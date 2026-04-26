@@ -1,0 +1,63 @@
+# .github/workflows/ci.yml
+#
+# Plan §10.4 definition of done: "Tests pass in CI."
+# Plan §11.2 #9 implementation — CI gate ships alongside the Vitest +
+# Playwright configs.
+#
+# Gate scope (per commit-10 prep approval):
+#   - lint              ESLint flat config, includes module-boundary rules
+#                       from PR #3.
+#   - typecheck         tsc --noEmit, strict mode.
+#   - test (unit only)  Vitest unit project. The integration project is
+#                       configured but NOT wired into CI yet — the test-DB
+#                       provisioning decision lands with the Day-2 R-3
+#                       isolation test. See vitest.config.ts comment block.
+#
+# Playwright is NOT in CI — the Vercel preview deployment provides the
+# real-environment runtime check, and Playwright in CI duplicates that
+# with a less faithful env. Revisit at Day 12+ when there are real flows
+# worth e2e-testing in CI.
+#
+# After this workflow lands, the Tier-1 auto-merge gate hardens: both
+# Vercel preview build AND this workflow must be green before any future
+# Tier-1 PR auto-merges (per the morning handoff brief).
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel in-progress runs for the same PR/branch when a newer commit lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: lint + typecheck + test (unit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # .nvmrc pins Node 20 to match Vercel's runtime.
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (unit)
+        run: npm run test
