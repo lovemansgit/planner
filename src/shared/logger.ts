@@ -6,9 +6,19 @@
 /**
  * Field names whose values are replaced with "[REDACTED]" anywhere in any
  * logged object, including nested objects and arrays. Source of truth:
- * resolutions §2.8. Match is case-insensitive on the field name; both
- * camelCase and snake_case variants must be listed where they differ —
- * case-insensitivity does not normalise underscores.
+ * resolutions §2.8.
+ *
+ * Matching is performed against a normalised form of the field name —
+ * lowercased with `_` and `-` stripped — so `phoneNumber`, `phone_number`,
+ * `PhoneNumber`, and `phone-number` all match the same canonical entry.
+ * The normalisation makes the list robust to author-side casing
+ * inconsistency (SuiteFleet returns snake_case; Supabase Postgres returns
+ * snake_case by convention; portal code is camelCase). The §2.8 list
+ * stays authoritative as the catalogue of redactable concepts.
+ *
+ * `username` is added per ADR-007 (commit-5 amendment): SuiteFleet uses
+ * username/password JWT auth, so the username is half of an auth
+ * credential pair — consistent with §2.8's intent to redact credentials.
  */
 export const REDACTED_FIELDS: ReadonlySet<string> = new Set([
   // Personal identifiers
@@ -41,6 +51,7 @@ export const REDACTED_FIELDS: ReadonlySet<string> = new Set([
   "authorization",
   "accessToken",
   "refreshToken",
+  "username", // added per ADR-007 — SuiteFleet username/password JWT auth
   // Webhook payloads
   "rawPayload",
   "raw_payload",
@@ -71,8 +82,17 @@ export const ALLOWED_LOG_FIELDS: readonly string[] = [
   "error_code",
 ];
 
-const REDACTED_LOWER: ReadonlySet<string> = new Set(
-  Array.from(REDACTED_FIELDS, (f) => f.toLowerCase())
+/**
+ * Canonicalise a field name for redaction lookup: lowercase, with `_` and
+ * `-` stripped. `phoneNumber`, `phone_number`, `PhoneNumber`, and
+ * `phone-number` all collapse to `phonenumber`. Internal helper.
+ */
+function normaliseFieldName(s: string): string {
+  return s.toLowerCase().replace(/[_-]/g, "");
+}
+
+const REDACTED_NORMALISED: ReadonlySet<string> = new Set(
+  Array.from(REDACTED_FIELDS, normaliseFieldName)
 );
 const REDACTED_VALUE = "[REDACTED]";
 const CIRCULAR_VALUE = "[CIRCULAR]";
@@ -91,7 +111,9 @@ function redact(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown 
   if (Array.isArray(value)) return value.map((v) => redact(v, seen));
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = REDACTED_LOWER.has(key.toLowerCase()) ? REDACTED_VALUE : redact(val, seen);
+    out[key] = REDACTED_NORMALISED.has(normaliseFieldName(key))
+      ? REDACTED_VALUE
+      : redact(val, seen);
   }
   return out;
 }
