@@ -16,19 +16,13 @@
 //                     lands Day 2 and is the first inhabitant.
 //
 // =============================================================================
-// THE INTEGRATION PROJECT IS INTENTIONALLY NOT WIRED INTO CI YET.
+// Integration project — wired into CI in R-3 (Day 2).
 // -----------------------------------------------------------------------------
-// The integration project exists, is configured here, and runs locally via
-// `npm run test:integration`. The CI test-database provisioning decision
-// (GitHub Actions service container vs dedicated Supabase test project vs
-// ephemeral Postgres) lands with the Day-2 R-3 isolation test
-// implementation, NOT in commit 10. Until that decision is made, the CI
-// workflow at .github/workflows/ci.yml runs ONLY the unit project.
-//
-// This is a documented pre-Day-2 state, not a bug. Do not "fix" it by
-// adding the integration project to CI without first deciding how the
-// test database is provisioned. See the open follow-up "Day-2 RLS
-// BYPASSRLS hole" in the project memory for the related Day-2 work.
+// CI runs `npm run test:integration` in a separate `integration` job against
+// a postgres:17 service container provisioned by `scripts/setup-test-db.sh`.
+// See `.github/workflows/ci.yml`'s `integration` job for the provisioning
+// rationale. Locally, run the same script against any reachable Postgres
+// (e.g. a docker container) and `npm run test:integration`.
 // =============================================================================
 
 import { defineConfig } from "vitest/config";
