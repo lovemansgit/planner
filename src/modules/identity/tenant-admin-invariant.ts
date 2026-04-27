@@ -19,6 +19,29 @@
 // passes them in. The check counts how many of those are tenant-admin
 // assignments and how many tenant-admin assignments exist tenant-wide
 // — if removal would land at zero, it throws ConflictError.
+//
+// Concurrency — pessimistic locking via SELECT FOR UPDATE:
+// -------------------------------------------------------------------
+// Without locking, two concurrent transactions could each pass the
+// check and each delete one of two admins, leaving the tenant with
+// zero — both reads see "2 admins exist" before either delete commits.
+// The total-count query below uses `FOR UPDATE OF ra` (wrapped in a
+// CTE because PostgreSQL does not allow FOR UPDATE alongside aggregate
+// functions) to lock every existing tenant-admin assignment row in
+// this tenant for the life of the caller's transaction. A second
+// transaction hitting this query against the same tenant blocks until
+// we COMMIT or ROLLBACK; once unblocked it re-evaluates against the
+// post-commit state, so the count it sees reflects our delete.
+//
+// INSERTs of new tenant-admin assignments concurrent with this check
+// are intentionally NOT serialized — adding admins never violates the
+// invariant. Non-admin DELETEs are also unaffected; FOR UPDATE only
+// locks rows matching the WHERE filter (tenant-admin in this tenant).
+//
+// Integration test of the lock semantics is a separate concern —
+// requires concurrent transactions against a real Postgres. Out of
+// scope for the unit tests in this commit; covered when the bulk
+// of admin-management endpoints land.
 
 import { sql as sqlTag } from "drizzle-orm";
 
@@ -56,13 +79,20 @@ export async function assertCanRemoveAssignments(
     return;
   }
 
-  // Count tenant-wide tenant-admin assignments.
+  // Count tenant-wide tenant-admin assignments. SELECT FOR UPDATE on
+  // the matching role_assignments rows is the C-21 race fix — see the
+  // file header's "Concurrency" block. Wrapped in a CTE because
+  // Postgres rejects FOR UPDATE adjacent to count(*).
   const totalRows = await tx.execute<CountRow>(sqlTag`
-    SELECT count(*)::int AS n
-    FROM role_assignments ra
-    JOIN roles r ON r.id = ra.role_id
-    WHERE ra.tenant_id = ${tenantId}
-      AND r.slug = ${TENANT_ADMIN_ROLE_SLUG}
+    WITH locked AS (
+      SELECT ra.id
+      FROM role_assignments ra
+      JOIN roles r ON r.id = ra.role_id
+      WHERE ra.tenant_id = ${tenantId}
+        AND r.slug = ${TENANT_ADMIN_ROLE_SLUG}
+      FOR UPDATE OF ra
+    )
+    SELECT count(*)::int AS n FROM locked
   `);
   const total = totalRows[0]?.n ?? 0;
 
@@ -71,6 +101,10 @@ export async function assertCanRemoveAssignments(
   // ids from another tenant cannot influence the check (RLS would
   // already filter, but this is defense in depth — the query reads
   // the same way regardless of pool routing).
+  //
+  // No FOR UPDATE here: the rows we're about to count are a subset
+  // of the rows the previous query already locked. Re-locking the
+  // same set is redundant.
   const removingAdminRows = await tx.execute<CountRow>(sqlTag`
     SELECT count(*)::int AS n
     FROM role_assignments ra
