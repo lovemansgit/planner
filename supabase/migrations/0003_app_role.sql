@@ -39,7 +39,9 @@
 --        postgres://planner_app:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
 --
 --   3. Operator pastes that string into Vercel as `SUPABASE_APP_DATABASE_URL`
---      (Production + Preview + Development). Paste source must be a plain text
+--      in the Production + Preview scopes only (NOT Development — Development
+--      is reserved for `.env.local`, matching this project's convention for
+--      every other server-side env var). Paste source must be a plain text
 --      editor — Excel/Numbers mangle silently
 --      (memory: feedback_vercel_credentials_paste_source.md).
 --
