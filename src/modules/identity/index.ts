@@ -1,8 +1,8 @@
 // identity module — plan §3.3 / §7 RBAC.
 //
-// Day-2 exports: the frozen permission catalogue (R-1) and the built-in
-// role definitions. requirePermission middleware (R-2) and the C-21
-// invariant land in subsequent commits.
+// Day-2 exports: the frozen permission catalogue (R-1), the built-in
+// role definitions, and the requirePermission helper (R-2). The C-21
+// invariant lands in a subsequent commit.
 
 export {
   PERMISSIONS,
@@ -21,3 +21,5 @@ export {
   type RoleDef,
   type BuiltInRoleSlug,
 } from "./roles";
+
+export { requirePermission } from "./require-permission";
