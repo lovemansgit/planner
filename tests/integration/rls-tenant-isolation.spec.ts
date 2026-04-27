@@ -7,13 +7,26 @@
 //   - withTenant scoped to tenant B sees only tenant B's row.
 //   - withServiceRole sees both (BYPASSRLS preserved for legitimate
 //     cross-tenant work — audit_events INSERTs, system actors, etc).
+//   - withTenant scoped to a third, unrelated tenant id sees no rows
+//     (tenant isolation — A and B are invisible to anyone but
+//     themselves).
+//   - **The canary**: a raw planner_app connection that has NEVER set
+//     `app.current_tenant_id` sees zero rows. This is the regression
+//     guard for the most dangerous footgun — someone forgetting to
+//     wrap a query in `withTenant` or otherwise reaching the DB
+//     without setting the session variable. The RLS policy MUST
+//     fail-closed, not fail-open.
 //
 // What it would catch:
 //   - Pre-R-0 code where db.ts's single pool connected as `postgres`
-//     would have FAILED tests 1 and 2 — every withTenant call would
+//     would have FAILED cases 1, 2, 4, AND 5 — every query would
 //     see all rows because the connecting role has BYPASSRLS=true.
 //   - Any future regression that points withTenant at a BYPASSRLS-
 //     enabled role.
+//   - An RLS-policy regression where the `NULLIF(..., '')::uuid`
+//     defensive form is dropped (case 5 fires on `current_setting('...',
+//     true)` returning NULL, which only fail-closes because the policy
+//     uses the defensive form per 0001's deviation note).
 //   - A copy-paste mistake that omits set_config('app.current_tenant_id').
 //
 // How it runs:
@@ -37,7 +50,8 @@
 import { randomUUID } from "node:crypto";
 
 import { sql as sqlTag } from "drizzle-orm";
-import { beforeAll, describe, expect, it } from "vitest";
+import postgres from "postgres";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { withServiceRole, withTenant } from "../../src/shared/db";
 
@@ -99,10 +113,11 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
     expect(rows.map((r) => r.slug)).toEqual([SLUG_A, SLUG_B]);
   });
 
-  it("withTenant with an unrelated tenant id sees zero rows (fail-closed)", async () => {
-    // Use a fresh random UUID that isn't either of A or B. RLS should
-    // filter every row out — proves the policy is filtering on the
-    // session variable, not waving everything through.
+  it("withTenant scoped to an unrelated tenant id sees neither A nor B (tenant isolation)", async () => {
+    // Demonstrates that RLS filters per the session variable, not
+    // "anyone authenticated sees everything." Different from the
+    // canary case below — here the variable IS set, just to a third
+    // tenant id.
     const UNRELATED_TENANT = randomUUID();
     const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
       return tx.execute<SlugRow>(sqlTag`
@@ -110,5 +125,63 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       `);
     });
     expect(rows.length).toBe(0);
+  });
+
+  describe("THE CANARY — fail-closed when app.current_tenant_id is never set", () => {
+    // This is the regression that matters most. If anyone forgets to
+    // wrap a query in `withTenant`, or reaches the DB through some
+    // path that bypasses the wrapper without going through
+    // `withServiceRole`, the connecting role MUST see zero rows.
+    //
+    // Why the test opens its own postgres-js connection rather than
+    // using the `db` export from src/shared/db.ts: the module-boundary
+    // lint rule (PR #3) restricts raw `db` use outside the carve-out.
+    // More importantly, this test is specifically about what happens
+    // when set_config is NEVER called — bypassing our wrappers
+    // entirely is the most honest way to demonstrate that. The
+    // connection here is a `planner_app` (NOBYPASSRLS) session with
+    // no `app.current_tenant_id` ever touched.
+
+    let canarySql: ReturnType<typeof postgres>;
+
+    beforeAll(() => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error(
+          "SUPABASE_APP_DATABASE_URL must be set for the canary case — see CI workflow / scripts/setup-test-db.sh"
+        );
+      }
+      canarySql = postgres(url, { prepare: false, max: 1 });
+    });
+
+    afterAll(async () => {
+      await canarySql.end({ timeout: 2 });
+    });
+
+    it("a raw planner_app connection with no app.current_tenant_id set sees zero rows", async () => {
+      // Sanity check: confirm we're connected as planner_app, not
+      // accidentally as postgres. If this assertion ever fails the
+      // test is meaningless; surface it loudly.
+      const role = await canarySql<{ role: string }[]>`SELECT current_user AS role`;
+      expect(role[0].role).toBe("planner_app");
+
+      // Confirm the session variable is genuinely unset on this
+      // connection — `current_setting(name, true)` returns NULL when
+      // the variable has never been set. This is the precondition
+      // the RLS policy's defensive `NULLIF(..., '')::uuid` form
+      // collapses to, fail-closing every row.
+      const settingProbe = await canarySql<
+        { setting: string | null }[]
+      >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+      expect(settingProbe[0].setting).toBeNull();
+
+      // The actual canary: query for our two test tenants. Zero
+      // expected — the RLS policy filters every row when the
+      // session variable is unset.
+      const rows = await canarySql<
+        SlugRow[]
+      >`SELECT slug FROM tenants WHERE slug LIKE ${SLUG_LIKE}`;
+      expect(rows.length).toBe(0);
+    });
   });
 });
