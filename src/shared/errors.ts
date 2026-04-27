@@ -40,3 +40,18 @@ export class NotFoundError extends AppError {
 export class CredentialError extends AppError {
   readonly code = "CREDENTIAL";
 }
+
+/**
+ * State-conflict — a request is well-formed and the actor is permitted,
+ * but performing it would leave the system in an invalid state. Thrown
+ * by service-layer invariant checks: the canonical example is C-21
+ * ("at least one Tenant Admin per tenant"), which throws this when an
+ * operation would remove the last Tenant Admin.
+ *
+ * Distinct from ValidationError (input-shape failure) and
+ * ForbiddenError (permission failure). Maps to HTTP 409 at the API
+ * boundary.
+ */
+export class ConflictError extends AppError {
+  readonly code = "CONFLICT";
+}
