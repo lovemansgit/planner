@@ -1,8 +1,8 @@
 // identity module — plan §3.3 / §7 RBAC.
 //
-// Day-2 exports: the frozen permission catalogue (R-1), the built-in
-// role definitions, and the requirePermission helper (R-2). The C-21
-// invariant lands in a subsequent commit.
+// Day-2 exports complete: permission catalogue + roles (R-1),
+// requirePermission helper (R-2), and the C-21 invariant +
+// service-layer operations that enforce it.
 
 export {
   PERMISSIONS,
@@ -23,3 +23,7 @@ export {
 } from "./roles";
 
 export { requirePermission } from "./require-permission";
+
+export { assertCanRemoveAssignments } from "./tenant-admin-invariant";
+
+export { deleteRoleAssignment, deleteUser } from "./service";
