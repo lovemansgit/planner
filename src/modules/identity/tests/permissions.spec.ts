@@ -63,6 +63,20 @@ describe("systemOnly permissions", () => {
   });
 });
 
+describe("migration-gate permissions (Day 3 / C-6)", () => {
+  it("registers all three migration-gate permissions in the catalogue", () => {
+    expect(PERMISSIONS["tenant:migration_gate_set"]).toBeDefined();
+    expect(PERMISSIONS["tenant:migration_gate_get"]).toBeDefined();
+    expect(PERMISSIONS["tenant:migration_gate_check"]).toBeDefined();
+  });
+
+  it("flags only gate_set as systemOnly (gate_get and gate_check are tenant-readable)", () => {
+    expect(PERMISSIONS["tenant:migration_gate_set"].systemOnly).toBe(true);
+    expect(PERMISSIONS["tenant:migration_gate_get"].systemOnly).toBe(false);
+    expect(PERMISSIONS["tenant:migration_gate_check"].systemOnly).toBe(false);
+  });
+});
+
 describe("API_KEY_FORBIDDEN_PERMISSIONS", () => {
   it("lists only known catalogue entries", () => {
     for (const id of API_KEY_FORBIDDEN_PERMISSIONS) {
@@ -150,6 +164,12 @@ describe("Tenant Admin (C-21 anchor)", () => {
     expect(perms.has("tenant:migration_import")).toBe(false);
     expect(perms.has("tenant:migration_gate_set")).toBe(false);
   });
+
+  it("includes migration_gate_get and migration_gate_check (Day 3 / C-6)", () => {
+    const perms = ROLES[TENANT_ADMIN_ROLE_SLUG].permissions;
+    expect(perms.has("tenant:migration_gate_get")).toBe(true);
+    expect(perms.has("tenant:migration_gate_check")).toBe(true);
+  });
 });
 
 describe("Ops Manager (Day-2 brief §6)", () => {
@@ -185,6 +205,24 @@ describe("Transcorp Systems Team (Day-2 brief §6)", () => {
     const perms = ROLES["transcorp-systems"].permissions;
     expect(perms.has("tenant:migration_gate_set")).toBe(true);
     expect(perms.has("tenant:migration_import")).toBe(false);
+  });
+
+  it("holds the two new gate read/check perms so the cut-over UI can render readiness (C-6)", () => {
+    const perms = ROLES["transcorp-systems"].permissions;
+    expect(perms.has("tenant:migration_gate_get")).toBe(true);
+    expect(perms.has("tenant:migration_gate_check")).toBe(true);
+  });
+});
+
+describe("Ops Manager — migration gate visibility (C-6)", () => {
+  it("holds tenant:migration_gate_get and tenant:migration_gate_check", () => {
+    const perms = ROLES["ops-manager"].permissions;
+    expect(perms.has("tenant:migration_gate_get")).toBe(true);
+    expect(perms.has("tenant:migration_gate_check")).toBe(true);
+  });
+
+  it("does NOT hold tenant:migration_gate_set (sysadmin-only stays sysadmin-only)", () => {
+    expect(ROLES["ops-manager"].permissions.has("tenant:migration_gate_set")).toBe(false);
   });
 });
 

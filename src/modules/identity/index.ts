@@ -27,3 +27,11 @@ export { requirePermission } from "./require-permission";
 export { assertCanRemoveAssignments } from "./tenant-admin-invariant";
 
 export { deleteRoleAssignment, deleteUser } from "./service";
+
+export {
+  gateGet,
+  gateCheck,
+  gateSet,
+  type GateStatus,
+  type TenantGateState,
+} from "./migration-gate";

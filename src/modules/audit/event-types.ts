@@ -89,8 +89,9 @@ const EVENT_TYPES_DRAFT = {
     resource: "tenant",
     action: "migration_gate_changed",
     description:
-      "The migration gate (Transcorp Systems Team's signoff that pre-existing future-dated SuiteFleet tasks are cleared) was set or unset for a tenant.",
-    metadataNotes: "previous_state (boolean), new_state (boolean), reason (string).",
+      "The migration gate (Transcorp Systems Team's signoff that pre-existing future-dated SuiteFleet tasks are cleared) transitioned to a new state for a tenant.",
+    metadataNotes:
+      "previous_status (string: closed|open|completed), new_status (string), reason (string). Note: original Day-2 metadataNotes spec'd booleans before C-5 finalised the three-state machine; updated in C-6 to match the actual state-machine alphabet.",
     systemOnly: true,
   },
 

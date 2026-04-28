@@ -85,10 +85,12 @@ const ROLES_DRAFT = {
     slug: "ops-manager",
     name: "Ops Manager",
     description:
-      "Operational management of consignees, subscriptions, and tasks. Includes bulk CSV imports for ongoing onboarding. No user / role / API-key administration.",
+      "Operational management of consignees, subscriptions, and tasks. Includes bulk CSV imports for ongoing onboarding. No user / role / API-key administration. Holds migration_gate_get + migration_gate_check so the cut-over UI can render readiness, but NOT migration_gate_set (that stays Transcorp-staff-only).",
     systemOnly: false,
     permissions: new Set<PermissionId>([
       "tenant:read",
+      "tenant:migration_gate_get",
+      "tenant:migration_gate_check",
       ...permsFor("consignee"), // includes bulk_create
       ...permsFor("subscription"), // includes bulk_create
       ...permsFor("task"),
@@ -140,6 +142,8 @@ const ROLES_DRAFT = {
     permissions: new Set<PermissionId>([
       "tenant:read",
       "tenant:migration_gate_set",
+      "tenant:migration_gate_get",
+      "tenant:migration_gate_check",
       "audit_event:read",
     ]),
   },
