@@ -86,6 +86,26 @@ const PERMISSIONS_DRAFT = {
       "Mark a tenant's SuiteFleet cleanup as complete, unblocking migration_import. Held by Transcorp Systems Team only.",
     systemOnly: true,
   },
+  // Day 3 / C-6: read + check counterparts to migration_gate_set. Both
+  // are intentionally NOT systemOnly — Tenant Admins need to see their
+  // own gate state (so the UI can render readiness), and the migration
+  // import code path needs an internal-callable check helper.
+  "tenant:migration_gate_get": {
+    id: "tenant:migration_gate_get",
+    resource: "tenant",
+    action: "migration_gate_get",
+    description:
+      "Read the migration gate state (status + when last set). Tenant Admins see status + set_at; sysadmin actors additionally see set_by.",
+    systemOnly: false,
+  },
+  "tenant:migration_gate_check": {
+    id: "tenant:migration_gate_check",
+    resource: "tenant",
+    action: "migration_gate_check",
+    description:
+      "Internal helper: returns whether the gate is open, ready for migration import. Held by Tenant Admin (so the UI can pre-check before allowing the click) and by the migration import system actor.",
+    systemOnly: false,
+  },
 
   // ---- user --------------------------------------------------------------
   "user:create": {
