@@ -25,12 +25,17 @@
 // (e.g. a docker container) and `npm run test:integration`.
 // =============================================================================
 
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 
+const SRC_ALIAS = { "@": path.resolve(__dirname, "src") } as const;
+
 export default defineConfig({
+  resolve: { alias: SRC_ALIAS },
   test: {
     projects: [
       {
+        resolve: { alias: SRC_ALIAS },
         test: {
           name: "unit",
           include: ["src/**/*.spec.ts", "tests/unit/**/*.spec.ts"],
@@ -38,6 +43,7 @@ export default defineConfig({
         },
       },
       {
+        resolve: { alias: SRC_ALIAS },
         test: {
           name: "integration",
           include: ["tests/integration/**/*.spec.ts"],
