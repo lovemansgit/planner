@@ -8,17 +8,31 @@
 // validation beyond null-vs-undefined handling — those belong in the
 // C-3 service layer.
 //
-// RLS scoping is implicit. Every callsite is expected to be inside a
+// RLS is the primary defence. Every callsite runs inside a
 // `withTenant(tenantId, …)` block, so the
 // `app.current_tenant_id`-keyed RLS policy on `consignees` filters
 // reads, blocks cross-tenant updates/deletes, and rejects inserts
 // whose `tenant_id` doesn't match the session value via WITH CHECK
-// (defensive form — see 0001_identity.sql header). The `findById`,
-// `update`, and `delete` functions do NOT take a tenantId argument
-// because RLS handles that filter; the `list` and `insert` functions
-// do, because (a) `list` reads more clearly with an explicit tenant
-// filter alongside RLS (defense in depth), and (b) `insert` must set
-// the column explicitly to satisfy the WITH CHECK clause.
+// (defensive form — see 0001_identity.sql header).
+//
+// Defence in depth: every write path AND every list/lookup that takes
+// a `tenantId` carries an explicit `AND tenant_id = ${tenantId}`
+// predicate alongside RLS. Same value, same result, but the WHERE
+// clause is self-describing in pg_stat / EXPLAIN, and the application
+// layer no longer relies on RLS being correctly configured as the
+// sole filter — matching the R-3 isolation test's mental model.
+//
+//   - `insert`         takes tenantId explicitly because WITH CHECK
+//                      requires the column to be set.
+//   - `list`           filters by tenantId in the WHERE.
+//   - `update` / `delete` take tenantId and combine it with id in the
+//                      WHERE — the cross-tenant write surface is the
+//                      single biggest blast-radius footgun, so they
+//                      get belt-and-braces.
+//   - `findById`       relies on RLS alone. Reads have no blast radius
+//                      beyond what RLS hides; adding a parameter would
+//                      complicate every caller without changing the
+//                      observable behaviour.
 
 import { sql as sqlTag, type SQL } from "drizzle-orm";
 
@@ -155,21 +169,26 @@ export async function listConsigneesByTenant(
 }
 
 /**
- * UPDATE selected fields on one consignee. Only fields present on
- * `patch` are written; others are left untouched. tenant_id, id, and
+ * UPDATE selected fields on one consignee, scoped to `tenantId` for
+ * defence in depth alongside RLS. Only fields present on `patch` are
+ * written; others are left untouched. `tenant_id`, `id`, and
  * timestamps are not patchable — the type already enforces this, and
  * the SET-clause builder below has no branch for them.
  *
  * Returns the updated row, or `null` if no row matched (because the
- * id was unknown, or RLS hid it as cross-tenant).
+ * id was unknown, was hidden by RLS, or carried a different tenant_id
+ * than the explicit predicate — same observable null in every case).
  *
- * Empty patch (no keys present) returns the current row unchanged via
- * findConsigneeById — single round-trip, no UPDATE statement issued.
- * The C-3 service layer should normally validate non-empty patches,
- * but this defensive branch keeps the repository total.
+ * Empty patch (no keys present) short-circuits to a tenant-scoped
+ * SELECT — one round-trip, no UPDATE statement issued. The C-3
+ * service layer should normally validate non-empty patches, but this
+ * defensive branch keeps the repository total. The SELECT uses the
+ * same `id = ? AND tenant_id = ?` predicate as the UPDATE so both
+ * paths through this function carry the same defence-in-depth filter.
  */
 export async function updateConsignee(
   tx: DbTx,
+  tenantId: Uuid,
   id: Uuid,
   patch: UpdateConsigneePatch
 ): Promise<Consignee | null> {
@@ -187,31 +206,36 @@ export async function updateConsignee(
     sets.push(sqlTag`notes_internal = ${patch.notesInternal}`);
 
   if (sets.length === 0) {
-    return findConsigneeById(tx, id);
+    const rows = await tx.execute<ConsigneeRow>(sqlTag`
+      SELECT * FROM consignees WHERE id = ${id} AND tenant_id = ${tenantId}
+    `);
+    return rows[0] ? mapRow(rows[0]) : null;
   }
 
   const setClause = sqlTag.join(sets, sqlTag`, `);
   const rows = await tx.execute<ConsigneeRow>(sqlTag`
     UPDATE consignees
     SET ${setClause}
-    WHERE id = ${id}
+    WHERE id = ${id} AND tenant_id = ${tenantId}
     RETURNING *
   `);
   return rows[0] ? mapRow(rows[0]) : null;
 }
 
 /**
- * DELETE one consignee. Returns `true` if a row was removed, `false`
- * if no row matched (unknown id or RLS-hidden cross-tenant id).
+ * DELETE one consignee, scoped to `tenantId` for defence in depth.
+ * Returns `true` if a row was removed, `false` if no row matched
+ * (unknown id, RLS-hidden cross-tenant id, or tenant_id mismatch
+ * against the explicit predicate).
  *
  * Hard delete in pilot per the 0004 header note — soft-delete is
  * deferred until the audit-history view requirements firm up. The
  * `consignee.deleted` audit event in C-3 captures the row identity
  * pre-delete so the action is recoverable from the audit trail.
  */
-export async function deleteConsignee(tx: DbTx, id: Uuid): Promise<boolean> {
+export async function deleteConsignee(tx: DbTx, tenantId: Uuid, id: Uuid): Promise<boolean> {
   const result = await tx.execute(sqlTag`
-    DELETE FROM consignees WHERE id = ${id}
+    DELETE FROM consignees WHERE id = ${id} AND tenant_id = ${tenantId}
   `);
   // postgres.js's row-list result carries `count` for non-RETURNING
   // statements. Fall back to length check for shapes returned by tests

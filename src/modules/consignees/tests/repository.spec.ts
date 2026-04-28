@@ -2,15 +2,20 @@
 //
 // Mocks `tx.execute` directly so the SQL building, the row mapper, and
 // the partial-patch SET-clause logic can be exercised without a real
-// Postgres connection. Integration test of the RLS-scoped path lives
-// in tests/integration (separate; not landing in C-2).
+// Postgres connection. RLS / cross-tenant isolation behaviour is
+// proven separately in tests/integration/rls-tenant-isolation.spec.ts;
+// the unit tests here verify the *shape* of the queries we send (the
+// defence-in-depth `tenant_id` predicate on update / delete) and the
+// repository's null-handling paths.
 //
-// Drizzle's tagged-template SQL objects are opaque from outside —
-// we can't deep-equal the produced SQL — but we CAN: count execute()
-// calls, snapshot the row shape returned by the mapper, and verify
-// the partial-patch builder skips the no-op execute when given an
-// empty patch.
+// Drizzle's tagged-template SQL objects are opaque from outside — we
+// can't string-equal the produced SQL — so the predicate assertions
+// compile each captured SQL object via PgDialect.sqlToQuery and
+// substring-match. That's stable enough for tests and decouples from
+// the SQL pretty-printer.
 
+import { sql as sqlTag, type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,9 +28,18 @@ import {
 import type { CreateConsigneeInput, UpdateConsigneePatch } from "../types";
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
+const OTHER_TENANT_ID = "00000000-0000-0000-0000-00000000000b";
 const CONSIGNEE_ID = "11111111-1111-1111-1111-111111111111";
 
 const FIXED_NOW = new Date("2026-04-28T10:00:00.000Z");
+
+const dialect = new PgDialect();
+
+/** Compile a captured SQL object into its `$1`-bound text + params. */
+function compile(query: unknown): { sql: string; params: unknown[] } {
+  const compiled = dialect.sqlToQuery(query as SQL);
+  return { sql: compiled.sql, params: compiled.params };
+}
 
 function rowFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -154,39 +168,64 @@ describe("listConsigneesByTenant", () => {
     const result = await listConsigneesByTenant(tx, TENANT_ID);
     expect(result).toEqual([]);
   });
+
+  it("includes the tenant_id predicate alongside RLS (defence in depth)", async () => {
+    const tx = makeStubTx([[]]);
+    await listConsigneesByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/);
+    expect(captured.params).toContain(TENANT_ID);
+  });
 });
 
 describe("updateConsignee", () => {
-  it("issues UPDATE and returns the mapped row when fields are present", async () => {
+  it("issues UPDATE with the defence-in-depth tenant_id predicate", async () => {
     const tx = makeStubTx([[rowFixture({ name: "Renamed" })]]);
     const patch: UpdateConsigneePatch = { name: "Renamed" };
 
-    const result = await updateConsignee(tx, CONSIGNEE_ID, patch);
+    const result = await updateConsignee(tx, TENANT_ID, CONSIGNEE_ID, patch);
 
     expect(tx.execute).toHaveBeenCalledOnce();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    // Both `id = $n` and `tenant_id = $n` must appear in the WHERE.
+    expect(captured.sql).toMatch(/UPDATE consignees/i);
+    expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.params).toContain(CONSIGNEE_ID);
     expect(result?.name).toBe("Renamed");
   });
 
-  it("falls through to findConsigneeById when the patch is empty (single SELECT, no UPDATE)", async () => {
+  it("falls through to a tenant-scoped SELECT when the patch is empty (no UPDATE)", async () => {
     const tx = makeStubTx([[rowFixture()]]);
-    const result = await updateConsignee(tx, CONSIGNEE_ID, {});
+
+    const result = await updateConsignee(tx, TENANT_ID, CONSIGNEE_ID, {});
+
     expect(tx.execute).toHaveBeenCalledOnce();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/^\s*SELECT/i);
+    // Empty-patch path MUST also carry the tenant_id predicate so both
+    // paths through updateConsignee enforce the same defence-in-depth.
+    expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
+    expect(captured.params).toContain(TENANT_ID);
     expect(result?.id).toBe(CONSIGNEE_ID);
   });
 
-  it("returns null when the row is missing or RLS-hidden", async () => {
+  it("returns null when the row is missing, RLS-hidden, or tenant_id mismatch", async () => {
     const tx = makeStubTx([[]]);
-    const result = await updateConsignee(tx, CONSIGNEE_ID, { name: "ghost" });
+    const result = await updateConsignee(tx, OTHER_TENANT_ID, CONSIGNEE_ID, { name: "ghost" });
     expect(result).toBeNull();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    // The tenantId we passed must be one of the bound params — proves
+    // the query carries the caller-supplied scope, not a hard-coded one.
+    expect(captured.params).toContain(OTHER_TENANT_ID);
   });
 
   it("includes every present optional column in the SET clause without writing absent ones", async () => {
-    // We can't see the SET clause, but we can verify call count + return.
     // The shape proves the dispatch logic doesn't bail out when several
     // fields are present — every field present should still produce
-    // exactly one UPDATE round-trip.
+    // exactly one UPDATE round-trip with the tenant_id predicate intact.
     const tx = makeStubTx([[rowFixture({ name: "n", phone: "p", email: "e@x" })]]);
-    const result = await updateConsignee(tx, CONSIGNEE_ID, {
+    const result = await updateConsignee(tx, TENANT_ID, CONSIGNEE_ID, {
       name: "n",
       phone: "p",
       email: "e@x",
@@ -197,28 +236,56 @@ describe("updateConsignee", () => {
       notesInternal: "i",
     });
     expect(tx.execute).toHaveBeenCalledOnce();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
     expect(result?.email).toBe("e@x");
   });
 });
 
 describe("deleteConsignee", () => {
-  it("returns true when the result reports a deleted row (postgres.js count shape)", async () => {
-    // postgres.js's RowList carries `count`. Simulate that.
+  it("issues DELETE with the defence-in-depth tenant_id predicate and returns true on a deleted row", async () => {
     const result = Object.assign([], { count: 1 });
     const tx = makeStubTx([result]);
-    expect(await deleteConsignee(tx, CONSIGNEE_ID)).toBe(true);
+
+    const ok = await deleteConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+
+    expect(ok).toBe(true);
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/DELETE FROM consignees/i);
+    expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.params).toContain(CONSIGNEE_ID);
   });
 
-  it("returns false when no row was deleted", async () => {
+  it("returns false when no row was deleted (unknown id, cross-tenant id, or RLS hides)", async () => {
     const result = Object.assign([], { count: 0 });
     const tx = makeStubTx([result]);
-    expect(await deleteConsignee(tx, CONSIGNEE_ID)).toBe(false);
+    expect(await deleteConsignee(tx, OTHER_TENANT_ID, CONSIGNEE_ID)).toBe(false);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.params).toContain(OTHER_TENANT_ID);
   });
 
   it("falls back to array length when the result has no `count` property", async () => {
     // Tests that pre-stub execute as a plain array still produce a
     // sensible boolean — defensive against stub shapes.
     const tx = makeStubTx([[]]);
-    expect(await deleteConsignee(tx, CONSIGNEE_ID)).toBe(false);
+    expect(await deleteConsignee(tx, TENANT_ID, CONSIGNEE_ID)).toBe(false);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Direct compile sanity check
+// -----------------------------------------------------------------------------
+// One assertion that the compile() helper actually does what we think
+// it does — guards against a future Drizzle bump silently changing the
+// PgDialect.sqlToQuery shape and rendering every other predicate
+// assertion in this file vacuously true.
+describe("compile() helper sanity", () => {
+  it("expands a simple tagged template into bound `$N` syntax", () => {
+    const q = sqlTag`SELECT * FROM consignees WHERE id = ${CONSIGNEE_ID} AND tenant_id = ${TENANT_ID}`;
+    const { sql, params } = compile(q);
+    expect(sql).toMatch(/id\s*=\s*\$1\s+AND\s+tenant_id\s*=\s*\$2/i);
+    expect(params).toEqual([CONSIGNEE_ID, TENANT_ID]);
   });
 });
