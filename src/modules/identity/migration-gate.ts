@@ -193,8 +193,50 @@ export async function gateCheck(
 }
 
 // -----------------------------------------------------------------------------
-// gateSet
+// gateSet — concurrency model (lock-and-re-validate, intentionally permissive)
 // -----------------------------------------------------------------------------
+// The SELECT FOR UPDATE inside gateSet serialises concurrent gateSet
+// calls on the same tenant row. After the lock releases, a second
+// caller re-reads the current state and re-evaluates its intended
+// transition against ALLOWED_TRANSITIONS — meaning concurrent operators
+// can legally compose into a longer-than-each-intended path. Concrete
+// example: caller A wants closed→open; caller B (also reading closed
+// initially) wants open→completed. A acquires the lock first, commits
+// closed→open. B unblocks, re-reads 'open', re-evaluates the
+// transition open→completed (allowed), and commits — even though B
+// originally read 'closed' and never explicitly asked for the
+// open→completed step.
+//
+// This is intentional. Tightening the contract to "B's originally-
+// intended previous state must still be current at lock-acquire time"
+// would force B to fail-loud and push retry logic onto callers in a
+// flow that is operator-driven and inherently sequential at the
+// product level (Transcorp Systems Team unblocks the gate; the import
+// system advances it). Compare-and-swap-style failure here is the
+// worse failure mode — the operators have no useful recovery action
+// other than "read the state and try again," which is exactly what
+// the lock-and-re-validate path already performs.
+//
+// What the lock DOES guarantee:
+//   - No lost updates. Two concurrent transitions from the same
+//     starting state cannot both apply; the second sees the first's
+//     commit and either no-ops (if same target) or re-validates.
+//   - State-graph safety. Every committed transition is in
+//     ALLOWED_TRANSITIONS for the row's actual state at the moment of
+//     UPDATE. Forbidden steps (e.g. closed→completed directly) raise
+//     ConflictError regardless of caller ordering.
+//   - Audit fidelity. Every COMMITTED transition emits exactly one
+//     tenant.migration_gate_changed event with the actual previous
+//     and new state at commit time, not the caller's stale view.
+//
+// What the lock does NOT do:
+//   - Preserve caller-original-intent. If B's plan was "go from
+//     closed to completed in one logical step," the lock will not
+//     reject B when A's intermediate commit makes B's transition
+//     legal-but-reordered. By design.
+//
+// Integration coverage of all three properties lives in
+// tests/integration/migration-gate-concurrency.spec.ts.
 
 /**
  * Transition the tenant's migration gate to `newStatus`. Sysadmin-
