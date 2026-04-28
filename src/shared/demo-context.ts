@@ -18,6 +18,15 @@
 //     the most common review-time use case.
 //   - tenantId mirrors actor.tenantId.
 //
+// Production gate (per PR #23 review):
+//   buildDemoContext refuses to run when NODE_ENV === "production"
+//   unless `ALLOW_DEMO_AUTH=true` is explicitly set. The gate fires at
+//   the top of buildDemoContext, before the DB lookup, so production
+//   never even reaches the first-tenant query. Vercel Preview deploys
+//   opt in via the Preview-scope env var; Production scope must NOT
+//   set ALLOW_DEMO_AUTH. .env.example documents the variable with that
+//   constraint called out.
+//
 // Documented limitations (per the Day-3 brief §8 + this header):
 //   - Returns 503 if no tenants exist yet — fail-loud instead of
 //     synthesising a phantom UUID that would silently fail-closed
@@ -35,7 +44,14 @@ import { sql as sqlTag } from "drizzle-orm";
 import { ROLES } from "@/modules/identity";
 
 import { withServiceRole } from "./db";
+import { NoTenantConfiguredError } from "./errors";
 import type { RequestContext } from "./tenant-context";
+
+// Re-export so existing call sites that import NoTenantConfiguredError
+// from this module keep working. The class itself lives in
+// src/shared/errors.ts so it participates in the AppError discriminated
+// union and the error-response switch's exhaustiveness check.
+export { NoTenantConfiguredError };
 
 /**
  * Deterministic synthetic UUID for the demo user. Distinguishable from
@@ -64,26 +80,28 @@ async function fetchFirstTenantId(): Promise<string | null> {
 }
 
 /**
- * Error type signalling "no tenants yet" — the route layer maps this
- * to HTTP 503. Distinct from Forbidden / Validation / NotFound so
- * callers don't conflate "the system is uninitialised" with "your
- * request was wrong."
- */
-export class NoTenantConfiguredError extends Error {
-  readonly code = "NO_TENANT_CONFIGURED";
-  constructor() {
-    super("No tenants configured yet — onboard at least one tenant before using the demo API");
-  }
-}
-
-/**
  * Build a RequestContext for the demo state. Fails loudly via
- * NoTenantConfiguredError if no tenants exist.
+ * NoTenantConfiguredError if no tenants exist. Refuses to run in
+ * production unless ALLOW_DEMO_AUTH=true is explicitly set (see file
+ * header for the env-var contract).
  */
 export async function buildDemoContext(
   path: string,
   requestId: string
 ): Promise<RequestContext> {
+  // Production gate. NODE_ENV === "production" covers both the real
+  // production deploy AND Vercel Preview deploys (which also boot with
+  // NODE_ENV=production). Preview opts in by setting ALLOW_DEMO_AUTH=true
+  // in its env scope; Production scope must not. Throwing a generic
+  // Error rather than a typed AppError is intentional — this is an
+  // operator misconfiguration, not a runtime user-facing case, so the
+  // framework's 500 path handles it without leaking detail.
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_AUTH !== "true") {
+    throw new Error(
+      "buildDemoContext is not permitted in production without explicit ALLOW_DEMO_AUTH=true opt-in"
+    );
+  }
+
   const tenantId = await fetchFirstTenantId();
   if (!tenantId) {
     throw new NoTenantConfiguredError();

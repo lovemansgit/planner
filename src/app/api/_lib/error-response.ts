@@ -2,70 +2,70 @@
 //
 // Single chokepoint for error → response mapping so every route emits
 // the same { error: { code, message } } envelope and the same HTTP
-// status for the same error class. Adding a new typed error means
-// adding one branch here, not editing every route.
+// status for the same error class.
 //
-// The status mapping:
-//   ForbiddenError      → 403
-//   ValidationError     → 400
-//   NotFoundError       → 404
-//   ConflictError       → 409
-//   CredentialError     → 502  (upstream credential failure — see plan §8.4)
-//   NoTenantConfigured  → 503  (system uninitialised; from demo-context)
+// Exhaustiveness via discriminated union (PR #23 review):
+//   - `KnownAppError` in src/shared/errors.ts is the closed union of
+//     every concrete typed error.
+//   - The switch below is keyed on `err.code`, the discriminant.
+//   - The default branch assigns to `const _exhaustive: never = err`,
+//     which only typechecks when every variant is covered. Adding a
+//     new typed error means: add the class + add the code literal +
+//     add to the union — and the build breaks at this file until the
+//     new case is handled here.
 //
-// Anything that isn't a known typed error is re-thrown — the framework
-// then renders a 500 with the generic Next error page. We do NOT
-// stringify unknown errors into the JSON response, because the
-// internal message could leak implementation detail to a client.
+// Anything that isn't a KnownAppError is re-thrown — the framework's
+// default 500 path then renders. We do NOT stringify unknown errors
+// into the JSON response, because the internal message could leak
+// implementation detail to a client.
 
 import "server-only";
 
 import { NextResponse } from "next/server";
 
-import { NoTenantConfiguredError } from "@/shared/demo-context";
-import {
-  AppError,
-  ConflictError,
-  CredentialError,
-  ForbiddenError,
-  NotFoundError,
-  ValidationError,
-} from "@/shared/errors";
+import { isKnownAppError, type KnownAppError } from "@/shared/errors";
 
-const STATUS_BY_CODE: Record<string, number> = {
-  FORBIDDEN: 403,
-  VALIDATION: 400,
-  NOT_FOUND: 404,
-  CONFLICT: 409,
-  CREDENTIAL: 502,
-};
-
-function statusFor(err: AppError): number {
-  return STATUS_BY_CODE[err.code] ?? 500;
+/** Stable JSON envelope returned by every typed-error path. */
+function envelope(err: KnownAppError, status: number): NextResponse {
+  return NextResponse.json({ error: { code: err.code, message: err.message } }, { status });
 }
 
 /**
- * Convert a thrown error into a NextResponse. If the error is not a
- * known typed error, re-throws so the framework's default 500 path
- * renders.
+ * Convert a thrown error into a NextResponse. Re-throws unknown errors
+ * so the framework's 500 handler renders.
  */
 export function errorResponse(err: unknown): NextResponse {
-  if (err instanceof NoTenantConfiguredError) {
-    return NextResponse.json({ error: { code: err.code, message: err.message } }, { status: 503 });
+  if (!isKnownAppError(err)) {
+    // Unknown error type — let the framework's 500 handler take it.
+    // Stringifying an unknown error to the client could leak detail.
+    throw err;
   }
-  if (
-    err instanceof ForbiddenError ||
-    err instanceof ValidationError ||
-    err instanceof NotFoundError ||
-    err instanceof ConflictError ||
-    err instanceof CredentialError
-  ) {
-    return NextResponse.json(
-      { error: { code: err.code, message: err.message } },
-      { status: statusFor(err) }
-    );
+
+  switch (err.code) {
+    case "FORBIDDEN":
+      return envelope(err, 403);
+    case "VALIDATION":
+      return envelope(err, 400);
+    case "NOT_FOUND":
+      return envelope(err, 404);
+    case "CONFLICT":
+      return envelope(err, 409);
+    case "CREDENTIAL":
+      // Upstream credential failure — see plan §8.4 (per-tenant credential SDK)
+      // and ADR-007 (SuiteFleet 401-after-retry).
+      return envelope(err, 502);
+    case "NO_TENANT_CONFIGURED":
+      // System uninitialised; from demo-context bootstrap. 503 (service
+      // unavailable) rather than 404 because the caller's request is
+      // well-formed; the system isn't ready yet.
+      return envelope(err, 503);
+    default: {
+      // Exhaustiveness guard. If `err` here is anything other than
+      // `never`, it's because a new variant was added to KnownAppError
+      // without being handled above — TS will fail to compile this
+      // assignment, breaking the build at the right place.
+      const _exhaustive: never = err;
+      return _exhaustive;
+    }
   }
-  // Unknown error type — let the framework's 500 handler take it.
-  // Stringifying an unknown error to the client could leak detail.
-  throw err;
 }
