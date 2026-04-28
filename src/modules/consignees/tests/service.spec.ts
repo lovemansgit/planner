@@ -329,6 +329,23 @@ describe("updateConsignee", () => {
     expect(emitArg.metadata).toEqual({ changed_fields: ["phone"] });
   });
 
+  it("does not emit consignee.updated when the only patched field is a local-shape phone that re-normalises to the existing E.164 value", async () => {
+    // PR #22 reviewer ask: a single regression target that exercises
+    // the full re-paste-no-emit chain — local shape -> normalise ->
+    // matches existing E.164 -> changed_fields[] empty -> no UPDATE,
+    // no audit event.
+    const before = consigneeFixture({ phone: "+971501234567" });
+    mockFindById.mockResolvedValue(before);
+
+    const result = await updateConsignee(ctx(["consignee:update"]), CONSIGNEE_ID, {
+      phone: "0501234567",
+    });
+
+    expect(result).toEqual(before);
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
   it("returns the current row and does NOT emit when no field actually changed", async () => {
     const before = consigneeFixture();
     mockFindById.mockResolvedValue(before);
