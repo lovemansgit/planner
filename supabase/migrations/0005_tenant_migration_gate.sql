@@ -1,0 +1,111 @@
+-- =============================================================================
+-- supabase/migrations/0005_tenant_migration_gate.sql
+-- =============================================================================
+-- Day 3 / C-5: tenant migration-gate state. Three columns on the existing
+-- `tenants` table that record where each tenant sits in the cut-over
+-- workflow:
+--
+--   closed     — default. Migration import is not yet allowed for this
+--                tenant. The merchant has not been onboarded to the
+--                cut-over flow, OR Transcorp Systems Team has not yet
+--                cleared the merchant's pre-existing future-dated tasks
+--                from SuiteFleet.
+--
+--   open       — Transcorp Systems Team has finished clearing the
+--                merchant's pre-existing future-dated SuiteFleet tasks.
+--                Tenant Admin may now run the one-shot migration import.
+--                Tenant Admin holds the `tenant:migration_import`
+--                permission (R-1 systemOnly=false NO — actually
+--                systemOnly=true per R-1, so a Tenant Admin can NOT
+--                self-trigger; this state is the precondition that
+--                permits the systemOnly import path to fire without
+--                producing duplicate tasks).
+--
+--   completed  — migration import has run for this tenant. Cannot
+--                re-open without an explicit sysadmin override. The
+--                state machine is intentionally NOT idempotent: re-
+--                opening risks a double-import that would generate
+--                duplicate future-dated tasks downstream.
+--
+-- Plan §11.3 non-negotiable: forward-only — never edit this file once
+-- applied.
+--
+-- -----------------------------------------------------------------------------
+-- State-transition policy (enforced at the service layer, not the DB)
+-- -----------------------------------------------------------------------------
+-- The C-6 service methods (gate_set / gate_get / gate_check) gate
+-- transitions:
+--
+--   closed   →  open       sysadmin (Transcorp Systems Team)
+--   open     →  completed  sysadmin (system actor, on successful import)
+--   completed →  open      sysadmin override only — never via routine flow
+--   open     →  closed     sysadmin override (rare, e.g. clearing was
+--                          incomplete)
+--
+-- The CHECK constraint below enforces only the value domain
+-- (closed | open | completed). Transition validation is in the service
+-- layer per the same reasoning as C-21: Postgres CHECK constraints
+-- can't read existing-row state during an UPDATE, and triggers that
+-- compare OLD vs NEW values are surprising under concurrent writers.
+--
+-- -----------------------------------------------------------------------------
+-- Column shapes
+-- -----------------------------------------------------------------------------
+--
+--   migration_gate_status   text NOT NULL DEFAULT 'closed' CHECK (...)
+--     - text rather than enum so future state additions don't require an
+--       ALTER TYPE plus migration drama. The CHECK is the authoritative
+--       value-domain guard.
+--     - DEFAULT 'closed' fail-closes existing tenants on this migration's
+--       application — no tenant gets migrate-permitted state without an
+--       explicit sysadmin transition.
+--
+--   migration_gate_set_at   timestamptz (nullable)
+--     - When the most recent transition happened. Null on tenants that
+--       have never transitioned (i.e. still at the 'closed' default).
+--     - Updated on every transition, not just open/completed, so the
+--       audit trail (combined with `tenant.migration_gate_changed`
+--       events from R-4 and the new C-6 emit) gives a complete history.
+--
+--   migration_gate_set_by   uuid (nullable) REFERENCES users(id)
+--                                          ON DELETE SET NULL
+--     - The user who performed the transition. Null on tenants that have
+--       never transitioned, OR whose previous setter has since been
+--       deleted (FK SET NULL).
+--     - References users(id) — the mirror table from 0001_identity.sql.
+--       Sysadmins are stored there with a Transcorp-staff role
+--       assignment, so the FK is correct even though the actor is
+--       Transcorp staff and not a tenant employee.
+--     - SET NULL rather than CASCADE because we don't want a deleted
+--       sysadmin to cascade-delete the tenant. Losing the setter id is
+--       acceptable degradation; losing the tenant is not.
+--     - The audit_events table additionally records the actor for every
+--       transition (R-4 emit), so even when this column nulls out the
+--       audit trail retains who set the gate.
+--
+-- =============================================================================
+
+ALTER TABLE tenants
+  ADD COLUMN migration_gate_status text NOT NULL DEFAULT 'closed'
+    CHECK (migration_gate_status IN ('closed', 'open', 'completed')),
+  ADD COLUMN migration_gate_set_at timestamptz,
+  ADD COLUMN migration_gate_set_by uuid REFERENCES users(id) ON DELETE SET NULL;
+
+-- -----------------------------------------------------------------------------
+-- No new GRANT needed.
+-- -----------------------------------------------------------------------------
+-- 0003_app_role.sql already grants SELECT/INSERT/UPDATE/DELETE on the
+-- existing tenants table to planner_app, and ALTER TABLE … ADD COLUMN
+-- inherits those grants automatically. No GRANT statement here.
+
+-- -----------------------------------------------------------------------------
+-- No RLS change needed.
+-- -----------------------------------------------------------------------------
+-- The tenants_self_isolation policy from 0001 (FOR ALL, USING+CHECK on
+-- `id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid`)
+-- already governs read/write on every column in this table, including
+-- the three columns added here. UPDATEs to the gate columns from a
+-- tenant-scoped session are filtered by RLS to the tenant's own row,
+-- which is correct: a Tenant Admin can NEVER self-transition the gate
+-- (the C-6 service methods enforce sysadmin-only transitions in code,
+-- but RLS shape is fine as-is).
