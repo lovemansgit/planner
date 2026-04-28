@@ -17,6 +17,14 @@
 //     without setting the session variable. The RLS policy MUST
 //     fail-closed, not fail-open.
 //
+// Day 3 / C-2 extension — `consignees` block. The C-1 RLS policy on
+// `consignees` is structurally identical to the one on `tenants`
+// proven above, but a structural similarity is not a regression test.
+// The block below mirrors the five tenants scenarios for consignees,
+// plus the no-session-var canary applied to consignees, so the
+// policy carries the same evidence as the table that authored the
+// pattern.
+//
 // What it would catch:
 //   - Pre-R-0 code where db.ts's single pool connected as `postgres`
 //     would have FAILED cases 1, 2, 4, AND 5 — every query would
@@ -165,15 +173,29 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       const role = await canarySql<{ role: string }[]>`SELECT current_user AS role`;
       expect(role[0].role).toBe("planner_app");
 
-      // Confirm the session variable is genuinely unset on this
-      // connection — `current_setting(name, true)` returns NULL when
-      // the variable has never been set. This is the precondition
-      // the RLS policy's defensive `NULLIF(..., '')::uuid` form
-      // collapses to, fail-closing every row.
+      // Confirm the session variable is in a state the RLS policy
+      // treats as "no tenant scope". The policy uses
+      // `NULLIF(current_setting('app.current_tenant_id', true), '')::uuid`,
+      // so it fail-closes on either NULL or the empty string. Both
+      // states are valid "unset" outcomes for this canary:
+      //   - On a fresh CI Postgres container: NULL (parameter never
+      //     declared on this connection).
+      //   - On the Supabase pooler: '' (a prior withServiceRole tx
+      //     ran `set_config('app.current_tenant_id', '', true)` on
+      //     the physical connection; pgBouncer's connection reuse
+      //     leaves the GUC declared at empty string even after the
+      //     transaction-local set_config ends — confirmed
+      //     2026-04-28 against the live preview DB through
+      //     aws-1-ap-south-1.pooler.supabase.com).
+      // Either is the precondition the RLS policy collapses to,
+      // fail-closing every row. Asserting the union here documents
+      // the operational reality and keeps the canary honest about
+      // what "unset" actually means in production.
       const settingProbe = await canarySql<
         { setting: string | null }[]
       >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
-      expect(settingProbe[0].setting).toBeNull();
+      const setting = settingProbe[0].setting;
+      expect(setting === null || setting === "").toBe(true);
 
       // The actual canary: query for our two test tenants. Zero
       // expected — the RLS policy filters every row when the
@@ -182,6 +204,144 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         SlugRow[]
       >`SELECT slug FROM tenants WHERE slug LIKE ${SLUG_LIKE}`;
       expect(rows.length).toBe(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Consignees — Day 3 / C-2 extension
+  // ---------------------------------------------------------------------------
+  // Mirrors the five tenants scenarios + canary, applied to a
+  // consignees row inserted into TENANT_A. Reuses TENANT_A and
+  // TENANT_B from the outer describe so this block depends on the
+  // outer beforeAll having seeded both tenants.
+  describe("consignees — same regression coverage", () => {
+    type ConsigneeIdRow = { id: string } & Record<string, unknown>;
+    type CountRow = { n: number } & Record<string, unknown>;
+    type NameRow = { name: string } & Record<string, unknown>;
+
+    const CONSIGNEE_PHONE = `r3-c-${RUN_ID}-1`;
+    const CONSIGNEE_NAME = `R-3 Consignee ${RUN_ID}`;
+    const CONSIGNEE_NAME_ATTEMPTED = `Cross-tenant overwrite ${RUN_ID}`;
+    let consigneeId: string;
+
+    beforeAll(async () => {
+      // Tenant A creates a consignee through `withTenant(A)` — the
+      // happy path. The WITH CHECK on the RLS policy passes because
+      // the row's tenant_id matches the session variable.
+      consigneeId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<ConsigneeIdRow>(sqlTag`
+          INSERT INTO consignees (
+            tenant_id, name, phone, address_line, emirate_or_region
+          ) VALUES (
+            ${TENANT_A}, ${CONSIGNEE_NAME}, ${CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+    });
+
+    it("withTenant(A) sees the consignee it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<NameRow>(sqlTag`
+          SELECT name FROM consignees WHERE id = ${consigneeId}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].name).toBe(CONSIGNEE_NAME);
+    });
+
+    it("withTenant(B) sees zero consignees from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<NameRow>(sqlTag`
+          SELECT name FROM consignees WHERE id = ${consigneeId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's consignee affects zero rows (RLS blocks cross-tenant writes)", async () => {
+      // RLS for UPDATE is enforced by the USING clause on the FOR ALL
+      // policy — rows whose tenant_id doesn't match the session
+      // variable are invisible to the UPDATE, so the row count is zero.
+      // Postgres reports this through the result's `count` field.
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE consignees SET name = ${CONSIGNEE_NAME_ATTEMPTED}
+          WHERE id = ${consigneeId}
+        `);
+      });
+
+      // Re-read as tenant A — the name MUST still be the original.
+      // This asserts no row was actually updated, regardless of how
+      // postgres.js reports row counts on the cross-tenant call.
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<NameRow>(sqlTag`
+          SELECT name FROM consignees WHERE id = ${consigneeId}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].name).toBe(CONSIGNEE_NAME);
+    });
+
+    it("withTenant(B) DELETE against tenant A's consignee removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM consignees WHERE id = ${consigneeId}
+        `);
+      });
+
+      // Tenant A still sees the row.
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM consignees WHERE id = ${consigneeId}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero consignees (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<NameRow>(sqlTag`
+          SELECT name FROM consignees WHERE id = ${consigneeId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero consignees", async () => {
+      // Same regression guard as the tenants canary above, applied to
+      // consignees. Opens a fresh planner_app connection that never
+      // calls set_config. RLS must fail-closed (zero rows), not
+      // fail-open.
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error("SUPABASE_APP_DATABASE_URL must be set for the consignees canary case");
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        // Same precondition union as the tenants canary above —
+        // accept NULL or '' because the policy's NULLIF treats both
+        // as "no tenant scope" and the Supabase pooler leaves the
+        // variable as ''. See the tenants canary for the full
+        // explanation.
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          NameRow[]
+        >`SELECT name FROM consignees WHERE id = ${consigneeId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
     });
   });
 });
