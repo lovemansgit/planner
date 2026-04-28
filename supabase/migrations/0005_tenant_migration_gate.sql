@@ -43,10 +43,65 @@
 --                          incomplete)
 --
 -- The CHECK constraint below enforces only the value domain
--- (closed | open | completed). Transition validation is in the service
--- layer per the same reasoning as C-21: Postgres CHECK constraints
--- can't read existing-row state during an UPDATE, and triggers that
--- compare OLD vs NEW values are surprising under concurrent writers.
+-- (closed | open | completed).
+--
+-- Transition validation lives in the service layer. NOTE: this is NOT
+-- the same reasoning as C-21. C-21 ("at least one Tenant Admin per
+-- tenant") is a row-count invariant that fundamentally cannot be
+-- expressed as a Postgres CHECK constraint, so the service layer was
+-- the only option. The migration-gate state machine, by contrast, is
+-- straightforwardly DB-enforceable — a `BEFORE UPDATE` trigger
+-- comparing OLD.migration_gate_status against NEW.migration_gate_status
+-- with an explicit allowed-transitions table would work cleanly under
+-- single-row-update concurrency (the row is locked for the duration of
+-- the UPDATE).
+--
+-- The choice to keep the state machine in code is a deliberate
+-- pilot-scope trade-off:
+--   1. Only the C-6 service layer is the legitimate caller. The
+--      sysadmin-only permission gate is itself enforced at the service
+--      layer (requirePermission `tenant:migration_gate_set` from R-1,
+--      systemOnly=true), so a defence-in-depth DB trigger would buy
+--      little marginal safety against the realistic threat model.
+--   2. Trigger-raised exceptions surface less actionable error messages
+--      to API callers than service-layer ConflictError throws.
+--   3. Pilot scope wants the smallest possible trigger surface area on
+--      tenants — the audit_events_no_delete RULE conflict caught in R-0
+--      verification (memory: followup_audit_rule_cascade_conflict) is
+--      a recent reminder that DB rules / triggers compose in
+--      surprising ways.
+--
+-- The accepted exposure: a sysadmin running a raw UPDATE bypasses the
+-- state machine. That is acceptable because sysadmin already holds the
+-- superuser DB role and could bypass any DB trigger by using ALTER
+-- TABLE … DISABLE TRIGGER. The DB layer cannot meaningfully constrain
+-- the same actor whose role can also reshape the constraint. Authorise
+-- the sysadmin in the service layer; audit every transition through
+-- R-4; reconcile drift via the audit log. A future PR can add the
+-- BEFORE UPDATE trigger as a lightweight defence-in-depth without
+-- changing this trade-off.
+--
+-- -----------------------------------------------------------------------------
+-- KNOWN: migration_gate_set_by is readable by tenant-scoped sessions
+-- -----------------------------------------------------------------------------
+-- Empirically verified C-5 PR #24, 2026-04-28: the existing tenants
+-- RLS policy (tenants_self_isolation, FOR ALL) filters rows but not
+-- columns, so a tenant-scoped read of the tenant's own row returns
+-- migration_gate_set_by — a Transcorp staff user uuid — to the tenant
+-- caller. RLS column-masking does not exist; this is structural.
+--
+-- C-6 (and any future tenant-read endpoint) MUST mask
+-- migration_gate_set_by from tenant-facing responses. The set_at
+-- timestamp can be surfaced (gives the tenant visibility into "when"
+-- without exposing internal personnel identity); the set_by uuid
+-- should be visible only to sysadmin actors. The audit_events trail
+-- retains the full setter-actor identity regardless.
+--
+-- This is documented here rather than fixed in the migration because
+-- (a) RLS doesn't column-mask anyway, so a DB-side mitigation isn't
+-- available, and (b) no tenant-read service path exists yet — the
+-- masking belongs in C-6's gate_get response shape and any future
+-- /api/tenants/me endpoint.
 --
 -- -----------------------------------------------------------------------------
 -- Column shapes
