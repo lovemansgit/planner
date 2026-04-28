@@ -29,6 +29,15 @@
 -- explicit GRANT below is belt-and-braces — the migration is self-contained,
 -- so anyone reading the file can confirm RLS-enforced access without having
 -- to trace back to 0003's defaults.
+--
+-- No unique constraint on (tenant_id, name, phone) or any other tuple — this
+-- is deliberate. Real-world delivery rosters legitimately repeat: two
+-- household members at the same address with the same shared landline, or
+-- a corporate site with multiple named recipients on one phone. A unique
+-- constraint here would reject valid data the merchant gave us. Duplicate
+-- detection during bulk import is advisory (warn + allow override), not
+-- enforced at the schema layer. The (tenant_id, phone) index supports that
+-- detection without preventing legitimate duplicates.
 -- =============================================================================
 
 
