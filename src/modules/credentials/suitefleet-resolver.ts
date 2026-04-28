@@ -36,6 +36,8 @@ export async function resolveSuiteFleetCredentials(
   tenantId: Uuid,
   env: EnvSource = process.env,
 ): Promise<SuiteFleetCredentials> {
+  // tenantId is intentionally unused in the Day-4 path — see file-header docblock.
+  // TODO(Day-5): replace env reads with AWS Secrets Manager lookup at /transcorp/secrets/{tenantId}/suitefleet/credentials.
   const username = env[ENV_USERNAME];
   const password = env[ENV_PASSWORD];
   const clientId = env[ENV_CLIENT_ID];
