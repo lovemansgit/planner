@@ -49,11 +49,13 @@ import type { Consignee, CreateConsigneeInput, UpdateConsigneePatch } from "./ty
 // caller-visible `Consignee` shape. Same pattern as identity's
 // CountRow / AssignmentRow.
 //
-// postgres.js returns `timestamptz` as Date instances. The domain
-// type carries IsoTimestamp (string) for cross-layer simplicity, so
-// the mapper converts here. Doing the conversion at the repository
-// boundary means the service / API / UI layers never have to know
-// about Date vs string.
+// postgres.js's timestamptz return shape is configuration-dependent —
+// against the Supabase pooler it returns ISO strings; against a fresh
+// node-postgres-style connection it can return Date instances. C-2's
+// initial typing assumed Date and broke at runtime against the live
+// preview DB; the coercion via `new Date(...).toISOString()` works for
+// both shapes (Date is idempotent through the constructor, string
+// parses back to the same instant). Surfaced during C-4 smoke-testing.
 type ConsigneeRow = {
   id: string;
   tenant_id: string;
@@ -65,9 +67,13 @@ type ConsigneeRow = {
   delivery_notes: string | null;
   external_ref: string | null;
   notes_internal: string | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: Date | string;
+  updated_at: Date | string;
 } & Record<string, unknown>;
+
+function toIso(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
 
 function mapRow(row: ConsigneeRow): Consignee {
   return {
@@ -81,8 +87,8 @@ function mapRow(row: ConsigneeRow): Consignee {
     deliveryNotes: row.delivery_notes,
     externalRef: row.external_ref,
     notesInternal: row.notes_internal,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
   };
 }
 
