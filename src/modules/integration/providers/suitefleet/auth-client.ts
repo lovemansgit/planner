@@ -25,6 +25,22 @@
 // 4xx responses are credential / shape problems and never benefit from
 // a retry, so they short-circuit straight to a CredentialError throw.
 //
+// (a) The brief's "3 attempts, 250ms / 500ms / 1000ms" is internally
+// inconsistent — 3 attempts implies 2 delays, not 3. Resolved as 3
+// retries / 4 total attempts / 3 delays. This is the conservative read,
+// matching the spirit of exponential backoff (each retry waits longer
+// than the last, ending at ~1s) and giving the upstream a generous
+// recovery budget for transient blips.
+//
+// (b) The retry condition is `response.status < 500` returns / `>= 500`
+// retries. That treats every 5xx as transient, including 501 (Not
+// Implemented) and 505 (HTTP Version Not Supported) which are
+// terminal. Negligible risk for SuiteFleet — neither code is
+// plausible against an established public API — but if the retry
+// surface widens (e.g., reused for tasks / consignees / webhooks
+// against less-vetted upstreams), tighten the retryable set to an
+// explicit allow-list: [500, 502, 503, 504, 408, 429].
+//
 // Logging hygiene — every log line goes through the project logger
 // (src/shared/logger.ts), which auto-redacts password / accessToken /
 // refreshToken / token / authorization / username (per ADR-007). The
