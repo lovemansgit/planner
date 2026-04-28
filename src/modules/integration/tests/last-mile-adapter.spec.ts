@@ -26,10 +26,10 @@ const TENANT_ID: Uuid = "00000000-0000-0000-0000-000000000001";
 
 const SAMPLE_SESSION: AuthenticatedSession = {
   tenantId: TENANT_ID,
-  accessToken: "access.sample",
-  refreshToken: "refresh.sample",
-  accessTokenExpiresAt: "2026-04-30T08:58:15.295Z",
-  refreshTokenExpiresAt: "2026-10-26T08:58:15.295Z",
+  token: "token.sample",
+  renewalToken: "renewal.sample",
+  tokenExpiresAt: "2026-04-30T08:58:15.295Z",
+  renewalTokenExpiresAt: "2026-10-26T08:58:15.295Z",
 };
 
 const SAMPLE_TASK: TaskCreateRequest = {
@@ -101,12 +101,12 @@ describe("LastMileAdapter contract", () => {
   it("authenticate returns a session bound to the requested tenant", async () => {
     const session = await adapter.authenticate(TENANT_ID);
     expect(session.tenantId).toBe(TENANT_ID);
-    expect(session.accessToken).toBeTypeOf("string");
+    expect(session.token).toBeTypeOf("string");
   });
 
   it("refreshSession round-trips a session shape", async () => {
     const refreshed = await adapter.refreshSession(SAMPLE_SESSION);
-    expect(refreshed.refreshToken).toBe(SAMPLE_SESSION.refreshToken);
+    expect(refreshed.renewalToken).toBe(SAMPLE_SESSION.renewalToken);
   });
 
   it("createTask returns an internal-language result", async () => {

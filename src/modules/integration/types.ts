@@ -38,10 +38,10 @@ export type InternalTaskStatus =
  */
 export interface AuthenticatedSession {
   readonly tenantId: Uuid;
-  readonly accessToken: string;
-  readonly refreshToken: string;
-  readonly accessTokenExpiresAt: IsoTimestamp;
-  readonly refreshTokenExpiresAt: IsoTimestamp;
+  readonly token: string;
+  readonly renewalToken: string;
+  readonly tokenExpiresAt: IsoTimestamp;
+  readonly renewalTokenExpiresAt: IsoTimestamp;
 }
 
 /**
@@ -120,7 +120,8 @@ export interface TaskCreateRequest {
 /**
  * Internal-language result of a successful `createTask`. `externalId` is
  * the provider's stable identifier (used in subsequent webhook events);
- * `trackingNumber` is the human-readable shipment label (AWB-equivalent).
+ * `trackingNumber` is the human-readable shipment label printed on the
+ * package and shown to the consignee.
  */
 export interface TaskCreateResult {
   readonly externalId: string;
