@@ -75,6 +75,21 @@ describe("migration-gate permissions (Day 3 / C-6)", () => {
     expect(PERMISSIONS["tenant:migration_gate_get"].systemOnly).toBe(false);
     expect(PERMISSIONS["tenant:migration_gate_check"].systemOnly).toBe(false);
   });
+
+  // Pinning the holder set so any drift in role membership for
+  // gate_set surfaces immediately. This is also the contract that
+  // migration-gate.ts's `isSysadminActor` proxy depends on: actors
+  // that carry gate_set are exactly those in these two systemOnly
+  // Transcorp roles. Both share the same internal-staff trust
+  // boundary, so treating them identically for set_by visibility is
+  // correct. If a future PR widens the holder set, this test breaks
+  // and forces a conscious decision about the proxy.
+  it("tenant:migration_gate_set is held by exactly the two systemOnly Transcorp roles", () => {
+    const holders = ALL_ROLE_SLUGS.filter((slug) =>
+      ROLES[slug].permissions.has("tenant:migration_gate_set")
+    );
+    expect(new Set(holders)).toEqual(new Set(["transcorp-systems", "transcorp-sysadmin"]));
+  });
 });
 
 describe("API_KEY_FORBIDDEN_PERMISSIONS", () => {
