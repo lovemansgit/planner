@@ -53,6 +53,7 @@
 // hand in `globalThis.fetch` and `() => new Date()` from the assembly
 // point in S-8.
 
+import type { SuiteFleetCredentials } from "../../../credentials";
 import { CredentialError } from "@/shared/errors";
 import { logger } from "@/shared/logger";
 
@@ -64,12 +65,10 @@ import type {
 const DEFAULT_BASE_URL = "https://api.suitefleet.com";
 const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000];
 
-/** Per-call credentials for the login flow. Resolved by S-3. */
-export interface SuiteFleetCredentials {
-  readonly username: string;
-  readonly password: string;
-  readonly clientId: string;
-}
+// `SuiteFleetCredentials` is owned by the credentials module — see
+// src/modules/credentials/types.ts. The auth client uses three of the
+// four fields (`username`, `password`, `clientId`); `customerId` is
+// consumed by S-8's `createTask` body builder.
 
 /** Inputs to the refresh flow — refresh tokens are scoped per clientId. */
 export interface SuiteFleetRefreshInput {

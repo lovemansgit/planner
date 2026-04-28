@@ -35,6 +35,7 @@ const SAMPLE_CREDENTIALS = {
   username: "planner@transcorp-intl.com",
   password: "p@ss+word with spaces",
   clientId: "transcorpsb",
+  customerId: 588,
 };
 
 const FIXED_NOW = new Date("2026-04-29T09:00:00.000Z");
