@@ -79,13 +79,12 @@ function plainResponse(text: string, status: number): Response {
 
 function makeClient(
   fetchMock: ReturnType<typeof vi.fn>,
-  options: { sleep?: (ms: number) => Promise<void>; baseUrl?: string } = {},
+  options: { baseUrl?: string } = {},
 ) {
   return createSuiteFleetTaskClient({
     fetch: fetchMock as unknown as typeof globalThis.fetch,
     clientId: "transcorpsb",
     clock: () => FIXED_NOW,
-    sleep: options.sleep ?? (async () => {}),
     baseUrl: options.baseUrl ?? "https://api.suitefleet.com",
   });
 }
@@ -394,21 +393,45 @@ describe("createTask — error mapping", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("retries on 5xx with the configured delay sequence then throws", async () => {
+  it("throws CredentialError on 5xx WITHOUT retry (single-attempt by design — see Idempotency policy)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(plainResponse("oops", 503));
-    const sleepCalls: number[] = [];
-    const sleep = vi.fn(async (ms: number) => {
-      sleepCalls.push(ms);
-    });
     await expect(
-      makeClient(fetchMock, { sleep }).createTask({
+      makeClient(fetchMock).createTask({
         session: SAMPLE_SESSION,
         customerId: 588,
         request: SAMPLE_REQUEST,
       }),
     ).rejects.toBeInstanceOf(CredentialError);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(sleepCalls).toEqual([250, 500, 1000]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws CredentialError on network error WITHOUT retry (single-attempt by design)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("ECONNRESET"));
+    await expect(
+      makeClient(fetchMock).createTask({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        request: SAMPLE_REQUEST,
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the underlying network error as cause on the single-attempt failure", async () => {
+    const networkError = new TypeError("ECONNRESET");
+    const fetchMock = vi.fn().mockRejectedValue(networkError);
+    let captured: unknown = null;
+    try {
+      await makeClient(fetchMock).createTask({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        request: SAMPLE_REQUEST,
+      });
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(CredentialError);
+    expect((captured as Error).cause).toBe(networkError);
   });
 });
 

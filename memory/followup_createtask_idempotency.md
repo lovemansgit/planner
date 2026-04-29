@@ -1,65 +1,67 @@
 ---
-name: createTask retry-on-uncertainty creates duplicate SuiteFleet tasks (Day-14 blocker)
-description: SuiteFleet sandbox does NOT dedupe by customerOrderNumber — empirical probe 2026-04-29. Retry policy in task-client.ts can produce duplicate physical deliveries when a request reaches SuiteFleet but the response is lost. Block pilot launch on hardening this surface.
+name: createTask single-attempt policy — SF doesn't dedupe and doesn't honour Idempotency-Key
+description: Two empirical sandbox probes 2026-04-29 confirmed SF does not dedupe by customerOrderNumber AND ignores the Idempotency-Key header. Code mitigation in place — createTask is single-attempt. Vendor written confirmation still required pre-pilot.
 type: project
 ---
 
-**Status: Day-14 cutoff blocker.** Must be hardened before pilot launch.
+**Status: code mitigation in place; vendor confirmation outstanding (Day-14 list).**
 
 ## Gap
 
-The S-8 task client (`src/modules/integration/providers/suitefleet/task-client.ts`) retries `POST /api/tasks` on 5xx and network errors with delays `[250, 500, 1000]ms` (4 attempts max). If a request reaches SuiteFleet successfully but the response is lost in transit (gateway timeout, NAT drop, our process crashes between send-receive), the retry creates a **duplicate task with a different `id` and a different `awb`** — which materialises as a duplicate physical delivery to the consignee.
+The S-8 task client (`src/modules/integration/providers/suitefleet/task-client.ts`) calls `POST /api/tasks`. If a request reaches SuiteFleet successfully but the response is lost in transit (gateway timeout, NAT drop, our process crashes between send-receive), a naive retry creates a **duplicate task with a different `id` and a different `awb`** — which materialises as a duplicate physical delivery to the consignee.
 
 ## Empirical evidence (2026-04-29)
+
+### Probe 1 — does SF dedupe by `customerOrderNumber`?
 
 Ran `scripts/sandbox-smoke-dedupe-probe.mjs`: posted same `customerOrderNumber=DEDUPE-PROBE-1777447850779` twice with 1-second gap, identical bodies. Both responses HTTP 200:
 
 - First:  `id=59019 awb=MPS-58040211`
 - Second: `id=59020 awb=MPS-05267778`
 
-**SuiteFleet sandbox does not dedupe by customerOrderNumber.** Probe script committed alongside the task client for future re-verification (SF behaviour may change post-vendor-update).
+**Result: SF does NOT dedupe by customerOrderNumber.**
 
-## Why this is a Day-14 blocker
+### Probe 2 — does SF honour `Idempotency-Key` header?
 
-The pilot scenario per `decision_daily_cutoff_and_throughput.md` pushes 7,000 tasks/day at 5 req/sec inside a 16:00–17:00 window. Each task is a physical delivery to a real consignee. A single network blip during the cutoff push could create 1+ duplicate tasks, which translates to:
+Ran `scripts/sandbox-smoke-idempotency-key-probe.mjs`: posted same body + same `Idempotency-Key: e43ac9cc-1b38-4fce-a7de-8ae4dbe35be1` UUID twice with 1-second gap. Both responses HTTP 200:
 
-- Duplicate driver dispatch
-- Duplicate physical delivery attempts (consignee receives the same package twice, or two drivers race to the same address)
-- Cost — Transcorp pays for both deliveries
-- CX harm — consignee confusion, merchant complaint
-- Reconciliation cost — operations has to detect, cancel one, refund
+- First:  `id=59022 awb=MPS-56635891`
+- Second: `id=59023 awb=MPS-23006236`
 
-The probability of a single blip per cutoff is low but non-zero, and the consequence is operationally serious. Pre-pilot sign-off requires this gap closed.
+**Result: SF IGNORES the Idempotency-Key header.**
 
-## Hardening options (pick one or stack)
+Both probe scripts are committed at `scripts/` for future re-verification (SF behaviour may change post-vendor-update).
 
-| Option | Pros | Cons |
-|---|---|---|
-| **Disable retry on POST `/api/tasks`** | Trivial code change. Eliminates duplicate risk. | Loses transient-failure resilience; one transient SF 503 = task push fails for the day, requiring manual replay. |
-| **Idempotency-Key header probe** | If SF honours RFC-style `Idempotency-Key`, retry-with-same-key returns the existing task. Industry-standard. | Untested against SF — they may ignore the header silently (then we still duplicate). Empirical probe needed. |
-| **Pre-flight `GET /api/tasks?customerOrderNumber=…` before retry** | Defensive — never POST a duplicate even if SF doesn't help. | Extra round-trip per retry; SF needs a search endpoint that we'd have to discover the shape of. |
-| **Client-side ledger + before-send check** | We track every POST attempt in our DB; on retry, check our own ledger before re-POSTing. | Adds DB write to the hot path; consistency is on us; doesn't help if our ledger write also failed. |
+## Code mitigation in place
 
-## Plan for pre-pilot hardening
+`task-client.ts` has been refactored: `createTask` is now **single-attempt**. On 5xx or network error, it throws immediately — no retry helper, no backoff. The auth client (S-2) retains its retry behaviour because auth flows are server-side idempotent.
 
-**Phase 1 — empirical probe of `Idempotency-Key`:**
-1. Modify the dedupe probe to send `Idempotency-Key: <uuid>` on both POSTs with the same UUID. If SF dedupes (same id, same awb), this is the cheapest fix.
-2. If SF ignores the header (still creates duplicates), proceed to Phase 2.
+The trade-off accepted:
 
-**Phase 2 — based on Phase 1 result:**
-- **If `Idempotency-Key` works:** wire it into `task-client.ts` — generate a UUID per `createTask` call, attach to header, reuse on retries within the same call. ~10 lines of code, one new test.
-- **If `Idempotency-Key` doesn't work:** disable retry on POST `/api/tasks` as the immediate fix. Surface 5xx / network errors directly to the caller; let the application layer (cron job) decide whether to re-attempt at the per-task level. Replace with pre-flight GET check or vendor escalation.
+| Outcome | Cost |
+|---|---|
+| Single-attempt + transient SF outage | One missed task per outage; cron worker re-attempts on next pass; no duplicate delivery |
+| Retry-on-uncertainty + lost response | Duplicate physical delivery; consignee receives package twice; Transcorp pays for both; CX harm |
 
-**Phase 3 — vendor confirmation regardless:**
-Email SuiteFleet account manager pre-Day-14 (folded into the existing pre-Day-14 communication that already covers webhook retry policy + error-code catalogue + auth rate limits). Specifically request:
+The cost of one duplicate physical delivery is operationally serious; the cost of one transient SF outage on a single task is low (cron re-attempts). Trade-off favours single-attempt.
 
-- Whether `Idempotency-Key` header is supported on `POST /api/tasks` (and the rest of the API surface)
-- Whether `customerOrderNumber` should be a unique key on their side (and if not, whether vendor can add server-side uniqueness)
-- Whether sandbox and production have the same dedupe behaviour
-- Recommended client-side patterns for at-least-once-delivery resilience
+## Vendor confirmation outstanding (Day-14 list)
 
-## Inline TODO
+**Required from SF account manager — written, not verbal:**
 
-`src/modules/integration/providers/suitefleet/task-client.ts` carries an inline `TODO(pre-pilot)` marker above the `callWithRetry` function. The marker references this memo. Resolution lands as a focused PR before Day 14.
+> "Request from SF account manager: written commitment to honour Idempotency-Key OR documented dedupe behaviour on customerOrderNumber."
 
-**Surfaced:** Day 4 / S-8 PR review (29 April 2026), empirical evidence captured the same day.
+This is folded into the existing pre-Day-14 SuiteFleet communication that already covers webhook retry policy + error-code catalogue + auth rate limits. If the vendor commits to one of:
+
+- (a) **Honouring `Idempotency-Key` going forward** — we re-enable retry with a per-call UUID header, dropping single-attempt back to retry-with-idempotency.
+- (b) **Documenting `customerOrderNumber` as a unique key on their side** — we re-enable retry knowing the second POST will return the existing task (or 409).
+
+If the vendor refuses both, single-attempt stays as the policy through pilot and beyond.
+
+## Inline pointers
+
+- `src/modules/integration/providers/suitefleet/task-client.ts` file-header comment block carries the two empirical probe results verbatim.
+- The createTask function body has a `SAFETY:` comment above the single fetch call documenting the design.
+- No `TODO(pre-pilot)` marker remains — the gap is closed in code; only vendor follow-up is outstanding (which is tracked here).
+
+**Surfaced and resolved in code:** Day 4 / S-8 PR review (29 April 2026), empirical evidence captured and code mitigation deployed the same day.

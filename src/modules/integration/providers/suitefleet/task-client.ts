@@ -23,22 +23,38 @@
 // undefined inputs produce field omission rather than null values.
 //
 // -------------------------------------------------------------------
-// Idempotency status (load-bearing):
+// Idempotency policy (load-bearing):
 //
-// Empirical sandbox dedupe probe on 2026-04-29 (S-8 review) confirmed
-// that SuiteFleet sandbox does NOT dedupe by customerOrderNumber.
-// Two POSTs with identical body 1 second apart created two distinct
-// tasks (id=59019 / awb=MPS-58040211 vs id=59020 / awb=MPS-05267778).
+// `createTask` is intentionally SINGLE-ATTEMPT. Two empirical sandbox
+// probes on 2026-04-29 confirmed:
 //
-// Implication: the retry block below CAN create duplicate tasks if a
-// request reaches SuiteFleet successfully but the response is lost
-// (gateway timeout, network drop). Sandbox behaviour ≠ production
-// guarantee — vendor written confirmation required pre-pilot.
+//   (1) SuiteFleet does NOT dedupe by `customerOrderNumber`.
+//       Two POSTs with identical body 1 second apart created two
+//       distinct tasks (id=59019 / awb=MPS-58040211 vs
+//                       id=59020 / awb=MPS-05267778).
 //
-// Tracked in memory/followup_createtask_idempotency.md as a Day-14
-// cutoff blocker. Hardening options: Idempotency-Key header probe,
-// disable retry-on-uncertainty for POST surface, or pre-flight check
-// by GET /api/tasks?customerOrderNumber=… before retry.
+//   (2) SuiteFleet does NOT honour the `Idempotency-Key` HTTP header.
+//       Two POSTs with same body + same UUID created two distinct
+//       tasks (id=59022 / awb=MPS-56635891 vs
+//              id=59023 / awb=MPS-23006236).
+//
+// Therefore: retrying on 5xx or network errors would create duplicate
+// physical deliveries when a request reaches SF but the response is
+// lost (gateway timeout, NAT drop, process crash). The cost of one
+// duplicate physical delivery is operationally serious; the cost of
+// one transient SF outage on a single task is one re-attempt by the
+// cron worker on the next pass. Trade-off favours single-attempt.
+//
+// The auth client (S-2) retains retry behaviour because auth flows
+// are idempotent on the server side — repeated logins return fresh
+// tokens, not duplicates of anything physical.
+//
+// Sandbox behaviour ≠ production guarantee. Vendor written
+// confirmation required pre-pilot (Day-14 list):
+//   "request from SF account manager: written commitment to honour
+//    Idempotency-Key OR documented dedupe behaviour on
+//    customerOrderNumber."
+// Tracked in memory/followup_createtask_idempotency.md.
 // -------------------------------------------------------------------
 //
 // S-8 sandbox capture also revealed: deliveryInformation.paymentMethod
@@ -48,10 +64,6 @@
 // GET /api/tasks/:id after creation, check whether paymentMethod
 // surfaces under any field name. Tracked in
 // memory/followup_paymentmethod_field_resolution.md.
-//
-// Retry: same policy as the auth client — 3 retries (4 total attempts)
-// with delays [250, 500, 1000]ms on network errors and 5xx; 4xx
-// surfaces immediately.
 
 import { CredentialError, ValidationError } from "../../../../shared/errors";
 import { logger } from "../../../../shared/logger";
@@ -68,15 +80,12 @@ import type {
 const log = logger.with({ component: "suitefleet_task_client" });
 
 const DEFAULT_BASE_URL = "https://api.suitefleet.com";
-const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000];
 
 export interface SuiteFleetTaskClientDeps {
   readonly fetch: typeof globalThis.fetch;
   readonly clientId: string;
   readonly clock: () => Date;
-  readonly sleep?: (ms: number) => Promise<void>;
   readonly baseUrl?: string;
-  readonly retryDelaysMs?: readonly number[];
 }
 
 export interface SuiteFleetTaskClient {
@@ -203,8 +212,6 @@ export function parseSuiteFleetTaskResponse(
     throw new ValidationError("SuiteFleet task response missing awb / trackingNumber");
   }
 
-  // Empirical sandbox capture (S-8 smoke) shows SuiteFleet returns
-  // `createdDate`, not `createdAt`. Try all three known variants.
   const createdAtRaw = body.createdDate ?? body.createdAt ?? body.creationDate;
   const createdAt =
     typeof createdAtRaw === "string" && createdAtRaw.length > 0
@@ -223,67 +230,21 @@ export function createSuiteFleetTaskClient(
   deps: SuiteFleetTaskClientDeps,
 ): SuiteFleetTaskClient {
   const baseUrl = (deps.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-
-  // TODO(pre-pilot): retry-on-uncertainty currently unsafe — empirical
-  // 2026-04-29 sandbox dedupe probe confirmed SuiteFleet does not dedupe
-  // by customerOrderNumber, so a network blip after SF processed the
-  // request creates a duplicate task on retry. Disable retry for POSTs
-  // OR add Idempotency-Key header probe OR pre-flight GET before retry.
-  // Vendor confirmation also required. Day-14 cutoff blocker; tracked
-  // in memory/followup_createtask_idempotency.md.
-  async function callWithRetry(
-    operation: "create_task",
-    request: () => Promise<Response>,
-  ): Promise<Response> {
-    const maxAttempts = retryDelays.length + 1;
-    let lastNetworkError: unknown = null;
-    let lastServerStatus: number | null = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      let response: Response | null = null;
-      try {
-        response = await request();
-      } catch (err) {
-        lastNetworkError = err;
-        log.warn({
-          operation,
-          attempt,
-          error_code: "network_error",
-          message: err instanceof Error ? err.message : "unknown",
-        });
-      }
-
-      if (response !== null) {
-        if (response.status < 500) return response;
-        lastServerStatus = response.status;
-        lastNetworkError = null;
-        log.warn({ operation, attempt, status: response.status, error_code: "server_5xx" });
-      }
-
-      if (attempt === maxAttempts) {
-        const cause = lastNetworkError instanceof Error ? lastNetworkError : undefined;
-        const reason =
-          lastServerStatus !== null
-            ? `SuiteFleet ${operation} returned ${lastServerStatus} after ${maxAttempts} attempts`
-            : `SuiteFleet ${operation} unreachable after ${maxAttempts} attempts`;
-        throw new CredentialError(reason, cause ? { cause } : undefined);
-      }
-
-      await sleep(retryDelays[attempt - 1]);
-    }
-
-    throw new CredentialError(`SuiteFleet ${operation} retry loop exhausted unexpectedly`);
-  }
 
   return {
     async createTask({ session, customerId, request }) {
       const url = `${baseUrl}/api/tasks`;
       const body = buildSuiteFleetTaskBody(request, customerId);
 
-      const response = await callWithRetry("create_task", () =>
-        deps.fetch(url, {
+      // SAFETY: single-attempt by design. See file-header
+      // "Idempotency policy" block. No retry helper here — any 5xx or
+      // network error surfaces directly to the caller, who decides
+      // whether to re-attempt at a higher level (e.g. the next cron
+      // pass for a missed task). Retry-on-uncertainty would create
+      // duplicate physical deliveries.
+      let response: Response;
+      try {
+        response = await deps.fetch(url, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${session.token}`,
@@ -292,8 +253,33 @@ export function createSuiteFleetTaskClient(
             Accept: "application/json",
           },
           body: JSON.stringify(body),
-        }),
-      );
+        });
+      } catch (err) {
+        log.warn({
+          operation: "create_task",
+          error_code: "network_error",
+          tenant_id: session.tenantId,
+          customer_order_number: request.customerOrderNumber,
+          message: err instanceof Error ? err.message : "unknown",
+        });
+        throw new CredentialError(
+          "SuiteFleet createTask network error — single-attempt policy, no retry",
+          err instanceof Error ? { cause: err } : undefined,
+        );
+      }
+
+      if (response.status >= 500) {
+        log.warn({
+          operation: "create_task",
+          status: response.status,
+          error_code: "server_5xx",
+          tenant_id: session.tenantId,
+          customer_order_number: request.customerOrderNumber,
+        });
+        throw new CredentialError(
+          `SuiteFleet createTask returned ${response.status} — single-attempt policy, no retry`,
+        );
+      }
 
       if (response.status >= 400) {
         log.warn({
