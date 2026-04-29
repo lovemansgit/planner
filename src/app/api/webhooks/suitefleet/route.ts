@@ -29,8 +29,7 @@ import type { Uuid } from "@/shared/types";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// Day-4 sentinel — single-tenant pilot path. Swapped for a URL-derived
-// tenantId at the moment the dynamic-route variant lands (Day 5+).
+// TODO(Day-5): swap sentinel for URL-derived tenantId when /api/webhooks/suitefleet/[tenantId] lands.
 const DAY_4_SINGLE_TENANT_SENTINEL: Uuid = "00000000-0000-0000-0000-000000000000";
 
 const log = logger.with({ component: "suitefleet_webhook_receiver" });

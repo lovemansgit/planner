@@ -6,7 +6,7 @@
 // — those tests are flaky and the standard library guarantees the
 // timing property of the primitive.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { SuiteFleetWebhookCredentials } from "../../../../credentials";
 
@@ -157,5 +157,62 @@ describe("verifySuiteFleetWebhook — value mismatch", () => {
       ok: false,
       reason: "client_id_mismatch",
     });
+  });
+});
+
+describe("verifySuiteFleetWebhook — timing-parity property", () => {
+  it("runs both string comparisons regardless of which header is missing", () => {
+    const compareSpy = vi.fn<(a: string, b: string) => boolean>(() => false);
+
+    // Missing only X-Client-Id — secret present
+    verifySuiteFleetWebhook(
+      makeHeaders({ "X-Client-Secret": EXPECTED.clientSecret }),
+      EXPECTED,
+      compareSpy,
+    );
+    expect(compareSpy).toHaveBeenCalledTimes(2);
+
+    compareSpy.mockClear();
+
+    // Missing only X-Client-Secret — id present
+    verifySuiteFleetWebhook(
+      makeHeaders({ "X-Client-Id": EXPECTED.clientId }),
+      EXPECTED,
+      compareSpy,
+    );
+    expect(compareSpy).toHaveBeenCalledTimes(2);
+
+    compareSpy.mockClear();
+
+    // Both headers missing
+    verifySuiteFleetWebhook(makeHeaders({}), EXPECTED, compareSpy);
+    expect(compareSpy).toHaveBeenCalledTimes(2);
+
+    compareSpy.mockClear();
+
+    // Both headers present, both wrong
+    verifySuiteFleetWebhook(
+      makeHeaders({ "X-Client-Id": "wrong", "X-Client-Secret": "wrong" }),
+      EXPECTED,
+      compareSpy,
+    );
+    expect(compareSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("compares against same-length fallback when a header is missing", () => {
+    const compareSpy = vi.fn<(a: string, b: string) => boolean>(() => false);
+
+    verifySuiteFleetWebhook(
+      makeHeaders({ "X-Client-Secret": EXPECTED.clientSecret }),
+      EXPECTED,
+      compareSpy,
+    );
+
+    // First call: clientId compare. Input is the same-length null-byte
+    // fallback, second arg is the expected clientId.
+    const firstCall = compareSpy.mock.calls[0];
+    expect(firstCall[0]).toHaveLength(EXPECTED.clientId.length);
+    expect(firstCall[1]).toBe(EXPECTED.clientId);
+    expect(firstCall[0]).not.toBe(EXPECTED.clientId);
   });
 });
