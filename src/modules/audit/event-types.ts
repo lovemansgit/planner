@@ -301,15 +301,6 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "task_ids[] (uuid), count (int).",
     systemOnly: true,
   },
-  "task.deleted": {
-    id: "task.deleted",
-    resource: "task",
-    action: "deleted",
-    description:
-      "A task was hard-deleted by a system actor (e.g., the migration-import rollback path or a future cron flow). System-only — users do not delete tasks per the catalogue's task-permission design (no task:delete in identity/permissions.ts).",
-    metadataNotes: "task_id, customer_order_number.",
-    systemOnly: true,
-  },
 
   // ---- import (bulk-import operations cross-cutting) ---------------------
   "import.validation_failed": {

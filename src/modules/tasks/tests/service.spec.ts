@@ -30,7 +30,15 @@ vi.mock("../repository", () => ({
   findTaskById: vi.fn(),
   listTasksByTenant: vi.fn(),
   updateTask: vi.fn(),
-  deleteTask: vi.fn(),
+}));
+
+vi.mock("../../../shared/logger", () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 import { withServiceRole, withTenant } from "../../../shared/db";
@@ -42,10 +50,11 @@ import {
 import type { Actor, RequestContext } from "../../../shared/tenant-context";
 import type { Permission } from "../../../shared/types";
 
+import { logger } from "../../../shared/logger";
+
 import { emit } from "../../audit";
 
 import {
-  deleteTask as deleteTaskRow,
   findTaskById,
   insertTaskWithPackages,
   listTasksByTenant,
@@ -55,7 +64,6 @@ import {
   BulkValidationError,
   bulkCreateTasks,
   createTask,
-  deleteTask,
   getTask,
   listTasks,
   updateTask,
@@ -69,7 +77,7 @@ const mockInsert = vi.mocked(insertTaskWithPackages);
 const mockFindById = vi.mocked(findTaskById);
 const mockListByTenant = vi.mocked(listTasksByTenant);
 const mockUpdate = vi.mocked(updateTaskRow);
-const mockDelete = vi.mocked(deleteTaskRow);
+const mockLoggerError = vi.mocked(logger.error);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
@@ -160,7 +168,7 @@ beforeEach(() => {
   mockFindById.mockReset();
   mockListByTenant.mockReset();
   mockUpdate.mockReset();
-  mockDelete.mockReset();
+  mockLoggerError.mockReset();
 
   mockWithTenant.mockImplementation(async (_tenantId, fn) => fn({} as never));
   mockWithServiceRole.mockImplementation(async (_reason, fn) => fn({} as never));
@@ -329,6 +337,55 @@ describe("bulkCreateTasks", () => {
     expect(error).toBeInstanceOf(BulkValidationError);
     expect(error.failures[0].field).toBe("packages[0].position");
   });
+
+  it("per-task emit failures are logged but do not poison the result (committed batch is preserved)", async () => {
+    const ctx = systemCtx();
+    const t1 = taskFixture({ id: "task-1", customerOrderNumber: "ORDER-1" });
+    const t2 = taskFixture({ id: "task-2", customerOrderNumber: "ORDER-2" });
+    const t3 = taskFixture({ id: "task-3", customerOrderNumber: "ORDER-3" });
+    mockInsert.mockResolvedValueOnce(t1).mockResolvedValueOnce(t2).mockResolvedValueOnce(t3);
+
+    // Emit succeeds for task-1, throws for task-2, succeeds for
+    // task-3, and succeeds for the meta event. The function MUST
+    // still return the full result with all three tasks.
+    mockEmit
+      .mockResolvedValueOnce(undefined) // task.created task-1
+      .mockRejectedValueOnce(new Error("audit DB unreachable")) // task.created task-2
+      .mockResolvedValueOnce(undefined) // task.created task-3
+      .mockResolvedValueOnce(undefined); // task.bulk_created meta
+
+    let raised: unknown = null;
+    let result: { created: readonly Task[] } | undefined;
+    try {
+      result = await bulkCreateTasks(ctx, [baseInput, baseInput, baseInput]);
+    } catch (err) {
+      raised = err;
+    }
+
+    expect(raised).toBeNull();
+    expect(result).toBeDefined();
+    expect(result!.created).toHaveLength(3);
+    expect(result!.created.map((t) => t.id)).toEqual(["task-1", "task-2", "task-3"]);
+
+    // All four emits attempted (3 per-task + 1 meta).
+    expect(mockEmit).toHaveBeenCalledTimes(4);
+
+    // The failed emit was logged at error level, NOT propagated.
+    expect(mockLoggerError).toHaveBeenCalledOnce();
+    const logArg = mockLoggerError.mock.calls[0][0] as unknown as {
+      eventType: string;
+      resourceId: string;
+      error: string;
+    };
+    expect(logArg.eventType).toBe("task.created");
+    expect(logArg.resourceId).toBe("task-2");
+    expect(logArg.error).toContain("audit DB unreachable");
+
+    // Transaction was already closed before the emits ran — nothing
+    // about an emit failure can roll back the committed inserts.
+    expect(mockWithServiceRole).toHaveBeenCalledOnce();
+    expect(mockInsert).toHaveBeenCalledTimes(3);
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -474,64 +531,3 @@ describe("updateTask", () => {
   });
 });
 
-// -----------------------------------------------------------------------------
-// deleteTask — system-only
-// -----------------------------------------------------------------------------
-
-describe("deleteTask", () => {
-  it("rejects a user actor with ForbiddenError (no user-facing task:delete permission)", async () => {
-    await expect(deleteTask(userCtx(["task:read", "task:update"]), TASK_ID)).rejects.toBeInstanceOf(
-      ForbiddenError,
-    );
-  });
-
-  it("throws ValidationError when tenantId is null", async () => {
-    const ctx = systemCtx("cron:generate_tasks", null);
-    await expect(deleteTask(ctx, TASK_ID)).rejects.toBeInstanceOf(ValidationError);
-  });
-
-  it("throws NotFoundError when row missing", async () => {
-    const ctx = systemCtx();
-    mockFindById.mockResolvedValue(null);
-    await expect(deleteTask(ctx, TASK_ID)).rejects.toBeInstanceOf(NotFoundError);
-    expect(mockDelete).not.toHaveBeenCalled();
-    expect(mockEmit).not.toHaveBeenCalled();
-  });
-
-  it("throws NotFoundError on tenant-mismatch (defence-in-depth under BYPASSRLS)", async () => {
-    const ctx = systemCtx();
-    // Pre-fetch returns a row, but its tenantId differs from ctx.tenantId.
-    // Under withServiceRole RLS doesn't filter, so the service must
-    // gate the tenant scope explicitly.
-    mockFindById.mockResolvedValue(taskFixture({ tenantId: "different-tenant" }));
-    await expect(deleteTask(ctx, TASK_ID)).rejects.toBeInstanceOf(NotFoundError);
-    expect(mockDelete).not.toHaveBeenCalled();
-  });
-
-  it("happy path — emits task.deleted with pre-delete metadata", async () => {
-    const ctx = systemCtx();
-    const row = taskFixture({ customerOrderNumber: "ORDER-DELETED" });
-    mockFindById.mockResolvedValue(row);
-    mockDelete.mockResolvedValue(true);
-
-    await deleteTask(ctx, TASK_ID);
-
-    expect(mockWithServiceRole).toHaveBeenCalledOnce();
-    expect(mockDelete).toHaveBeenCalledOnce();
-    expect(mockEmit).toHaveBeenCalledOnce();
-    const emitArg = mockEmit.mock.calls[0][0];
-    expect(emitArg.eventType).toBe("task.deleted");
-    expect(emitArg.actorKind).toBe("system");
-    expect(emitArg.actorId).toBe("cron:generate_tasks");
-    expect(emitArg.metadata?.task_id).toBe(TASK_ID);
-    expect(emitArg.metadata?.customer_order_number).toBe("ORDER-DELETED");
-  });
-
-  it("surfaces a vanished-row race as NotFoundError", async () => {
-    const ctx = systemCtx();
-    mockFindById.mockResolvedValue(taskFixture());
-    mockDelete.mockResolvedValue(false);
-    await expect(deleteTask(ctx, TASK_ID)).rejects.toBeInstanceOf(NotFoundError);
-    expect(mockEmit).not.toHaveBeenCalled();
-  });
-});

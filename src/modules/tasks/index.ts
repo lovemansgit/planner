@@ -4,12 +4,16 @@
 // design captured in
 // memory/decision_task_module_no_user_create_delete.md:
 //
-//   - createTask, bulkCreateTasks, deleteTask are SYSTEM-ONLY (no
-//     user-facing permission in the catalogue; the cron and the
-//     migration-import flow are the legitimate callers).
+//   - createTask, bulkCreateTasks are SYSTEM-ONLY (no user-facing
+//     permission in the catalogue; the cron and the migration-import
+//     flow are the legitimate callers).
 //
 //   - getTask, listTasks, updateTask are user-flow methods gated on
 //     existing task:read / task:update permissions.
+//
+// No deleteTask method — no MVP caller. If a future requirement
+// surfaces (GDPR erasure, manual cleanup), it lands then with
+// explicit scope and an audit event added in the same PR.
 //
 // The repository (T-2) is internal — only the service layer is
 // exported, so any caller reaches the DB through the audited /
@@ -30,7 +34,6 @@ export {
   BulkValidationError,
   bulkCreateTasks,
   createTask,
-  deleteTask,
   getTask,
   listTasks,
   updateTask,
