@@ -45,3 +45,9 @@ export type {
   SuiteFleetTaskClient,
   SuiteFleetTaskClientDeps,
 } from "./providers/suitefleet/task-client";
+export { createSuiteFleetAuthClient } from "./providers/suitefleet/auth-client";
+export type {
+  SuiteFleetAuthClient,
+  SuiteFleetAuthClientDeps,
+  SuiteFleetRefreshInput,
+} from "./providers/suitefleet/auth-client";

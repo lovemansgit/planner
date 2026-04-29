@@ -54,6 +54,20 @@ export default defineConfig({
           hookTimeout: 30_000,
         },
       },
+      {
+        // Sandbox project — Day 4 / S-9. Hits the live SuiteFleet
+        // sandbox at api.suitefleet.com. Tagged separately so default
+        // CI doesn't run these — opt in via `npm run test:sandbox`.
+        // Spec self-skips if sandbox is unreachable or creds missing.
+        resolve: { alias: SRC_ALIAS },
+        test: {
+          name: "sandbox",
+          include: ["tests/sandbox/**/*.spec.ts"],
+          environment: "node",
+          testTimeout: 30_000,
+          hookTimeout: 15_000,
+        },
+      },
     ],
   },
 });

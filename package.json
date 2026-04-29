@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:sandbox": "vitest run --project sandbox",
     "test:e2e": "playwright test"
   },
   "dependencies": {
