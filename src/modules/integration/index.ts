@@ -31,3 +31,8 @@ export type {
 export { verifySuiteFleetWebhook } from "./providers/suitefleet/webhook-verifier";
 export { parseSuiteFleetWebhookEvents } from "./providers/suitefleet/webhook-parser";
 export { mapSuiteFleetStatusToInternal } from "./providers/suitefleet/status-mapper";
+export { createSuiteFleetTokenCache } from "./providers/suitefleet/token-cache";
+export type {
+  SuiteFleetTokenCache,
+  SuiteFleetTokenCacheDeps,
+} from "./providers/suitefleet/token-cache";
