@@ -45,6 +45,10 @@ The trade-off accepted:
 
 The cost of one duplicate physical delivery is operationally serious; the cost of one transient SF outage on a single task is low (cron re-attempts). Trade-off favours single-attempt.
 
+## Day 7+ cron implication (non-negotiable for the cron design)
+
+With `createTask` now single-attempt, transient 5xx or network failures during the nightly cutoff push silently drop individual tasks. The cron layer must implement **application-layer retry-with-audit-trail OR explicit requeue-for-tomorrow on push failure**. Without this, pilot risk shifts from "duplicate delivery" to "missed delivery." Neither is acceptable; the cron design must address this explicitly. Capture in the Day 7 brief as a non-negotiable.
+
 ## Vendor confirmation outstanding (Day-14 list)
 
 **Required from SF account manager — written, not verbal:**
