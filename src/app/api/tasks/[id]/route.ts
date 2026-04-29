@@ -21,6 +21,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getTask, updateTask } from "@/modules/tasks";
+import { UpdateTaskBodySchema } from "@/modules/tasks/schemas";
 import { buildDemoContext } from "@/shared/demo-context";
 import { NotFoundError, ValidationError } from "@/shared/errors";
 
@@ -34,35 +35,6 @@ export const revalidate = 0;
 // -----------------------------------------------------------------------------
 
 const IdParamSchema = z.string().uuid({ message: "id must be a uuid" });
-
-// Patch shape mirrors UpdateTaskPatch from the tasks module. Identity,
-// association, and lifecycle columns (id, tenantId, consigneeId,
-// subscriptionId, externalId, externalTrackingNumber, pushedToExternalAt,
-// timestamps) are deliberately excluded — those are not patchable
-// through the user-facing surface. The service layer enforces the
-// same invariant; the boundary schema makes it explicit.
-const UpdateBodySchema = z
-  .object({
-    customerOrderNumber: z.string().optional(),
-    referenceNumber: z.string().optional(),
-    internalStatus: z
-      .enum(["CREATED", "ASSIGNED", "IN_TRANSIT", "DELIVERED", "FAILED", "CANCELED", "ON_HOLD"])
-      .optional(),
-    deliveryDate: z.string().optional(),
-    deliveryStartTime: z.string().optional(),
-    deliveryEndTime: z.string().optional(),
-    deliveryType: z.string().optional(),
-    taskKind: z.enum(["DELIVERY", "PICKUP"]).optional(),
-    paymentMethod: z.string().optional(),
-    codAmount: z.string().optional(),
-    declaredValue: z.string().optional(),
-    weightKg: z.string().optional(),
-    notes: z.string().optional(),
-    signatureRequired: z.boolean().optional(),
-    smsNotifications: z.boolean().optional(),
-    deliverToCustomerOnly: z.boolean().optional(),
-  })
-  .strict();
 
 // Next.js 16 dynamic route segments are async — `params` is a Promise.
 type RouteContext = { params: Promise<{ id: string }> };
@@ -98,7 +70,7 @@ export async function PATCH(req: Request, { params }: RouteContext): Promise<Nex
     const id = parseId(rawId);
 
     const body = (await req.json().catch(() => null)) as unknown;
-    const parsed = UpdateBodySchema.safeParse(body);
+    const parsed = UpdateTaskBodySchema.safeParse(body);
     if (!parsed.success) {
       throw new ValidationError(`request body invalid: ${parsed.error.message}`);
     }
