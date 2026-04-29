@@ -36,17 +36,43 @@ import type { WebhookEvent, WebhookEventKind } from "../../types";
 
 const log = logger.with({ component: "suitefleet_webhook_parser" });
 
-// TODO(Day-4-spec): verify the full 15-action vocabulary against
-// suitefleet-adapter-tech-spec.md (or empirical sandbox capture during
-// S-9) and replace the heuristic classifier below with an exhaustive
-// known-action map. Only `TASK_HAS_BEEN_ASSIGNED` is verified today.
+// 15-action vocabulary per brief §5.3.4. Each name maps to the
+// most appropriate WebhookEventKind based on its name.
 const KNOWN_ACTIONS: Readonly<Record<string, WebhookEventKind>> = {
+  // VERIFIED — confirmed via memory/decision_task_editability_cutoff_at_assigned.md
   TASK_HAS_BEEN_ASSIGNED: "TASK_ASSIGNMENT_CHANGED",
+
+  // TODO(Day-4-spec): mappings below are inferred from action names per brief §5.3.4
+  // and remain unverified until S-9 empirical sandbox capture confirms each.
+  TASK_HAS_BEEN_ORDERED: "TASK_STATUS_CHANGED",
+  TASK_HAS_BEEN_UPDATED: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_PICKED_UP: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_IN_TRANSIT: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_HUB_TRANSFER: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_DELIVERED: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_FAILED: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_REATTEMPT: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_RESCHEDULED: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER: "TASK_STATUS_CHANGED",
+  TASK_STATUS_UPDATED_TO_CANCELED: "TASK_STATUS_CHANGED",
 };
 
 function classifySuiteFleetAction(action: string): WebhookEventKind {
   const known = KNOWN_ACTIONS[action];
   if (known !== undefined) return known;
+
+  // Fallback heuristic. Every firing here means SuiteFleet sent an
+  // action we don't have in the explicit map — log a warn so ops can
+  // pick up the vocabulary drift before it silently misclassifies.
+  log.warn({
+    operation: "classify",
+    error_code: "unknown_action_fallback",
+    action,
+  });
+
   if (action.includes("ASSIGN")) return "TASK_ASSIGNMENT_CHANGED";
   if (action.includes("LOCATION")) return "TASK_LOCATION_UPDATE";
   if (action.includes("NOTE") || action.includes("PHOTO")) return "TASK_NOTE_ADDED";
@@ -86,8 +112,37 @@ function extractOccurredAt(raw: Record<string, unknown>): string {
   return new Date().toISOString();
 }
 
+// Canonical JSON: object keys are sorted recursively before serialising
+// so two payloads with identical content but different key ordering
+// produce the same byte string. Arrays preserve order (array elements
+// are positional; sorting them would change semantics).
+//
+// Properties:
+//   - Same content, any key ordering → same canonical string → same key
+//   - Different content (extra field, different value) → different
+//   - Nested objects with re-ordered keys → same key
+//
+// Limitation: assumes JSON-derived input (no `undefined`, no symbols,
+// no functions, no cycles). Webhook bodies are always JSON-parsed
+// before they reach the parser, so this assumption holds.
+function canonicalJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return "[" + value.map(canonicalJsonStringify).join(",") + "]";
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return (
+    "{" +
+    keys
+      .map((k) => JSON.stringify(k) + ":" + canonicalJsonStringify(obj[k]))
+      .join(",") +
+    "}"
+  );
+}
+
 function generateIdempotencyKey(raw: unknown): string {
-  return createHash("sha256").update(JSON.stringify(raw)).digest("hex");
+  return createHash("sha256").update(canonicalJsonStringify(raw)).digest("hex");
 }
 
 export function parseSuiteFleetWebhookEvents(body: unknown): readonly WebhookEvent[] {

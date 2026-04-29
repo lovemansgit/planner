@@ -279,3 +279,140 @@ describe("parseSuiteFleetWebhookEvents — return shape", () => {
     });
   });
 });
+
+describe("parseSuiteFleetWebhookEvents — 15-action vocabulary (brief §5.3.4)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["TASK_HAS_BEEN_ASSIGNED", "TASK_ASSIGNMENT_CHANGED"],
+    ["TASK_HAS_BEEN_ORDERED", "TASK_STATUS_CHANGED"],
+    ["TASK_HAS_BEEN_UPDATED", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_PICKED_UP", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_IN_TRANSIT", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_HUB_TRANSFER", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_DELIVERED", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_FAILED", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_REATTEMPT", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_RESCHEDULED", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER", "TASK_STATUS_CHANGED"],
+    ["TASK_STATUS_UPDATED_TO_CANCELED", "TASK_STATUS_CHANGED"],
+  ])("classifies %s as %s (explicit map entry)", (action, expectedKind) => {
+    const result = parseSuiteFleetWebhookEvents([{ ...VALID_ENTRY, action }]);
+    expect(result[0].kind).toBe(expectedKind);
+  });
+
+  it("emits a warn log when an unknown action falls through to the heuristic", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    parseSuiteFleetWebhookEvents([
+      { ...VALID_ENTRY, action: "TOTALLY_NEW_ACTION_FROM_SUITEFLEET" },
+    ]);
+
+    const allErr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(allErr).toContain("unknown_action_fallback");
+    expect(allErr).toContain("TOTALLY_NEW_ACTION_FROM_SUITEFLEET");
+  });
+
+  it("does NOT warn for known-map entries (no false positives on verified vocabulary)", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    parseSuiteFleetWebhookEvents([
+      { ...VALID_ENTRY, action: "TASK_HAS_BEEN_ASSIGNED" },
+      { ...VALID_ENTRY, action: "TASK_STATUS_UPDATED_TO_DELIVERED" },
+    ]);
+
+    const allErr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(allErr).not.toContain("unknown_action_fallback");
+  });
+});
+
+describe("parseSuiteFleetWebhookEvents — canonical-JSON idempotency key", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("produces identical keys for payloads with different top-level key ordering", () => {
+    const a = parseSuiteFleetWebhookEvents([
+      {
+        action: "TASK_HAS_BEEN_DELIVERED",
+        taskId: "x",
+        occurredAt: "2026-04-29T00:00:00Z",
+      },
+    ]);
+    const b = parseSuiteFleetWebhookEvents([
+      {
+        occurredAt: "2026-04-29T00:00:00Z",
+        taskId: "x",
+        action: "TASK_HAS_BEEN_DELIVERED",
+      },
+    ]);
+    expect(a[0].idempotencyKey).toBe(b[0].idempotencyKey);
+  });
+
+  it("produces identical keys for payloads with different nested-object key ordering", () => {
+    const a = parseSuiteFleetWebhookEvents([
+      {
+        action: "TASK_STATUS_UPDATED_TO_DELIVERED",
+        taskId: "x",
+        details: { driverId: "d-1", routeId: "r-1", note: "ok" },
+      },
+    ]);
+    const b = parseSuiteFleetWebhookEvents([
+      {
+        action: "TASK_STATUS_UPDATED_TO_DELIVERED",
+        taskId: "x",
+        details: { note: "ok", routeId: "r-1", driverId: "d-1" },
+      },
+    ]);
+    expect(a[0].idempotencyKey).toBe(b[0].idempotencyKey);
+  });
+
+  it("produces different keys when content differs (extra field)", () => {
+    const a = parseSuiteFleetWebhookEvents([
+      { action: "TASK_HAS_BEEN_ORDERED", taskId: "x" },
+    ]);
+    const b = parseSuiteFleetWebhookEvents([
+      { action: "TASK_HAS_BEEN_ORDERED", taskId: "x", extra: "value" },
+    ]);
+    expect(a[0].idempotencyKey).not.toBe(b[0].idempotencyKey);
+  });
+
+  it("produces different keys when content differs (different value)", () => {
+    const a = parseSuiteFleetWebhookEvents([
+      { action: "TASK_HAS_BEEN_ORDERED", taskId: "x" },
+    ]);
+    const b = parseSuiteFleetWebhookEvents([
+      { action: "TASK_HAS_BEEN_ORDERED", taskId: "y" },
+    ]);
+    expect(a[0].idempotencyKey).not.toBe(b[0].idempotencyKey);
+  });
+
+  it("preserves array element order (arrays sorting would change semantics)", () => {
+    const a = parseSuiteFleetWebhookEvents([
+      {
+        action: "TASK_HAS_BEEN_UPDATED",
+        taskId: "x",
+        history: ["ORDERED", "PICKED_UP", "DELIVERED"],
+      },
+    ]);
+    const b = parseSuiteFleetWebhookEvents([
+      {
+        action: "TASK_HAS_BEEN_UPDATED",
+        taskId: "x",
+        history: ["DELIVERED", "PICKED_UP", "ORDERED"],
+      },
+    ]);
+    expect(a[0].idempotencyKey).not.toBe(b[0].idempotencyKey);
+  });
+});
