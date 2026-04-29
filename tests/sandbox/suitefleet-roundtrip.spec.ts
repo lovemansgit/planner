@@ -207,6 +207,48 @@ describe("SuiteFleet sandbox — token cache behaviour", () => {
       Date.parse(first.tokenExpiresAt),
     );
   });
+
+  it("concurrent dedup: 5 parallel getSession calls produce 1 real login", async (ctx) => {
+    if (sandbox === null) {
+      ctx.skip();
+      return;
+    }
+    requireSandbox(sandbox);
+
+    let fetchCount = 0;
+    const countingFetch = ((...args: Parameters<typeof globalThis.fetch>) => {
+      fetchCount++;
+      return globalThis.fetch(...args);
+    }) as typeof globalThis.fetch;
+
+    const cache = createSuiteFleetTokenCache({
+      authClient: createSuiteFleetAuthClient({
+        fetch: countingFetch,
+        clock: () => new Date(),
+      }),
+      resolveCredentials: resolveSuiteFleetCredentials,
+      clock: () => new Date(),
+    });
+
+    // Fire 5 parallel getSession calls against an empty cache. The
+    // S-7 in-flight renewals map should make Call 1 start the renewal
+    // and Calls 2-5 attach to its Promise. End state: one real login,
+    // five identical sessions.
+    //
+    // Side observation — if SuiteFleet rate-limits rapid concurrent
+    // logins from the same user, this test still passes because dedup
+    // collapses 5 attempts into 1. Track separately if a future call
+    // pattern exposes the rate-limit (memory/followup_suitefleet_auth_rate_limits.md).
+    const promises = Array.from({ length: 5 }, () => cache.getSession(TENANT));
+    const sessions = await Promise.all(promises);
+
+    expect(fetchCount).toBe(1);
+    expect(sessions).toHaveLength(5);
+    for (const session of sessions) {
+      expect(session.token).toBe(sessions[0].token);
+      expect(session.tokenExpiresAt).toBe(sessions[0].tokenExpiresAt);
+    }
+  });
 });
 
 describe("SuiteFleet sandbox — task create round-trip", () => {
