@@ -29,3 +29,4 @@ export type {
 } from "./types";
 
 export { verifySuiteFleetWebhook } from "./providers/suitefleet/webhook-verifier";
+export { parseSuiteFleetWebhookEvents } from "./providers/suitefleet/webhook-parser";
