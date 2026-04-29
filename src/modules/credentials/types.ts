@@ -29,3 +29,17 @@ export interface SuiteFleetCredentials {
   readonly clientId: string;
   readonly customerId: number;
 }
+
+/**
+ * Resolved per-tenant SuiteFleet webhook secret. These values are
+ * configured by Transcorp in SuiteFleet's portal and sent on every
+ * inbound webhook as `X-Client-Id` / `X-Client-Secret` headers. They
+ * are SEPARATE from `SuiteFleetCredentials` — the auth credentials are
+ * for OUTBOUND calls; the webhook credentials are for verifying INBOUND
+ * deliveries. Production stores them per-tenant in AWS Secrets Manager
+ * at /transcorp/secrets/{tenantId}/suitefleet/webhook-credentials.
+ */
+export interface SuiteFleetWebhookCredentials {
+  readonly clientId: string;
+  readonly clientSecret: string;
+}

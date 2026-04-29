@@ -5,6 +5,10 @@
 // lives under providers/suitefleet/ and is not re-exported — callers
 // resolve a provider instance through the adapter factory (lands later
 // in Day 4 once auth + cred plumbing is in place).
+//
+// Day 4 / S-4: provider-specific webhook verifier exposed by name
+// (`verifySuiteFleetWebhook`). When a second provider lands, each gets
+// its own export; the route layer picks one per route.
 
 export type { LastMileAdapter } from "./last-mile-adapter";
 
@@ -23,3 +27,5 @@ export type {
   WebhookEventKind,
   WebhookVerificationResult,
 } from "./types";
+
+export { verifySuiteFleetWebhook } from "./providers/suitefleet/webhook-verifier";
