@@ -2,8 +2,8 @@
 //
 // The integration boundary callers depend on. Six methods, no provider
 // vocabulary in the signatures. The SuiteFleet implementation lives
-// under providers/suitefleet/ and is constructed by `getLastMileAdapter`
-// (lands later in Day 4 once auth + credential plumbing is in place).
+// under providers/suitefleet/ and is constructed by
+// `createSuiteFleetLastMileAdapter` (Day 5 / T-8).
 //
 // Day-4 commits implementing each method:
 //   authenticate          — S-2 (auth client) + S-3 (cred resolver) + S-7 (cache)
@@ -13,10 +13,20 @@
 //   parseWebhookEvents    — S-5
 //   mapStatusToInternal   — S-6
 //
+// Day-5 / T-8: assembled the primitives into one constructable
+// adapter. As part of T-8 review, `verifyWebhookRequest` was changed
+// to take `tenantId` as an explicit parameter and return a Promise.
+// The Day-4 single-tenant sentinel was a placeholder for the
+// per-tenant credential lookup that is now plumbed through the
+// interface. Surfacing the per-tenant dependency at the interface
+// level is cleaner than capturing a defaultTenantId sentinel inside
+// the assembly closure (which would invert the dependency direction
+// and bake the sentinel into every caller).
+//
 // Why these six and not, say, `getTask` / `cancelTask` / `listTasks`:
 // Day-4 demo target is the create-then-webhook round-trip. The remaining
-// CRUD lands Day 5+ alongside the task module and adds methods to this
-// interface as it does (not breaking changes — additions only).
+// CRUD lands later when the cron / webhook receiver / task-update
+// callers exist; the interface grows by addition.
 
 import type {
   AuthenticatedSession,
@@ -36,7 +46,18 @@ export interface LastMileAdapter {
     session: AuthenticatedSession,
     task: TaskCreateRequest,
   ): Promise<TaskCreateResult>;
-  verifyWebhookRequest(headers: HeadersLike, body: unknown): WebhookVerificationResult;
+  /**
+   * Verify an inbound webhook request against the tenant-specific
+   * webhook credentials. tenantId is supplied by the route handler
+   * (post-Day-5 dynamic route `/api/webhooks/suitefleet/[tenantId]`).
+   * Async because credential resolution is async (env reads today;
+   * AWS Secrets Manager once the swap lands).
+   */
+  verifyWebhookRequest(
+    tenantId: Uuid,
+    headers: HeadersLike,
+    body: unknown,
+  ): Promise<WebhookVerificationResult>;
   parseWebhookEvents(body: unknown): readonly WebhookEvent[];
   /**
    * Maps a provider-native status / event identifier to one of the
