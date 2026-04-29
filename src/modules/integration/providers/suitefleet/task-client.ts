@@ -5,7 +5,8 @@
 // SuiteFleet's wire shape; the response is mapped back into the
 // internal-language `TaskCreateResult`.
 //
-// Wire facts (locked from real curls during Day 3 brief capture):
+// Wire facts (locked from real curls during Day 3 brief capture +
+// confirmed by S-8 sandbox smoke):
 //   - Method: POST /api/tasks
 //   - Headers: Authorization: Bearer <token>, Clientid: <clientId>,
 //     Content-Type: application/json
@@ -14,15 +15,39 @@
 //   - customerId in body even though scoped in the JWT
 //   - creationSource: "API"; initial status: "ORDERED"
 //   - Coordinates as raw numbers, not strings
+//   - Response uses `id` (numeric) and `awb` (string)
+//   - Response timestamp field is `createdDate` (NOT `createdAt`)
 //
 // Optional-field handling: SuiteFleet expects absence of optional
 // fields, not `null`. The body builder uses conditional spreads so
 // undefined inputs produce field omission rather than null values.
 //
-// TODO(Day-4-spec): the response shape (`id` / `awb` / `trackingNumber`)
-// is inferred from public delivery-API conventions and from the brief.
-// S-9 sandbox round-trip will pin down the actual field names. The
-// permissive parser handles a few variants until confirmed.
+// -------------------------------------------------------------------
+// Idempotency status (load-bearing):
+//
+// Empirical sandbox dedupe probe on 2026-04-29 (S-8 review) confirmed
+// that SuiteFleet sandbox does NOT dedupe by customerOrderNumber.
+// Two POSTs with identical body 1 second apart created two distinct
+// tasks (id=59019 / awb=MPS-58040211 vs id=59020 / awb=MPS-05267778).
+//
+// Implication: the retry block below CAN create duplicate tasks if a
+// request reaches SuiteFleet successfully but the response is lost
+// (gateway timeout, network drop). Sandbox behaviour ≠ production
+// guarantee — vendor written confirmation required pre-pilot.
+//
+// Tracked in memory/followup_createtask_idempotency.md as a Day-14
+// cutoff blocker. Hardening options: Idempotency-Key header probe,
+// disable retry-on-uncertainty for POST surface, or pre-flight check
+// by GET /api/tasks?customerOrderNumber=… before retry.
+// -------------------------------------------------------------------
+//
+// S-8 sandbox capture also revealed: deliveryInformation.paymentMethod
+// we send is NOT echoed in the response. S-9 must verify whether
+// (a) we're sending it in the wrong shape, (b) SF stores it under a
+// different field, or (c) SF silently ignores it. Verification path:
+// GET /api/tasks/:id after creation, check whether paymentMethod
+// surfaces under any field name. Tracked in
+// memory/followup_paymentmethod_field_resolution.md.
 //
 // Retry: same policy as the auth client — 3 retries (4 total attempts)
 // with delays [250, 500, 1000]ms on network errors and 5xx; 4xx
@@ -201,6 +226,13 @@ export function createSuiteFleetTaskClient(
   const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
+  // TODO(pre-pilot): retry-on-uncertainty currently unsafe — empirical
+  // 2026-04-29 sandbox dedupe probe confirmed SuiteFleet does not dedupe
+  // by customerOrderNumber, so a network blip after SF processed the
+  // request creates a duplicate task on retry. Disable retry for POSTs
+  // OR add Idempotency-Key header probe OR pre-flight GET before retry.
+  // Vendor confirmation also required. Day-14 cutoff blocker; tracked
+  // in memory/followup_createtask_idempotency.md.
   async function callWithRetry(
     operation: "create_task",
     request: () => Promise<Response>,
