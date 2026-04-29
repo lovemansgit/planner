@@ -89,8 +89,8 @@ class StubAdapter implements LastMileAdapter {
     void body;
     return [];
   }
-  mapStatusToInternal(externalStatus: string): InternalTaskStatus {
-    void externalStatus;
+  mapStatusToInternal(externalStatus: string): InternalTaskStatus | null {
+    if (externalStatus === "") return null;
     return "CREATED";
   }
 }
@@ -125,7 +125,7 @@ describe("LastMileAdapter contract", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("mapStatusToInternal returns one of the seven internal states", () => {
+  it("mapStatusToInternal returns one of the seven internal states or null", () => {
     const status = adapter.mapStatusToInternal("ORDERED");
     const allowed: ReadonlySet<InternalTaskStatus> = new Set<InternalTaskStatus>([
       "CREATED",
@@ -136,7 +136,11 @@ describe("LastMileAdapter contract", () => {
       "CANCELED",
       "ON_HOLD",
     ]);
-    expect(allowed.has(status)).toBe(true);
+    expect(status === null || allowed.has(status)).toBe(true);
+  });
+
+  it("mapStatusToInternal returns null for non-lifecycle inputs (caller must not update state)", () => {
+    expect(adapter.mapStatusToInternal("")).toBeNull();
   });
 });
 

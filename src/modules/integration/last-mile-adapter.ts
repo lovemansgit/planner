@@ -38,5 +38,18 @@ export interface LastMileAdapter {
   ): Promise<TaskCreateResult>;
   verifyWebhookRequest(headers: HeadersLike, body: unknown): WebhookVerificationResult;
   parseWebhookEvents(body: unknown): readonly WebhookEvent[];
-  mapStatusToInternal(externalStatus: string): InternalTaskStatus;
+  /**
+   * Maps a provider-native status / event identifier to one of the
+   * seven internal lifecycle states.
+   *
+   * Returns `null` when the input is not a lifecycle-changing event —
+   * for example, a SuiteFleet `TASK_HAS_BEEN_UPDATED` (an edit, not a
+   * status change) or an unknown action vocabulary the implementation
+   * doesn't recognise.
+   *
+   * Caller contract: `null` means "do not update the task's state on
+   * this event." This makes the no-regress invariant visible at every
+   * call site rather than buried in downstream FSM logic.
+   */
+  mapStatusToInternal(externalStatus: string): InternalTaskStatus | null;
 }

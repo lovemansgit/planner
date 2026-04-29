@@ -30,3 +30,4 @@ export type {
 
 export { verifySuiteFleetWebhook } from "./providers/suitefleet/webhook-verifier";
 export { parseSuiteFleetWebhookEvents } from "./providers/suitefleet/webhook-parser";
+export { mapSuiteFleetStatusToInternal } from "./providers/suitefleet/status-mapper";
