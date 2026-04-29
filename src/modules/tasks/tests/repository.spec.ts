@@ -352,6 +352,45 @@ describe("updateTask", () => {
     expect(result?.packages).toHaveLength(1);
   });
 
+  it("empty-patch updateTask returns the same shape as findTaskById for the same id", async () => {
+    // Pins the empty-patch contract: an empty patch is "return current
+    // state, byte-identical to a fresh read." Prevents a future
+    // optimisation from drifting one path's mapped shape from the other.
+    //
+    // Both functions go through the same SELECT-with-json_agg form and
+    // the same mapTaskWithPackages mapper, so the asserted shape equality
+    // is a structural guarantee — not coincidence. If a future commit
+    // changes one mapper but not the other (e.g., adds a derived field
+    // to findTaskById without updating the empty-patch path), this test
+    // catches it before merge.
+    const sharedRow = taskRowWithPackagesFixture(
+      [
+        packageJsonFixture({ id: PACKAGE_ID_1, position: 0 }),
+        packageJsonFixture({ id: PACKAGE_ID_2, position: 1 }),
+      ],
+      {
+        customer_order_number: "ORDER-CONTRACT",
+        reference_number: "REF-9",
+        payment_method: "PrePaid",
+        cod_amount: "42.50",
+        weight_kg: "1.250",
+        signature_required: true,
+      },
+    );
+
+    const txUpdate = makeStubTx([[sharedRow]]);
+    const txFind = makeStubTx([[sharedRow]]);
+
+    const updateResult = await updateTask(txUpdate, TENANT_ID, TASK_ID, {});
+    const findResult = await findTaskById(txFind, TASK_ID);
+
+    expect(updateResult).not.toBeNull();
+    expect(findResult).not.toBeNull();
+    // Deep equality across every field, including the packages array
+    // (which both code paths deserialise via mapPackageFromJson).
+    expect(updateResult).toEqual(findResult);
+  });
+
   it("returns null when the row is missing, RLS-hidden, or tenant_id mismatch", async () => {
     const tx = makeStubTx([[]]);
     const result = await updateTask(tx, OTHER_TENANT_ID, TASK_ID, { customerOrderNumber: "ghost" });
