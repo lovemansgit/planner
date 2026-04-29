@@ -30,5 +30,11 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Credential resolver type narrowing](followup_credential_resolver_type_narrowing.md) — `as string` casts in suitefleet-resolver.ts; single-guard refactor removes them, ties to Day-5 Secrets Manager touch
 - [Internal task status lossiness](followup_internal_task_status_lossiness.md) — FAILED collapses transient + terminal failure; add 8th state if pilot feedback confirms the merchant cares
 - [SuiteFleet auth rate limits unknown](followup_suitefleet_auth_rate_limits.md) — auth endpoint limits + account-lockout policy undocumented; email SF account manager pre-Day-14
-- [createTask single-attempt policy](followup_createtask_idempotency.md) — SF doesn't dedupe and ignores Idempotency-Key (probes 2026-04-29). Code mitigation in place; vendor confirmation outstanding for Day-14
+- [createTask single-attempt policy](followup_createtask_idempotency.md) — SF doesn't dedupe and ignores Idempotency-Key (probes 2026-04-29). Code mitigation in place; vendor confirmation outstanding for Day-14. Day-5 update: T-7 SQLSTATE 23505 routing for cron upsert decision
 - [paymentMethod dropped from response](followup_paymentmethod_field_resolution.md) — S-9 must verify whether deliveryInformation.paymentMethod is mis-shaped, renamed, or silently ignored by SF
+
+## Day 5 (30 April 2026)
+
+- [Task module — no user-facing create/delete](decision_task_module_no_user_create_delete.md) — Day-5 bimodal design: createTask/bulk system-only, only updateTask + reads are user-flow; T-5 ships 3 endpoints, not 6; no deleteTask method
+- [No self-tier escalation](feedback_no_self_tier_escalation.md) — tier is Love's call; never self-escalate or de-escalate. Surface the question pre-PR instead
+- [Ephemeral vs durable memory](feedback_ephemeral_vs_durable_memory.md) — `~/Code/planner/memory/` is canonical (git-tracked). The agent-private auto-memory location is scratch only. Survey the durable store at session start
