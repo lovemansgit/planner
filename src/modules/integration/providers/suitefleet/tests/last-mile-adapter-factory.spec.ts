@@ -290,14 +290,86 @@ describe("verifyWebhookRequest", () => {
 });
 
 describe("parseWebhookEvents and mapStatusToInternal", () => {
-  it("delegates parseWebhookEvents to parseSuiteFleetWebhookEvents", () => {
+  it("delegates parseWebhookEvents to parseSuiteFleetWebhookEvents (empty result passes through)", () => {
     const events: readonly WebhookEvent[] = [];
     mockParseWebhook.mockReturnValue(events);
 
     const adapter = buildAdapter();
     const result = adapter.parseWebhookEvents("body");
     expect(mockParseWebhook).toHaveBeenCalledWith("body");
-    expect(result).toBe(events);
+    expect(result).toEqual([]);
+  });
+
+  it("composes the parser output with mapStatusToInternal — populates internalStatus on lifecycle events", () => {
+    // Parser returns an event with no internalStatus (its design).
+    // Adapter composes by reading event.raw.action, calling the
+    // mapper, and merging the result.
+    const parserOutput: readonly WebhookEvent[] = [
+      {
+        kind: "TASK_STATUS_CHANGED",
+        externalTaskId: "59000",
+        occurredAt: "2026-04-29T10:00:00.000Z",
+        idempotencyKey: "abc",
+        raw: { action: "TASK_HAS_BEEN_ORDERED", taskId: "59000" },
+      },
+    ];
+    mockParseWebhook.mockReturnValue(parserOutput);
+    mockMapStatus.mockReturnValue("CREATED");
+
+    const adapter = buildAdapter();
+    const result = adapter.parseWebhookEvents([]);
+
+    expect(mockMapStatus).toHaveBeenCalledWith("TASK_HAS_BEEN_ORDERED");
+    expect(result).toHaveLength(1);
+    expect(result[0].internalStatus).toBe("CREATED");
+    // Other event fields preserved unchanged.
+    expect(result[0].externalTaskId).toBe("59000");
+    expect(result[0].kind).toBe("TASK_STATUS_CHANGED");
+  });
+
+  it("leaves internalStatus undefined when the mapper returns null (non-lifecycle action)", () => {
+    // TASK_HAS_BEEN_UPDATED is an edit, not a status change. The
+    // mapper returns null for it. Per the LastMileAdapter contract,
+    // null means "do not populate internalStatus" — the event flows
+    // through unchanged.
+    const parserOutput: readonly WebhookEvent[] = [
+      {
+        kind: "TASK_STATUS_CHANGED",
+        externalTaskId: "59000",
+        occurredAt: "2026-04-29T10:00:00.000Z",
+        idempotencyKey: "abc",
+        raw: { action: "TASK_HAS_BEEN_UPDATED", taskId: "59000" },
+      },
+    ];
+    mockParseWebhook.mockReturnValue(parserOutput);
+    mockMapStatus.mockReturnValue(null);
+
+    const adapter = buildAdapter();
+    const result = adapter.parseWebhookEvents([]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].internalStatus).toBeUndefined();
+  });
+
+  it("skips composition when event.raw doesn't carry a string action (defensive)", () => {
+    // A future parser change or a malformed raw shape shouldn't
+    // crash the composition. The event passes through unchanged.
+    const parserOutput: readonly WebhookEvent[] = [
+      {
+        kind: "TASK_OTHER",
+        externalTaskId: "x",
+        occurredAt: "2026-04-29T10:00:00.000Z",
+        idempotencyKey: "k",
+        raw: { taskId: "x" }, // no `action` field
+      },
+    ];
+    mockParseWebhook.mockReturnValue(parserOutput);
+
+    const adapter = buildAdapter();
+    const result = adapter.parseWebhookEvents([]);
+
+    expect(mockMapStatus).not.toHaveBeenCalled();
+    expect(result[0].internalStatus).toBeUndefined();
   });
 
   it("delegates mapStatusToInternal to mapSuiteFleetStatusToInternal", () => {

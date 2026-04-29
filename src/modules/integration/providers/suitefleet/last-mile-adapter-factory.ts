@@ -147,7 +147,30 @@ export function createSuiteFleetLastMileAdapter(
     },
 
     parseWebhookEvents(body) {
-      return parseSuiteFleetWebhookEvents(body);
+      // Composition per S-5's parser file header: "the adapter
+      // assembly point composes the parser output with
+      // mapStatusToInternal to populate internalStatus." The parser
+      // intentionally leaves internalStatus undefined; this method
+      // is where the composition lands.
+      //
+      // Implementation: pull each event's action from `raw` (the
+      // original entry the parser preserved), call
+      // mapSuiteFleetStatusToInternal, and merge into the event.
+      // The mapper returns null for non-lifecycle actions (e.g.
+      // TASK_HAS_BEEN_UPDATED is an edit, not a state change) — in
+      // that case leave internalStatus undefined per the
+      // LastMileAdapter.mapStatusToInternal contract documented in
+      // last-mile-adapter.ts ("null means do not update the task's
+      // state on this event").
+      const events = parseSuiteFleetWebhookEvents(body);
+      return events.map((event) => {
+        if (typeof event.raw !== "object" || event.raw === null) return event;
+        const action = (event.raw as Record<string, unknown>).action;
+        if (typeof action !== "string") return event;
+        const internalStatus = mapSuiteFleetStatusToInternal(action);
+        if (internalStatus === null) return event;
+        return { ...event, internalStatus };
+      });
     },
 
     mapStatusToInternal(externalStatus) {

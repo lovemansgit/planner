@@ -227,13 +227,10 @@ describe("T-9 — LastMileAdapter end-to-end via assembly factory", () => {
     expect(events).toHaveLength(1);
     expect(events[0].kind).toBe("TASK_STATUS_CHANGED");
     expect(events[0].externalTaskId).toBe("59000");
-    // internalStatus is intentionally NOT asserted — the parser
-    // (S-5) leaves it undefined and the assembly point delegates 1:1
-    // rather than composing with mapStatusToInternal. The S-5 file
-    // header notes the original design intent was for the adapter
-    // assembly point to compose; T-8 didn't implement the composition,
-    // so callers (the Day-6 webhook receiver) compose at their layer.
-    // Tracked as a Day-6 follow-up in the T-9 PR description.
+    // internalStatus IS populated — the assembly factory composes
+    // the parser output with mapStatusToInternal per S-5's file
+    // header design intent. TASK_HAS_BEEN_ORDERED maps to CREATED.
+    expect(events[0].internalStatus).toBe("CREATED");
   });
 
   it("mapStatusToInternal: assembled adapter maps TASK_HAS_BEEN_ORDERED to CREATED", () => {
