@@ -40,6 +40,15 @@
 -- service layer's bulk-create path (T-4) inserts them in the same transaction
 -- and reads tenant_id from the same RequestContext.
 --
+-- Schema-layer enforcement of consistency. A BEFORE INSERT OR UPDATE trigger
+-- (task_packages_assert_tenant_match) verifies task_packages.tenant_id equals
+-- the parent tasks.tenant_id on every write. The trigger fires under
+-- BYPASSRLS callers (e.g., withServiceRole), closing the leak vector where a
+-- buggy service-role caller could insert a task_packages row whose tenant_id
+-- doesn't match its parent task's tenant_id. This is the schema-layer belt
+-- matching the application-layer braces — precedent: 0002's
+-- audit_events_no_delete RULE.
+--
 -- -----------------------------------------------------------------------------
 -- Column-level decisions
 -- -----------------------------------------------------------------------------
@@ -128,6 +137,48 @@ CREATE TRIGGER task_packages_set_updated_at
   BEFORE UPDATE ON task_packages
   FOR EACH ROW
   EXECUTE FUNCTION set_updated_at();
+
+
+-- -----------------------------------------------------------------------------
+-- Schema-layer tenant_id consistency invariant
+-- -----------------------------------------------------------------------------
+-- Asserts task_packages.tenant_id = parent tasks.tenant_id on every INSERT
+-- or UPDATE. Fires under BYPASSRLS callers too (triggers run regardless of
+-- RLS), so this catches the leak vector that the RLS WITH CHECK on
+-- task_packages cannot — a withServiceRole caller could otherwise insert a
+-- mismatched row because BYPASSRLS skips policy evaluation entirely.
+--
+-- Lookup of the parent's tenant_id reads through the table-owner chain and
+-- bypasses RLS by design, so the trigger works correctly regardless of the
+-- caller's session tenant.
+--
+-- The exception type is plain `RAISE EXCEPTION` — Postgres surfaces it as
+-- a SQLSTATE P0001 (raise_exception). The application layer treats this
+-- as an integrity violation and surfaces it as a 5xx (not a 4xx); this
+-- should never happen during routine flow because the application also
+-- enforces the invariant at the repository layer.
+CREATE OR REPLACE FUNCTION task_packages_assert_tenant_match()
+RETURNS trigger AS $$
+DECLARE
+  parent_tenant uuid;
+BEGIN
+  SELECT tenant_id INTO parent_tenant FROM tasks WHERE id = NEW.task_id;
+  IF parent_tenant IS NULL THEN
+    RAISE EXCEPTION 'task_packages.task_id % does not exist', NEW.task_id;
+  END IF;
+  IF parent_tenant <> NEW.tenant_id THEN
+    RAISE EXCEPTION
+      'task_packages.tenant_id % does not match parent task tenant_id %',
+      NEW.tenant_id, parent_tenant;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER task_packages_tenant_match
+  BEFORE INSERT OR UPDATE ON task_packages
+  FOR EACH ROW
+  EXECUTE FUNCTION task_packages_assert_tenant_match();
 
 
 -- -----------------------------------------------------------------------------
