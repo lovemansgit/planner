@@ -292,6 +292,15 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "task_id, completed_via — ui | api | webhook.",
     systemOnly: false,
   },
+  "task.bulk_created": {
+    id: "task.bulk_created",
+    resource: "task",
+    action: "bulk_created",
+    description:
+      "Many tasks were created in one transactional bulk-insert. System-only — emitted alongside per-task task.created events for traceability of the meta-operation (count, tenant) when investigating a batch's success or failure.",
+    metadataNotes: "task_ids[] (uuid), count (int).",
+    systemOnly: true,
+  },
 
   // ---- import (bulk-import operations cross-cutting) ---------------------
   "import.validation_failed": {
