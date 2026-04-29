@@ -49,6 +49,10 @@ The cost of one duplicate physical delivery is operationally serious; the cost o
 
 With `createTask` now single-attempt, transient 5xx or network failures during the nightly cutoff push silently drop individual tasks. The cron layer must implement **application-layer retry-with-audit-trail OR explicit requeue-for-tomorrow on push failure**. Without this, pilot risk shifts from "duplicate delivery" to "missed delivery." Neither is acceptable; the cron design must address this explicitly. Capture in the Day 7 brief as a non-negotiable.
 
+### T-7 SQLSTATE 23505 routing (Day-5 follow-up, 2026-04-30)
+
+The failed-pushes module's `recordFailedPush` (PR #42) is INSERT-PATH ONLY. The Day-7 cron caller of `recordFailedPush` MUST detect `SQLSTATE 23505` (unique_violation) from the partial UNIQUE on `failed_pushes (task_id) WHERE resolved_at IS NULL` and route to the future `recordFailedPushAttempt` UPDATE path (which lands when the cron does). A 23505 here means "this task already has an unresolved failed_pushes row" — it is the upsert decision point, not an error to surface.
+
 ## Vendor confirmation outstanding (Day-14 list)
 
 **Required from SF account manager — written, not verbal:**

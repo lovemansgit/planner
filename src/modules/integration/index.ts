@@ -51,3 +51,8 @@ export type {
   SuiteFleetAuthClientDeps,
   SuiteFleetRefreshInput,
 } from "./providers/suitefleet/auth-client";
+
+// Day 5 / T-8 — assembly factory that combines the primitives above
+// into a single constructable LastMileAdapter instance.
+export { createSuiteFleetLastMileAdapter } from "./providers/suitefleet/last-mile-adapter-factory";
+export type { SuiteFleetLastMileAdapterDeps } from "./providers/suitefleet/last-mile-adapter-factory";

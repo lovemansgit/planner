@@ -80,7 +80,12 @@ class StubAdapter implements LastMileAdapter {
       createdAt: "2026-04-29T09:00:00.000Z",
     };
   }
-  verifyWebhookRequest(headers: HeadersLike, body: unknown): WebhookVerificationResult {
+  async verifyWebhookRequest(
+    tenantId: string,
+    headers: HeadersLike,
+    body: unknown,
+  ): Promise<WebhookVerificationResult> {
+    void tenantId;
     void headers;
     void body;
     return { ok: true };
@@ -115,9 +120,10 @@ describe("LastMileAdapter contract", () => {
     expect(result.status).toBe<InternalTaskStatus>("CREATED");
   });
 
-  it("verifyWebhookRequest accepts a Headers-like object", () => {
+  it("verifyWebhookRequest accepts a tenantId and a Headers-like object", async () => {
     const headers: HeadersLike = { get: () => null };
-    expect(adapter.verifyWebhookRequest(headers, {}).ok).toBe(true);
+    const result = await adapter.verifyWebhookRequest(TENANT_ID, headers, {});
+    expect(result.ok).toBe(true);
   });
 
   it("parseWebhookEvents returns a readonly array", () => {
