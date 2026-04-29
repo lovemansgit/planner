@@ -292,6 +292,24 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "task_id, completed_via — ui | api | webhook.",
     systemOnly: false,
   },
+  "task.bulk_created": {
+    id: "task.bulk_created",
+    resource: "task",
+    action: "bulk_created",
+    description:
+      "Many tasks were created in one transactional bulk-insert. System-only — emitted alongside per-task task.created events for traceability of the meta-operation (count, tenant) when investigating a batch's success or failure.",
+    metadataNotes: "task_ids[] (uuid), count (int).",
+    systemOnly: true,
+  },
+  "task.deleted": {
+    id: "task.deleted",
+    resource: "task",
+    action: "deleted",
+    description:
+      "A task was hard-deleted by a system actor (e.g., the migration-import rollback path or a future cron flow). System-only — users do not delete tasks per the catalogue's task-permission design (no task:delete in identity/permissions.ts).",
+    metadataNotes: "task_id, customer_order_number.",
+    systemOnly: true,
+  },
 
   // ---- import (bulk-import operations cross-cutting) ---------------------
   "import.validation_failed": {
