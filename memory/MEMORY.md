@@ -30,3 +30,5 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Credential resolver type narrowing](followup_credential_resolver_type_narrowing.md) — `as string` casts in suitefleet-resolver.ts; single-guard refactor removes them, ties to Day-5 Secrets Manager touch
 - [Internal task status lossiness](followup_internal_task_status_lossiness.md) — FAILED collapses transient + terminal failure; add 8th state if pilot feedback confirms the merchant cares
 - [SuiteFleet auth rate limits unknown](followup_suitefleet_auth_rate_limits.md) — auth endpoint limits + account-lockout policy undocumented; email SF account manager pre-Day-14
+- [createTask single-attempt policy](followup_createtask_idempotency.md) — SF doesn't dedupe and ignores Idempotency-Key (probes 2026-04-29). Code mitigation in place; vendor confirmation outstanding for Day-14
+- [paymentMethod dropped from response](followup_paymentmethod_field_resolution.md) — S-9 must verify whether deliveryInformation.paymentMethod is mis-shaped, renamed, or silently ignored by SF

@@ -36,3 +36,12 @@ export type {
   SuiteFleetTokenCache,
   SuiteFleetTokenCacheDeps,
 } from "./providers/suitefleet/token-cache";
+export {
+  createSuiteFleetTaskClient,
+  buildSuiteFleetTaskBody,
+  parseSuiteFleetTaskResponse,
+} from "./providers/suitefleet/task-client";
+export type {
+  SuiteFleetTaskClient,
+  SuiteFleetTaskClientDeps,
+} from "./providers/suitefleet/task-client";
