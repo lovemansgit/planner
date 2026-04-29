@@ -301,6 +301,15 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "task_ids[] (uuid), count (int).",
     systemOnly: true,
   },
+  "task.push_failed": {
+    id: "task.push_failed",
+    resource: "task",
+    action: "push_failed",
+    description:
+      "A SuiteFleet push for a task exhausted its application-layer retries. A DLQ row was written to failed_pushes with the request payload + categorised failure reason for the Day-7 cron's retry-with-audit-trail flow. System-only — only the cron / adapter assembly path writes here.",
+    metadataNotes: "task_id (uuid), attempt_count (int), failure_reason (enum), http_status (int, nullable for network/timeout).",
+    systemOnly: true,
+  },
 
   // ---- import (bulk-import operations cross-cutting) ---------------------
   "import.validation_failed": {

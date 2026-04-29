@@ -640,4 +640,154 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Failed pushes — Day 5 / T-7 extension
+  // ---------------------------------------------------------------------------
+  // Mirrors the five tenants scenarios + canary, applied to a
+  // failed_pushes row inserted into TENANT_A. Self-contained: creates
+  // its own consignee + task dependencies through withServiceRole
+  // because the failed-pushes module's repository runs system-only
+  // (no withTenant path), and using withServiceRole here matches the
+  // production write path.
+  //
+  // Note on RLS-vs-trigger interaction (same as task_packages
+  // block): cross-tenant attempts are filtered by RLS USING before
+  // the failed_pushes_assert_tenant_match trigger has a chance to
+  // fire (the trigger only sees rows that survive the policy). The
+  // trigger's BYPASSRLS coverage lives in
+  // tests/integration/failed-pushes-tenant-match.spec.ts.
+  describe("failed_pushes — same regression coverage", () => {
+    type IdRow = { id: string } & Record<string, unknown>;
+    type CountRow = { n: number } & Record<string, unknown>;
+    type ReasonRow = { failure_reason: string } & Record<string, unknown>;
+
+    const FP_CONSIGNEE_PHONE = `t7-fp-${RUN_ID}-1`;
+    let failedPushId: string;
+
+    beforeAll(async () => {
+      // Seed via withServiceRole so we don't have to thread the
+      // tenant session for the multi-step setup. The repository's
+      // production caller is also withServiceRole.
+      await withServiceRole("T-7 RLS-block setup", async (tx) => {
+        const consigneeRows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO consignees (
+            tenant_id, name, phone, address_line, emirate_or_region
+          ) VALUES (
+            ${TENANT_A}, 'T-7 FP Consignee', ${FP_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+          )
+          RETURNING id
+        `);
+        const consigneeId = consigneeRows[0].id;
+
+        const taskRows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO tasks (
+            tenant_id, consignee_id, customer_order_number,
+            delivery_date, delivery_start_time, delivery_end_time
+          ) VALUES (
+            ${TENANT_A}, ${consigneeId}, ${`T7-RLS-FP-${RUN_ID}`},
+            '2026-05-01', '14:00', '16:00'
+          )
+          RETURNING id
+        `);
+        const fpTaskId = taskRows[0].id;
+
+        const fpRows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO failed_pushes (
+            tenant_id, task_id, task_payload, failure_reason
+          ) VALUES (
+            ${TENANT_A}, ${fpTaskId},
+            '{"customerOrderNumber":"T7-RLS"}'::jsonb, 'network'
+          )
+          RETURNING id
+        `);
+        failedPushId = fpRows[0].id;
+      });
+    });
+
+    it("withTenant(A) sees the failed_push it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<ReasonRow>(sqlTag`
+          SELECT failure_reason FROM failed_pushes WHERE id = ${failedPushId}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].failure_reason).toBe("network");
+    });
+
+    it("withTenant(B) sees zero failed_pushes from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<ReasonRow>(sqlTag`
+          SELECT failure_reason FROM failed_pushes WHERE id = ${failedPushId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's failed_push affects zero rows (RLS blocks before the trigger fires)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE failed_pushes SET failure_reason = 'timeout' WHERE id = ${failedPushId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<ReasonRow>(sqlTag`
+          SELECT failure_reason FROM failed_pushes WHERE id = ${failedPushId}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].failure_reason).toBe("network");
+    });
+
+    it("withTenant(B) DELETE against tenant A's failed_push removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM failed_pushes WHERE id = ${failedPushId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM failed_pushes WHERE id = ${failedPushId}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero failed_pushes (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<ReasonRow>(sqlTag`
+          SELECT failure_reason FROM failed_pushes WHERE id = ${failedPushId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero failed_pushes", async () => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error("SUPABASE_APP_DATABASE_URL must be set for the failed_pushes canary case");
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          ReasonRow[]
+        >`SELECT failure_reason FROM failed_pushes WHERE id = ${failedPushId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
+    });
+  });
 });
