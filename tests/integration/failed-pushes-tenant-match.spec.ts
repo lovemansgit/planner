@@ -191,4 +191,66 @@ describe("T-6 — failed_pushes_assert_tenant_match trigger fires under BYPASSRL
     // from the index, not the trigger.
     expect(error.code).toBe("23505");
   });
+
+  it("partial UNIQUE allows a new unresolved row for a task whose previous row is already resolved", async () => {
+    // Pins the "queue + audit trail" property: a task can fail,
+    // get resolved, then fail again — the partial UNIQUE on
+    // (task_id) WHERE resolved_at IS NULL only constrains the
+    // active failures, so historical resolved rows do not block a
+    // new unresolved row from inserting.
+    //
+    // Without this test, a future migration that tightens the
+    // partial UNIQUE (e.g., drops the WHERE clause and makes it a
+    // full UNIQUE) would silently break the resolve-and-refail
+    // flow without the spec catching it.
+    //
+    // State at the start of this test (after prior tests):
+    //   - One unresolved row for taskId (Row B from the matching-
+    //     INSERT test). The UPDATE-mismatch test left it intact;
+    //     the second-unresolved-INSERT test failed.
+    //
+    // What this test does:
+    //   1. UPDATE the existing unresolved row to set resolved_at
+    //      = now(). Row transitions to "resolved" and exits the
+    //      partial-index participation set.
+    //   2. INSERT a brand-new unresolved row for the same taskId.
+    //      The partial UNIQUE cannot see the resolved row (its
+    //      predicate evaluates FALSE), so the new row inserts
+    //      cleanly.
+    //   3. Assert both rows exist; one resolved, one unresolved.
+
+    // Step 1: resolve the existing row.
+    await sql`
+      UPDATE failed_pushes
+      SET resolved_at = now()
+      WHERE task_id = ${taskId} AND resolved_at IS NULL
+    `;
+
+    // Step 2: insert a fresh unresolved row for the same task.
+    await sql`
+      INSERT INTO failed_pushes (
+        task_id, tenant_id, task_payload, failure_reason
+      ) VALUES (
+        ${taskId}, ${TENANT_A}, '{"customerOrderNumber":"T6-refail"}'::jsonb, 'server_5xx'
+      )
+    `;
+
+    // Step 3: verify the queue + audit trail state.
+    const totalRows = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM failed_pushes WHERE task_id = ${taskId}
+    `;
+    expect(totalRows[0].n).toBe(2);
+
+    const unresolvedRows = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM failed_pushes
+      WHERE task_id = ${taskId} AND resolved_at IS NULL
+    `;
+    expect(unresolvedRows[0].n).toBe(1);
+
+    const resolvedRows = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM failed_pushes
+      WHERE task_id = ${taskId} AND resolved_at IS NOT NULL
+    `;
+    expect(resolvedRows[0].n).toBe(1);
+  });
 });
