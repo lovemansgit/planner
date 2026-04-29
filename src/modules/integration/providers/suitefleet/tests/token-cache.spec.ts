@@ -307,6 +307,137 @@ describe("SuiteFleetTokenCache — invalidate", () => {
   });
 });
 
+describe("SuiteFleetTokenCache — still-serviceable cached fallback", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("returns cached session when refresh fails AND login fails AND cached is still serviceable", async () => {
+    const h = buildHarness();
+    h.loginMock.mockResolvedValueOnce(
+      makeTokens({ accessToken: "AT.original", fromTime: h.clock.now }),
+    );
+    await h.cache.getSession(TENANT_A);
+
+    // Move into the T-1h refresh window (23.5h after issue, 30m remaining)
+    h.clock.now += 23.5 * 60 * 60 * 1000;
+
+    h.refreshMock.mockRejectedValueOnce(new Error("refresh upstream 5xx"));
+    h.loginMock.mockRejectedValueOnce(new Error("login upstream 5xx"));
+
+    const session = await h.cache.getSession(TENANT_A);
+
+    expect(session.token).toBe("AT.original");
+    expect(h.refreshMock).toHaveBeenCalledTimes(1);
+    expect(h.loginMock).toHaveBeenCalledTimes(2); // initial + the failed retry
+  });
+
+  it("returns cached session when credential resolver fails AND cached is still serviceable", async () => {
+    const h = buildHarness();
+    h.loginMock.mockResolvedValueOnce(
+      makeTokens({ accessToken: "AT.original", fromTime: h.clock.now }),
+    );
+    await h.cache.getSession(TENANT_A);
+
+    h.clock.now += 23.5 * 60 * 60 * 1000;
+
+    h.resolveMock.mockRejectedValueOnce(new Error("Secrets Manager unreachable"));
+
+    const session = await h.cache.getSession(TENANT_A);
+
+    expect(session.token).toBe("AT.original");
+    expect(h.refreshMock).not.toHaveBeenCalled();
+    expect(h.loginMock).toHaveBeenCalledTimes(1); // only the initial
+  });
+
+  it("propagates error when all renewal paths fail AND cached has hard-expired", async () => {
+    const h = buildHarness();
+    h.loginMock.mockResolvedValueOnce(makeTokens({ fromTime: h.clock.now }));
+    await h.cache.getSession(TENANT_A);
+
+    // Past the access-token hard expiry (24h+1h = 25h, both inside refresh
+    // token's 180-day window so refresh would normally be tried)
+    h.clock.now += 25 * 60 * 60 * 1000;
+
+    h.refreshMock.mockRejectedValueOnce(new Error("refresh failed"));
+    h.loginMock.mockRejectedValueOnce(new Error("login failed"));
+
+    await expect(h.cache.getSession(TENANT_A)).rejects.toThrow("login failed");
+  });
+
+  it("propagates error when no cached token exists at all", async () => {
+    const h = buildHarness();
+    h.resolveMock.mockRejectedValueOnce(new Error("Secrets Manager unreachable"));
+
+    await expect(h.cache.getSession(TENANT_A)).rejects.toThrow(
+      "Secrets Manager unreachable",
+    );
+    expect(h.loginMock).not.toHaveBeenCalled();
+    expect(h.refreshMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("SuiteFleetTokenCache — concurrent-request dedup", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("dedupes 100 concurrent getSession calls into a single login", async () => {
+    const h = buildHarness();
+    h.loginMock.mockResolvedValueOnce(
+      makeTokens({ accessToken: "AT.shared", fromTime: h.clock.now }),
+    );
+
+    const promises = Array.from({ length: 100 }, () => h.cache.getSession(TENANT_A));
+    const sessions = await Promise.all(promises);
+
+    expect(h.loginMock).toHaveBeenCalledTimes(1);
+    expect(h.resolveMock).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveLength(100);
+    for (const session of sessions) {
+      expect(session.token).toBe("AT.shared");
+    }
+  });
+
+  it("dedupes concurrent refresh attempts within the refresh window", async () => {
+    const h = buildHarness();
+    h.loginMock.mockResolvedValueOnce(makeTokens({ fromTime: h.clock.now }));
+    await h.cache.getSession(TENANT_A);
+
+    h.clock.now += 23.5 * 60 * 60 * 1000; // inside T-1h window
+
+    h.refreshMock.mockResolvedValueOnce(
+      makeTokens({ accessToken: "AT.refreshed.shared", fromTime: h.clock.now }),
+    );
+
+    h.loginMock.mockClear();
+    h.resolveMock.mockClear();
+
+    const promises = Array.from({ length: 50 }, () => h.cache.getSession(TENANT_A));
+    const sessions = await Promise.all(promises);
+
+    expect(h.refreshMock).toHaveBeenCalledTimes(1);
+    expect(h.resolveMock).toHaveBeenCalledTimes(1);
+    expect(h.loginMock).not.toHaveBeenCalled();
+    for (const session of sessions) {
+      expect(session.token).toBe("AT.refreshed.shared");
+    }
+  });
+
+  it("clears the in-flight entry on failure so retries can proceed", async () => {
+    const h = buildHarness();
+    h.loginMock.mockRejectedValueOnce(new Error("first attempt fails"));
+
+    await expect(h.cache.getSession(TENANT_A)).rejects.toThrow("first attempt fails");
+
+    // Second call (sequential, after the first failed) should attempt
+    // a fresh renewal — not block on a stale in-flight entry.
+    h.loginMock.mockResolvedValueOnce(
+      makeTokens({ accessToken: "AT.recovered", fromTime: h.clock.now }),
+    );
+
+    const session = await h.cache.getSession(TENANT_A);
+    expect(session.token).toBe("AT.recovered");
+    expect(h.loginMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("SuiteFleetTokenCache — custom refreshLeadTimeMs", () => {
   afterEach(() => vi.restoreAllMocks());
 

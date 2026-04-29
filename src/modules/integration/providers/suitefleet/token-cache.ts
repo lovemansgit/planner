@@ -1,6 +1,6 @@
 // SuiteFleet token cache — Day 4 / S-7.
 //
-// Wraps the auth client (S-2) and the credential resolver (S-3) into a
+// Wraps the auth client (S-2) and credential resolver (S-3) into a
 // per-tenant session cache. Hides login / refresh / cache plumbing
 // from callers — the public API is `getSession(tenantId)` returning
 // an `AuthenticatedSession`.
@@ -21,21 +21,42 @@
 //   throws)
 //     → resolve credentials → full login → cache → return
 //
+// -------------------------------------------------------------------
+// Renewal opportunism (load-bearing):
+//
+// A cached token valid for another 59 minutes is not "expired" — it is
+// "renew when convenient." Any failure during the optimistic renewal
+// window — credential resolver throws, refresh throws, login throws —
+// falls back to the still-serviceable cached token if `now <
+// cached.tokenExpiresAt`. Only when no serviceable cached token
+// exists does the error propagate.
+// -------------------------------------------------------------------
+//
+// Concurrency dedup (load-bearing):
+//
+// In-flight renewals are tracked in a Map<Uuid, Promise>. When a
+// `getSession` call decides renewal is needed, it checks for an
+// in-flight entry first; if found, it awaits that Promise instead of
+// starting its own. This makes 100 simultaneous getSession calls for
+// the same tenant produce a single login, not 100. The .finally()
+// hook clears the entry on settle (success or failure) so subsequent
+// retries are not blocked by a stale entry.
+//
+// This mirrors the Day-5+ Redis SETNX guard pattern — first arriver
+// locks, others wait. The Day-5 swap relocates the same logic to the
+// distributed primitive without changing the semantics.
+//
+// -------------------------------------------------------------------
+//
 // The "proactive" refresh is lazy: refresh is triggered by the next
 // `getSession` call that lands within the refresh window. There is no
-// background timer. With in-memory state and request-driven traffic
-// this is sufficient for pilot scale; the Day-5+ Redis swap may
-// introduce a real background refresh job if needed.
+// background timer.
 //
-// TODO(Day-5): replace the in-memory Map with Upstash Redis. The cache
-// API is the same shape; only the backing store changes. Keys:
-//   sf:session:<tenantId>
-// Values: serialised AuthenticatedSession with TTL = (renewalExpiresAt - now).
-//
-// Concurrency: this implementation does NOT dedupe concurrent
-// cache-miss requests. Two simultaneous getSession calls for the same
-// tenantId can each trigger a login. Pilot-scale traffic makes this a
-// non-issue; the Redis swap on Day 5+ will use SETNX-style guards.
+// TODO(Day-5): replace the in-memory Map with Upstash Redis.
+//   Cache keys:    sf:session:<tenantId>
+//   In-flight:     sf:renewal-lock:<tenantId> (SET NX EX 30)
+//   Values:        serialised AuthenticatedSession with TTL =
+//                  (renewalExpiresAt - now)
 
 import { logger } from "../../../../shared/logger";
 import type { Uuid, IsoTimestamp } from "../../../../shared/types";
@@ -64,9 +85,8 @@ export interface SuiteFleetTokenCache {
   /**
    * Returns a usable `AuthenticatedSession` for the tenant. Hits the
    * cache when fresh, refreshes proactively when near expiry, falls
-   * back to full login when the refresh token is expired or refresh
-   * fails. Throws `CredentialError` if neither refresh nor login can
-   * produce a valid session.
+   * back to the still-serviceable cached token if any renewal step
+   * fails. Throws only when there's no usable session at all.
    */
   getSession(tenantId: Uuid): Promise<AuthenticatedSession>;
   /** Drop the cached session for one tenant, or all tenants. */
@@ -90,7 +110,63 @@ export function createSuiteFleetTokenCache(
   deps: SuiteFleetTokenCacheDeps,
 ): SuiteFleetTokenCache {
   const cache = new Map<Uuid, AuthenticatedSession>();
+  const inFlightRenewals = new Map<Uuid, Promise<AuthenticatedSession>>();
   const refreshLeadTimeMs = deps.refreshLeadTimeMs ?? DEFAULT_REFRESH_LEAD_TIME_MS;
+
+  async function performRenewal(
+    tenantId: Uuid,
+    cached: AuthenticatedSession | undefined,
+  ): Promise<AuthenticatedSession> {
+    try {
+      const credentials = await deps.resolveCredentials(tenantId);
+
+      if (cached !== undefined) {
+        const renewalExpiresAtMs = Date.parse(cached.renewalTokenExpiresAt);
+        const renewalNow = deps.clock().getTime();
+        if (renewalNow < renewalExpiresAtMs) {
+          try {
+            const tokens = await deps.authClient.refresh({
+              clientId: credentials.clientId,
+              refreshToken: cached.renewalToken,
+            });
+            const session = toAuthenticatedSession(tenantId, tokens);
+            cache.set(tenantId, session);
+            log.info({ operation: "refresh_session", tenant_id: tenantId, outcome: "ok" });
+            return session;
+          } catch (refreshErr) {
+            log.warn({
+              operation: "refresh_session",
+              tenant_id: tenantId,
+              outcome: "fallback_to_login",
+              message: refreshErr instanceof Error ? refreshErr.message : "unknown",
+            });
+          }
+        }
+      }
+
+      const tokens = await deps.authClient.login(credentials);
+      const session = toAuthenticatedSession(tenantId, tokens);
+      cache.set(tenantId, session);
+      log.info({ operation: "login_session", tenant_id: tenantId, outcome: "ok" });
+      return session;
+    } catch (err) {
+      // Renewal failed somewhere (resolver / refresh / login). Fall
+      // back to the cached token if it's still serviceable.
+      if (cached !== undefined) {
+        const fallbackNow = deps.clock().getTime();
+        if (fallbackNow < Date.parse(cached.tokenExpiresAt)) {
+          log.warn({
+            operation: "renewal_session",
+            tenant_id: tenantId,
+            error_code: "renewal_failed_using_cached",
+            message: err instanceof Error ? err.message : "unknown",
+          });
+          return cached;
+        }
+      }
+      throw err;
+    }
+  }
 
   async function getSession(tenantId: Uuid): Promise<AuthenticatedSession> {
     const now = deps.clock().getTime();
@@ -104,46 +180,19 @@ export function createSuiteFleetTokenCache(
       }
     }
 
-    // Either: cache miss, or cached session is within the refresh
-    // window, or fully expired. All three paths need credentials.
-    const credentials = await deps.resolveCredentials(tenantId);
-
-    if (cached !== undefined) {
-      const renewalExpiresAtMs = Date.parse(cached.renewalTokenExpiresAt);
-      if (now < renewalExpiresAtMs) {
-        try {
-          const tokens = await deps.authClient.refresh({
-            clientId: credentials.clientId,
-            refreshToken: cached.renewalToken,
-          });
-          const session = toAuthenticatedSession(tenantId, tokens);
-          cache.set(tenantId, session);
-          log.info({
-            operation: "refresh_session",
-            tenant_id: tenantId,
-            outcome: "ok",
-          });
-          return session;
-        } catch (err) {
-          log.warn({
-            operation: "refresh_session",
-            tenant_id: tenantId,
-            outcome: "fallback_to_login",
-            message: err instanceof Error ? err.message : "unknown",
-          });
-        }
-      }
+    // Concurrent-renewal dedup: if another caller is already running
+    // the renewal flow for this tenant, await that Promise instead of
+    // starting our own.
+    const inFlight = inFlightRenewals.get(tenantId);
+    if (inFlight !== undefined) {
+      return inFlight;
     }
 
-    const tokens = await deps.authClient.login(credentials);
-    const session = toAuthenticatedSession(tenantId, tokens);
-    cache.set(tenantId, session);
-    log.info({
-      operation: "login_session",
-      tenant_id: tenantId,
-      outcome: "ok",
+    const renewal = performRenewal(tenantId, cached).finally(() => {
+      inFlightRenewals.delete(tenantId);
     });
-    return session;
+    inFlightRenewals.set(tenantId, renewal);
+    return renewal;
   }
 
   function invalidate(tenantId?: Uuid): void {
