@@ -344,4 +344,300 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Tasks — Day 5 / T-2 extension
+  // ---------------------------------------------------------------------------
+  // Mirrors the five tenants scenarios + canary, applied to a tasks
+  // row inserted into TENANT_A. Self-contained: creates its own
+  // consignee dependency (tasks.consignee_id is NOT NULL with ON
+  // DELETE RESTRICT) so this block does not depend on the consignees
+  // block above.
+  describe("tasks — same regression coverage", () => {
+    type IdRow = { id: string } & Record<string, unknown>;
+    type CountRow = { n: number } & Record<string, unknown>;
+    type OrderRow = { customer_order_number: string } & Record<string, unknown>;
+
+    const TASK_ORDER = `T2-RLS-${RUN_ID}`;
+    const TASK_ORDER_ATTEMPTED = `T2-RLS-ATTEMPTED-${RUN_ID}`;
+    const TASK_CONSIGNEE_PHONE = `t2-task-${RUN_ID}-1`;
+    let taskConsigneeId: string;
+    let taskId: string;
+
+    beforeAll(async () => {
+      // Tenant A creates a consignee + task through withTenant(A).
+      // Both inserts pass the RLS WITH CHECK because the row's
+      // tenant_id matches the session variable. The task insert also
+      // satisfies the consignees FK because the session can SELECT
+      // the consignee it just created.
+      taskConsigneeId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO consignees (
+            tenant_id, name, phone, address_line, emirate_or_region
+          ) VALUES (
+            ${TENANT_A}, 'T-2 Task Consignee', ${TASK_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+
+      taskId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO tasks (
+            tenant_id, consignee_id, customer_order_number,
+            delivery_date, delivery_start_time, delivery_end_time
+          ) VALUES (
+            ${TENANT_A}, ${taskConsigneeId}, ${TASK_ORDER},
+            '2026-05-01', '14:00', '16:00'
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+    });
+
+    it("withTenant(A) sees the task it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<OrderRow>(sqlTag`
+          SELECT customer_order_number FROM tasks WHERE id = ${taskId}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].customer_order_number).toBe(TASK_ORDER);
+    });
+
+    it("withTenant(B) sees zero tasks from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<OrderRow>(sqlTag`
+          SELECT customer_order_number FROM tasks WHERE id = ${taskId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's task affects zero rows (RLS blocks cross-tenant writes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE tasks SET customer_order_number = ${TASK_ORDER_ATTEMPTED}
+          WHERE id = ${taskId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<OrderRow>(sqlTag`
+          SELECT customer_order_number FROM tasks WHERE id = ${taskId}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].customer_order_number).toBe(TASK_ORDER);
+    });
+
+    it("withTenant(B) DELETE against tenant A's task removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM tasks WHERE id = ${taskId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM tasks WHERE id = ${taskId}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero tasks (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<OrderRow>(sqlTag`
+          SELECT customer_order_number FROM tasks WHERE id = ${taskId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero tasks", async () => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error("SUPABASE_APP_DATABASE_URL must be set for the tasks canary case");
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          OrderRow[]
+        >`SELECT customer_order_number FROM tasks WHERE id = ${taskId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Task packages — Day 5 / T-2 extension
+  // ---------------------------------------------------------------------------
+  // Mirrors the five tenants scenarios + canary, applied to a
+  // task_packages row inserted into TENANT_A. Self-contained: creates
+  // its own consignee + task dependencies through withTenant(A) so
+  // this block does not depend on the tasks block above.
+  //
+  // Note on the schema-layer trigger interaction. The
+  // task_packages_assert_tenant_match trigger fires BEFORE INSERT OR
+  // UPDATE and asserts task_packages.tenant_id = parent's tenant_id.
+  // The seed below inserts task_packages with tenant_id = TENANT_A
+  // and task_id = task_a, so the trigger passes. Cross-tenant
+  // attempts in the body of these tests are blocked by RLS (USING
+  // clause filters target rows out before the UPDATE/DELETE engages),
+  // not by the trigger — the trigger only runs against rows that
+  // survive the policy. The trigger's BYPASSRLS coverage is in
+  // tests/integration/task-packages-tenant-match.spec.ts.
+  describe("task_packages — same regression coverage", () => {
+    type IdRow = { id: string } & Record<string, unknown>;
+    type CountRow = { n: number } & Record<string, unknown>;
+    type StatusRow = { package_status: string } & Record<string, unknown>;
+
+    const PKG_CONSIGNEE_PHONE = `t2-pkg-${RUN_ID}-1`;
+    let packageId: string;
+
+    beforeAll(async () => {
+      const consigneeId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO consignees (
+            tenant_id, name, phone, address_line, emirate_or_region
+          ) VALUES (
+            ${TENANT_A}, 'T-2 Package Consignee', ${PKG_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+
+      const pkgTaskId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO tasks (
+            tenant_id, consignee_id, customer_order_number,
+            delivery_date, delivery_start_time, delivery_end_time
+          ) VALUES (
+            ${TENANT_A}, ${consigneeId}, ${`T2-RLS-PKG-${RUN_ID}`},
+            '2026-05-01', '14:00', '16:00'
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+
+      packageId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO task_packages (
+            task_id, tenant_id, position
+          ) VALUES (
+            ${pkgTaskId}, ${TENANT_A}, 0
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+    });
+
+    it("withTenant(A) sees the task_package it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT package_status FROM task_packages WHERE id = ${packageId}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].package_status).toBe("ORDERED");
+    });
+
+    it("withTenant(B) sees zero task_packages from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT package_status FROM task_packages WHERE id = ${packageId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's task_package affects zero rows (RLS blocks before the trigger fires)", async () => {
+      // RLS filters the UPDATE's target rows by the USING predicate
+      // before the trigger has a chance to fire. The result is that
+      // the UPDATE touches zero rows; no trigger exception. This is
+      // distinct from the BYPASSRLS path covered in
+      // task-packages-tenant-match.spec.ts.
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE task_packages SET package_status = 'DELIVERED' WHERE id = ${packageId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT package_status FROM task_packages WHERE id = ${packageId}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].package_status).toBe("ORDERED");
+    });
+
+    it("withTenant(B) DELETE against tenant A's task_package removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM task_packages WHERE id = ${packageId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM task_packages WHERE id = ${packageId}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero task_packages (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT package_status FROM task_packages WHERE id = ${packageId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero task_packages", async () => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error("SUPABASE_APP_DATABASE_URL must be set for the task_packages canary case");
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          StatusRow[]
+        >`SELECT package_status FROM task_packages WHERE id = ${packageId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
+    });
+  });
 });
