@@ -384,10 +384,12 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         const rows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, customer_order_number,
-            delivery_date, delivery_start_time, delivery_end_time
+            delivery_date, delivery_start_time, delivery_end_time,
+            created_via
           ) VALUES (
             ${TENANT_A}, ${taskConsigneeId}, ${TASK_ORDER},
-            '2026-05-01', '14:00', '16:00'
+            '2026-05-01', '14:00', '16:00',
+            'manual_admin'
           )
           RETURNING id
         `);
@@ -525,10 +527,12 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         const rows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, customer_order_number,
-            delivery_date, delivery_start_time, delivery_end_time
+            delivery_date, delivery_start_time, delivery_end_time,
+            created_via
           ) VALUES (
             ${TENANT_A}, ${consigneeId}, ${`T2-RLS-PKG-${RUN_ID}`},
-            '2026-05-01', '14:00', '16:00'
+            '2026-05-01', '14:00', '16:00',
+            'manual_admin'
           )
           RETURNING id
         `);
@@ -681,10 +685,12 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         const taskRows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, customer_order_number,
-            delivery_date, delivery_start_time, delivery_end_time
+            delivery_date, delivery_start_time, delivery_end_time,
+            created_via
           ) VALUES (
             ${TENANT_A}, ${consigneeId}, ${`T7-RLS-FP-${RUN_ID}`},
-            '2026-05-01', '14:00', '16:00'
+            '2026-05-01', '14:00', '16:00',
+            'manual_admin'
           )
           RETURNING id
         `);
