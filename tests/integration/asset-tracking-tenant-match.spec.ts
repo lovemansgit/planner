@@ -109,10 +109,10 @@ describe("B-1 — asset_tracking_cache_assert_tenant_match trigger fires under B
       await sql`
         INSERT INTO asset_tracking_cache (
           task_id, task_id_external, external_record_id,
-          tracking_id, awb, type, state, tenant_id
+          tracking_id, type, state, tenant_id
         ) VALUES (
           ${taskId}, 99001, 70001,
-          ${`B1-MISMATCH-${RUN_ID}-1`}, ${`B1-MISMATCH-${RUN_ID}`},
+          ${`B1-MISMATCH-${RUN_ID}-1`},
           'BAGS', 'COLLECTED', ${TENANT_B}
         )
       `;
@@ -137,10 +137,10 @@ describe("B-1 — asset_tracking_cache_assert_tenant_match trigger fires under B
     await sql`
       INSERT INTO asset_tracking_cache (
         task_id, task_id_external, external_record_id,
-        tracking_id, awb, type, state, tenant_id
+        tracking_id, type, state, tenant_id
       ) VALUES (
         ${taskId}, 99001, 70001,
-        ${`B1-OK-${RUN_ID}-1`}, ${`B1-OK-${RUN_ID}`},
+        ${`B1-OK-${RUN_ID}-1`},
         'BAGS', 'COLLECTED', ${TENANT_A}
       )
     `;
@@ -182,10 +182,10 @@ describe("B-1 — asset_tracking_cache_assert_tenant_match trigger fires under B
       await sql`
         INSERT INTO asset_tracking_cache (
           task_id, task_id_external, external_record_id,
-          tracking_id, awb, type, state, tenant_id
+          tracking_id, type, state, tenant_id
         ) VALUES (
           ${ghostTaskId}, 99002, 70002,
-          ${`B1-GHOST-${RUN_ID}-1`}, ${`B1-GHOST-${RUN_ID}`},
+          ${`B1-GHOST-${RUN_ID}-1`},
           'BAGS', 'COLLECTED', ${TENANT_A}
         )
       `;

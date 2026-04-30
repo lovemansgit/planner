@@ -114,25 +114,46 @@
 -- =============================================================================
 
 
+-- -----------------------------------------------------------------------------
+-- `awb` as a GENERATED column (defence in depth)
+-- -----------------------------------------------------------------------------
+-- `awb` is derived from `tracking_id` by stripping the trailing
+-- `-<index>` segment (per the SF doc: trackingId format `<awb>-<index>`).
+-- Two ways the invariant could be enforced:
+--   (a) Application code computes both, schema trusts.
+--   (b) Schema computes `awb` from `tracking_id` via a STORED generated
+--       column; application code cannot override.
+--
+-- We pick (b). The application surface still exposes `awb` for query
+-- convenience (the `?awbs=<AWB>` lookup is the canonical access pattern),
+-- but the cache cannot drift from the trackingId that produced it. A
+-- repository write only specifies `tracking_id`; Postgres derives `awb`
+-- on commit. This closes the "future writer accidentally splits the
+-- two values" defence-in-depth gap surfaced in B-1 review.
+--
+-- Regex breakdown — `^(.+)-[^-]+$`:
+--   - Anchors at start and end.
+--   - `.+` greedy capture group (the AWB prefix).
+--   - `-[^-]+$` matches the trailing `-<index>` (no embedded dash).
+--   - For "MPS-98410409-1" → captures "MPS-98410409".
+--   - For "no-dash-suffix" (no trailing -<index>) → no match → returns NULL.
+--
+-- The companion CHECK on tracking_id pins the format invariant: any
+-- trackingId without a `-<index>` suffix is rejected at write time, so
+-- the generated column is always non-null. NOT NULL on the generated
+-- column is structurally enforced; we declare it explicitly for clarity.
+
 CREATE TABLE asset_tracking_cache (
   id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id                uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   task_id_external       bigint NOT NULL,
   external_record_id     bigint NOT NULL,
   tracking_id            text NOT NULL,
-  awb                    text NOT NULL,
-  type                   text NOT NULL
-                           CHECK (type IN ('BAGS')),
-                           -- BOX / PALLET / CONTAINER documented as future
-                           -- possibilities (vendor question 1); widen when
-                           -- they appear empirically in production.
-  state                  text NOT NULL
-                           CHECK (state IN (
-                             'COLLECTED',
-                             'EN_ROUTE',
-                             'RECEIVED',
-                             'RETURNED'
-                           )),
+  awb                    text GENERATED ALWAYS AS
+                           (substring(tracking_id from '^(.+)-[^-]+$'))
+                           STORED NOT NULL,
+  type                   text NOT NULL,
+  state                  text NOT NULL,
   photos                 jsonb,
   notes                  text,
   supplementary_quantity integer,
@@ -145,7 +166,17 @@ CREATE TABLE asset_tracking_cache (
   last_synced_at         timestamptz NOT NULL DEFAULT now(),
   created_at             timestamptz NOT NULL DEFAULT now(),
   updated_at             timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT asset_tracking_cache_tracking_id_unique UNIQUE (tracking_id)
+  CONSTRAINT asset_tracking_cache_tracking_id_unique UNIQUE (tracking_id),
+  CONSTRAINT asset_tracking_cache_tracking_id_format
+    CHECK (tracking_id ~ '^.+-[^-]+$'),
+  CONSTRAINT asset_tracking_cache_type_check
+    CHECK (type IN ('BAGS')),
+    -- BOX / PALLET / CONTAINER documented as future possibilities
+    -- (vendor question 1); widen this constraint when they appear
+    -- empirically in production. Constraint is named so a future ALTER
+    -- TABLE … DROP CONSTRAINT can target it directly.
+  CONSTRAINT asset_tracking_cache_state_check
+    CHECK (state IN ('COLLECTED', 'EN_ROUTE', 'RECEIVED', 'RETURNED'))
 );
 
 CREATE INDEX asset_tracking_cache_tenant_awb_idx

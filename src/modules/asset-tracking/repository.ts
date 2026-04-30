@@ -22,10 +22,18 @@
 // subscriptions / consignees repository pattern.
 //
 // Upsert semantics:
-//   `upsertCacheRows` is one INSERT … ON CONFLICT (tracking_id) DO
+//   `upsertCacheRow` is one INSERT … ON CONFLICT (tracking_id) DO
 //   UPDATE per package. Same trackingId arriving with a new state
 //   updates the row in place and bumps `last_synced_at` to now() so
 //   the TTL clock resets. New trackingIds INSERT cleanly.
+//
+// `awb` is NOT in the INSERT column list — 0011 declares it as a
+// GENERATED ALWAYS AS (...) STORED column derived from tracking_id.
+// The schema computes it on every INSERT/UPDATE; the repository
+// cannot override (Postgres rejects writes to GENERATED ALWAYS
+// columns). The wire-shape `pkg.awb` is still mapped through to the
+// service / caller via the cache row read, but the value the cache
+// returns is the schema-computed one.
 
 import { sql as sqlTag } from "drizzle-orm";
 
@@ -165,7 +173,6 @@ export async function upsertCacheRow(
       task_id_external,
       external_record_id,
       tracking_id,
-      awb,
       type,
       state,
       photos,
@@ -183,7 +190,6 @@ export async function upsertCacheRow(
       ${pkg.taskIdExternal},
       ${pkg.externalRecordId},
       ${pkg.trackingId},
-      ${pkg.awb},
       ${pkg.type},
       ${pkg.state},
       ${photosJson === null ? null : sqlTag`${photosJson}::jsonb`},
@@ -201,7 +207,6 @@ export async function upsertCacheRow(
       task_id                = EXCLUDED.task_id,
       task_id_external       = EXCLUDED.task_id_external,
       external_record_id     = EXCLUDED.external_record_id,
-      awb                    = EXCLUDED.awb,
       type                   = EXCLUDED.type,
       state                  = EXCLUDED.state,
       photos                 = EXCLUDED.photos,

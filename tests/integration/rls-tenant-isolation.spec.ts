@@ -979,10 +979,10 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         const rows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO asset_tracking_cache (
             task_id, task_id_external, external_record_id,
-            tracking_id, awb, type, state, tenant_id
+            tracking_id, type, state, tenant_id
           ) VALUES (
             ${atTaskId}, 88001, 60001,
-            ${`B1-RLS-AT-${RUN_ID}-1`}, ${`B1-RLS-AT-${RUN_ID}`},
+            ${`B1-RLS-AT-${RUN_ID}-1`},
             'BAGS', 'COLLECTED', ${TENANT_A}
           )
           RETURNING id
