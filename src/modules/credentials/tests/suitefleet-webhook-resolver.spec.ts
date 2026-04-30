@@ -10,7 +10,8 @@ import type { Uuid } from "../../../shared/types";
 
 import { resolveSuiteFleetWebhookCredentials } from "../suitefleet-webhook-resolver";
 
-const TENANT_A: Uuid = "00000000-0000-0000-0000-000000000001";
+// Sandbox tenant seeded by supabase/seed.sql — see W-1 PR for context.
+const SANDBOX_MERCHANT_588_TENANT_ID: Uuid = "8bfc84b0-c139-4f43-b966-5a12eaa7a302";
 const TENANT_B: Uuid = "00000000-0000-0000-0000-000000000002";
 
 const COMPLETE_ENV: Readonly<Record<string, string>> = {
@@ -32,31 +33,33 @@ describe("resolveSuiteFleetWebhookCredentials — happy path", () => {
   });
 
   it("returns the two-field webhook secret shape", async () => {
-    const creds = await resolveSuiteFleetWebhookCredentials(TENANT_A, COMPLETE_ENV);
+    const creds = await resolveSuiteFleetWebhookCredentials(
+      SANDBOX_MERCHANT_588_TENANT_ID,
+      COMPLETE_ENV
+    );
     expect(creds.clientId).toBe(COMPLETE_ENV.SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_ID);
     expect(creds.clientSecret).toBe(COMPLETE_ENV.SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_SECRET);
   });
 
   it("returns identical credentials for different tenant ids (Day-4 single-secret behaviour)", async () => {
-    const credsA = await resolveSuiteFleetWebhookCredentials(TENANT_A, COMPLETE_ENV);
+    const credsA = await resolveSuiteFleetWebhookCredentials(
+      SANDBOX_MERCHANT_588_TENANT_ID,
+      COMPLETE_ENV
+    );
     const credsB = await resolveSuiteFleetWebhookCredentials(TENANT_B, COMPLETE_ENV);
     expect(credsA).toEqual(credsB);
   });
 
   it("never logs the client secret", async () => {
-    await resolveSuiteFleetWebhookCredentials(TENANT_A, COMPLETE_ENV);
-    const all = [...logSpy.mock.calls, ...errSpy.mock.calls]
-      .map((c) => String(c[0]))
-      .join("\n");
+    await resolveSuiteFleetWebhookCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
+    const all = [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => String(c[0])).join("\n");
     expect(all).not.toContain(COMPLETE_ENV.SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_SECRET);
   });
 
   it("logs the tenant_id for forensic traceability", async () => {
-    await resolveSuiteFleetWebhookCredentials(TENANT_A, COMPLETE_ENV);
-    const all = [...logSpy.mock.calls, ...errSpy.mock.calls]
-      .map((c) => String(c[0]))
-      .join("\n");
-    expect(all).toContain(TENANT_A);
+    await resolveSuiteFleetWebhookCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
+    const all = [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => String(c[0])).join("\n");
+    expect(all).toContain(SANDBOX_MERCHANT_588_TENANT_ID);
   });
 });
 
@@ -69,7 +72,9 @@ describe("resolveSuiteFleetWebhookCredentials — missing env vars", () => {
 
   it("throws CredentialError when clientId is missing", async () => {
     const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_ID: "" };
-    await expect(resolveSuiteFleetWebhookCredentials(TENANT_A, env)).rejects.toMatchObject({
+    await expect(
+      resolveSuiteFleetWebhookCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
+    ).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_ID/),
     });
@@ -77,7 +82,9 @@ describe("resolveSuiteFleetWebhookCredentials — missing env vars", () => {
 
   it("throws CredentialError when clientSecret is missing", async () => {
     const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_SECRET: "" };
-    await expect(resolveSuiteFleetWebhookCredentials(TENANT_A, env)).rejects.toMatchObject({
+    await expect(
+      resolveSuiteFleetWebhookCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
+    ).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_SECRET/),
     });
@@ -86,7 +93,7 @@ describe("resolveSuiteFleetWebhookCredentials — missing env vars", () => {
   it("names every missing var when both are blank", async () => {
     let captured: unknown = null;
     try {
-      await resolveSuiteFleetWebhookCredentials(TENANT_A, {});
+      await resolveSuiteFleetWebhookCredentials(SANDBOX_MERCHANT_588_TENANT_ID, {});
     } catch (err) {
       captured = err;
     }
@@ -101,11 +108,9 @@ describe("resolveSuiteFleetWebhookCredentials — missing env vars", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_ID: "" };
     await expect(
-      resolveSuiteFleetWebhookCredentials(TENANT_A, env),
+      resolveSuiteFleetWebhookCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
     ).rejects.toBeInstanceOf(CredentialError);
-    const all = [...logSpy.mock.calls, ...errSpy.mock.calls]
-      .map((c) => String(c[0]))
-      .join("\n");
+    const all = [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => String(c[0])).join("\n");
     expect(all).not.toContain(COMPLETE_ENV.SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_SECRET);
   });
 });
@@ -118,7 +123,10 @@ describe("resolveSuiteFleetWebhookCredentials — async signature contract", () 
   afterEach(() => vi.restoreAllMocks());
 
   it("returns a Promise even though Day-4 reads are synchronous", () => {
-    const result = resolveSuiteFleetWebhookCredentials(TENANT_A, COMPLETE_ENV);
+    const result = resolveSuiteFleetWebhookCredentials(
+      SANDBOX_MERCHANT_588_TENANT_ID,
+      COMPLETE_ENV
+    );
     expect(result).toBeInstanceOf(Promise);
   });
 });
