@@ -152,6 +152,9 @@ CREATE TABLE subscriptions (
   CONSTRAINT subscriptions_end_date_after_start
     CHECK (end_date IS NULL OR end_date >= start_date),
 
+  -- cardinality() not array_length(): array_length(empty_array, 1) returns
+  -- NULL, and CHECK treats NULL as PASS. cardinality() returns 0 for empty
+  -- arrays and so correctly rejects them. See header for full reasoning.
   CONSTRAINT subscriptions_days_of_week_non_empty
     CHECK (cardinality(days_of_week) BETWEEN 1 AND 7),
 
