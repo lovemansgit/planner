@@ -37,11 +37,44 @@ Short-circuit: if the SF portal UI rejects the second-endpoint config outright (
 
 ### Probe findings
 
-_Empty — to be filled in after the probe runs. Standby for probe instructions per Love._
+**Date:** 1 May 2026.
+
+**Method:** Configured two System Webhook entries in the SF sandbox portal — Probe A and Probe B — both Active, both using the same Client ID (`transcorpsb`), each pointed at a separate `webhook.site` capture URL. Triggered the `TASK_STATUS_UPDATED_TO_DELIVERED` status event on task id `59113` (AWB `MPS-98410409`, customer "588 MEAL PLAN SCHEDULAR").
+
+**Result:** Both endpoints received the event. Payloads were byte-identical. Timestamps were identical at `1777533200494`. **SF fans out the same status event to multiple active webhook endpoints in parallel.**
+
+**Per-status configuration:** _Open — Love is still investigating whether SF supports status-level routing (configuring different endpoints for different status events). For now the finding is "all Active System Webhooks fired on this status event"; whether a System Webhook entry can be scoped per-status is not yet confirmed._
+
+**Client Secret field:** _Open — whether the Client Secret field on the System Webhook entry is required or optional has not been confirmed during the probe. Carry as a small operational question for the SF portal config step in W-1._
 
 ### Architectural decision
 
-_Empty — to be filled in once probe findings land. The decision determines whether W-1's per-tenant URL ships as-is (additive) or whether an outbound-emission commit is required to gate the W-1 portal config (relayer). Either way, the per-tenant-URL pattern at the SF configuration layer is preserved._
+**Decision:** The Planner is an **additive receiver**. SF fans events out to both the Planner per-tenant URL and the merchant's existing webhook URL. Merchant integrations remain untouched. The Planner does NOT relay.
+
+**Architectural implication:** No outbound webhook delivery from the Planner to merchants. No retry/DLQ surface for forwarding. The Planner is not on the critical path for merchant order management — a Planner outage does not block the merchant's existing flows.
+
+**Operational implication:** When onboarding a merchant onto the Planner, the merchant's existing SF webhook configuration stays exactly as-is, and a second System Webhook entry is added in the SF portal pointing at the Planner per-tenant URL (`/api/webhooks/suitefleet/[tenantId]`). Both fire in parallel for every event.
+
+**W-1 status:** The per-tenant URL design (`/api/webhooks/suitefleet/[tenantId]`) is validated. W-1 (PR #46) resumes — the seed-migration + sentinel-UUID fix is the next blocker, separate from the architectural question.
+
+## Bonus findings from probe payload
+
+Two findings unrelated to the additive-vs-relayer question but worth carrying forward, surfaced from inspecting the actual webhook payload received during the probe:
+
+### Bag tracking signal lives on the payload
+
+The webhook payload exposes bag tracking configuration directly under `customer`:
+
+- `customer.taskAssetTrackingEnabled` — boolean, indicating whether bag tracking is enabled for this merchant
+- `customer.defaultTaskAssetType` — string, e.g. `"BAGS"`, identifying the default asset type
+
+**Implication for B-1 (bag tracking schema + adapter method):** the bag-tracking-enabled flag is available on every webhook event without a separate API call. The B-1 design can read this directly from the inbound webhook rather than provisioning a separate "is bag tracking enabled?" lookup. Cache the value on the bag-tracking row and refresh on subsequent events.
+
+### codPaymentMethod surface confirms Day-4 finding
+
+On a fully delivered task with otherwise populated `deliveryInformation`, `codPaymentMethod` was `null`. This is consistent with the Day-4 / S-9 empirical finding that `paymentMethod` is dropped from `createTask` responses (per [followup_paymentmethod_field_resolution.md](followup_paymentmethod_field_resolution.md)).
+
+**Implication for B-2 (paymentMethod probe):** the field is missing on the receive side too, not just the create-response side. Day-4's three-outcome hypothesis (surfaces in webhook / absent everywhere / surfaces only via GET) tilts toward "absent everywhere" — but B-2's explicit GET-path probe should still run to confirm.
 
 ## Carried-forward vendor questions (brief §14, no prior home)
 
