@@ -17,20 +17,23 @@
 --   2. UPDATE backfill — existing tasks (subscription_id IS NULL by
 --      construction; the column was bare uuid before this migration) get
 --      created_via = 'manual_admin' so they satisfy the composite CHECK
---   3. ADD CONSTRAINT tasks_subscription_id_fk — FK with ON DELETE SET NULL
+--   3. ADD CONSTRAINT tasks_subscription_id_fk — FK with ON DELETE RESTRICT
 --   4. ADD CONSTRAINT tasks_creation_source_invariant — composite CHECK
 --      tying subscription_id presence to created_via='subscription'
 --   5. CREATE INDEX tasks_subscription_id_idx — partial, for the cron's
 --      "find tasks for this subscription" query
 --
--- Forward-only. No down-migration. ON DELETE SET NULL on the FK + the
--- composite CHECK creates an emergent behaviour: deleting a subscription
--- with task children fails (the cascade-set-null would set subscription_id
--- to NULL on rows whose created_via='subscription', violating the CHECK).
--- Per the design intent in brief §6.5 / §10 — subscription lifecycle
--- terminus is `status = 'ended'`, not row deletion. This emergent block
--- on subscription deletion is a feature, not a bug. The integration test
--- subscription-link-invariant.spec.ts pins the empirical behaviour.
+-- Forward-only. No down-migration. The FK uses ON DELETE RESTRICT (not
+-- the brief's literal SET NULL): per the design intent in brief §6.5 / §10,
+-- subscription lifecycle terminus is `status = 'ended'`, not row deletion.
+-- SET NULL would have produced silent CHECK violations (the cascade-set-null
+-- would set subscription_id to NULL on rows whose created_via='subscription',
+-- violating the composite CHECK below — PostgreSQL aborts the DELETE either
+-- way, but via the CHECK rather than the FK). RESTRICT enforces the contract
+-- honestly: subscriptions cannot be deleted while tasks reference them. If a
+-- deliberate hard-delete admin/compliance path is ever needed, it goes through
+-- code that transitions or relabels subscription-tasks first, then deletes —
+-- not a silent SET NULL that doesn't actually work.
 --
 -- -----------------------------------------------------------------------------
 -- Why split the CHECK from the column-level CHECK on created_via
@@ -77,23 +80,29 @@ ALTER TABLE tasks
 -- to it before S-2). The composite CHECK we're about to add requires
 -- non-subscription rows to have subscription_id IS NULL. Mark them
 -- 'manual_admin' so they pass.
+--
+-- 'manual_admin' chosen over 'migration_import': pre-S-2 rows have
+-- unknown provenance (test fixtures, ad-hoc inserts). Calling them
+-- 'migration_import' would falsely claim they came from a CSV migration
+-- flow that doesn't exist yet. 'manual_admin' is the honest catch-all
+-- for "no recorded provenance, no subscription link."
 UPDATE tasks SET created_via = 'manual_admin' WHERE subscription_id IS NULL;
 
 
 -- -----------------------------------------------------------------------------
--- 3. ADD CONSTRAINT tasks_subscription_id_fk — ON DELETE SET NULL
+-- 3. ADD CONSTRAINT tasks_subscription_id_fk — ON DELETE RESTRICT
 -- -----------------------------------------------------------------------------
--- ON DELETE SET NULL was the brief's literal choice ("historical tasks
--- should survive a subscription delete"). In practice, combined with
--- the composite CHECK below, this means subscription deletion fails
--- when the subscription has tasks with created_via='subscription' —
--- the cascade-set-null violates the CHECK and PostgreSQL aborts the
--- DELETE. This matches the intended lifecycle (subscriptions go to
--- status='ended', not row deletion). Pinned in
+-- RESTRICT (not SET NULL): subscription-created tasks require a non-NULL
+-- subscription_id per the composite CHECK below; SET NULL would silently
+-- produce CHECK violations on delete (cascade-set-null clears the FK
+-- column to NULL, which violates the CHECK, which PostgreSQL aborts).
+-- RESTRICT enforces the contract honestly at the FK level — subscriptions
+-- cannot be deleted while tasks reference them. Lifecycle terminus is
+-- status='ended', not hard delete. Pinned in
 -- subscription-link-invariant.spec.ts.
 ALTER TABLE tasks
   ADD CONSTRAINT tasks_subscription_id_fk
-    FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE SET NULL;
+    FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE RESTRICT;
 
 
 -- -----------------------------------------------------------------------------

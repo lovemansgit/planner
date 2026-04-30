@@ -9,8 +9,8 @@
 //     - created_via='subscription'    requires subscription_id IS NOT NULL
 //     - created_via='migration_import' or 'manual_admin' requires subscription_id IS NULL
 //   Plus the column-level value-domain CHECK on created_via, the
-//   default-value behaviour, and the ON DELETE SET NULL ↔ CHECK
-//   interaction (an emergent block on subscription deletion).
+//   default-value behaviour, and the FK ON DELETE RESTRICT enforcement
+//   (subscriptions cannot be deleted while tasks reference them).
 //
 // Why this lives in its own file:
 //   Same separation as task-packages-tenant-match.spec.ts and
@@ -24,16 +24,14 @@
 //   layer regardless of caller. CHECK rejections come from the engine,
 //   not the application wrapper.
 //
-// ON DELETE SET NULL emergent behaviour (counter-reviewer ask):
-//   The brief specifies ON DELETE SET NULL on tasks.subscription_id.
-//   Combined with the composite CHECK, this means: deleting a subscription
-//   that has any tasks with created_via='subscription' will FAIL — the
-//   cascade-set-null operation tries to set subscription_id=NULL on those
-//   rows, but the CHECK requires created_via='subscription' rows to have
-//   subscription_id IS NOT NULL. PostgreSQL aborts the parent DELETE.
-//
-//   This matches the design intent (subscriptions go to status='ended',
-//   not row deletion). Test below pins the empirical behaviour.
+// FK ON DELETE RESTRICT enforcement:
+//   The brief originally specified ON DELETE SET NULL, but SET NULL would
+//   silently produce CHECK violations (the cascade-set-null clears
+//   subscription_id to NULL on rows whose created_via='subscription',
+//   violating the composite CHECK). The post-S-2 design uses ON DELETE
+//   RESTRICT instead — subscriptions cannot be deleted while tasks
+//   reference them, full stop. Lifecycle terminus is status='ended', not
+//   hard delete. The test below pins the FK rejection.
 //
 // Determinism:
 //   Random per-run UUIDs.
@@ -266,10 +264,10 @@ describe("S-2 — tasks ↔ subscriptions link CHECK invariant fires at the sche
   });
 
   // ---------------------------------------------------------------------------
-  // ON DELETE SET NULL ↔ CHECK invariant — emergent block
+  // FK ON DELETE RESTRICT — subscriptions cannot be deleted with task children
   // ---------------------------------------------------------------------------
 
-  it("ON DELETE SET NULL on a subscription with active subscription-tasks FAILS via CHECK violation", async () => {
+  it("ON DELETE RESTRICT on a subscription with active subscription-tasks FAILS via FK violation", async () => {
     // Setup: dedicated subscription + one subscription-task pinned to it.
     // We do this in-test (rather than in beforeAll) so the deletion
     // doesn't touch the shared subscription used by other cases.
@@ -299,14 +297,13 @@ describe("S-2 — tasks ↔ subscriptions link CHECK invariant fires at the sche
       )
     `;
 
-    // The deletion. ON DELETE SET NULL would try to clear the child task's
-    // subscription_id. That violates the composite CHECK
-    // (created_via='subscription' requires subscription_id IS NOT NULL),
-    // so PostgreSQL aborts the DELETE.
+    // The deletion. ON DELETE RESTRICT rejects directly at the FK level
+    // because the subscription has child tasks. The composite CHECK
+    // doesn't get a chance to fire — the FK aborts first.
     await expect(sql`
       DELETE FROM subscriptions WHERE id = ${ephemeralSubId}
     `).rejects.toMatchObject({
-      message: expect.stringMatching(/tasks_creation_source_invariant/),
+      message: expect.stringMatching(/tasks_subscription_id_fk/),
     });
 
     // Sanity check: the subscription still exists (DELETE was aborted).
@@ -316,10 +313,11 @@ describe("S-2 — tasks ↔ subscriptions link CHECK invariant fires at the sche
     expect(stillThere.length).toBe(1);
   });
 
-  it("ON DELETE SET NULL on an empty subscription succeeds (no children, no CHECK violation)", async () => {
+  it("ON DELETE RESTRICT on an empty subscription succeeds (no children, no FK violation)", async () => {
     // Boundary case: a subscription with NO tasks can be deleted directly.
-    // ON DELETE SET NULL has nothing to cascade, so the CHECK doesn't fire.
-    // This is the "deletion is rare but not blocked" case from the brief.
+    // RESTRICT only fires when there are referencing rows; no children
+    // means deletion proceeds. This is the "deletion is rare but possible
+    // when the subscription has no historical task linkage" case.
     const subs = await sql<{ id: string }[]>`
       INSERT INTO subscriptions (
         tenant_id, consignee_id,
