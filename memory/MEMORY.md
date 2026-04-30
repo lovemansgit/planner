@@ -45,3 +45,4 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [SuiteFleet webhook policy](followup_suitefleet_webhook_policy.md) — additive receiver + per-status routing confirmed; canonical 15-event SF taxonomy captured; Planner subscribed to all 15 on sandbox merchant 588; existing mapper covers all 15 (no code gap)
 - [SF outbound base URL — single host validated](followup_suitefleet_base_url.md) — empirical probe (1 May 2026) confirms api.suitefleet.com is the canonical API for all merchants; portal subdomains UI-only; no refactor needed
 - [Zod 4 UUID validation](followup_zod_uuid_validation.md) — `.uuid()` enforces RFC 4122 version + variant nibbles; existing 1111-only fixtures fail in Zod-validated paths
+- [Route-layer test-coverage gap](followup_route_layer_test_coverage.md) — no `/api/*` route has handler-level tests; Zod parsing, error-mapping precedence, status-code correctness, response-envelope shape have no regression pin
