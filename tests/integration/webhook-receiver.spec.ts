@@ -1,10 +1,12 @@
 // SuiteFleet webhook receiver — Day 6 / W-1 integration test.
 //
-// Pins the dynamic-route migration's status-code contract:
+// Pins the dynamic-route migration's status-code contract AND the
+// "body-not-read-until-verified" DOS-surface guarantee:
 //
-//   - valid tenantId + valid creds  → 200
-//   - invalid tenantId in URL       → 400 (Zod parse failure → ValidationError)
-//   - missing creds (CredentialError throw) → 500 (bare, not 502)
+//   - valid tenantId + valid creds            → 200
+//   - invalid tenantId in URL                 → 400 (ValidationError envelope)
+//   - missing creds (CredentialError throw)   → 500 (bare, not 502)
+//   - verification mismatch (ok:false reason) → 401 + body NOT consumed
 //
 // "Integration" by vitest project tag — this lives in tests/integration/
 // because the route handler imports server-only Next.js code paths and
@@ -99,5 +101,28 @@ describe("webhook receiver — W-1 dynamic per-tenant route", () => {
 
     expect(response.status).toBe(500);
     expect(mocks.verifyWebhookRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 401 and does NOT read request body when verification reports mismatch", async () => {
+    mocks.verifyWebhookRequest.mockResolvedValue({
+      ok: false,
+      reason: "client_id_mismatch",
+    });
+
+    // Spy on the request body read. The route MUST NOT call req.text()
+    // (or any other body-consuming method) before verification succeeds —
+    // this is the DOS-surface guarantee documented at the route header.
+    const req = makeRequest({ "X-Client-Id": "wrong", "X-Client-Secret": "wrong" });
+    const textSpy = vi.spyOn(req, "text");
+    const jsonSpy = vi.spyOn(req, "json");
+    const arrayBufferSpy = vi.spyOn(req, "arrayBuffer");
+
+    const response = await POST(req, makeContext(VALID_TENANT_ID));
+
+    expect(response.status).toBe(401);
+    expect(mocks.verifyWebhookRequest).toHaveBeenCalledTimes(1);
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(arrayBufferSpy).not.toHaveBeenCalled();
   });
 });
