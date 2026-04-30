@@ -16,3 +16,5 @@ export type {
 } from "./types";
 
 export { findCacheByAwb, upsertCacheRow } from "./repository";
+
+export { getAssetTrackingForTask } from "./service";

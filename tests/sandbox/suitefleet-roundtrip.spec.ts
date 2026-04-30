@@ -324,12 +324,108 @@ describe("SuiteFleet sandbox — task create round-trip", () => {
   });
 });
 
-describe("SuiteFleet sandbox — paymentMethod field resolution (followup)", () => {
-  // Per memory/followup_paymentmethod_field_resolution.md — verifies
-  // whether deliveryInformation.paymentMethod we send surfaces under
-  // any field name in the GET-task response. Marked `it.todo` because
-  // we already know from S-8 capture that the create response doesn't
-  // echo it back; the GET-task path may or may not. Resolution lands
-  // in a follow-up commit once we know the answer.
-  it.todo("GET /api/tasks/:id returns paymentMethod under some field name (verify path)");
+describe("SuiteFleet sandbox — paymentMethod field resolution (resolved Day 6 / B-2)", () => {
+  // Per memory/followup_paymentmethod_field_resolution.md — empirical
+  // probe (1 May 2026) confirmed: paymentMethod is silently dropped
+  // end-to-end. The value we send on POST never surfaces on GET, on
+  // webhook events, or under any other field name. The GET response's
+  // deliveryInformation block carries codPaymentMethod (which we do
+  // NOT send) with value null, but no paymentMethod field exists.
+  //
+  // The test below is empirically pinned: it asserts the silent-drop
+  // behaviour. If a future SF release starts surfacing the value, the
+  // test breaks and forces a conscious update of the memo + the
+  // pilot's payment-method handling. Non-blocking for pilot scope
+  // (all subscriptions PrePaid by definition); vendor-escalation
+  // queued for the Day-14 SF email.
+
+  it("paymentMethod sent on POST is NOT echoed back on GET (silent-drop pinned)", async (ctx) => {
+    if (sandbox === null) {
+      ctx.skip();
+      return;
+    }
+    requireSandbox(sandbox);
+
+    const auth = createSuiteFleetAuthClient({
+      fetch: globalThis.fetch,
+      clock: () => new Date(),
+    });
+    const taskClient = createSuiteFleetTaskClient({
+      fetch: globalThis.fetch,
+      clientId: sandbox.creds.clientId,
+      clock: () => new Date(),
+    });
+
+    const tokens = await auth.login(sandbox.creds);
+    const session = {
+      tenantId: TENANT,
+      token: tokens.accessToken,
+      renewalToken: tokens.refreshToken,
+      tokenExpiresAt: tokens.accessTokenExpiresAt.toISOString(),
+      renewalTokenExpiresAt: tokens.refreshTokenExpiresAt.toISOString(),
+    };
+
+    // Create a task with a non-default paymentMethod so a faithful
+    // round-trip would echo it back.
+    const orderNumber = `S9-PAYMETHOD-${Date.now()}`;
+    const created = await taskClient.createTask({
+      session,
+      customerId: sandbox.creds.customerId,
+      request: {
+        tenantId: TENANT,
+        customerOrderNumber: orderNumber,
+        kind: "DELIVERY",
+        consignee: {
+          name: "PaymentMethod Probe Consignee",
+          contactPhone: "+971500000005",
+          address: {
+            addressLine1: "Villa PM",
+            city: "Dubai",
+            countryCode: "AE",
+            latitude: 25.1972,
+            longitude: 55.2744,
+          },
+        },
+        shipFrom: {
+          addressLine1: "Warehouse PM",
+          city: "Dubai",
+          countryCode: "AE",
+          latitude: 25.0,
+          longitude: 55.0,
+        },
+        window: {
+          date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+          startTime: "09:00:00",
+          endTime: "12:00:00",
+        },
+        paymentMethod: "CashOnDelivery",
+        itemQuantity: 1,
+      },
+    });
+
+    // GET the task by external id and inspect every field for
+    // "CashOnDelivery". A faithful round-trip would surface it.
+    const getRes = await globalThis.fetch(
+      `https://api.suitefleet.com/api/tasks/${created.externalId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.accessToken}`,
+          Clientid: sandbox.creds.clientId,
+          Accept: "application/json",
+        },
+      },
+    );
+    expect(getRes.status).toBe(200);
+    const body = await getRes.json();
+
+    const json = JSON.stringify(body);
+    expect(json).not.toContain("CashOnDelivery");
+    // codPaymentMethod is the only payment-related field on the GET
+    // response and it always returns null on sandbox. Pinning both
+    // observations: the field exists and the value is null.
+    expect(body.deliveryInformation.codPaymentMethod).toBeNull();
+    // The value we sent ("CashOnDelivery") would have to land
+    // somewhere if SF persisted it — we explicitly assert it does
+    // not. This is the silent-drop signal.
+  }, 30_000);
 });
