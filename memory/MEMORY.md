@@ -41,4 +41,4 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 
 ## Day 6 (1 May 2026)
 
-- [Brand guidelines v2 — design tokens](decision_brand_guidelines_v2.md) — working tokens (7 hex values + Mulish/Sanchez Slab/Manrope) locked for frontend work; brand-team source-of-truth confirmation pending pre-Day-14; brand book pages 27–28 have printed-hex errors
+- [Brand guidelines v2 — design tokens](decision_brand_guidelines_v2.md) — Mulish + Sanchez registered for product UI; Manrope is slogan-only and deliberately excluded; 7 working hex tokens not source-of-truth (brand-team confirmation pre-Day-14; brand book pages 27–28 have printed-hex errors)
