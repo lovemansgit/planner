@@ -335,9 +335,7 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         const setting = settingProbe[0].setting;
         expect(setting === null || setting === "").toBe(true);
 
-        const rows = await canary<
-          NameRow[]
-        >`SELECT name FROM consignees WHERE id = ${consigneeId}`;
+        const rows = await canary<NameRow[]>`SELECT name FROM consignees WHERE id = ${consigneeId}`;
         expect(rows.length).toBe(0);
       } finally {
         await canary.end({ timeout: 2 });
@@ -784,6 +782,135 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         const rows = await canary<
           ReasonRow[]
         >`SELECT failure_reason FROM failed_pushes WHERE id = ${failedPushId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
+    });
+  });
+
+  describe("subscriptions — same regression coverage (S-1)", () => {
+    type IdRow = { id: string } & Record<string, unknown>;
+    type CountRow = { n: number } & Record<string, unknown>;
+    type StatusRow = { status: string } & Record<string, unknown>;
+
+    const SUB_CONSIGNEE_PHONE = `s1-sub-${RUN_ID}-1`;
+    let subscriptionId: string;
+
+    beforeAll(async () => {
+      // Seed via withServiceRole. Same posture as the tasks /
+      // failed_pushes setups above — multi-step setup is cleaner under
+      // service-role, and the subscription module's system-actor caller
+      // (cron task generation, Day 7+) will also run withServiceRole.
+      await withServiceRole("S-1 RLS-block setup", async (tx) => {
+        const consigneeRows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO consignees (
+            tenant_id, name, phone, address_line, emirate_or_region
+          ) VALUES (
+            ${TENANT_A}, 'S-1 Sub Consignee', ${SUB_CONSIGNEE_PHONE},
+            'Test Address', 'Dubai'
+          )
+          RETURNING id
+        `);
+        const consigneeId = consigneeRows[0].id;
+
+        const subRows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO subscriptions (
+            tenant_id, consignee_id, status,
+            start_date, end_date,
+            days_of_week,
+            delivery_window_start, delivery_window_end
+          ) VALUES (
+            ${TENANT_A}, ${consigneeId}, 'active',
+            '2026-05-01', '2026-08-31',
+            ARRAY[1, 3, 5]::integer[],
+            '14:00', '16:00'
+          )
+          RETURNING id
+        `);
+        subscriptionId = subRows[0].id;
+      });
+    });
+
+    it("withTenant(A) sees the subscription it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM subscriptions WHERE id = ${subscriptionId}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].status).toBe("active");
+    });
+
+    it("withTenant(B) sees zero subscriptions from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM subscriptions WHERE id = ${subscriptionId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's subscription affects zero rows (RLS blocks cross-tenant writes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE subscriptions SET status = 'paused' WHERE id = ${subscriptionId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM subscriptions WHERE id = ${subscriptionId}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].status).toBe("active");
+    });
+
+    it("withTenant(B) DELETE against tenant A's subscription removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM subscriptions WHERE id = ${subscriptionId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM subscriptions WHERE id = ${subscriptionId}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero subscriptions (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM subscriptions WHERE id = ${subscriptionId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero subscriptions", async () => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error("SUPABASE_APP_DATABASE_URL must be set for the subscriptions canary case");
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          StatusRow[]
+        >`SELECT status FROM subscriptions WHERE id = ${subscriptionId}`;
         expect(rows.length).toBe(0);
       } finally {
         await canary.end({ timeout: 2 });
