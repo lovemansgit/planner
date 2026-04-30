@@ -324,12 +324,117 @@ describe("SuiteFleet sandbox — task create round-trip", () => {
   });
 });
 
-describe("SuiteFleet sandbox — paymentMethod field resolution (followup)", () => {
-  // Per memory/followup_paymentmethod_field_resolution.md — verifies
-  // whether deliveryInformation.paymentMethod we send surfaces under
-  // any field name in the GET-task response. Marked `it.todo` because
-  // we already know from S-8 capture that the create response doesn't
-  // echo it back; the GET-task path may or may not. Resolution lands
-  // in a follow-up commit once we know the answer.
-  it.todo("GET /api/tasks/:id returns paymentMethod under some field name (verify path)");
+describe("SuiteFleet sandbox — paymentMethod field resolution (resolved Day 6 / B-2)", () => {
+  // Per memory/followup_paymentmethod_field_resolution.md — TWO
+  // independent observations, NOT the same field:
+  //
+  //   1. `paymentMethod` (sent on create, under deliveryInformation):
+  //      SF accepts it on POST without rejection but never echoes it
+  //      back on GET. Most likely a free-text metadata slot SF
+  //      accepts for client-integration compatibility but does not
+  //      operationally use for COD-vs-prepaid routing.
+  //
+  //   2. `codPaymentMethod` (returned on GET, also under
+  //      deliveryInformation): SF-side Cash-On-Delivery payment
+  //      method (the mechanism the consignee uses to pay the courier
+  //      at the door). For prepaid tasks (no money collection)
+  //      `codPaymentMethod = null` is the normal value. NOT evidence
+  //      about (1).
+  //
+  // The reviewer flagged the original conflation; this test asserts
+  // both observations independently so a regression cannot collapse
+  // them again. Non-blocking for pilot (all subscriptions prepaid).
+
+  it("paymentMethod sent on POST is NOT echoed on GET; codPaymentMethod is null on prepaid (separate fields)", async (ctx) => {
+    if (sandbox === null) {
+      ctx.skip();
+      return;
+    }
+    requireSandbox(sandbox);
+
+    const auth = createSuiteFleetAuthClient({
+      fetch: globalThis.fetch,
+      clock: () => new Date(),
+    });
+    const taskClient = createSuiteFleetTaskClient({
+      fetch: globalThis.fetch,
+      clientId: sandbox.creds.clientId,
+      clock: () => new Date(),
+    });
+
+    const tokens = await auth.login(sandbox.creds);
+    const session = {
+      tenantId: TENANT,
+      token: tokens.accessToken,
+      renewalToken: tokens.refreshToken,
+      tokenExpiresAt: tokens.accessTokenExpiresAt.toISOString(),
+      renewalTokenExpiresAt: tokens.refreshTokenExpiresAt.toISOString(),
+    };
+
+    // Create a task with a non-default paymentMethod so a faithful
+    // round-trip would echo it back.
+    const orderNumber = `S9-PAYMETHOD-${Date.now()}`;
+    const created = await taskClient.createTask({
+      session,
+      customerId: sandbox.creds.customerId,
+      request: {
+        tenantId: TENANT,
+        customerOrderNumber: orderNumber,
+        kind: "DELIVERY",
+        consignee: {
+          name: "PaymentMethod Probe Consignee",
+          contactPhone: "+971500000005",
+          address: {
+            addressLine1: "Villa PM",
+            city: "Dubai",
+            countryCode: "AE",
+            latitude: 25.1972,
+            longitude: 55.2744,
+          },
+        },
+        shipFrom: {
+          addressLine1: "Warehouse PM",
+          city: "Dubai",
+          countryCode: "AE",
+          latitude: 25.0,
+          longitude: 55.0,
+        },
+        window: {
+          date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+          startTime: "09:00:00",
+          endTime: "12:00:00",
+        },
+        paymentMethod: "CashOnDelivery",
+        itemQuantity: 1,
+      },
+    });
+
+    // GET the task by external id and inspect every field for
+    // "CashOnDelivery". A faithful round-trip would surface it.
+    const getRes = await globalThis.fetch(
+      `https://api.suitefleet.com/api/tasks/${created.externalId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.accessToken}`,
+          Clientid: sandbox.creds.clientId,
+          Accept: "application/json",
+        },
+      },
+    );
+    expect(getRes.status).toBe(200);
+    const body = await getRes.json();
+
+    const json = JSON.stringify(body);
+    // Observation 1: the value we sent on `paymentMethod` does not
+    // surface anywhere in the GET response — not under
+    // `paymentMethod`, not under any other field name. The string
+    // "CashOnDelivery" we POSTed is absent.
+    expect(json).not.toContain("CashOnDelivery");
+    // Observation 2: codPaymentMethod is the SF-side COD field. Its
+    // null value here means the task is NOT configured as COD on the
+    // SF side (the field is unrelated to what we sent on
+    // `paymentMethod`). For a prepaid pilot task, null is the
+    // correct, expected value — not evidence about observation 1.
+    expect(body.deliveryInformation.codPaymentMethod).toBeNull();
+  }, 30_000);
 });

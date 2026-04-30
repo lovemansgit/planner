@@ -358,6 +358,42 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: true,
   },
 
+  // ---- asset_tracking (Day 6 / B-2) --------------------------------------
+  // Three lifecycle events for the read-through asset-tracking cache
+  // per memory/decision_bag_tracking_mvp.md. The cache reads
+  // themselves are NOT audited (R-4 read-not-audited convention plus
+  // anti-flood reasoning — see the memo).
+  "asset_tracking.refreshed": {
+    id: "asset_tracking.refreshed",
+    resource: "asset_tracking",
+    action: "refreshed",
+    description:
+      "A cache miss or TTL-expired lookup triggered an outbound SuiteFleet GET /api/task-asset-tracking and the cache was upserted with the result. Lets ops reconstruct refresh frequency from the audit log if cache hit-rate debugging surfaces.",
+    metadataNotes:
+      "awb (string), previous_synced_at (iso timestamp | null — null on first refresh for an AWB), record_count (int — number of package records returned by SF).",
+    systemOnly: false,
+  },
+  "asset_tracking.state_changed": {
+    id: "asset_tracking.state_changed",
+    resource: "asset_tracking",
+    action: "state_changed",
+    description:
+      "A cached package's state column transitioned from one value to another (whether triggered by webhook or by read-through GET). Load-bearing forensic event for bag-loss investigation. Per the SET-vs-CLEAR convention at the top of this file: the new state is the operational signal, the old state is the historical one.",
+    metadataNotes:
+      "tracking_id (string, format <awb>-<index>), task_id_external (int), previous_state ('COLLECTED' | 'EN_ROUTE' | 'RECEIVED' | 'RETURNED'), new_state (same domain), trigger_source ('webhook' | 'read_through').",
+    systemOnly: false,
+  },
+  "asset_tracking.orphan_dropped": {
+    id: "asset_tracking.orphan_dropped",
+    resource: "asset_tracking",
+    action: "orphan_dropped",
+    description:
+      "SuiteFleet returned an asset-tracking record whose taskId does not match any Planner-side tasks.external_id. The cache write is dropped because asset_tracking_cache.task_id is NOT NULL (path (i) from B-1 race-path design). System-only because only the ingestion path emits it; no user actor triggers it. Documented for ops to reconstruct WHICH SF event was dropped if a webhook-period data gap surfaces.",
+    metadataNotes:
+      "tracking_id (string), task_id_external (int — the SF taskId that did not resolve), awb (string — derived from tracking_id stem).",
+    systemOnly: true,
+  },
+
   // ---- import (bulk-import operations cross-cutting) ---------------------
   "import.validation_failed": {
     id: "import.validation_failed",

@@ -345,6 +345,21 @@ const PERMISSIONS_DRAFT = {
     systemOnly: false,
   },
 
+  // ---- asset_tracking (Day 6 / B-2) --------------------------------------
+  // Read permission for the asset-tracking cache. The cache itself is
+  // populated by webhook ingestion + read-through GETs (both system-
+  // path); there is no user-facing create / update / delete surface.
+  // Only the read endpoint at /api/tasks/:id/asset-tracking is gated
+  // by this permission today.
+  "asset_tracking:read": {
+    id: "asset_tracking:read",
+    resource: "asset_tracking",
+    action: "read",
+    description:
+      "View asset-tracking (bag-tracking) records for a task. Cache reads are not audited per R-4; the cache-miss / state-change / orphan-dropped lifecycle events are audited at the system layer.",
+    systemOnly: false,
+  },
+
   // ---- audit_event -------------------------------------------------------
   // No write permissions — emit is a system-only path through `withServiceRole`,
   // not an action a tenant actor can take. Only `read` is in the catalogue.

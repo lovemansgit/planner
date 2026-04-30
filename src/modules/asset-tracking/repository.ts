@@ -47,6 +47,18 @@ import type {
   AssetType,
 } from "./types";
 
+/**
+ * Tagged result for the task → AWB resolution. Distinguishes the
+ * three cases the service-layer read-through needs to branch on:
+ *   - task does not exist or is RLS-hidden
+ *   - task exists but has no AWB yet (not pushed to SF)
+ *   - task exists and carries an AWB
+ */
+export type TaskAwbLookup =
+  | { readonly kind: "not_found" }
+  | { readonly kind: "no_awb" }
+  | { readonly kind: "ok"; readonly awb: string };
+
 // -----------------------------------------------------------------------------
 // Row shape and mapper
 // -----------------------------------------------------------------------------
@@ -228,4 +240,70 @@ export async function upsertCacheRow(
     );
   }
   return mapCacheRow(rows[0]);
+}
+
+// -----------------------------------------------------------------------------
+// Cross-module lookups (tasks)
+// -----------------------------------------------------------------------------
+// The service layer's read-through path needs to resolve:
+//   (a) a Planner task uuid → its AWB (so we know what to GET from SF)
+//   (b) an SF taskIdExternal (number) → the matching Planner task uuid
+//       (so we can attach incoming asset-tracking rows to a parent
+//        task; if no match, the orphan_dropped audit event fires).
+//
+// Both queries hit `tasks` directly via SQL rather than going through
+// the tasks-module service. Reasoning:
+//   - The service-layer permission check on the asset-tracking surface
+//     is `asset_tracking:read`. Calling `tasks.getTask` would require
+//     the actor to also hold `task:read` — gratuitously expanding the
+//     auth surface for a derived data fetch.
+//   - RLS still scopes the lookups (tenant_id in WHERE + RLS policy
+//     on `tasks`).
+//   - Living in this module's repository keeps the dependency arrow
+//     pointing one way: asset-tracking depends on tasks data, not on
+//     tasks-module internals.
+
+/**
+ * Resolve a Planner task to its SuiteFleet AWB
+ * (`tasks.external_tracking_number`). Returns a tagged result so the
+ * service can branch on the three meaningful outcomes without
+ * conflating "task does not exist" with "task exists but has no AWB
+ * yet".
+ */
+export async function findTaskAwb(
+  tx: DbTx,
+  tenantId: Uuid,
+  taskId: Uuid,
+): Promise<TaskAwbLookup> {
+  type Row = { external_tracking_number: string | null } & Record<string, unknown>;
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT external_tracking_number FROM tasks
+    WHERE id = ${taskId} AND tenant_id = ${tenantId}
+  `);
+  if (rows.length === 0) return { kind: "not_found" };
+  const awb = rows[0].external_tracking_number;
+  if (awb === null) return { kind: "no_awb" };
+  return { kind: "ok", awb };
+}
+
+/**
+ * Resolve a SuiteFleet taskId (numeric) to a Planner task uuid via
+ * `tasks.external_id`. Returns null when no Planner task matches —
+ * the orphan-drop case the service-layer flags via the
+ * `asset_tracking.orphan_dropped` audit event.
+ *
+ * `tasks.external_id` is `text` (per 0006); we coerce the SF numeric
+ * id to its decimal-string form for the equality predicate.
+ */
+export async function findTaskIdByExternalId(
+  tx: DbTx,
+  tenantId: Uuid,
+  externalTaskId: number,
+): Promise<Uuid | null> {
+  type Row = { id: string } & Record<string, unknown>;
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id FROM tasks
+    WHERE external_id = ${String(externalTaskId)} AND tenant_id = ${tenantId}
+  `);
+  return (rows[0]?.id as Uuid | undefined) ?? null;
 }
