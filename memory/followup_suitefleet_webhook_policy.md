@@ -43,7 +43,7 @@ Short-circuit: if the SF portal UI rejects the second-endpoint config outright (
 
 **Result:** Both endpoints received the event. Payloads were byte-identical. Timestamps were identical at `1777533200494`. **SF fans out the same status event to multiple active webhook endpoints in parallel.**
 
-**Per-status configuration:** _Open — Love is still investigating whether SF supports status-level routing (configuring different endpoints for different status events). For now the finding is "all Active System Webhooks fired on this status event"; whether a System Webhook entry can be scoped per-status is not yet confirmed._
+**Per-status configuration:** **Resolved 1 May 2026** — per-status routing IS supported. Each System Webhook entry binds to exactly one event type. Multiple entries per merchant are allowed (the additive fan-out probe already confirmed parallel delivery to multiple URLs). See § "Empirical findings from SF portal config — 1 May 2026" below for the full event taxonomy.
 
 **Client Secret field:** _Open — whether the Client Secret field on the System Webhook entry is required or optional has not been confirmed during the probe. Carry as a small operational question for the SF portal config step in W-1._
 
@@ -76,6 +76,81 @@ On a fully delivered task with otherwise populated `deliveryInformation`, `codPa
 
 **Implication for B-2 (paymentMethod probe):** the field is missing on the receive side too, not just the create-response side. Day-4's three-outcome hypothesis (surfaces in webhook / absent everywhere / surfaces only via GET) tilts toward "absent everywhere" — but B-2's explicit GET-path probe should still run to confirm.
 
+## Empirical findings from SF portal config — 1 May 2026
+
+A second SF portal session (separate from the additive-receiver probe) configured the production webhook subscriptions and surfaced the canonical SF event taxonomy. Findings:
+
+### Per-status routing IS supported
+
+Each System Webhook entry binds to exactly one event type. Multiple entries per merchant are allowed (the earlier additive fan-out probe confirmed parallel delivery). This closes the "Per-status configuration" open question above.
+
+### Canonical SF event taxonomy — 15 events
+
+Verified empirically against the SF sandbox portal:
+
+```
+TASK_HAS_BEEN_ORDERED
+TASK_HAS_BEEN_ASSIGNED
+TASK_HAS_BEEN_UPDATED
+TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC
+TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY
+TASK_STATUS_UPDATED_TO_PICKED_UP
+TASK_STATUS_UPDATED_TO_IN_TRANSIT
+TASK_STATUS_UPDATED_TO_DELIVERED
+TASK_STATUS_UPDATED_TO_FAILED
+TASK_STATUS_UPDATED_TO_CANCELED
+TASK_STATUS_UPDATED_TO_RESCHEDULED
+TASK_STATUS_UPDATED_TO_REATTEMPT
+TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN
+TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER
+TASK_STATUS_UPDATED_TO_HUB_TRANSFER
+```
+
+Three lifecycle prefixes: `TASK_HAS_BEEN_*` (3 events — order/assign/update), `TASK_STATUS_UPDATED_TO_*` (12 events — driver-side status transitions). The `_UPDATED` event is non-lifecycle (edits, not state changes); the other 14 are state transitions.
+
+### Production state — sandbox merchant 588
+
+The Subscription Planner is now subscribed to **all 15 events** on sandbox merchant 588, all pointing at:
+
+```
+https://planner-olive-sigma.vercel.app/api/webhooks/suitefleet/8bfc84b0-c139-4f43-b966-5a12eaa7a302
+```
+
+Probe webhooks (Probe A, Probe B at webhook.site, used for the additive-receiver probe) have been deleted. Sandbox merchant 588's webhook configuration is now production-shaped: existing merchant integrations untouched + 15 Planner subscriptions added additively.
+
+### Existing mapper coverage — all 15 covered
+
+Read-only check against the Day-4 / S-5 + S-6 vocabulary tables. Both files cover the canonical 15 with no gaps:
+
+| SF action                                    | `status-mapper.ts` → InternalTaskStatus | `webhook-parser.ts` → WebhookEventKind |
+| -------------------------------------------- | --------------------------------------- | -------------------------------------- |
+| `TASK_HAS_BEEN_ORDERED`                      | `CREATED`                               | `TASK_STATUS_CHANGED`                  |
+| `TASK_HAS_BEEN_ASSIGNED`                     | `ASSIGNED`                              | `TASK_ASSIGNMENT_CHANGED`              |
+| `TASK_HAS_BEEN_UPDATED`                      | `null` (non-lifecycle, expected)        | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC`       | `IN_TRANSIT`                            | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY`    | `IN_TRANSIT`                            | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_PICKED_UP`           | `IN_TRANSIT`                            | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_IN_TRANSIT`          | `IN_TRANSIT`                            | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_DELIVERED`           | `DELIVERED`                             | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_FAILED`              | `FAILED`                                | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_CANCELED`            | `CANCELED`                              | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_RESCHEDULED`         | `ON_HOLD`                               | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_REATTEMPT`           | `ON_HOLD`                               | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN`  | `FAILED`                                | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER` | `FAILED`                                | `TASK_STATUS_CHANGED`                  |
+| `TASK_STATUS_UPDATED_TO_HUB_TRANSFER`        | `IN_TRANSIT`                            | `TASK_STATUS_CHANGED`                  |
+
+**Covered: 15/15 in both files. Uncovered: 0.**
+
+The Day-4 / S-5 work inferred this vocabulary from brief §5.3.4 and is now empirically confirmed by Love's portal session. Two file-header lines are now stale (no code change required, surfaced for a future cleanup commit):
+
+- `webhook-parser.ts` line 22: _"Action vocabulary: only `TASK_HAS_BEEN_ASSIGNED` is verified … other 14 names live in `suitefleet-adapter-tech-spec.md` which is not in the repo yet"_ — all 15 are now verified empirically; the spec doc is moot.
+- `webhook-parser.ts` line 45: `// TODO(Day-4-spec): mappings below are inferred from action names per brief §5.3.4 and remain unverified until S-9 empirical sandbox capture confirms each.` — verification has landed (via the portal session, not S-9 sandbox capture).
+
+### Implication for §14 #7 (error code catalogue)
+
+This portal session resolves the **event/action taxonomy** half of brief §14 #7. The **error code catalogue** half — the full list of HTTP 4xx/5xx codes SF emits on REST responses, and any error-shaped payloads on webhook deliveries — is a separate empirical question and remains open. Distinct concerns; same vendor email.
+
 ## Carried-forward vendor questions (brief §14, no prior home)
 
 These are pre-Day-14 questions carried forward from the brief's §14 list. Each was previously homeless or referenced only in passing across other followup files; consolidating here so a single email to the SF account manager can cover all webhook-policy concerns.
@@ -99,6 +174,8 @@ The full list of error codes SF emits — both inside webhook payloads and as HT
 - Confidence that future SF additions don't silently slip into our default-drop branch
 
 Mentioned in passing in `decision_daily_cutoff_and_throughput.md`'s "Open follow-up — SuiteFleet rate-limit confirmation" section but never given a dedicated home until now.
+
+**Partial resolution 1 May 2026:** the **event/action taxonomy** half of this question (which actions does SF emit?) is now empirically resolved — see § "Empirical findings from SF portal config — 1 May 2026" above. The 15-action vocabulary is captured. The HTTP **error code catalogue** half (which 4xx/5xx codes SF emits + any error-shaped webhook payloads) is a separate concern that remains open.
 
 ### 3. SF portal API for programmatic webhook config
 

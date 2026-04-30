@@ -42,4 +42,4 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 ## Day 6 (1 May 2026)
 
 - [Brand guidelines v2 — design tokens](decision_brand_guidelines_v2.md) — Mulish + Sanchez registered for product UI; Manrope is slogan-only and deliberately excluded; 7 working hex tokens not source-of-truth (brand-team confirmation pre-Day-14; brand book pages 27–28 have printed-hex errors)
-- [SuiteFleet webhook policy](followup_suitefleet_webhook_policy.md) — additive receiver confirmed via probe (1 May 2026); SF fans events to multiple endpoints in parallel; W-1 per-tenant URL design validated. §14 retry/error-catalogue/portal-API questions still open
+- [SuiteFleet webhook policy](followup_suitefleet_webhook_policy.md) — additive receiver + per-status routing confirmed; canonical 15-event SF taxonomy captured; Planner subscribed to all 15 on sandbox merchant 588; existing mapper covers all 15 (no code gap)
