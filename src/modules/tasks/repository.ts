@@ -53,6 +53,7 @@ import type {
   CreateTaskInput,
   CreateTaskPackageInput,
   Task,
+  TaskCreationSource,
   TaskInternalStatus,
   TaskKind,
   TaskPackage,
@@ -84,6 +85,7 @@ type TaskRow = {
   tenant_id: string;
   consignee_id: string;
   subscription_id: string | null;
+  created_via: TaskCreationSource;
   customer_order_number: string;
   reference_number: string | null;
   internal_status: TaskInternalStatus;
@@ -197,6 +199,7 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
     tenantId: row.tenant_id,
     consigneeId: row.consignee_id,
     subscriptionId: row.subscription_id,
+    createdVia: row.created_via,
     customerOrderNumber: row.customer_order_number,
     referenceNumber: row.reference_number,
     internalStatus: row.internal_status,
@@ -243,13 +246,14 @@ function mapTaskWithPackages(row: TaskRowWithPackages): Task {
 export async function insertTaskWithPackages(
   tx: DbTx,
   tenantId: Uuid,
-  input: CreateTaskInput,
+  input: CreateTaskInput
 ): Promise<Task> {
   const taskRows = await tx.execute<TaskRow>(sqlTag`
     INSERT INTO tasks (
       tenant_id,
       consignee_id,
       subscription_id,
+      created_via,
       customer_order_number,
       reference_number,
       internal_status,
@@ -270,6 +274,7 @@ export async function insertTaskWithPackages(
       ${tenantId},
       ${input.consigneeId},
       ${input.subscriptionId ?? null},
+      ${input.createdVia ?? "subscription"},
       ${input.customerOrderNumber},
       ${input.referenceNumber ?? null},
       ${input.internalStatus ?? "CREATED"},
@@ -309,7 +314,7 @@ export async function insertTaskWithPackages(
       ${tenantId},
       ${pkg.position},
       ${pkg.packageStatus ?? "ORDERED"}
-    )`,
+    )`
   );
   const valuesClause = sqlTag.join(packageValues, sqlTag`, `);
 
@@ -365,10 +370,7 @@ export async function findTaskById(tx: DbTx, id: Uuid): Promise<Task | null> {
  * One round-trip total; packages arrive denormalised into a JSON
  * column and are deserialised by the mapper.
  */
-export async function listTasksByTenant(
-  tx: DbTx,
-  tenantId: Uuid,
-): Promise<readonly Task[]> {
+export async function listTasksByTenant(tx: DbTx, tenantId: Uuid): Promise<readonly Task[]> {
   const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
     SELECT
       t.*,
@@ -404,7 +406,7 @@ export async function updateTask(
   tx: DbTx,
   tenantId: Uuid,
   id: Uuid,
-  patch: UpdateTaskPatch,
+  patch: UpdateTaskPatch
 ): Promise<Task | null> {
   const sets: SQL[] = [];
   if (patch.customerOrderNumber !== undefined)
@@ -413,20 +415,16 @@ export async function updateTask(
     sets.push(sqlTag`reference_number = ${patch.referenceNumber}`);
   if (patch.internalStatus !== undefined)
     sets.push(sqlTag`internal_status = ${patch.internalStatus}`);
-  if (patch.deliveryDate !== undefined)
-    sets.push(sqlTag`delivery_date = ${patch.deliveryDate}`);
+  if (patch.deliveryDate !== undefined) sets.push(sqlTag`delivery_date = ${patch.deliveryDate}`);
   if (patch.deliveryStartTime !== undefined)
     sets.push(sqlTag`delivery_start_time = ${patch.deliveryStartTime}`);
   if (patch.deliveryEndTime !== undefined)
     sets.push(sqlTag`delivery_end_time = ${patch.deliveryEndTime}`);
-  if (patch.deliveryType !== undefined)
-    sets.push(sqlTag`delivery_type = ${patch.deliveryType}`);
+  if (patch.deliveryType !== undefined) sets.push(sqlTag`delivery_type = ${patch.deliveryType}`);
   if (patch.taskKind !== undefined) sets.push(sqlTag`task_kind = ${patch.taskKind}`);
-  if (patch.paymentMethod !== undefined)
-    sets.push(sqlTag`payment_method = ${patch.paymentMethod}`);
+  if (patch.paymentMethod !== undefined) sets.push(sqlTag`payment_method = ${patch.paymentMethod}`);
   if (patch.codAmount !== undefined) sets.push(sqlTag`cod_amount = ${patch.codAmount}`);
-  if (patch.declaredValue !== undefined)
-    sets.push(sqlTag`declared_value = ${patch.declaredValue}`);
+  if (patch.declaredValue !== undefined) sets.push(sqlTag`declared_value = ${patch.declaredValue}`);
   if (patch.weightKg !== undefined) sets.push(sqlTag`weight_kg = ${patch.weightKg}`);
   if (patch.notes !== undefined) sets.push(sqlTag`notes = ${patch.notes}`);
   if (patch.signatureRequired !== undefined)
