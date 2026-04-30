@@ -73,6 +73,24 @@ export const CreateSubscriptionBodySchema = z
   .strict();
 
 /**
+ * Body shape for the lifecycle sub-routes
+ * (`POST /api/subscriptions/:id/{pause,resume,end}`). These endpoints
+ * take NO input — the id is path-only and the transition is the
+ * verb. An incoming body MAY be empty (`{}`) or absent; ANY key in
+ * the body is rejected to prevent footguns like
+ * `POST .../pause { status: "ended" }` silently doing the wrong
+ * thing. Routes apply this schema only when a body is actually
+ * present (req.json() resolves to a value); a missing body bypasses
+ * the schema entirely.
+ *
+ * `.strict()` is the regression target: dropping it would let a
+ * caller stuff a `status` field into a /pause request and have it
+ * silently dropped at parse time. Tests pin rejection of the three
+ * lifecycle column names explicitly.
+ */
+export const LifecycleNoBodySchema = z.object({}).strict();
+
+/**
  * Body shape for `PATCH /api/subscriptions/:id`. Mirrors
  * `UpdateSubscriptionPatch`: every field optional. Lifecycle columns
  * (`status`, `pausedAt`, `endedAt`) are NOT in this schema —

@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CreateSubscriptionBodySchema,
+  LifecycleNoBodySchema,
   UpdateSubscriptionBodySchema,
 } from "../schemas";
 
@@ -147,5 +148,45 @@ describe("UpdateSubscriptionBodySchema", () => {
   it("rejects an invalid consigneeId in a patch", () => {
     const result = UpdateSubscriptionBodySchema.safeParse({ consigneeId: "not-a-uuid" });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("LifecycleNoBodySchema (pause / resume / end)", () => {
+  it("accepts an empty object body", () => {
+    // Lifecycle endpoints permit `{}` so clients that always send
+    // `Content-Type: application/json` with an empty payload don't
+    // hit a 400. The route layer additionally accepts an absent
+    // body (handled before the schema runs).
+    const result = LifecycleNoBodySchema.safeParse({});
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["status"],
+    ["pausedAt"],
+    ["endedAt"],
+  ])("rejects body containing a %s field", (field) => {
+    // Footgun guard: a caller stuffing `status` or a lifecycle
+    // timestamp into a /pause request must NOT be silently accepted
+    // and dropped. The .strict() empty-object schema rejects any
+    // key — these three field names are the highest-risk ones
+    // (they parallel columns the lifecycle paths actually write).
+    const body: Record<string, unknown> = { [field]: "anything" };
+    const result = LifecycleNoBodySchema.safeParse(body);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an arbitrary unknown field too", () => {
+    // Catch-all so a future change to .strict() drops the regression
+    // pin even if no-one notices the named-field tests still pass.
+    const result = LifecycleNoBodySchema.safeParse({ foo: "bar" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-object body (string / array / null)", () => {
+    for (const bad of ["string", [], null]) {
+      const result = LifecycleNoBodySchema.safeParse(bad);
+      expect(result.success).toBe(false);
+    }
   });
 });
