@@ -52,7 +52,7 @@ describe("T-1 — task_packages_tenant_match trigger fires under BYPASSRLS", () 
     const url = process.env.SUPABASE_DATABASE_URL;
     if (!url) {
       throw new Error(
-        "SUPABASE_DATABASE_URL must be set for the T-1 trigger test — this connection is the superuser/BYPASSRLS path the trigger is designed to guard against",
+        "SUPABASE_DATABASE_URL must be set for the T-1 trigger test — this connection is the superuser/BYPASSRLS path the trigger is designed to guard against"
       );
     }
     sql = postgres(url, { prepare: false, max: 1 });
@@ -88,10 +88,12 @@ describe("T-1 — task_packages_tenant_match trigger fires under BYPASSRLS", () 
     const taskRows = await sql<{ id: string }[]>`
       INSERT INTO tasks (
         tenant_id, consignee_id, customer_order_number,
-        delivery_date, delivery_start_time, delivery_end_time
+        delivery_date, delivery_start_time, delivery_end_time,
+        created_via
       ) VALUES (
         ${TENANT_A}, ${consigneeId}, ${`T1-TRIGGER-${RUN_ID}`},
-        '2026-05-01', '14:00', '16:00'
+        '2026-05-01', '14:00', '16:00',
+        'manual_admin'
       )
       RETURNING id
     `;
