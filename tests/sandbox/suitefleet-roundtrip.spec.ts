@@ -325,21 +325,27 @@ describe("SuiteFleet sandbox — task create round-trip", () => {
 });
 
 describe("SuiteFleet sandbox — paymentMethod field resolution (resolved Day 6 / B-2)", () => {
-  // Per memory/followup_paymentmethod_field_resolution.md — empirical
-  // probe (1 May 2026) confirmed: paymentMethod is silently dropped
-  // end-to-end. The value we send on POST never surfaces on GET, on
-  // webhook events, or under any other field name. The GET response's
-  // deliveryInformation block carries codPaymentMethod (which we do
-  // NOT send) with value null, but no paymentMethod field exists.
+  // Per memory/followup_paymentmethod_field_resolution.md — TWO
+  // independent observations, NOT the same field:
   //
-  // The test below is empirically pinned: it asserts the silent-drop
-  // behaviour. If a future SF release starts surfacing the value, the
-  // test breaks and forces a conscious update of the memo + the
-  // pilot's payment-method handling. Non-blocking for pilot scope
-  // (all subscriptions PrePaid by definition); vendor-escalation
-  // queued for the Day-14 SF email.
+  //   1. `paymentMethod` (sent on create, under deliveryInformation):
+  //      SF accepts it on POST without rejection but never echoes it
+  //      back on GET. Most likely a free-text metadata slot SF
+  //      accepts for client-integration compatibility but does not
+  //      operationally use for COD-vs-prepaid routing.
+  //
+  //   2. `codPaymentMethod` (returned on GET, also under
+  //      deliveryInformation): SF-side Cash-On-Delivery payment
+  //      method (the mechanism the consignee uses to pay the courier
+  //      at the door). For prepaid tasks (no money collection)
+  //      `codPaymentMethod = null` is the normal value. NOT evidence
+  //      about (1).
+  //
+  // The reviewer flagged the original conflation; this test asserts
+  // both observations independently so a regression cannot collapse
+  // them again. Non-blocking for pilot (all subscriptions prepaid).
 
-  it("paymentMethod sent on POST is NOT echoed back on GET (silent-drop pinned)", async (ctx) => {
+  it("paymentMethod sent on POST is NOT echoed on GET; codPaymentMethod is null on prepaid (separate fields)", async (ctx) => {
     if (sandbox === null) {
       ctx.skip();
       return;
@@ -419,13 +425,16 @@ describe("SuiteFleet sandbox — paymentMethod field resolution (resolved Day 6 
     const body = await getRes.json();
 
     const json = JSON.stringify(body);
+    // Observation 1: the value we sent on `paymentMethod` does not
+    // surface anywhere in the GET response — not under
+    // `paymentMethod`, not under any other field name. The string
+    // "CashOnDelivery" we POSTed is absent.
     expect(json).not.toContain("CashOnDelivery");
-    // codPaymentMethod is the only payment-related field on the GET
-    // response and it always returns null on sandbox. Pinning both
-    // observations: the field exists and the value is null.
+    // Observation 2: codPaymentMethod is the SF-side COD field. Its
+    // null value here means the task is NOT configured as COD on the
+    // SF side (the field is unrelated to what we sent on
+    // `paymentMethod`). For a prepaid pilot task, null is the
+    // correct, expected value — not evidence about observation 1.
     expect(body.deliveryInformation.codPaymentMethod).toBeNull();
-    // The value we sent ("CashOnDelivery") would have to land
-    // somewhere if SF persisted it — we explicitly assert it does
-    // not. This is the silent-drop signal.
   }, 30_000);
 });

@@ -1,6 +1,6 @@
 ---
-name: SuiteFleet drops deliveryInformation.paymentMethod end-to-end
-description: We send deliveryInformation.paymentMethod="PrePaid" on createTask. Empirical probes (S-8 create response + B-2 GET probe + Day-6 webhook payload) confirm the value is silently ignored — never echoed in any response, never appears in webhook events, no field on GET surfaces "PrePaid" or "Cash" anywhere. codPaymentMethod returns null. Effective product gap for non-PrePaid use cases; non-blocking for pilot (all deliveries PrePaid by subscription definition); needs vendor escalation pre-pilot for any future COD merchant.
+name: SuiteFleet paymentMethod (sent on create) vs codPaymentMethod (SF-side COD field) — distinct fields, both pilot non-blocking
+description: B-1's first memo conflated two independent observations into one "silent drop" finding. Reviewer pointed out that paymentMethod (what we send on create) and codPaymentMethod (returned on GET, SF-side Cash-On-Delivery field) are NOT the same field. paymentMethod is accepted-but-ignored on POST. codPaymentMethod is null on prepaid tasks because there is no COD to record. Both observations stand empirically; the conflation was the bug. Pilot non-blocking (all meal-plan deliveries prepaid). Day-14 vendor escalation downgraded to "scope clarified, non-issue for pilot."
 type: project
 ---
 
@@ -44,7 +44,18 @@ If GET `/api/tasks/:id` doesn't surface payment method anywhere, escalate to ven
 
 Add a sub-test to the create-task round-trip integration suite that follows the create with a GET, asserts the payment method is recoverable. If the assertion fails, mark the test as `it.todo` and capture the response for the gap analysis.
 
-## Resolution — empirical (Day 6 / B-2, 1 May 2026)
+## Resolution — empirical + reviewer correction (Day 6 / B-2, 1 May 2026, revised)
+
+### Reviewer correction to the original framing
+
+The first version of this section conflated two independent observations into a single "silent drop" finding. Reviewer pointed out:
+
+- **`paymentMethod`** is what we send on create, nested under `deliveryInformation`. A free-text-ish metadata field where we put values like `"PrePaid"` or `"CashOnDelivery"`.
+- **`codPaymentMethod`** is what SF returns on GET, also nested under `deliveryInformation`. The SF-side **Cash-On-Delivery** payment method — the mechanism the consignee uses to pay the courier at the door (cash, card, etc.) when the task is configured as COD on the SF side. For non-COD (prepaid) tasks, `codPaymentMethod` is expected to be `null` because there is no money to collect.
+
+These are **NOT the same field**. The original memo treated `codPaymentMethod = null` as evidence that `paymentMethod` was being silently dropped. That conflated two distinct observations of distinct fields.
+
+### Empirical probe (re-interpreted)
 
 Probe executed against sandbox task 59113 (created via S-9 round-trip with `paymentMethod: "PrePaid"`):
 
@@ -53,47 +64,45 @@ GET /api/tasks/59113
 status: 200
 ```
 
-**Result: the value `"PrePaid"` does NOT appear anywhere in the GET response.** A recursive search across every nested field returns exactly one payment-related reference:
+A recursive search across every nested field returns exactly one payment-related reference:
 
 ```
 deliveryInformation.codPaymentMethod = null
 ```
 
-`codPaymentMethod` was never sent by us; it is a SF-side field that surfaces on the response with a null value. There is no `paymentMethod` (singular) field on the GET response. There is no field anywhere with the value `"PrePaid"`, `"Cash"`, or `"CashOnDelivery"`.
+The value we sent (`"PrePaid"`) appears nowhere in the GET response.
 
-The full `deliveryInformation` block on GET (25 fields) confirms: `id`, `deliveryDate`, `deliveryStartTime`, `deliveryEndTime`, plus 21 nullable operational fields (collectedAmount, completionLatitude, recipientName, signature, taskAssetsReturned, codPaymentMethod, etc.). None carries our payment-method value.
+### Two independent observations, read independently
 
-This is consistent with the parallel finding in [followup_suitefleet_webhook_policy.md](followup_suitefleet_webhook_policy.md) ("codPaymentMethod surface confirms Day-4 finding"): on a fully delivered task with otherwise populated `deliveryInformation`, `codPaymentMethod` was also `null`.
+1. **`paymentMethod` is accepted-but-ignored on POST.** SF accepts `deliveryInformation.paymentMethod` without rejection on create, returns no error, and the value never resurfaces — not on GET, not in webhook events, not under any other field name we have probed. This is the original Day-4 finding from S-8 capture, re-confirmed.
+2. **`codPaymentMethod = null` is the correct value for a non-COD task.** The probe task was not configured as COD on the SF side, so SF returns null for the COD-payment-method field. This is *not* evidence about `paymentMethod`; it is SF's normal handling of its own COD-related field on a non-COD task.
 
-### Three-possibilities answer
-
-- **(a) Wrong shape sent.** Unlikely — we sent the doc-shaped `deliveryInformation.paymentMethod` and got no rejection on create; SF's response simply omits it. Possibility (a) cannot be fully ruled out without docs that we don't have, but the silent-drop pattern is more consistent with (c).
-- **(b) Stored under a different field.** Empirically false on the surfaces we can probe. The full GET response and the inbound webhook payload do not expose the value under any name.
-- **(c) Silently ignored.** ✅ Best-supported by the evidence. SF accepts the field on create, returns no error, and the value never resurfaces. It is effectively dropped.
+Both observations are empirically true; conflating them was the bug.
 
 ### Pilot-time impact
 
-**Non-blocking for Transcorp's pilot.** All meal-plan deliveries are PrePaid by subscription billing — there is no per-task payment collection. Drivers do not need to know payment status because they never collect money on delivery. The dropped field has no observable effect on pilot operations.
+**Non-blocking for Transcorp's pilot.** All meal-plan deliveries are PrePaid by subscription billing → no COD → `codPaymentMethod = null` is the expected operational state. The driver UI does not surface payment-method information because there is no money to collect on delivery. Both `paymentMethod` and `codPaymentMethod` are operationally irrelevant for pilot scope.
 
-### Future-pilot impact (when escalation matters)
+### What `paymentMethod` actually is (best inference)
 
-For any future merchant using **CashOnDelivery** or **partial payments**, SF's silent drop becomes a real product gap:
+The `paymentMethod` field SF accepts on create is most likely a free-text metadata field for a vendor's own bookkeeping — accepted on POST so client integrations don't error, but not the operational signal SF uses for COD vs prepaid routing. The actual COD signal lives in a separate task-creation mechanism we haven't fully mapped (probably a customer-level configuration or a different field on the create body); when set, it would populate `codPaymentMethod` on the GET response.
 
-- Drivers cannot tell from the SF UI whether to collect money at the door
-- The `collectedAmount` field returns post-delivery — too late for the driver to know what to ask for
-- Reporting cannot reconcile per-task revenue against payment method
+For pilot, this is moot — we don't have COD merchants and the prepaid case is the empty-COD-field case which we already observe.
 
-This blocks any non-pre-paid B2B use case until SF either (i) acknowledges the field and stores it, or (ii) documents the correct field name / shape. Pre-pilot escalation to the SF account manager is required for any non-PrePaid merchant onboarding.
+### Day-14 vendor escalation — DOWNGRADED
 
-### Day-14 vendor escalation message
+The original "where does paymentMethod surface?" question is **downgraded to: scope clarified, non-issue for pilot.** Pulled from the Day-14 vendor-email queue.
 
-Combine with the other open SF questions (asset-tracking enum exhaustiveness, pagination behaviour, rate limits, etc.) into a single consolidated email. Specific paymentMethod ask:
+A lower-priority residual question, useful pre-future-COD-merchant onboarding (NOT pilot-blocking):
 
-> "POST /api/tasks accepts `deliveryInformation.paymentMethod` without rejection but the value never surfaces on GET /api/tasks/:id, on webhook events, or under any other field name we can see. `codPaymentMethod` returns null on every response we have inspected. (a) Is `deliveryInformation.paymentMethod` the correct shape? (b) If yes, where is the value persisted and how do drivers see it in the SF mobile/web UI? (c) What is the canonical field name for distinguishing PrePaid / CashOnDelivery / partial-payment tasks at create time? (d) Does the SF mobile UI surface payment method at all, and from which field?"
+> "When a task should be COD (consignee pays courier at door), what is the correct create-time signal to SuiteFleet, and does that signal populate `codPaymentMethod` on the GET response? Our `deliveryInformation.paymentMethod` send appears to be a metadata-only field that doesn't drive COD routing."
+
+This can land on the Day-14 list if a future COD merchant is in the pipeline; otherwise it's reference material for whenever non-PrePaid scope opens.
 
 ## Status
 
-**Resolved as known gap** for pilot scope. Documented; non-blocking; vendor-escalation queued for Day-14 message.
+**Resolved as scope clarification** for pilot scope. Documented; non-blocking; vendor-escalation downgraded.
 
 **Surfaced:** Day 4 / S-8 sandbox capture review (29 April 2026).
-**Resolved (empirically) and documented:** Day 6 / B-2 closing commit (1 May 2026).
+**Empirical probe:** Day 6 / B-2 closing commit (1 May 2026, initial framing).
+**Reviewer correction (paymentMethod ≠ codPaymentMethod):** Day 6 / B-2 closing-commit reviewer round (1 May 2026).
