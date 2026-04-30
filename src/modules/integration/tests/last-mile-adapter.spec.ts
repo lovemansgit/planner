@@ -98,6 +98,14 @@ class StubAdapter implements LastMileAdapter {
     if (externalStatus === "") return null;
     return "CREATED";
   }
+  async fetchAssetTrackingByAwb(
+    session: AuthenticatedSession,
+    awb: string,
+  ): Promise<readonly import("../types").AssetTrackingPackage[]> {
+    void session;
+    void awb;
+    return [];
+  }
 }
 
 describe("LastMileAdapter contract", () => {

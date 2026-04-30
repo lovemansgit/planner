@@ -923,4 +923,159 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Asset tracking cache — Day 6 / B-1 extension
+  // ---------------------------------------------------------------------------
+  // Mirrors the five tenants scenarios + canary, applied to an
+  // asset_tracking_cache row inserted into TENANT_A. Self-contained:
+  // creates its own consignee + task dependencies through
+  // withTenant(A) so this block does not depend on the tasks /
+  // task_packages blocks above.
+  //
+  // Note on RLS-vs-trigger interaction (same as task_packages /
+  // failed_pushes blocks): cross-tenant attempts are filtered by RLS
+  // USING before the asset_tracking_cache_assert_tenant_match trigger
+  // has a chance to fire. The trigger's BYPASSRLS coverage lives in
+  // tests/integration/asset-tracking-tenant-match.spec.ts.
+  describe("asset_tracking_cache — same regression coverage", () => {
+    type IdRow = { id: string } & Record<string, unknown>;
+    type CountRow = { n: number } & Record<string, unknown>;
+    type StateRow = { state: string } & Record<string, unknown>;
+
+    const AT_CONSIGNEE_PHONE = `b1-at-${RUN_ID}-1`;
+    let cacheRowId: string;
+
+    beforeAll(async () => {
+      const consigneeId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO consignees (
+            tenant_id, name, phone, address_line, emirate_or_region
+          ) VALUES (
+            ${TENANT_A}, 'B-1 AT Consignee', ${AT_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+
+      const atTaskId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO tasks (
+            tenant_id, consignee_id, customer_order_number,
+            delivery_date, delivery_start_time, delivery_end_time,
+            created_via
+          ) VALUES (
+            ${TENANT_A}, ${consigneeId}, ${`B1-RLS-AT-${RUN_ID}`},
+            '2026-05-01', '14:00', '16:00',
+            'manual_admin'
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+
+      cacheRowId = await withTenant(TENANT_A, async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO asset_tracking_cache (
+            task_id, task_id_external, external_record_id,
+            tracking_id, awb, type, state, tenant_id
+          ) VALUES (
+            ${atTaskId}, 88001, 60001,
+            ${`B1-RLS-AT-${RUN_ID}-1`}, ${`B1-RLS-AT-${RUN_ID}`},
+            'BAGS', 'COLLECTED', ${TENANT_A}
+          )
+          RETURNING id
+        `);
+        return rows[0].id;
+      });
+    });
+
+    it("withTenant(A) sees the asset_tracking_cache row it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StateRow>(sqlTag`
+          SELECT state FROM asset_tracking_cache WHERE id = ${cacheRowId}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].state).toBe("COLLECTED");
+    });
+
+    it("withTenant(B) sees zero asset_tracking_cache rows from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<StateRow>(sqlTag`
+          SELECT state FROM asset_tracking_cache WHERE id = ${cacheRowId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's cache row affects zero rows (RLS blocks before the trigger fires)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE asset_tracking_cache SET state = 'RECEIVED' WHERE id = ${cacheRowId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StateRow>(sqlTag`
+          SELECT state FROM asset_tracking_cache WHERE id = ${cacheRowId}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].state).toBe("COLLECTED");
+    });
+
+    it("withTenant(B) DELETE against tenant A's cache row removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM asset_tracking_cache WHERE id = ${cacheRowId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM asset_tracking_cache WHERE id = ${cacheRowId}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero asset_tracking_cache rows (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<StateRow>(sqlTag`
+          SELECT state FROM asset_tracking_cache WHERE id = ${cacheRowId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero asset_tracking_cache rows", async () => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error(
+          "SUPABASE_APP_DATABASE_URL must be set for the asset_tracking_cache canary case",
+        );
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          StateRow[]
+        >`SELECT state FROM asset_tracking_cache WHERE id = ${cacheRowId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
+    });
+  });
 });
