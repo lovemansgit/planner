@@ -181,3 +181,58 @@ export interface WebhookEvent {
   readonly idempotencyKey: string;
   readonly raw: unknown;
 }
+
+/**
+ * Asset type — the unit of cargo a tracking record describes. `BAGS`
+ * is the only observed value today; `BOX`, `PALLET`, `CONTAINER` are
+ * documented as future possibilities. The 0011 schema CHECK is
+ * restrictive; widening waits until those types appear empirically.
+ *
+ * "AWB" appears below as a deliberate exception to the
+ * "no SuiteFleet vocabulary in integration types" convention. AWB
+ * is a generic shipping-industry term (Air Waybill — the master
+ * shipment identifier across carriers, not specific to SuiteFleet);
+ * adopting it at the interface level is cleaner than inventing a
+ * Planner-only synonym for a concept that has cross-vendor recognition.
+ */
+export type AssetType = "BAGS";
+
+/**
+ * Four-state asset lifecycle.
+ *
+ *   COLLECTED — courier has the asset
+ *   EN_ROUTE  — asset moving from origin to destination
+ *   RECEIVED  — handed off at destination
+ *   RETURNED  — asset came back (returned-to-sender or recovery)
+ */
+export type AssetTrackingState = "COLLECTED" | "EN_ROUTE" | "RECEIVED" | "RETURNED";
+
+/**
+ * One package's tracking record, returned by the adapter's
+ * `fetchAssetTrackingByAwb` method. The cache row in
+ * `asset_tracking_cache` mirrors this shape with internal-FK +
+ * freshness-metadata fields layered on (see
+ * src/modules/asset-tracking/types.ts).
+ *
+ * `photos` and the four `*By` actor fields are typed as `unknown`
+ * because the SuiteFleet doc does not specify their inner shape and
+ * empirical samples are not yet available (sandbox merchant 588 has
+ * `taskAssetTrackingEnabled: true` but no records). Tightened in a
+ * follow-up migration once empirical samples land.
+ */
+export interface AssetTrackingPackage {
+  readonly externalRecordId: number;
+  readonly taskIdExternal: number;
+  readonly trackingId: string;
+  readonly awb: string;
+  readonly type: AssetType;
+  readonly state: AssetTrackingState;
+  readonly photos: unknown | null;
+  readonly notes: string | null;
+  readonly supplementaryQuantity: number | null;
+  readonly containerId: number | null;
+  readonly collectedBy: unknown | null;
+  readonly enrouteBy: unknown | null;
+  readonly receivedBy: unknown | null;
+  readonly returnedBy: unknown | null;
+}

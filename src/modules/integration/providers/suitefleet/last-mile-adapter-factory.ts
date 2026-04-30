@@ -52,6 +52,7 @@ import type {
   SuiteFleetWebhookCredentials,
 } from "@/modules/credentials";
 
+import { createSuiteFleetAssetTrackingClient } from "./asset-tracking-client";
 import { createSuiteFleetAuthClient } from "./auth-client";
 import { mapSuiteFleetStatusToInternal } from "./status-mapper";
 import { createSuiteFleetTaskClient } from "./task-client";
@@ -135,6 +136,20 @@ export function createSuiteFleetLastMileAdapter(
         customerId: credentials.customerId,
         request,
       });
+    },
+
+    async fetchAssetTrackingByAwb(session, awb) {
+      // Same per-call construction pattern as createTask — clientId
+      // is per-tenant and resolveCredentials is the canonical
+      // accessor. The asset-tracking client itself is stateless;
+      // construction cost is one closure allocation.
+      const credentials = await resolveCredentials(session.tenantId);
+      const client = createSuiteFleetAssetTrackingClient({
+        fetch: deps.fetch,
+        clientId: credentials.clientId,
+        baseUrl: deps.baseUrl,
+      });
+      return client.fetchByAwb({ session, awb });
     },
 
     async verifyWebhookRequest(tenantId, headers, body) {

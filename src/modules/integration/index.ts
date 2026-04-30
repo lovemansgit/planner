@@ -13,6 +13,9 @@
 export type { LastMileAdapter } from "./last-mile-adapter";
 
 export type {
+  AssetTrackingPackage,
+  AssetTrackingState,
+  AssetType,
   AuthenticatedSession,
   ConsigneeSnapshot,
   DeliveryAddress,
@@ -51,6 +54,16 @@ export type {
   SuiteFleetAuthClientDeps,
   SuiteFleetRefreshInput,
 } from "./providers/suitefleet/auth-client";
+
+export {
+  createSuiteFleetAssetTrackingClient,
+  parseAssetTrackingPage,
+  parseAssetTrackingRecord,
+} from "./providers/suitefleet/asset-tracking-client";
+export type {
+  SuiteFleetAssetTrackingClient,
+  SuiteFleetAssetTrackingClientDeps,
+} from "./providers/suitefleet/asset-tracking-client";
 
 // Day 5 / T-8 — assembly factory that combines the primitives above
 // into a single constructable LastMileAdapter instance.
