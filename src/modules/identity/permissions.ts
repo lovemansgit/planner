@@ -267,6 +267,13 @@ const PERMISSIONS_DRAFT = {
   },
 
   // ---- subscription ------------------------------------------------------
+  // Lifecycle is split: `update` covers schedule/window/cosmetic edits via
+  // a generic patch; `pause` / `resume` / `end` are dedicated permissions
+  // for status transitions. Each lifecycle permission maps 1:1 to its
+  // audit event (subscription.paused / .resumed / .ended), matching the
+  // service-layer transitional methods on the repository (S-3). Hard
+  // delete is NOT a planned operation in pilot — `endSubscription` is
+  // terminal; there is no `subscription:delete`.
   "subscription:create": {
     id: "subscription:create",
     resource: "subscription",
@@ -285,14 +292,30 @@ const PERMISSIONS_DRAFT = {
     id: "subscription:update",
     resource: "subscription",
     action: "update",
-    description: "Edit subscription frequency, end-date, pause/resume.",
+    description:
+      "Edit a subscription's schedule, delivery window, address override, or cosmetic fields. Lifecycle transitions (pause/resume/end) are separate permissions.",
     systemOnly: false,
   },
-  "subscription:delete": {
-    id: "subscription:delete",
+  "subscription:pause": {
+    id: "subscription:pause",
     resource: "subscription",
-    action: "delete",
-    description: "End or remove a subscription.",
+    action: "pause",
+    description: "Transition a subscription from 'active' to 'paused'.",
+    systemOnly: false,
+  },
+  "subscription:resume": {
+    id: "subscription:resume",
+    resource: "subscription",
+    action: "resume",
+    description: "Transition a subscription from 'paused' back to 'active'.",
+    systemOnly: false,
+  },
+  "subscription:end": {
+    id: "subscription:end",
+    resource: "subscription",
+    action: "end",
+    description:
+      "Transition a subscription to the terminal 'ended' state. Reactivation is not supported; create a new subscription instead.",
     systemOnly: false,
   },
   "subscription:bulk_create": {
