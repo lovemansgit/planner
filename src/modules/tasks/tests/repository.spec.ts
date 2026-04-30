@@ -47,6 +47,7 @@ function taskRowFixture(overrides: Partial<Record<string, unknown>> = {}) {
     tenant_id: TENANT_ID,
     consignee_id: CONSIGNEE_ID,
     subscription_id: null,
+    created_via: "manual_admin" as const,
     customer_order_number: "ORDER-001",
     reference_number: null,
     internal_status: "CREATED" as const,
@@ -74,7 +75,7 @@ function taskRowFixture(overrides: Partial<Record<string, unknown>> = {}) {
 
 function taskRowWithPackagesFixture(
   packages: ReadonlyArray<Record<string, unknown>> = [],
-  overrides: Partial<Record<string, unknown>> = {},
+  overrides: Partial<Record<string, unknown>> = {}
 ) {
   return {
     ...taskRowFixture(overrides),
@@ -249,10 +250,9 @@ describe("findTaskById", () => {
   it("returns the mapped task with packages when one exists", async () => {
     const tx = makeStubTx([
       [
-        taskRowWithPackagesFixture(
-          [packageJsonFixture({ id: PACKAGE_ID_1, position: 0 })],
-          { customer_order_number: "ORDER-X" },
-        ),
+        taskRowWithPackagesFixture([packageJsonFixture({ id: PACKAGE_ID_1, position: 0 })], {
+          customer_order_number: "ORDER-X",
+        }),
       ],
     ]);
     const result = await findTaskById(tx, TASK_ID);
@@ -326,9 +326,7 @@ describe("updateTask", () => {
     expect(tx.execute).toHaveBeenCalledTimes(2);
     const updateCaptured = compile(tx.execute.mock.calls[0][0]);
     expect(updateCaptured.sql).toMatch(/UPDATE tasks/i);
-    expect(updateCaptured.sql).toMatch(
-      /where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i,
-    );
+    expect(updateCaptured.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
     expect(updateCaptured.params).toContain(TENANT_ID);
     expect(updateCaptured.params).toContain(TASK_ID);
     expect(result?.customerOrderNumber).toBe("Renamed");
@@ -344,9 +342,7 @@ describe("updateTask", () => {
     expect(tx.execute).toHaveBeenCalledOnce();
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/^\s*SELECT/i);
-    expect(captured.sql).toMatch(
-      /where\s+t\.id\s*=\s*\$\d+\s+and\s+t\.tenant_id\s*=\s*\$\d+/i,
-    );
+    expect(captured.sql).toMatch(/where\s+t\.id\s*=\s*\$\d+\s+and\s+t\.tenant_id\s*=\s*\$\d+/i);
     expect(captured.params).toContain(TENANT_ID);
     expect(result?.id).toBe(TASK_ID);
     expect(result?.packages).toHaveLength(1);
@@ -375,7 +371,7 @@ describe("updateTask", () => {
         cod_amount: "42.50",
         weight_kg: "1.250",
         signature_required: true,
-      },
+      }
     );
 
     const txUpdate = makeStubTx([[sharedRow]]);

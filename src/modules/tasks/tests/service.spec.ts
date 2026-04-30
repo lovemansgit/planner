@@ -42,11 +42,7 @@ vi.mock("../../../shared/logger", () => ({
 }));
 
 import { withServiceRole, withTenant } from "../../../shared/db";
-import {
-  ForbiddenError,
-  NotFoundError,
-  ValidationError,
-} from "../../../shared/errors";
+import { ForbiddenError, NotFoundError, ValidationError } from "../../../shared/errors";
 import type { Actor, RequestContext } from "../../../shared/tenant-context";
 import type { Permission } from "../../../shared/types";
 
@@ -85,7 +81,10 @@ const TASK_ID = "11111111-1111-1111-1111-111111111111";
 const CONSIGNEE_ID = "22222222-2222-2222-2222-222222222222";
 const FIXED_NOW = "2026-04-30T10:00:00.000Z";
 
-function userCtx(perms: readonly Permission[], tenantId: string | null = TENANT_ID): RequestContext {
+function userCtx(
+  perms: readonly Permission[],
+  tenantId: string | null = TENANT_ID
+): RequestContext {
   return {
     actor: {
       kind: "user",
@@ -103,7 +102,7 @@ type SystemActorName = (Actor & { kind: "system" })["system"];
 
 function systemCtx(
   system: SystemActorName = "cron:generate_tasks",
-  tenantId: string | null = TENANT_ID,
+  tenantId: string | null = TENANT_ID
 ): RequestContext {
   return {
     actor: {
@@ -124,6 +123,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     tenantId: TENANT_ID,
     consigneeId: CONSIGNEE_ID,
     subscriptionId: null,
+    createdVia: "manual_admin",
     customerOrderNumber: "ORDER-001",
     referenceNumber: null,
     internalStatus: "CREATED",
@@ -185,7 +185,7 @@ afterEach(() => {
 describe("createTask", () => {
   it("rejects a user actor with ForbiddenError (no user-facing task:create permission)", async () => {
     await expect(createTask(userCtx(["task:read"]), baseInput)).rejects.toBeInstanceOf(
-      ForbiddenError,
+      ForbiddenError
     );
     expect(mockInsert).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
@@ -198,9 +198,9 @@ describe("createTask", () => {
 
   it("throws ValidationError on missing required field", async () => {
     const ctx = systemCtx();
-    await expect(createTask(ctx, { ...baseInput, customerOrderNumber: " " })).rejects.toBeInstanceOf(
-      ValidationError,
-    );
+    await expect(
+      createTask(ctx, { ...baseInput, customerOrderNumber: " " })
+    ).rejects.toBeInstanceOf(ValidationError);
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
@@ -231,7 +231,7 @@ describe("createTask", () => {
 describe("bulkCreateTasks", () => {
   it("rejects a user actor with ForbiddenError", async () => {
     await expect(bulkCreateTasks(userCtx(["task:read"]), [baseInput])).rejects.toBeInstanceOf(
-      ForbiddenError,
+      ForbiddenError
     );
     expect(mockInsert).not.toHaveBeenCalled();
   });
@@ -400,7 +400,7 @@ describe("getTask", () => {
 
   it("throws ValidationError when tenantId is null", async () => {
     await expect(getTask(userCtx(["task:read"], null), TASK_ID)).rejects.toBeInstanceOf(
-      ValidationError,
+      ValidationError
     );
   });
 
@@ -443,15 +443,15 @@ describe("listTasks", () => {
 
 describe("updateTask", () => {
   it("rejects an actor without task:update with ForbiddenError", async () => {
-    await expect(updateTask(userCtx(["task:read"]), TASK_ID, { notes: "x" })).rejects.toBeInstanceOf(
-      ForbiddenError,
-    );
+    await expect(
+      updateTask(userCtx(["task:read"]), TASK_ID, { notes: "x" })
+    ).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("throws NotFoundError when the row does not exist", async () => {
     mockFindById.mockResolvedValue(null);
     await expect(
-      updateTask(userCtx(["task:update"]), TASK_ID, { notes: "x" }),
+      updateTask(userCtx(["task:update"]), TASK_ID, { notes: "x" })
     ).rejects.toBeInstanceOf(NotFoundError);
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
@@ -520,14 +520,13 @@ describe("updateTask", () => {
     mockFindById.mockResolvedValue(taskFixture({ notes: null }));
     mockUpdate.mockResolvedValue(null);
     await expect(
-      updateTask(userCtx(["task:update"]), TASK_ID, { notes: "x" }),
+      updateTask(userCtx(["task:update"]), TASK_ID, { notes: "x" })
     ).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("rejects empty required-string fields in the patch", async () => {
     await expect(
-      updateTask(userCtx(["task:update"]), TASK_ID, { customerOrderNumber: "  " }),
+      updateTask(userCtx(["task:update"]), TASK_ID, { customerOrderNumber: "  " })
     ).rejects.toBeInstanceOf(ValidationError);
   });
 });
-

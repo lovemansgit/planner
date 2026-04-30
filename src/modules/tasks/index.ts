@@ -23,6 +23,7 @@ export type {
   CreateTaskInput,
   CreateTaskPackageInput,
   Task,
+  TaskCreationSource,
   TaskInternalStatus,
   TaskKind,
   TaskPackage,
