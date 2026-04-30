@@ -7,7 +7,8 @@
 // post-merge operational step) updates each tenant's webhook URL on
 // the SuiteFleet side to embed its own tenantId. Day-7+ rolls per-
 // tenant URL configuration out across the merchant fleet; pilot
-// sandbox merchant 588 still uses the Day-5 sentinel UUID for now.
+// sandbox merchant 588's tenantId is seeded via supabase/seed.sql
+// against an idempotent v4 UUID for sandbox-merchant-588.
 //
 // Status semantics:
 //   200 — verified, async processing kicked
