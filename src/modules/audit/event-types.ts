@@ -20,6 +20,24 @@
 // exist yet. Same approach as R-1's permission catalogue — RBAC and
 // audit are system-wide invariants; partial coverage is partial
 // enforcement.
+//
+// Lifecycle-event metadata convention (SET vs CLEAR):
+//
+//   Events that SET a timestamp column carry the freshly-written value
+//   under the column's own name. Examples: subscription.paused sets
+//   paused_at and emits `paused_at: <iso>`; subscription.ended sets
+//   ended_at and emits `ended_at: <iso>`.
+//
+//   Events that CLEAR a timestamp column carry the about-to-be-cleared
+//   value under a *_was-suffixed name, preserving the historical
+//   timestamp for forensic reconstruction (e.g. computing pause
+//   duration). Example: subscription.resumed clears paused_at and
+//   emits `paused_at_was: <iso>` — the value pulled from before-state.
+//
+//   The suffix is the tell: a `*_was` field is the historical value,
+//   not the current one. New lifecycle events that follow the
+//   SET-or-CLEAR shape must obey this convention so audit-log queries
+//   stay consistent across resources.
 
 /**
  * One entry in the vocabulary.
@@ -233,28 +251,57 @@ const EVENT_TYPES_DRAFT = {
   },
 
   // ---- subscription ------------------------------------------------------
+  // Lifecycle taxonomy: created → (updated | paused → resumed)* → ended.
+  // 'ended' is terminal — no `subscription.deleted` event because hard
+  // delete is not a planned operation in pilot (S-3 / Day 6). Each
+  // transition has a dedicated event type so audit-log queries can
+  // discriminate "operator paused" from "operator resumed" without
+  // parsing metadata.
   "subscription.created": {
     id: "subscription.created",
     resource: "subscription",
     action: "created",
     description: "A single subscription was created.",
-    metadataNotes: "subscription_id, frequency, start_date.",
+    metadataNotes:
+      "subscription_id (uuid), consignee_id (uuid), start_date (YYYY-MM-DD), days_of_week (number[] of ISO 1-7).",
     systemOnly: false,
   },
   "subscription.updated": {
     id: "subscription.updated",
     resource: "subscription",
     action: "updated",
-    description: "A subscription's frequency, end date, or pause/resume state changed.",
+    description:
+      "A subscription's schedule, delivery window, address override, or cosmetic fields changed. Excludes lifecycle transitions, which have dedicated event types.",
     metadataNotes: "changed_fields[].",
     systemOnly: false,
   },
-  "subscription.deleted": {
-    id: "subscription.deleted",
+  "subscription.paused": {
+    id: "subscription.paused",
     resource: "subscription",
-    action: "deleted",
-    description: "A subscription was ended or removed.",
-    metadataNotes: "subscription_id.",
+    action: "paused",
+    description:
+      "A subscription was transitioned from 'active' to 'paused'. Cron stops generating tasks while paused.",
+    metadataNotes:
+      "subscription_id (uuid), previous_status ('active'), new_status ('paused'), paused_at (iso timestamp).",
+    systemOnly: false,
+  },
+  "subscription.resumed": {
+    id: "subscription.resumed",
+    resource: "subscription",
+    action: "resumed",
+    description: "A subscription was transitioned from 'paused' back to 'active'.",
+    metadataNotes:
+      "subscription_id (uuid), previous_status ('paused'), new_status ('active'), paused_at_was (iso timestamp — when the now-cleared pause began).",
+    systemOnly: false,
+  },
+  "subscription.ended": {
+    id: "subscription.ended",
+    resource: "subscription",
+    action: "ended",
+    description:
+      "A subscription was transitioned to the terminal 'ended' state. Cron stops generating tasks; reactivation is not supported.",
+    metadataNotes:
+      "subscription_id (uuid), previous_status ('active' | 'paused'), new_status ('ended'), ended_at (iso timestamp).",
     systemOnly: false,
   },
   "subscription.bulk_created": {

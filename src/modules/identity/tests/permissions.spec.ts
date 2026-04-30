@@ -241,6 +241,57 @@ describe("Ops Manager — migration gate visibility (C-6)", () => {
   });
 });
 
+describe("subscription lifecycle permissions (Day 6 / S-4)", () => {
+  // Pins the auto-pickup behaviour for the three new lifecycle perms
+  // (subscription:pause, :resume, :end) that S-4 adds. Tenant Admin
+  // and Ops Manager grant them automatically — Tenant Admin via
+  // TENANT_SCOPED (every non-systemOnly perm) and Ops Manager via
+  // permsFor("subscription"). CS Agent is constructed from an
+  // EXPLICIT permission list and must remain read-only on
+  // subscriptions; auto-pickup must never silently widen its
+  // surface. If a future PR drops the explicit list in favour of
+  // permsFor() or similar, this test breaks and forces a conscious
+  // decision about CS Agent's write surface.
+
+  const lifecyclePerms: readonly PermissionId[] = [
+    "subscription:pause",
+    "subscription:resume",
+    "subscription:end",
+  ];
+
+  it("registers all three lifecycle permissions in the catalogue, none systemOnly", () => {
+    for (const id of lifecyclePerms) {
+      expect(PERMISSIONS[id]).toBeDefined();
+      expect(PERMISSIONS[id].systemOnly).toBe(false);
+    }
+  });
+
+  it("does NOT register the deprecated subscription:delete (replaced by lifecycle :end)", () => {
+    expect(isKnownPermission("subscription:delete")).toBe(false);
+  });
+
+  it("Tenant Admin holds all three (TENANT_SCOPED auto-pickup)", () => {
+    const perms = ROLES[TENANT_ADMIN_ROLE_SLUG].permissions;
+    for (const id of lifecyclePerms) {
+      expect(perms.has(id)).toBe(true);
+    }
+  });
+
+  it("Ops Manager holds all three (permsFor('subscription') auto-pickup)", () => {
+    const perms = ROLES["ops-manager"].permissions;
+    for (const id of lifecyclePerms) {
+      expect(perms.has(id)).toBe(true);
+    }
+  });
+
+  it("CS Agent holds NONE of the three (explicit list, read-only stays read-only)", () => {
+    const perms = ROLES["cs-agent"].permissions;
+    for (const id of lifecyclePerms) {
+      expect(perms.has(id)).toBe(false);
+    }
+  });
+});
+
 describe("Transcorp Sysadmin (Day-2 brief §6)", () => {
   it("is systemOnly", () => {
     expect(ROLES["transcorp-sysadmin"].systemOnly).toBe(true);

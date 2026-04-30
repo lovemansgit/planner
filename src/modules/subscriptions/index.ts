@@ -1,14 +1,14 @@
-// subscriptions module — Day 6 / S-3.
+// subscriptions module — public surface.
 //
-// S-3 ships the data-shape layer only: types and repository. No
-// service, no API routes, no audit emit (those land in S-4 and S-5).
+// S-3 shipped types + repository (data-shape). S-4 ships the service
+// layer (audit-emit + permission gates). S-5 will add API routes and
+// the minimal `/subscriptions` UI list page.
 //
-// This barrel re-exports the public types so external callers can
-// `import type { Subscription } from '@/modules/subscriptions'` once
-// the service layer lands. Until then, the repository is the only
-// callable surface, and S-4 will replace this barrel's runtime
-// exports with the service layer (matching the tasks-module pattern
-// in src/modules/tasks/index.ts).
+// Pattern matches src/modules/tasks/index.ts: types are re-exported as
+// `export type { … }`, runtime service functions as a flat
+// `export { … } from "./service"`. Internal repository helpers stay
+// private; consumers go through the service for any operation that
+// needs auth or audit.
 
 export type {
   CreateSubscriptionInput,
@@ -18,3 +18,13 @@ export type {
   SubscriptionUpdate,
   UpdateSubscriptionPatch,
 } from "./types";
+
+export {
+  createSubscription,
+  endSubscription,
+  getSubscription,
+  listSubscriptions,
+  pauseSubscription,
+  resumeSubscription,
+  updateSubscription,
+} from "./service";
