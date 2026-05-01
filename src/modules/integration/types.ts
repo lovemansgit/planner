@@ -47,19 +47,20 @@ export interface AuthenticatedSession {
 /**
  * Postal/geographic address for a delivery endpoint.
  *
- * Latitude/longitude are OPTIONAL per Aqib Group-1 confirmation
- * (3 May 2026): SuiteFleet resolves consignee coordinates server-side
- * via WhatsApp post-push when the create payload omits them. The
- * shipFrom side never carries lat/lng either (warehouse address is
- * fixed in SF's merchant master). Existing callers that DO supply
- * coordinates are still accepted — the type relaxation is additive.
+ * `district` is REQUIRED on the wire per Aqib Group-1 confirmation
+ * (3 May 2026), and required in the type to enforce that at typecheck.
+ * Post-D8-2 the schema's NOT NULL constraint on `consignees.district`
+ * means every consignee row carries it; the adapter's body-build
+ * unconditionally lands it on the SF payload. Leaving the type
+ * optional would permit internal callers to silently produce a
+ * SF-rejected payload — wrong direction.
  *
- * `district` is REQUIRED on the wire per Aqib Group-1, but the
- * type still carries it as optional (`district?`) so internal callers
- * have flexibility; the adapter's conditional spread mirrors the
- * production data flow where district is always present after the
- * D8-2 schema migration. Tighten to `district: string` if a future
- * caller starts passing it through unconditionally.
+ * Latitude/longitude are OPTIONAL per Aqib Group-1: SuiteFleet
+ * resolves consignee coordinates server-side via WhatsApp post-push
+ * when the create payload omits them. The shipFrom side never
+ * carries lat/lng either (warehouse address is fixed in SF's
+ * merchant master). Existing callers that DO supply coordinates are
+ * still accepted — the lat/lng relaxation is additive.
  *
  * `addressCode` is an optional internal warehouse/zone shortcode
  * (provider-specific value lives in the adapter's mapping, not here).
@@ -75,7 +76,7 @@ export interface DeliveryAddress {
   readonly addressLine1: string;
   readonly addressLine2?: string;
   readonly city: string;
-  readonly district?: string;
+  readonly district: string;
   readonly countryCode: string;
   readonly latitude?: number;
   readonly longitude?: number;

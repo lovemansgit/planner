@@ -49,6 +49,7 @@ const SAMPLE_REQUEST: TaskCreateRequest = {
   shipFrom: {
     addressLine1: "Warehouse 1",
     city: "Dubai",
+    district: "Al Quoz Industrial 1",
     countryCode: "AE",
     latitude: 25.0,
     longitude: 55.0,
@@ -248,7 +249,10 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
     expect(body.shipFrom.longitude).toBe(55.0);
   });
 
-  it("omits address.addressLine2 / district / addressCode when not provided", () => {
+  it("omits address.addressLine2 / addressCode when not provided", () => {
+    // district is REQUIRED on the contract (and on the wire) per
+    // Aqib Group-1 + D8-2 schema migration; it always lands. Only
+    // addressLine2 and addressCode are truly optional.
     const minimal: TaskCreateRequest = {
       ...SAMPLE_REQUEST,
       consignee: {
@@ -256,6 +260,7 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
         address: {
           addressLine1: "Plot 1",
           city: "Dubai",
+          district: "Al Quoz Industrial 1",
           countryCode: "AE",
           latitude: 25,
           longitude: 55,
@@ -266,8 +271,20 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
       consignee: { location: Record<string, unknown> };
     };
     expect("addressLine2" in body.consignee.location).toBe(false);
-    expect("district" in body.consignee.location).toBe(false);
     expect("addressCode" in body.consignee.location).toBe(false);
+  });
+
+  it("passes district through to body.consignee.location and body.shipFrom (required field, never dropped)", () => {
+    // Regression guard: district is required on the contract + on the
+    // wire per Aqib Group-1, so the unconditional spread in
+    // buildLocation MUST land it on every body it produces. Mirrors
+    // the additive lat/lng pass-through test pattern.
+    const body = buildSuiteFleetTaskBody(SAMPLE_REQUEST, 588) as {
+      consignee: { location: { district: unknown } };
+      shipFrom: { district: unknown };
+    };
+    expect(body.consignee.location.district).toBe("Jumeirah 3");
+    expect(body.shipFrom.district).toBe("Al Quoz Industrial 1");
   });
 });
 

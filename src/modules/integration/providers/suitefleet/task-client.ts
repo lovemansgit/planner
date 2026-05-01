@@ -102,7 +102,7 @@ interface SuiteFleetLocationBody {
   readonly addressLine1: string;
   readonly addressLine2?: string;
   readonly city: string;
-  readonly district?: string;
+  readonly district: string;
   readonly countryCode: string;
   readonly latitude?: number;
   readonly longitude?: number;
@@ -118,7 +118,7 @@ function buildLocation(
     addressLine1: address.addressLine1,
     ...(address.addressLine2 !== undefined && { addressLine2: address.addressLine2 }),
     city: address.city,
-    ...(address.district !== undefined && { district: address.district }),
+    district: address.district,
     countryCode: address.countryCode,
     ...(address.latitude !== undefined && { latitude: address.latitude }),
     ...(address.longitude !== undefined && { longitude: address.longitude }),
