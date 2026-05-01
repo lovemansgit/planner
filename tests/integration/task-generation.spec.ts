@@ -65,17 +65,25 @@ describe("C-2 — task generation service (cron path)", () => {
   });
 
   afterAll(async () => {
-    // Cleanup. Tasks first (FK to subscriptions ON DELETE RESTRICT),
-    // then subscriptions, then consignees, then run rows, then tenant.
-    // CASCADE on tenant FK does the rest.
-    await withServiceRole("C-2 task-generation test cleanup", async (tx) => {
-      await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM subscriptions WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM task_generation_runs WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM audit_events WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM tenants WHERE id = ${TENANT_ID}`);
-    });
+    // Cleanup wrapped in try/catch per the convention in
+    // subscription-link-invariant.spec.ts and asset-tracking-tenant-match.spec.ts:
+    // DELETE FROM tenants will fail with the "audit_events_tenant_id_fkey
+    // gave unexpected result" error when audit rows exist (the audit
+    // table's no-delete RULE rewrites the cascade to a no-op, so the FK
+    // check sees referencing rows and aborts). Documented at
+    // memory/followup_audit_rule_cascade_conflict.md. Random per-run
+    // tenant UUIDs prevent cross-run pollution; cleanup failure is not
+    // test failure.
+    try {
+      await withServiceRole("C-2 task-generation test cleanup", async (tx) => {
+        await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${TENANT_ID}`);
+        await tx.execute(sqlTag`DELETE FROM subscriptions WHERE tenant_id = ${TENANT_ID}`);
+        await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${TENANT_ID}`);
+        await tx.execute(sqlTag`DELETE FROM task_generation_runs WHERE tenant_id = ${TENANT_ID}`);
+      });
+    } catch {
+      /* cleanup failure is not test failure */
+    }
   });
 
   describe("happy path — matching subscriptions produce tasks", () => {
@@ -217,7 +225,7 @@ describe("C-2 — task generation service (cron path)", () => {
           SELECT event_type FROM audit_events
           WHERE tenant_id = ${TENANT_ID}
             AND event_type IN ('task.created', 'task.bulk_generated', 'task.bulk_generation_skipped_already_run')
-          ORDER BY created_at ASC
+          ORDER BY occurred_at ASC
         `);
       });
       const types = events.map((e) => e.event_type);
@@ -271,14 +279,18 @@ describe("C-2 — task generation service (cron path)", () => {
     });
 
     afterAll(async () => {
-      await withServiceRole("C-2 cap-path cleanup", async (tx) => {
-        await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${TENANT_ID_CAP}`);
-        await tx.execute(sqlTag`DELETE FROM subscriptions WHERE tenant_id = ${TENANT_ID_CAP}`);
-        await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${TENANT_ID_CAP}`);
-        await tx.execute(sqlTag`DELETE FROM task_generation_runs WHERE tenant_id = ${TENANT_ID_CAP}`);
-        await tx.execute(sqlTag`DELETE FROM audit_events WHERE tenant_id = ${TENANT_ID_CAP}`);
-        await tx.execute(sqlTag`DELETE FROM tenants WHERE id = ${TENANT_ID_CAP}`);
-      });
+      // Same cleanup-failure-tolerant pattern as the outer afterAll —
+      // see comment there for the audit-RULE-vs-FK-CASCADE rationale.
+      try {
+        await withServiceRole("C-2 cap-path cleanup", async (tx) => {
+          await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${TENANT_ID_CAP}`);
+          await tx.execute(sqlTag`DELETE FROM subscriptions WHERE tenant_id = ${TENANT_ID_CAP}`);
+          await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${TENANT_ID_CAP}`);
+          await tx.execute(sqlTag`DELETE FROM task_generation_runs WHERE tenant_id = ${TENANT_ID_CAP}`);
+        });
+      } catch {
+        /* cleanup failure is not test failure */
+      }
     });
 
     it("aborts before any task INSERT; status='capped'; cap_threshold recorded", async () => {
