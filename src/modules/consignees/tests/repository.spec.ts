@@ -50,6 +50,7 @@ function rowFixture(overrides: Partial<Record<string, unknown>> = {}) {
     email: null,
     address_line: "Building 12, Al Quoz",
     emirate_or_region: "Dubai",
+    district: "Al Quoz Industrial 1",
     delivery_notes: null,
     external_ref: null,
     notes_internal: null,
@@ -79,6 +80,7 @@ describe("insertConsignee", () => {
       phone: "+971501234567",
       addressLine: "Building 12, Al Quoz",
       emirateOrRegion: "Dubai",
+      district: "Al Quoz Industrial 1",
     };
 
     const result = await insertConsignee(tx, TENANT_ID, input);
@@ -92,6 +94,7 @@ describe("insertConsignee", () => {
       email: null,
       addressLine: "Building 12, Al Quoz",
       emirateOrRegion: "Dubai",
+      district: "Al Quoz Industrial 1",
       deliveryNotes: null,
       externalRef: null,
       notesInternal: null,
@@ -113,6 +116,7 @@ describe("insertConsignee", () => {
       phone: "+971500000000",
       addressLine: "y",
       emirateOrRegion: "Dubai",
+      district: "Al Quoz",
     });
     expect(result.email).toBeNull();
     expect(result.deliveryNotes).toBeNull();
@@ -128,6 +132,7 @@ describe("insertConsignee", () => {
         phone: "y",
         addressLine: "z",
         emirateOrRegion: "Dubai",
+        district: "Al Quoz",
       })
     ).rejects.toThrow(/zero rows/);
   });
@@ -231,6 +236,7 @@ describe("updateConsignee", () => {
       email: "e@x",
       addressLine: "a",
       emirateOrRegion: "Sharjah",
+      district: "Industrial Area 1",
       deliveryNotes: "d",
       externalRef: "r",
       notesInternal: "i",

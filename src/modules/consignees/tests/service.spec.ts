@@ -86,6 +86,7 @@ function consigneeFixture(overrides: Partial<Consignee> = {}): Consignee {
     email: null,
     addressLine: "Building 12, Al Quoz",
     emirateOrRegion: "Dubai",
+    district: "Al Quoz Industrial 1",
     deliveryNotes: null,
     externalRef: null,
     notesInternal: null,
@@ -128,6 +129,7 @@ describe("createConsignee", () => {
         phone: "+971501234567",
         addressLine: "a",
         emirateOrRegion: "Dubai",
+        district: "Al Quoz",
       })
     ).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockWithTenant).not.toHaveBeenCalled();
@@ -141,6 +143,7 @@ describe("createConsignee", () => {
         phone: "+971501234567",
         addressLine: "a",
         emirateOrRegion: "Dubai",
+        district: "Al Quoz",
       })
     ).rejects.toBeInstanceOf(ValidationError);
     expect(mockWithTenant).not.toHaveBeenCalled();
@@ -153,6 +156,7 @@ describe("createConsignee", () => {
         phone: "+971501234567",
         addressLine: "a",
         emirateOrRegion: "Dubai",
+        district: "Al Quoz",
       })
     ).rejects.toThrow(/name is required/);
     expect(mockInsert).not.toHaveBeenCalled();
@@ -166,6 +170,7 @@ describe("createConsignee", () => {
       phone: "0501234567", // local UAE shape — should normalise
       addressLine: "Building 12",
       emirateOrRegion: "Dubai",
+      district: "Al Quoz Industrial 1",
     });
 
     expect(mockInsert).toHaveBeenCalledOnce();
@@ -189,6 +194,7 @@ describe("createConsignee", () => {
       phone: "+971501234567",
       addressLine: "a",
       emirateOrRegion: "Dubai",
+      district: "Al Quoz",
       email: "   ",
       deliveryNotes: "",
     });
@@ -205,6 +211,7 @@ describe("createConsignee", () => {
         phone: "not-a-phone",
         addressLine: "a",
         emirateOrRegion: "Dubai",
+        district: "Al Quoz",
       })
     ).rejects.toBeInstanceOf(ValidationError);
     expect(mockInsert).not.toHaveBeenCalled();

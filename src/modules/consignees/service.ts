@@ -115,6 +115,7 @@ export async function createConsignee(
     phone: normaliseToE164(input.phone),
     addressLine: requireNonEmpty(input.addressLine, "addressLine"),
     emirateOrRegion: requireNonEmpty(input.emirateOrRegion, "emirateOrRegion"),
+    district: requireNonEmpty(input.district, "district"),
     email: optionalTrim(input.email),
     deliveryNotes: optionalTrim(input.deliveryNotes),
     externalRef: optionalTrim(input.externalRef),
@@ -209,6 +210,8 @@ export async function updateConsignee(
       patch.emirateOrRegion !== undefined
         ? requireNonEmpty(patch.emirateOrRegion, "emirateOrRegion")
         : undefined,
+    district:
+      patch.district !== undefined ? requireNonEmpty(patch.district, "district") : undefined,
     deliveryNotes: patch.deliveryNotes !== undefined ? optionalTrim(patch.deliveryNotes) : undefined,
     externalRef: patch.externalRef !== undefined ? optionalTrim(patch.externalRef) : undefined,
     notesInternal:
@@ -237,6 +240,8 @@ export async function updateConsignee(
       normalised.emirateOrRegion !== before.emirateOrRegion
     )
       changedFields.push("emirateOrRegion");
+    if (normalised.district !== undefined && normalised.district !== before.district)
+      changedFields.push("district");
     if (
       normalised.deliveryNotes !== undefined &&
       normalised.deliveryNotes !== (before.deliveryNotes ?? undefined)
@@ -271,6 +276,7 @@ export async function updateConsignee(
     if (changedFields.includes("addressLine")) toApply.addressLine = normalised.addressLine;
     if (changedFields.includes("emirateOrRegion"))
       toApply.emirateOrRegion = normalised.emirateOrRegion;
+    if (changedFields.includes("district")) toApply.district = normalised.district;
     if (changedFields.includes("deliveryNotes")) toApply.deliveryNotes = normalised.deliveryNotes;
     if (changedFields.includes("externalRef")) toApply.externalRef = normalised.externalRef;
     if (changedFields.includes("notesInternal")) toApply.notesInternal = normalised.notesInternal;

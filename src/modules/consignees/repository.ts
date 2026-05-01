@@ -64,6 +64,7 @@ type ConsigneeRow = {
   email: string | null;
   address_line: string;
   emirate_or_region: string;
+  district: string;
   delivery_notes: string | null;
   external_ref: string | null;
   notes_internal: string | null;
@@ -84,6 +85,7 @@ function mapRow(row: ConsigneeRow): Consignee {
     email: row.email,
     addressLine: row.address_line,
     emirateOrRegion: row.emirate_or_region,
+    district: row.district,
     deliveryNotes: row.delivery_notes,
     externalRef: row.external_ref,
     notesInternal: row.notes_internal,
@@ -118,6 +120,7 @@ export async function insertConsignee(
       email,
       address_line,
       emirate_or_region,
+      district,
       delivery_notes,
       external_ref,
       notes_internal
@@ -128,6 +131,7 @@ export async function insertConsignee(
       ${input.email ?? null},
       ${input.addressLine},
       ${input.emirateOrRegion},
+      ${input.district},
       ${input.deliveryNotes ?? null},
       ${input.externalRef ?? null},
       ${input.notesInternal ?? null}
@@ -205,6 +209,7 @@ export async function updateConsignee(
   if (patch.addressLine !== undefined) sets.push(sqlTag`address_line = ${patch.addressLine}`);
   if (patch.emirateOrRegion !== undefined)
     sets.push(sqlTag`emirate_or_region = ${patch.emirateOrRegion}`);
+  if (patch.district !== undefined) sets.push(sqlTag`district = ${patch.district}`);
   if (patch.deliveryNotes !== undefined)
     sets.push(sqlTag`delivery_notes = ${patch.deliveryNotes}`);
   if (patch.externalRef !== undefined) sets.push(sqlTag`external_ref = ${patch.externalRef}`);

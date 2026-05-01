@@ -77,9 +77,9 @@ describe("T-1 — task_packages_tenant_match trigger fires under BYPASSRLS", () 
     `;
     const consigneeRows = await sql<{ id: string }[]>`
       INSERT INTO consignees (
-        tenant_id, name, phone, address_line, emirate_or_region
+        tenant_id, name, phone, address_line, emirate_or_region, district
       ) VALUES (
-        ${TENANT_A}, 'T-1 Trigger Consignee', ${CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+        ${TENANT_A}, 'T-1 Trigger Consignee', ${CONSIGNEE_PHONE}, 'Test Address', 'Dubai', 'Test District'
       )
       RETURNING id
     `;

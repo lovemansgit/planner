@@ -132,6 +132,7 @@ function consigneeFixture() {
     email: null,
     addressLine: "Test Address",
     emirateOrRegion: "Dubai",
+    district: "Test District",
     deliveryNotes: null,
     externalRef: null,
     notesInternal: null,
