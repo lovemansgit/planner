@@ -90,7 +90,7 @@ vi.mock("../../src/shared/sentry-capture", () => ({
 }));
 
 import { withServiceRole } from "../../src/shared/db";
-import { ForbiddenError, NotFoundError } from "../../src/shared/errors";
+import { ConflictError, ForbiddenError, NotFoundError } from "../../src/shared/errors";
 import { emit } from "../../src/modules/audit";
 import {
   findSubscriptionById,
@@ -269,6 +269,63 @@ describe("MP-14 — push-failure auto-pause (FULLY IMPLEMENTED; cron caller is D
       autoPauseSubscriptionForRepeatedFailure(systemCtx(), AUTO_PAUSE_INPUT),
     ).rejects.toBeInstanceOf(NotFoundError);
 
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("Path 7 — race-loser: concurrent invocation hits ConflictError → no-op, no audit emit", async () => {
+    // Concurrent T1/T2 scenario: both pre-checks see active. T1 wins
+    // the SELECT FOR UPDATE inside pauseRow, transitions to paused,
+    // emits the event. T2 acquires the lock after T1 commits, the
+    // repository's status re-check sees paused, throws ConflictError.
+    // Service must catch it, refetch the now-paused row, return it as
+    // a no-op WITHOUT a second audit emit.
+    //
+    // Test simulation:
+    //   - First withServiceRole call (the project+pause tx): runs the
+    //     callback which calls findSubscriptionById (active) then
+    //     pauseRow (throws ConflictError).
+    //   - Second withServiceRole call (the refetch): runs the callback
+    //     which calls findSubscriptionById and returns the paused row.
+    mockFindById
+      .mockResolvedValueOnce(subscriptionFixture("active"))   // pre-check inside the tx
+      .mockResolvedValueOnce(subscriptionFixture("paused"));  // refetch after ConflictError
+    mockPauseRow.mockImplementation(async () => {
+      throw new ConflictError(
+        `Cannot pause subscription ${SUBSCRIPTION_ID}: status is 'paused', expected 'active'`,
+      );
+    });
+
+    const result = await autoPauseSubscriptionForRepeatedFailure(systemCtx(), AUTO_PAUSE_INPUT);
+
+    // Returns the now-paused row as a no-op — caller can't tell whether
+    // it won or lost the race; both outcomes look identical from the
+    // cron's perspective (subscription is paused, no error).
+    expect(result.status).toBe("paused");
+    // Audit event MUST NOT fire on the race-loser path. T1's emit is
+    // the canonical record of this auto-pause; T2 emitting again would
+    // duplicate the event with a stale failure_count + last_error from
+    // T2's input that doesn't reflect the actual triggering failure.
+    expect(mockEmit).not.toHaveBeenCalled();
+    // Second withServiceRole call (the refetch) must have happened.
+    expect(mockWithServiceRole).toHaveBeenCalledTimes(2);
+  });
+
+  it("Path 8 — ConflictError + refetch returns null (vanished) → original ConflictError surfaces", async () => {
+    // Edge case for the race-loser path: T1 paused successfully, then
+    // an admin / future delete-subscription path removed the row, and
+    // T2's refetch finds nothing. We can't fabricate state, so the
+    // original ConflictError surfaces instead of a fake NotFoundError
+    // or a synthesised paused row.
+    mockFindById
+      .mockResolvedValueOnce(subscriptionFixture("active"))
+      .mockResolvedValueOnce(null);
+    mockPauseRow.mockImplementation(async () => {
+      throw new ConflictError("race-loser path");
+    });
+
+    await expect(
+      autoPauseSubscriptionForRepeatedFailure(systemCtx(), AUTO_PAUSE_INPUT),
+    ).rejects.toBeInstanceOf(ConflictError);
     expect(mockEmit).not.toHaveBeenCalled();
   });
 

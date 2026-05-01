@@ -46,7 +46,12 @@
 
 import { emit } from "../audit";
 import { withServiceRole, withTenant } from "../../shared/db";
-import { ForbiddenError, NotFoundError, ValidationError } from "../../shared/errors";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+} from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
@@ -64,6 +69,7 @@ import {
 import type {
   CreateSubscriptionInput,
   Subscription,
+  SubscriptionUpdate,
   UpdateSubscriptionPatch,
 } from "./types";
 
@@ -558,6 +564,16 @@ export interface AutoPauseInput {
 }
 
 /**
+ * Internal result of the project+pause transaction. Exported as a type
+ * only for the race-handling try/catch in
+ * autoPauseSubscriptionForRepeatedFailure to declare its variable.
+ */
+type AutoPauseRunResult =
+  | { kind: "not_found" }
+  | { kind: "no_op"; current: Subscription }
+  | { kind: "paused"; transition: SubscriptionUpdate };
+
+/**
  * MP-14: auto-pause a subscription whose pushed task has failed N
  * times in a row (N=3 in pilot per memory/notes/day7_schedule_drift.md
  * §"Day-7 row carry-forwards"). System-only — no `subscription:pause`
@@ -613,33 +629,72 @@ export async function autoPauseSubscriptionForRepeatedFailure(
   // pauseSubscription expects to run inside a tenant-scoped tx, so we
   // bind the GUC inside the service-role transaction the same way
   // demo-context does for setup writes.
-  const result = await withServiceRole(
-    `subscription:auto_pause for tenant ${tenantId} (subscription ${input.subscriptionId})`,
-    async (tx) => {
-      // Pre-check: idempotent no-op for paused/ended subscriptions.
-      const current = await findSubscriptionById(tx, input.subscriptionId);
-      if (!current) {
-        return { kind: "not_found" as const };
-      }
-      if (current.tenantId !== tenantId) {
-        // Cross-tenant access via system actor — surface as not-found
-        // to the caller (the cron passes the tenantId from its
-        // per-tenant loop; if it ever drifts from the subscription's
-        // owning tenant, that's a routing bug worth surfacing).
-        return { kind: "not_found" as const };
-      }
-      if (current.status !== "active") {
-        return { kind: "no_op" as const, current };
-      }
+  //
+  // Race-safety mechanism (load-bearing — reviewer-verified at C-7 PR):
+  //   The repository's pauseSubscription does SELECT … FOR UPDATE
+  //   followed by a status re-check. Under two concurrent invocations
+  //   T1 / T2 that both observe `status='active'` at pre-check time:
+  //
+  //     1. T1's pauseRow call acquires the row lock, status check
+  //        passes, UPDATE commits, lock releases.
+  //     2. T2's pauseRow call blocks waiting for the lock; once
+  //        acquired, the post-lock status re-check sees `paused` and
+  //        the repo throws ConflictError.
+  //
+  //   We CATCH ConflictError below and return `no_op`. T1 emits one
+  //   `subscription.auto_paused`; T2 returns the now-paused row
+  //   without an emit. Audit-emit-once invariant preserved; idempotency
+  //   honored on the race-loser side without surfacing a 5xx to the
+  //   cron caller.
+  let result: AutoPauseRunResult;
+  try {
+    result = await withServiceRole(
+      `subscription:auto_pause for tenant ${tenantId} (subscription ${input.subscriptionId})`,
+      async (tx) => {
+        // Pre-check: idempotent no-op for paused/ended subscriptions.
+        const current = await findSubscriptionById(tx, input.subscriptionId);
+        if (!current) {
+          return { kind: "not_found" as const };
+        }
+        if (current.tenantId !== tenantId) {
+          // Cross-tenant access via system actor — surface as not-found
+          // to the caller (the cron passes the tenantId from its
+          // per-tenant loop; if it ever drifts from the subscription's
+          // owning tenant, that's a routing bug worth surfacing).
+          return { kind: "not_found" as const };
+        }
+        if (current.status !== "active") {
+          return { kind: "no_op" as const, current };
+        }
 
-      const transition = await pauseSubscriptionRow(tx, tenantId, input.subscriptionId);
-      if (transition === null) {
-        // Race: row vanished between the pre-check and the pause.
-        return { kind: "not_found" as const };
+        const transition = await pauseSubscriptionRow(tx, tenantId, input.subscriptionId);
+        if (transition === null) {
+          // Race: row vanished between the pre-check and the pause.
+          return { kind: "not_found" as const };
+        }
+        return { kind: "paused" as const, transition };
+      },
+    );
+  } catch (err) {
+    // Race-loser path — see header comment. T2's pauseSubscription
+    // call observed a non-active state under the FOR UPDATE lock and
+    // the repo threw ConflictError. T1 already paused and emitted;
+    // T2 is a no-op. We re-fetch the now-paused row to return a
+    // consistent shape to the caller.
+    if (err instanceof ConflictError) {
+      const refetched = await withServiceRole(
+        `subscription:auto_pause refetch for tenant ${tenantId}`,
+        async (tx) => findSubscriptionById(tx, input.subscriptionId),
+      );
+      if (refetched && refetched.tenantId === tenantId) {
+        return refetched;
       }
-      return { kind: "paused" as const, transition };
-    },
-  );
+      // If we cannot re-fetch (vanished, cross-tenant), surface the
+      // original ConflictError rather than fabricate state.
+      throw err;
+    }
+    throw err;
+  }
 
   if (result.kind === "not_found") {
     throw new NotFoundError(
