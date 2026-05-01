@@ -58,3 +58,8 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Day 7 EOD handoff](handoffs/day-7-eod.md) — sprint summary (8 commits + EOD-fill T1), 5 counter-review patterns, watch-items, Day-8 carry-forwards. Read before responding to next-session brief.
 - [SF label endpoint](followup_suitefleet_label_endpoint.md) — Aqib-confirmed shape (GET shipment-label.suitefleet.com/generate-label, comma-separated bulk, indv-small format, tz_offset=4); load-bearing security rule: token-in-query MUST NOT reach operator browsers (server-side fetch + stream PDF back); Day 8 T2 commit scope locked
 - [SF webhook auth + payload architecture](followup_webhook_auth_architecture.md) — live webhook capture (post-Day-7-close): clientid/clientsecret lowercase headers (NOT Authorization/Bearer/HMAC); body is JSON array of action-keyed events; shipFrom auto-populated by SF (drops tenant-shipping config); customer.code required; pulls webhook auth/parsing/routing from Day 12 to Day 8 T3
+
+## Day 8 (3 May 2026)
+
+- [Day 8 schedule note](notes/day8_schedule.md) — calendar Day 8 ≈ plan Day 10; commit plan: D8-1 through D8-7 core (must land), D8-8/9/10 optional; tier mix 2 T1 / 3 T2 / 2 T3 core, up to 2 T1 / 4 T2 / 4 T3 if all optionals land; mid-day handoff trigger at <25% context during D8-2 or D8-4
+- [createBulk vs single-loop](followup_createbulk_vs_single_loop.md) — open as of Day 8 morning; single-loop locked default for C-3 cron push; createBulk only acceptable if SF confirms per-task IDs on success AND per-task 23505 semantics on conflict; resolution deadline before D8-4 PR opens
