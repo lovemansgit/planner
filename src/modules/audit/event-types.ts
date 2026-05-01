@@ -299,9 +299,9 @@ const EVENT_TYPES_DRAFT = {
     resource: "subscription",
     action: "ended",
     description:
-      "A subscription was transitioned to the terminal 'ended' state. Cron stops generating tasks; reactivation is not supported.",
+      "A subscription was transitioned to the terminal 'ended' state. Cron stops generating tasks; reactivation is not supported. Two trigger sources: operator-driven (subscription:end permission via API route) and system-driven (Day-7 / C-8 end-date sweeper that walks subscriptions whose end_date has passed). Both surface as the same event type with `trigger_source` metadata to disambiguate — same precedent as `asset_tracking.state_changed` (webhook | read_through).",
     metadataNotes:
-      "subscription_id (uuid), previous_status ('active' | 'paused'), new_status ('ended'), ended_at (iso timestamp).",
+      "subscription_id (uuid), previous_status ('active' | 'paused'), new_status ('ended'), ended_at (iso timestamp), trigger_source ('user' | 'sweeper' — distinguishes operator-driven end from end-date sweeper auto-end).",
     systemOnly: false,
   },
   "subscription.bulk_created": {

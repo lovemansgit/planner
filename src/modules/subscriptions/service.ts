@@ -62,6 +62,7 @@ import {
   findSubscriptionById,
   insertSubscription,
   listSubscriptionsByTenant,
+  listSweepCandidates,
   pauseSubscription as pauseSubscriptionRow,
   resumeSubscription as resumeSubscriptionRow,
   updateSubscription as updateSubscriptionRow,
@@ -535,6 +536,7 @@ export async function endSubscription(
       previous_status: result.before.status,
       new_status: result.after.status,
       ended_at: result.after.endedAt,
+      trigger_source: "user" as const,
     },
     requestId: ctx.requestId,
   });
@@ -722,4 +724,145 @@ export async function autoPauseSubscriptionForRepeatedFailure(
   });
 
   return result.transition.after;
+}
+
+// -----------------------------------------------------------------------------
+// sweepEndedSubscriptions (lifecycle: active|paused → ended, system actor)
+// -----------------------------------------------------------------------------
+
+/**
+ * Result of one sweep invocation. The cron handler (Day 12 work)
+ * aggregates these per-tenant for the run-summary payload.
+ */
+export interface SweepResult {
+  readonly swept: number;
+  readonly subscriptionIds: readonly Uuid[];
+  readonly skippedDueToRace: number;
+}
+
+/**
+ * Day 7 / C-8 — End-date sweeper service.
+ *
+ * Walks subscriptions whose `end_date < asOfDate` and `status != 'ended'`
+ * for the bound tenant, transitioning each to ENDED via the existing
+ * `endSubscription` repository method. Per-row idempotent: if another
+ * actor (operator-driven endSubscription, prior sweep) already transitioned
+ * the row between the candidate-list query and the per-row update, the
+ * repository's `SELECT … FOR UPDATE` + status re-check raises ConflictError
+ * which the sweep catches and counts as `skippedDueToRace`. No audit emit
+ * fires for race-loser rows.
+ *
+ * Today's scope is service-layer ONLY. The cron handler that calls this
+ * on a schedule lands Day 12 per `docs/plan.docx`. The current callers
+ * are integration tests + (eventually) the Day-12 cron.
+ *
+ * Design choice — `trigger_source: "user" | "sweeper"` metadata:
+ *   The brief's C-8 watch-item asked: should the system-driven sweep
+ *   reuse `subscription.ended` (currently systemOnly: false, used by
+ *   operator-driven endSubscription), or get its own event type? Two
+ *   options:
+ *     (a) reuse the same event type, add a `trigger_source` metadata
+ *         field to disambiguate — same precedent as
+ *         `asset_tracking.state_changed` (webhook | read_through)
+ *     (b) keep ctx.actor as "system" (vs "user") and infer trigger
+ *         from actor.kind alone, no metadata field
+ *
+ *   Path (a) chosen: the metadata field is queryable in audit logs
+ *   without joining against the actors table; the field name is
+ *   explicit; it follows an existing precedent in the catalogue. The
+ *   user-driven endSubscription emit was updated to carry
+ *   `trigger_source: "user"` in the same commit so the field is
+ *   present on every emit — never undefined.
+ *
+ * System-only — the cron is the only legitimate caller. A user actor
+ * reaching this path is a routing bug; surface as ForbiddenError.
+ *
+ * Throws:
+ *   - ForbiddenError    user actor reached this path.
+ *   - ValidationError   no tenant context, or asOfDate not YYYY-MM-DD.
+ */
+export async function sweepEndedSubscriptions(
+  ctx: RequestContext,
+  asOfDate: string,
+): Promise<SweepResult> {
+  if (ctx.actor.kind !== "system") {
+    throw new ForbiddenError(
+      "subscription:sweep requires a system actor",
+    );
+  }
+  assertTenantScoped(ctx, "subscription:sweep");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
+    throw new ValidationError(
+      `asOfDate must be YYYY-MM-DD, got '${asOfDate}'`,
+    );
+  }
+
+  const tenantId = ctx.tenantId;
+
+  // Phase 1: fetch the candidate id list via the repository.
+  const candidates = await withServiceRole(
+    `subscription:sweep list for tenant ${tenantId} asOfDate=${asOfDate}`,
+    async (tx) => listSweepCandidates(tx, tenantId, asOfDate),
+  );
+
+  if (candidates.length === 0) {
+    return { swept: 0, subscriptionIds: [], skippedDueToRace: 0 };
+  }
+
+  // Phase 2: per-row transition. Each row gets its own withServiceRole
+  // tx to keep the per-row lock window short — the sweep can be hours
+  // long for a high-volume tenant; bundling all rows into one tx would
+  // hold every row's lock until the last one commits. Per-row tx also
+  // means a single ConflictError doesn't roll back the whole batch.
+  const sweptIds: Uuid[] = [];
+  let skippedDueToRace = 0;
+
+  for (const id of candidates) {
+    try {
+      const transition = await withServiceRole(
+        `subscription:sweep end ${id}`,
+        async (tx) => endSubscriptionRow(tx, tenantId, id),
+      );
+      if (transition === null) {
+        // Row vanished between the candidate list and the end call.
+        // Treat the same as a race-loser: count and continue.
+        skippedDueToRace += 1;
+        continue;
+      }
+
+      await emit({
+        eventType: "subscription.ended",
+        actorKind: ctx.actor.kind,
+        actorId: actorIdFor(ctx.actor),
+        tenantId,
+        resourceType: "subscription",
+        resourceId: id,
+        metadata: {
+          subscription_id: id,
+          previous_status: transition.before.status,
+          new_status: transition.after.status,
+          ended_at: transition.after.endedAt,
+          trigger_source: "sweeper" as const,
+        },
+        requestId: ctx.requestId,
+      });
+
+      sweptIds.push(id);
+    } catch (err) {
+      // Race-loser: the row was already 'ended' by the time the per-row
+      // SELECT FOR UPDATE acquired the lock. Repository raises
+      // ConflictError; sweep counts and continues.
+      if (err instanceof ConflictError) {
+        skippedDueToRace += 1;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return {
+    swept: sweptIds.length,
+    subscriptionIds: sweptIds,
+    skippedDueToRace,
+  };
 }

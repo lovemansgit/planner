@@ -412,6 +412,36 @@ async function findSubscriptionByIdScoped(
   return rows[0] ? mapSubscription(rows[0]) : null;
 }
 
+/**
+ * Day 7 / C-8 — list candidate subscriptions for the end-date sweep.
+ *
+ * Returns the id list of subscriptions where:
+ *   - tenant_id = tenantId
+ *   - end_date IS NOT NULL (open-ended subscriptions are never swept)
+ *   - end_date < asOfDate (passed in YYYY-MM-DD form)
+ *   - status != 'ended' (terminal — already swept on a prior pass)
+ *
+ * Service-layer caller iterates the list and transitions each via
+ * `endSubscription` per-row, accepting per-row race-loser ConflictError
+ * as the idempotency mechanism.
+ */
+export async function listSweepCandidates(
+  tx: DbTx,
+  tenantId: Uuid,
+  asOfDate: string,
+): Promise<readonly Uuid[]> {
+  type IdRow = { id: string } & Record<string, unknown>;
+  const rows = await tx.execute<IdRow>(sqlTag`
+    SELECT id FROM subscriptions
+    WHERE tenant_id = ${tenantId}
+      AND end_date IS NOT NULL
+      AND end_date < ${asOfDate}::date
+      AND status != 'ended'
+    ORDER BY end_date ASC
+  `);
+  return rows.map((r) => r.id);
+}
+
 // Re-export the typed errors used by transitional methods so callers
 // of this module can match without importing from @/shared/errors.
 // (Same convention as failed-pushes module.)

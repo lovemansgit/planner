@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../shared/db", () => ({
   withTenant: vi.fn(),
+  withServiceRole: vi.fn(),
 }));
 
 vi.mock("../../audit", () => ({
@@ -19,13 +20,14 @@ vi.mock("../repository", () => ({
   insertSubscription: vi.fn(),
   findSubscriptionById: vi.fn(),
   listSubscriptionsByTenant: vi.fn(),
+  listSweepCandidates: vi.fn(),
   updateSubscription: vi.fn(),
   pauseSubscription: vi.fn(),
   resumeSubscription: vi.fn(),
   endSubscription: vi.fn(),
 }));
 
-import { withTenant } from "../../../shared/db";
+import { withServiceRole, withTenant } from "../../../shared/db";
 import {
   ConflictError,
   ForbiddenError,
@@ -42,6 +44,7 @@ import {
   findSubscriptionById,
   insertSubscription,
   listSubscriptionsByTenant,
+  listSweepCandidates,
   pauseSubscription as pauseSubscriptionRow,
   resumeSubscription as resumeSubscriptionRow,
   updateSubscription as updateSubscriptionRow,
@@ -53,15 +56,18 @@ import {
   listSubscriptions,
   pauseSubscription,
   resumeSubscription,
+  sweepEndedSubscriptions,
   updateSubscription,
 } from "../service";
 import type { Subscription, SubscriptionUpdate } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
+const mockWithServiceRole = vi.mocked(withServiceRole);
 const mockEmit = vi.mocked(emit);
 const mockInsert = vi.mocked(insertSubscription);
 const mockFindById = vi.mocked(findSubscriptionById);
 const mockListByTenant = vi.mocked(listSubscriptionsByTenant);
+const mockListSweepCandidates = vi.mocked(listSweepCandidates);
 const mockUpdate = vi.mocked(updateSubscriptionRow);
 const mockPause = vi.mocked(pauseSubscriptionRow);
 const mockResume = vi.mocked(resumeSubscriptionRow);
@@ -547,6 +553,7 @@ describe("endSubscription", () => {
       previous_status: "active",
       new_status: "ended",
       ended_at: FIXED_NOW,
+      trigger_source: "user",
     });
   });
 
@@ -562,5 +569,158 @@ describe("endSubscription", () => {
       previous_status: "paused",
       new_status: "ended",
     });
+  });
+});
+
+// =============================================================================
+// sweepEndedSubscriptions — Day 7 / C-8 (closing commit)
+// =============================================================================
+//
+// Service-layer end-date sweeper. Walks subscriptions whose end_date has
+// passed and transitions each to ENDED, emitting subscription.ended with
+// trigger_source: 'sweeper' to disambiguate from the operator-driven
+// endSubscription path (which now emits trigger_source: 'user').
+
+describe("sweepEndedSubscriptions (system actor; cron caller pending Day 12)", () => {
+  beforeEach(() => {
+    mockWithServiceRole.mockImplementation(async (_reason, fn) => fn({} as never));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function systemSweepCtx(tenantId: string | null = TENANT_ID): RequestContext {
+    return {
+      actor: {
+        kind: "system",
+        system: "cron:end_expired",
+        tenantId,
+        permissions: new Set(),
+      },
+      tenantId,
+      requestId: "sweep-test-request",
+      path: "/cron/end-expired",
+    };
+  }
+
+  it("rejects user actors with ForbiddenError (system-only)", async () => {
+    await expect(
+      sweepEndedSubscriptions(ctx(["subscription:end"]), "2026-05-02"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockListSweepCandidates).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed asOfDate with ValidationError", async () => {
+    await expect(
+      sweepEndedSubscriptions(systemSweepCtx(), "May 2 2026"),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockListSweepCandidates).not.toHaveBeenCalled();
+  });
+
+  it("rejects null tenantId with ValidationError", async () => {
+    await expect(
+      sweepEndedSubscriptions(systemSweepCtx(null), "2026-05-02"),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("returns zero swept when no candidates match (no audit emit)", async () => {
+    mockListSweepCandidates.mockResolvedValue([]);
+
+    const result = await sweepEndedSubscriptions(systemSweepCtx(), "2026-05-02");
+
+    expect(result).toEqual({ swept: 0, subscriptionIds: [], skippedDueToRace: 0 });
+    expect(mockEnd).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("transitions matching candidates to ended and emits trigger_source: 'sweeper'", async () => {
+    const idA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const idB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    mockListSweepCandidates.mockResolvedValue([idA, idB]);
+    const beforeA = subFixture({ id: idA, status: "active" });
+    const afterA = subFixture({ id: idA, status: "ended", endedAt: FIXED_NOW });
+    const beforeB = subFixture({ id: idB, status: "paused", pausedAt: "2026-04-30T00:00:00.000Z" });
+    const afterB = subFixture({ id: idB, status: "ended", pausedAt: null, endedAt: FIXED_NOW });
+    mockEnd
+      .mockResolvedValueOnce(makeUpdate(beforeA, afterA))
+      .mockResolvedValueOnce(makeUpdate(beforeB, afterB));
+
+    const result = await sweepEndedSubscriptions(systemSweepCtx(), "2026-05-02");
+
+    expect(result.swept).toBe(2);
+    expect(result.subscriptionIds).toEqual([idA, idB]);
+    expect(result.skippedDueToRace).toBe(0);
+
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    const firstEmit = mockEmit.mock.calls[0][0];
+    expect(firstEmit.eventType).toBe("subscription.ended");
+    expect(firstEmit.actorKind).toBe("system");
+    expect(firstEmit.actorId).toBe("cron:end_expired");
+    expect(firstEmit.resourceId).toBe(idA);
+    expect(firstEmit.metadata).toEqual({
+      subscription_id: idA,
+      previous_status: "active",
+      new_status: "ended",
+      ended_at: FIXED_NOW,
+      trigger_source: "sweeper",
+    });
+
+    const secondEmit = mockEmit.mock.calls[1][0];
+    expect(secondEmit.metadata).toMatchObject({
+      subscription_id: idB,
+      previous_status: "paused",
+      trigger_source: "sweeper",
+    });
+  });
+
+  it("counts ConflictError race-loser rows in skippedDueToRace (no emit for those)", async () => {
+    const idActive = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const idRace = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    mockListSweepCandidates.mockResolvedValue([idActive, idRace]);
+    const before = subFixture({ id: idActive, status: "active" });
+    const after = subFixture({ id: idActive, status: "ended", endedAt: FIXED_NOW });
+    mockEnd
+      .mockResolvedValueOnce(makeUpdate(before, after))
+      .mockImplementationOnce(async () => {
+        throw new ConflictError(
+          `Cannot end subscription ${idRace}: status is already 'ended' (terminal)`,
+        );
+      });
+
+    const result = await sweepEndedSubscriptions(systemSweepCtx(), "2026-05-02");
+
+    expect(result.swept).toBe(1);
+    expect(result.subscriptionIds).toEqual([idActive]);
+    expect(result.skippedDueToRace).toBe(1);
+
+    // Only the active row's emit fires; the race-loser is silent.
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit.mock.calls[0][0].resourceId).toBe(idActive);
+  });
+
+  it("counts vanished rows (endSubscriptionRow returns null) in skippedDueToRace", async () => {
+    const idVanished = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    mockListSweepCandidates.mockResolvedValue([idVanished]);
+    mockEnd.mockResolvedValueOnce(null);
+
+    const result = await sweepEndedSubscriptions(systemSweepCtx(), "2026-05-02");
+
+    expect(result.swept).toBe(0);
+    expect(result.skippedDueToRace).toBe(1);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("propagates non-ConflictError exceptions (e.g. DB connectivity errors)", async () => {
+    const idA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    mockListSweepCandidates.mockResolvedValue([idA]);
+    mockEnd.mockImplementationOnce(async () => {
+      throw new Error("connection terminated unexpectedly");
+    });
+
+    await expect(
+      sweepEndedSubscriptions(systemSweepCtx(), "2026-05-02"),
+    ).rejects.toThrow(/connection terminated/);
   });
 });
