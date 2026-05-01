@@ -49,3 +49,7 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Asset tracking MVP design](decision_bag_tracking_mvp.md) — hybrid cache + read-through with 5-min TTL; one row per package; 4-state taxonomy (COLLECTED/EN_ROUTE/RECEIVED/RETURNED) per SF doc §6.2; emit-none on cache reads; asset-tracking-enabled flag derives from inbound webhook payload
 - [SF task-asset-tracking API](followup_suitefleet_asset_tracking_api.md) — `?awbs=<AWB>` (NOT `?taskId=`); Spring Data wrapper empirically confirmed; one row per package; 4-state enum `{COLLECTED, EN_ROUTE, RECEIVED, RETURNED}`; 9 open vendor questions
 - [Day 6 EOD handoff](handoffs/day-6-eod.md) — sprint summary (8 commits), counter-review patterns, Day-7 carry-forwards. Read before responding to next-session brief.
+
+## Day 7 (2 May 2026)
+
+- [Day 7 schedule drift](notes/day7_schedule_drift.md) — calendar Day 7 ≈ plan Day 9; subscriptions/task modules shipped ahead of plan calendar; today's work is nightly cron batch + DLQ retry + Sentry + MP-13/14 + sweeper service
