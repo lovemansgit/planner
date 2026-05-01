@@ -304,3 +304,95 @@ contract, visibility-filter behaviour, and open post-pilot questions.
 ## Day 8 closing-commit posture
 
 C-3 (cron push + DLQ + 23505 routing + Sentry wiring of the bulk-push failure path that C-6 reserved a slot for) is the single largest commit on the Day-8 calendar. Likely 2× C-2's complexity given the schema migration + contract fix + ingest path + cron-service layer all touch in one PR. Plan §4.7 closing-commit discipline applies — no known semantic gaps in whatever lands as Day-8's closing commit.
+
+---
+
+## D8-4 reviewer watch-items (carried forward from D8-2 review, 3 May 2026)
+
+D8-2 review surfaced two fail-closed guards the D8-2 migration comments
+promise but D8-4 must actually implement and pin with named unit tests.
+Both guards live in the cron-service layer's per-tenant push code; both
+pin the "skip-and-leave-for-next-cron-pass" semantics rather than
+push-and-fail-downstream.
+
+### Watch-item 1 — `consignee.district = 'UNKNOWN'` fail-closed
+
+The D8-2 migration backfills existing rows with the sentinel `'UNKNOWN'`
+and SETs NOT NULL. The application-layer guard MUST detect that sentinel
+in the cron's per-task push path and skip the push.
+
+**Expected behaviour:**
+- Cron walks tasks, prepares payload from `consignee.district` per row.
+- If `consignee.district === 'UNKNOWN'`, skip the push for that task.
+- Emit `task.push_failed` audit event with metadata
+  `reason: 'unknown_district'`, `consignee_id`, `task_id`. The reason
+  vocabulary is system-only telemetry; operator-facing alerting in a
+  later commit can map the reason to "consignee district is missing —
+  please re-upload via CSV."
+- Task row stays unpushed (`pushed_to_external_at IS NULL`); next cron
+  pass re-attempts (the operator may have backfilled by then).
+
+**Required test:**
+`tests/unit/cron-push-rejects-unknown-district.spec.ts` (or equivalent
+co-located naming under the cron module). Asserts:
+1. A task with `consignee.district = 'UNKNOWN'` does NOT call the SF
+   adapter's `createTask` method.
+2. A `task.push_failed` event is emitted with
+   `reason: 'unknown_district'`.
+3. The task row remains unpushed (no `pushed_to_external_at` or
+   `external_id` write).
+
+### Watch-item 2 — `tenants.suitefleet_customer_code IS NULL` fail-closed
+
+The D8-2 migration adds the column NULLABLE; SET NOT NULL is deferred
+to a follow-up after operator backfills all 3 pilot tenants. Until then
+(and as a permanent guard against future tenants onboarded without the
+code), the cron must fail-closed when the column is null.
+
+**Expected behaviour:**
+- Cron resolves the tenant's `suitefleet_customer_code` once per
+  tenant-pass (not per task — same value across the batch).
+- If `null` (or empty string, defence-in-depth), skip the entire
+  tenant's push for this cron pass.
+- Emit a single `tenant.push_skipped` audit event (NEW event type —
+  systemOnly: true) with metadata
+  `reason: 'missing_customer_code'`, `tenant_id`, `task_count` (number
+  of tasks that would have been pushed). Single event per pass per
+  tenant, NOT per task — the cause is a tenant-level config gap, not
+  a per-task failure. Surfaces operationally as one alert per tenant
+  per cron pass instead of N alerts.
+- All tasks in the batch stay unpushed; next cron pass re-attempts.
+
+**NOTE on event-type design:** chose `tenant.push_skipped` (new) over
+re-using `task.push_failed` because (a) the cause isn't per-task —
+emitting N task-level events for one tenant-config gap pollutes the
+audit timeline; (b) the operator-facing alert is "tenant X needs a
+customer_code", not "task Y failed N times" — different remediation.
+Surface this design choice at D8-4 PR open for explicit reviewer sign-
+off before the new event type lands.
+
+**Required test:**
+`tests/unit/cron-push-rejects-missing-customer-code.spec.ts` (or
+equivalent). Asserts:
+1. A tenant with `suitefleet_customer_code = null` results in ZERO
+   calls to the SF adapter's `createTask` method, even when the tenant
+   has pending tasks.
+2. Exactly ONE `tenant.push_skipped` event is emitted per tenant per
+   pass, with `reason: 'missing_customer_code'` and
+   `task_count: <expected>`.
+3. All tasks for the tenant remain unpushed.
+
+### Both watch-items at PR open
+
+D8-4 PR opening message must inline:
+- The per-task `unknown_district` guard logic (load-bearing).
+- The per-tenant `missing_customer_code` guard logic (load-bearing).
+- The new `tenant.push_skipped` audit event registration in
+  `event-types.ts`.
+- The two named unit-test files (summary + scenarios; full inline
+  on reviewer ask).
+
+Reviewer signed off on the posture decisions in D8-2; D8-4 owes the
+actual enforcement + tests. Without these guards, the D8-2 migration's
+operational story breaks (sentinel district pushed to SF; null
+customer_code pushed and rejected downstream).
