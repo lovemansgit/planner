@@ -48,6 +48,7 @@ import { emit, type EmitInput } from "../audit";
 import { withServiceRole } from "../../shared/db";
 import { ForbiddenError, ValidationError } from "../../shared/errors";
 import { logger } from "../../shared/logger";
+import { captureException } from "../../shared/sentry-capture";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
@@ -239,6 +240,17 @@ export async function generateTasksForWindow(
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
     runLog.error({ error: errorText }, "task generation failed before completion");
+    // Day-7 / C-6: surface this to Sentry. Cron failures used to be
+    // log-only; ops can't infer "this tenant's tasks didn't generate
+    // tonight" from a log line at 16:30 buried under 2K other lines.
+    captureException(err, {
+      component: "task_generation_service",
+      operation: "project_and_generate",
+      tenant_id: input.tenantId,
+      run_id: run.id,
+      window_start: input.windowStart,
+      window_end: input.windowEnd,
+    });
     // Try to record the failure on the run row — best-effort. If this
     // also fails, the run stays in 'running' state and operations'
     // stuck-runs query surfaces it.
@@ -252,7 +264,17 @@ export async function generateTasksForWindow(
           }),
       );
       return { kind: "failed", run: failedRun, errorText };
-    } catch {
+    } catch (finaliseErr) {
+      // Even the finalise-as-failed update threw. Capture this too —
+      // it indicates the run row will stay in 'running' and ops'
+      // stuck-runs query will pick it up; Sentry gives faster signal.
+      captureException(finaliseErr, {
+        component: "task_generation_service",
+        operation: "finalise_failed",
+        tenant_id: input.tenantId,
+        run_id: run.id,
+        original_error: errorText,
+      });
       return { kind: "failed", run, errorText };
     }
   }
@@ -353,6 +375,15 @@ async function emitOrLog(input: EmitInput): Promise<void> {
       },
       "audit emit failed during task generation (non-blocking)",
     );
+    // Day-7 / C-6: surface to Sentry. Per-task audit emit drops add up
+    // to "tonight's run created 7K tasks but the audit log shows 6.8K"
+    // — easy to miss in logs, important to know in production.
+    captureException(err, {
+      component: "task_generation_service",
+      operation: "audit_emit",
+      event_type: input.eventType,
+      resource_id: input.resourceId,
+    });
   }
 }
 

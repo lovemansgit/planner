@@ -34,6 +34,7 @@ import { z } from "zod";
 import { getSuiteFleetAdapter } from "@/modules/integration/providers/suitefleet/get-adapter";
 import { CredentialError, ValidationError } from "@/shared/errors";
 import { logger } from "@/shared/logger";
+import { captureException } from "@/shared/sentry-capture";
 import type { Uuid } from "@/shared/types";
 
 import { errorResponse } from "../../../_lib/error-response";
@@ -93,6 +94,15 @@ export async function POST(req: Request, { params }: RouteContext): Promise<Resp
       tenant_id: tenantId,
       error_code: "async_processing_failed",
       message: err instanceof Error ? err.message : "unknown",
+    });
+    // Day-7 / C-6: log it AND capture to Sentry. Async failures here
+    // were silently dropped before — request returned 200 to SF and
+    // the body never got processed.
+    captureException(err, {
+      component: "suitefleet_webhook_receiver",
+      operation: "async_process",
+      tenant_id: tenantId,
+      request_id: requestId,
     });
   });
 

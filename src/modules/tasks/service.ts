@@ -56,6 +56,7 @@ import { emit, type EmitInput } from "../audit";
 import { withServiceRole, withTenant } from "../../shared/db";
 import { ForbiddenError, NotFoundError, ValidationError } from "../../shared/errors";
 import { logger } from "../../shared/logger";
+import { captureException } from "../../shared/sentry-capture";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
@@ -436,6 +437,14 @@ async function emitOrLog(input: EmitInput): Promise<void> {
       },
       "audit emit failed during bulk operation (non-blocking)",
     );
+    // Day-7 / C-6: surface to Sentry. Bulk-create silent audit drops
+    // were the original motivating case for this whole wiring effort.
+    captureException(err, {
+      component: "tasks_service",
+      operation: "bulk_audit_emit",
+      event_type: input.eventType,
+      resource_id: input.resourceId,
+    });
   }
 }
 
