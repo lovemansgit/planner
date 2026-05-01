@@ -1078,4 +1078,136 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // task_generation_runs — Day 7 / C-2 extension
+  // ---------------------------------------------------------------------------
+  // Mirrors the five tenants scenarios + canary, applied to a
+  // task_generation_runs row inserted into TENANT_A. Self-contained:
+  // seeds via withServiceRole because task_generation_runs writes
+  // happen exclusively from the cron, which runs under
+  // withServiceRole. Reuses TENANT_A and TENANT_B from the outer
+  // describe.
+  //
+  // Unlike task_packages / failed_pushes / asset_tracking_cache, this
+  // table has NO denormalised tenant_id paired with a child FK, so
+  // there is no *_assert_tenant_match trigger to coexist with. The
+  // RLS policy alone is the schema-layer defence; the trigger
+  // category does not apply (header in 0012).
+  describe("task_generation_runs — same regression coverage", () => {
+    type IdRow = { id: string } & Record<string, unknown>;
+    type CountRow = { n: number } & Record<string, unknown>;
+    type StatusRow = { status: string } & Record<string, unknown>;
+
+    const RUN_WINDOW_START = "2026-05-02T12:00:00Z";
+    const RUN_WINDOW_END = "2026-05-02T13:00:00Z";
+    let runRowId: string;
+
+    beforeAll(async () => {
+      // Seed via withServiceRole. Mirrors the cron's actual write path
+      // (the cron is a cross-tenant system actor and uses
+      // withServiceRole to insert run rows for whichever tenant it's
+      // walking).
+      await withServiceRole("C-2 RLS-block setup", async (tx) => {
+        const rows = await tx.execute<IdRow>(sqlTag`
+          INSERT INTO task_generation_runs (
+            tenant_id, window_start, window_end, status, cap_threshold
+          ) VALUES (
+            ${TENANT_A}, ${RUN_WINDOW_START}, ${RUN_WINDOW_END},
+            'completed', 7000
+          )
+          RETURNING id
+        `);
+        runRowId = rows[0].id;
+      });
+    });
+
+    it("withTenant(A) sees the run row it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM task_generation_runs WHERE id = ${runRowId}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].status).toBe("completed");
+    });
+
+    it("withTenant(B) sees zero run rows from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM task_generation_runs WHERE id = ${runRowId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's run row affects zero rows (RLS blocks cross-tenant writes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE task_generation_runs SET status = 'failed', error_text = 'cross-tenant attempt'
+          WHERE id = ${runRowId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM task_generation_runs WHERE id = ${runRowId}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].status).toBe("completed");
+    });
+
+    it("withTenant(B) DELETE against tenant A's run row removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM task_generation_runs WHERE id = ${runRowId}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM task_generation_runs WHERE id = ${runRowId}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero run rows (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<StatusRow>(sqlTag`
+          SELECT status FROM task_generation_runs WHERE id = ${runRowId}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero task_generation_runs rows", async () => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error(
+          "SUPABASE_APP_DATABASE_URL must be set for the task_generation_runs canary case",
+        );
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          StatusRow[]
+        >`SELECT status FROM task_generation_runs WHERE id = ${runRowId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
+    });
+  });
 });
