@@ -33,6 +33,7 @@
 import { sql as sqlTag } from "drizzle-orm";
 
 import { setServiceRoleObserver, withServiceRole } from "../../shared/db";
+import { captureException } from "../../shared/sentry-capture";
 
 import { type EventTypeId, isKnownEventType } from "./event-types";
 
@@ -161,8 +162,15 @@ export function serviceRoleAuditObserver(reason: string): void {
     actorId: "audit",
     tenantId: null,
     metadata: { reason },
-  }).catch(() => {
-    // Best-effort. See doc comment above. Sentry capture lands Day 9.
+  }).catch((err) => {
+    // Best-effort. See doc comment above. Day-7 / C-6 wired Sentry
+    // capture so this telemetry-of-telemetry-failure surfaces in
+    // production instead of dropping silently.
+    captureException(err, {
+      component: "audit_emit",
+      event_type: "db.service_role.use",
+      reason,
+    });
   });
 }
 

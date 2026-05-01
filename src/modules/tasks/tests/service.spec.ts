@@ -32,13 +32,26 @@ vi.mock("../repository", () => ({
   updateTask: vi.fn(),
 }));
 
-vi.mock("../../../shared/logger", () => ({
-  logger: {
+vi.mock("../../../shared/logger", () => {
+  const child = {
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
-  },
+  };
+  return {
+    logger: {
+      ...child,
+      with: () => child,
+    },
+  };
+});
+
+// sentry-capture is imported transitively by tasks/service.ts; mock it
+// here so a test environment without SENTRY_DSN doesn't try to dispatch
+// to the real SDK.
+vi.mock("../../../shared/sentry-capture", () => ({
+  captureException: vi.fn(),
 }));
 
 import { withServiceRole, withTenant } from "../../../shared/db";

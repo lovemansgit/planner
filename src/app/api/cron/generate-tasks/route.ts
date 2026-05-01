@@ -50,6 +50,7 @@ import type { GenerateForWindowResult } from "@/modules/task-generation";
 import { nextCalendarDateInDubai } from "@/modules/task-generation/dubai-date";
 import { withServiceRole } from "@/shared/db";
 import { logger } from "@/shared/logger";
+import { captureException } from "@/shared/sentry-capture";
 import type { Actor, RequestContext } from "@/shared/tenant-context";
 import type { Uuid } from "@/shared/types";
 
@@ -129,6 +130,13 @@ export async function GET(req: Request): Promise<Response> {
       { error: err instanceof Error ? err.message : String(err) },
       "failed to enumerate tenants for cron run",
     );
+    // Day-7 / C-6: cron run aborted before any per-tenant work; this
+    // is an outage signal worth waking ops up for.
+    captureException(err, {
+      component: "cron_generate_tasks",
+      operation: "list_tenants",
+      request_id: requestId,
+    });
     return new Response(null, { status: 500 });
   }
   runLog.info({ tenant_count: tenantIds.length }, "tenants enumerated for cron run");
@@ -157,6 +165,16 @@ export async function GET(req: Request): Promise<Response> {
         },
         "task generation threw for tenant",
       );
+      // Day-7 / C-6: per-tenant Sentry visibility. Without this, the
+      // cron-summary 500 collapses every per-tenant failure into one
+      // event — ops can't tell whether one tenant or all tenants
+      // tripped tonight without reading the per-tenant payload.
+      captureException(err, {
+        component: "cron_generate_tasks",
+        operation: "per_tenant_generate",
+        tenant_id: tenantId,
+        request_id: requestId,
+      });
       perTenant.push({
         tenantId,
         kind: "failed",
