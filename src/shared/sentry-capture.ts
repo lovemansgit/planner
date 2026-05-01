@@ -1,7 +1,7 @@
 // Safe Sentry capture wrapper.
 //
 // Day 7 / C-6. Replaces silent fire-and-forget drops with a non-throwing
-// `captureException` call. Three layered guarantees:
+// `captureException` call. Two layered guarantees:
 //
 //   1. If SENTRY_DSN is unset (development scope per
 //      memory/feedback_vercel_env_scope_convention.md), Sentry init in
@@ -10,14 +10,17 @@
 //
 //   2. If Sentry init succeeded but the runtime capture fails (network
 //      down, transport error, JSON serialisation throw on a circular
-//      `extra` object), the inner try/catch swallows the failure. A
+//      `extra` object), the try/catch below swallows the failure. A
 //      Sentry capture must NEVER throw upstream — the audit emit
 //      failure path that calls this is already non-fatal; if Sentry
 //      capture about the audit failure is itself fatal, we lose the
 //      whole telemetry stack on transient Sentry outages.
 //
-//   3. If the dynamic import of `@sentry/nextjs` itself fails (highly
-//      unlikely; SDK is bundled), the outer try/catch covers it.
+// What this wrapper does NOT cover: a failure of the static
+// `@sentry/nextjs` import itself. That would manifest at module-load
+// time, before any caller reaches captureException, and would crash
+// the whole app boot regardless of how this function is written.
+// We accept that failure mode — Sentry is a hard dependency.
 //
 // Always import this wrapper — never `Sentry.captureException` directly
 // in fire-and-forget paths. A direct call is one missing try/catch
