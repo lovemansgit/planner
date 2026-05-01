@@ -53,3 +53,4 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 ## Day 7 (2 May 2026)
 
 - [Day 7 schedule drift](notes/day7_schedule_drift.md) — calendar Day 7 ≈ plan Day 9; subscriptions/task modules shipped ahead of plan calendar; today's work is nightly cron batch + DLQ retry + Sentry + MP-13/14 + sweeper service
+- [C-3 cron bulk push deferred to Day 8](followup_c3_deferred_day8.md) — consignees has no district column; SF requires it. Captures Day-8 schema migration scope, defaults, Transcorp shipFrom values, and 14 outstanding Aqib questions to fold in on response
