@@ -356,11 +356,13 @@ code), the cron must fail-closed when the column is null.
   tenant's push for this cron pass.
 - Emit a single `tenant.push_skipped` audit event (NEW event type —
   systemOnly: true) with metadata
-  `reason: 'missing_customer_code'`, `tenant_id`, `task_count` (number
-  of tasks that would have been pushed). Single event per pass per
-  tenant, NOT per task — the cause is a tenant-level config gap, not
-  a per-task failure. Surfaces operationally as one alert per tenant
-  per cron pass instead of N alerts.
+  `reason: 'missing_customer_code'`, `tenant_id`, `skipped_task_count`
+  (number of tasks that would have been pushed). Single event per
+  pass per tenant, NOT per task — the cause is a tenant-level config
+  gap, not a per-task failure. Surfaces operationally as one alert
+  per tenant per cron pass instead of N alerts. Field name is
+  canonical per the sub-item below — use `skipped_task_count`, not
+  `task_count`.
 - All tasks in the batch stay unpushed; next cron pass re-attempts.
 
 **NOTE on event-type design:** chose `tenant.push_skipped` (new) over
@@ -379,10 +381,39 @@ equivalent). Asserts:
    has pending tasks.
 2. Exactly ONE `tenant.push_skipped` event is emitted per tenant per
    pass, with `reason: 'missing_customer_code'` and
-   `task_count: <expected>`.
+   `skipped_task_count: <expected>`.
 3. All tasks for the tenant remain unpushed.
 
-### Both watch-items at PR open
+#### Sub-item — register `tenant.push_skipped` in `event-types.ts`
+
+Reviewer follow-up after D8-2 design-choice acceptance (3 May 2026).
+The new `tenant.push_skipped` audit event MUST be registered in
+`src/modules/audit/event-types.ts` at D8-4, alongside the guard
+itself. Easy to forget when adding the guard logic; pinning here
+explicitly so D8-4 implementer doesn't ship the guard with an
+unregistered event type.
+
+**Registration shape:**
+- Event type: `tenant.push_skipped`
+- `systemOnly: true` — cron-emitted, not user-driven; appears in
+  systemOnly subscription audit feeds, not in operator-visible
+  per-tenant timelines.
+- Metadata shape (canonical):
+  ```ts
+  {
+    tenant_id: Uuid,
+    reason: 'missing_customer_code',
+    skipped_task_count: number,
+  }
+  ```
+- `reason` is a string union from the start — extending later for
+  other tenant-level skip causes (e.g. `'tenant_suspended'`) is
+  cheap. For D8-4 only `'missing_customer_code'` is in the union.
+
+**At D8-4 PR open**: inline the registration block from
+`event-types.ts` alongside the guard logic. Reviewer can confirm
+`systemOnly: true` and the metadata shape match this spec without
+chasing the file.
 
 D8-4 PR opening message must inline:
 - The per-task `unknown_district` guard logic (load-bearing).
