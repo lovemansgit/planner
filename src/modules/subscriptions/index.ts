@@ -20,6 +20,7 @@ export type {
 } from "./types";
 
 export {
+  autoPauseSubscriptionForRepeatedFailure,
   createSubscription,
   endSubscription,
   getSubscription,
@@ -28,3 +29,5 @@ export {
   resumeSubscription,
   updateSubscription,
 } from "./service";
+
+export type { AutoPauseInput } from "./service";
