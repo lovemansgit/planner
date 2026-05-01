@@ -34,3 +34,29 @@ INSERT INTO tenants (
   now(), now(),
   'closed', NULL, NULL
 ) ON CONFLICT (id) DO NOTHING;
+
+
+-- -----------------------------------------------------------------------------
+-- Backfill suitefleet_customer_code for the sandbox tenant
+-- -----------------------------------------------------------------------------
+-- Day 8 / D8-4 prep. The `suitefleet_customer_code` column on `tenants`
+-- was added by migration 0013 (D8-2); the cron's bulk-push code (D8-4)
+-- reads this column per-tenant and passes it as `customer.code` on
+-- every SF task-create POST. Without it the `tenant.push_skipped`
+-- guard fires and the sandbox tenant's batch is fail-closed every
+-- cron pass — never exercising the actual SF push path.
+--
+-- Sandbox merchant 588 maps to the SF "Planner" test customer; the
+-- merchant code SF expects on the wire is 'MPL'. Production pilot
+-- codes (Tabchilli=TBC + 2 unknowns) are populated separately at
+-- pilot-launch time via operator-side UPDATEs against the production
+-- DB; this seed only covers the dev/preview sandbox row.
+--
+-- Idempotent: unconditional UPDATE that always lands 'MPL' on the
+-- sandbox row regardless of prior state. Re-running the seed
+-- preserves the value. Operators do not edit sandbox tenant rows by
+-- hand; clobbering on re-run is fine in dev/preview per the file
+-- header's "NOT for production" posture.
+UPDATE tenants
+SET suitefleet_customer_code = 'MPL'
+WHERE id = '8bfc84b0-c139-4f43-b966-5a12eaa7a302';
