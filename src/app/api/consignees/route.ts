@@ -43,6 +43,7 @@ const CreateBodySchema = z.object({
   email: z.string().optional(),
   addressLine: z.string(),
   emirateOrRegion: z.string(),
+  district: z.string(),
   deliveryNotes: z.string().optional(),
   externalRef: z.string().optional(),
   notesInternal: z.string().optional(),

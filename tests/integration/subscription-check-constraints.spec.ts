@@ -78,10 +78,10 @@ describe("S-1 — subscriptions CHECK constraints fire at the schema layer", () 
 
     const consignees = await sql<{ id: string }[]>`
       INSERT INTO consignees (
-        tenant_id, name, phone, address_line, emirate_or_region
+        tenant_id, name, phone, address_line, emirate_or_region, district
       ) VALUES (
         ${TENANT_A}, 'S-1 Check Consignee', ${CONSIGNEE_PHONE},
-        'Test Address', 'Dubai'
+        'Test Address', 'Dubai', 'Test District'
       )
       RETURNING id
     `;

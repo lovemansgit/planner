@@ -231,9 +231,9 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       consigneeId = await withTenant(TENANT_A, async (tx) => {
         const rows = await tx.execute<ConsigneeIdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_A}, ${CONSIGNEE_NAME}, ${CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+            ${TENANT_A}, ${CONSIGNEE_NAME}, ${CONSIGNEE_PHONE}, 'Test Address', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -371,9 +371,9 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       taskConsigneeId = await withTenant(TENANT_A, async (tx) => {
         const rows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_A}, 'T-2 Task Consignee', ${TASK_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+            ${TENANT_A}, 'T-2 Task Consignee', ${TASK_CONSIGNEE_PHONE}, 'Test Address', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -514,9 +514,9 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       const consigneeId = await withTenant(TENANT_A, async (tx) => {
         const rows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_A}, 'T-2 Package Consignee', ${PKG_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+            ${TENANT_A}, 'T-2 Package Consignee', ${PKG_CONSIGNEE_PHONE}, 'Test Address', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -674,9 +674,9 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       await withServiceRole("T-7 RLS-block setup", async (tx) => {
         const consigneeRows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_A}, 'T-7 FP Consignee', ${FP_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+            ${TENANT_A}, 'T-7 FP Consignee', ${FP_CONSIGNEE_PHONE}, 'Test Address', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -811,10 +811,10 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       await withServiceRole("S-1 RLS-block setup", async (tx) => {
         const consigneeRows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
             ${TENANT_A}, 'S-1 Sub Consignee', ${SUB_CONSIGNEE_PHONE},
-            'Test Address', 'Dubai'
+            'Test Address', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -950,9 +950,9 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       const consigneeId = await withTenant(TENANT_A, async (tx) => {
         const rows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_A}, 'B-1 AT Consignee', ${AT_CONSIGNEE_PHONE}, 'Test Address', 'Dubai'
+            ${TENANT_A}, 'B-1 AT Consignee', ${AT_CONSIGNEE_PHONE}, 'Test Address', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -1204,6 +1204,133 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
         const rows = await canary<
           StatusRow[]
         >`SELECT status FROM task_generation_runs WHERE id = ${runRowId}`;
+        expect(rows.length).toBe(0);
+      } finally {
+        await canary.end({ timeout: 2 });
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // tenant_suitefleet_webhook_credentials — Day 8 / D8-2 extension
+  // ---------------------------------------------------------------------------
+  // Mirrors the five tenants scenarios + canary, applied to a
+  // tenant_suitefleet_webhook_credentials row inserted into TENANT_A.
+  // Self-contained: seeds via withServiceRole because credential rows
+  // are created by an admin flow that runs under service-role (Tenant
+  // Admin → admin route → server-side insert). Reuses TENANT_A and
+  // TENANT_B from the outer describe.
+  //
+  // Same posture as task_generation_runs: this table has tenant_id as
+  // the PRIMARY KEY (not a denormalised column alongside a separate
+  // FK), so there is no *_assert_tenant_match trigger to coexist with.
+  // The RLS policy alone is the schema-layer defence; the trigger
+  // category does not apply (header in 0013).
+  describe("tenant_suitefleet_webhook_credentials — same regression coverage", () => {
+    type CountRow = { n: number } & Record<string, unknown>;
+    type ClientIdRow = { client_id: string } & Record<string, unknown>;
+
+    const CLIENT_ID = `d8-creds-${RUN_ID}`;
+    const CLIENT_ID_ATTEMPTED = `d8-creds-${RUN_ID}-cross-tenant`;
+    // Constant-format placeholder — bcrypt hashes look similar in
+    // shape. This block doesn't exercise hash semantics; just that
+    // RLS scoping holds for whatever value the column carries.
+    const SECRET_HASH = `$2b$10$d8creds${RUN_ID}placeholderhashforintegrationtest`;
+
+    beforeAll(async () => {
+      await withServiceRole("D8-2 RLS-block setup", async (tx) => {
+        await tx.execute(sqlTag`
+          INSERT INTO tenant_suitefleet_webhook_credentials (
+            tenant_id, client_id, client_secret_hash
+          ) VALUES (
+            ${TENANT_A}, ${CLIENT_ID}, ${SECRET_HASH}
+          )
+        `);
+      });
+    });
+
+    it("withTenant(A) sees the credential row it just inserted (RLS allows same-tenant read)", async () => {
+      const rows = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<ClientIdRow>(sqlTag`
+          SELECT client_id FROM tenant_suitefleet_webhook_credentials WHERE tenant_id = ${TENANT_A}
+        `);
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0].client_id).toBe(CLIENT_ID);
+    });
+
+    it("withTenant(B) sees zero credential rows from tenant A (RLS filters cross-tenant reads)", async () => {
+      const rows = await withTenant(TENANT_B, async (tx) => {
+        return tx.execute<ClientIdRow>(sqlTag`
+          SELECT client_id FROM tenant_suitefleet_webhook_credentials WHERE tenant_id = ${TENANT_A}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("withTenant(B) UPDATE against tenant A's credential row affects zero rows (RLS blocks cross-tenant writes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          UPDATE tenant_suitefleet_webhook_credentials SET client_id = ${CLIENT_ID_ATTEMPTED}
+          WHERE tenant_id = ${TENANT_A}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<ClientIdRow>(sqlTag`
+          SELECT client_id FROM tenant_suitefleet_webhook_credentials WHERE tenant_id = ${TENANT_A}
+        `);
+      });
+      expect(after.length).toBe(1);
+      expect(after[0].client_id).toBe(CLIENT_ID);
+    });
+
+    it("withTenant(B) DELETE against tenant A's credential row removes nothing (RLS blocks cross-tenant deletes)", async () => {
+      await withTenant(TENANT_B, async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM tenant_suitefleet_webhook_credentials WHERE tenant_id = ${TENANT_A}
+        `);
+      });
+
+      const after = await withTenant(TENANT_A, async (tx) => {
+        return tx.execute<CountRow>(sqlTag`
+          SELECT count(*)::int AS n FROM tenant_suitefleet_webhook_credentials WHERE tenant_id = ${TENANT_A}
+        `);
+      });
+      expect(after[0].n).toBe(1);
+    });
+
+    it("withTenant scoped to an unrelated tenant id sees zero credential rows (full tenant isolation)", async () => {
+      const UNRELATED_TENANT = randomUUID();
+      const rows = await withTenant(UNRELATED_TENANT, async (tx) => {
+        return tx.execute<ClientIdRow>(sqlTag`
+          SELECT client_id FROM tenant_suitefleet_webhook_credentials WHERE tenant_id = ${TENANT_A}
+        `);
+      });
+      expect(rows.length).toBe(0);
+    });
+
+    it("CANARY — a raw planner_app connection with no app.current_tenant_id sees zero credential rows", async () => {
+      const url = process.env.SUPABASE_APP_DATABASE_URL;
+      if (!url) {
+        throw new Error(
+          "SUPABASE_APP_DATABASE_URL must be set for the tenant_suitefleet_webhook_credentials canary case",
+        );
+      }
+      const canary = postgres(url, { prepare: false, max: 1 });
+      try {
+        const role = await canary<{ role: string }[]>`SELECT current_user AS role`;
+        expect(role[0].role).toBe("planner_app");
+
+        const settingProbe = await canary<
+          { setting: string | null }[]
+        >`SELECT current_setting('app.current_tenant_id', true) AS setting`;
+        const setting = settingProbe[0].setting;
+        expect(setting === null || setting === "").toBe(true);
+
+        const rows = await canary<
+          ClientIdRow[]
+        >`SELECT client_id FROM tenant_suitefleet_webhook_credentials WHERE tenant_id = ${TENANT_A}`;
         expect(rows.length).toBe(0);
       } finally {
         await canary.end({ timeout: 2 });

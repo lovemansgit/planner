@@ -97,9 +97,9 @@ describe("C-2 — task generation service (cron path)", () => {
       await withServiceRole("C-2 happy-path seed", async (tx) => {
         const cAR = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_ID}, 'C-2 A', ${`c2-a-${RUN_ID}`}, 'Addr', 'Dubai'
+            ${TENANT_ID}, 'C-2 A', ${`c2-a-${RUN_ID}`}, 'Addr', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -107,9 +107,9 @@ describe("C-2 — task generation service (cron path)", () => {
 
         const cBR = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_ID}, 'C-2 B', ${`c2-b-${RUN_ID}`}, 'Addr', 'Dubai'
+            ${TENANT_ID}, 'C-2 B', ${`c2-b-${RUN_ID}`}, 'Addr', 'Dubai', 'Test District'
           )
           RETURNING id
         `);
@@ -254,9 +254,9 @@ describe("C-2 — task generation service (cron path)", () => {
         `);
         const cR = await tx.execute<IdRow>(sqlTag`
           INSERT INTO consignees (
-            tenant_id, name, phone, address_line, emirate_or_region
+            tenant_id, name, phone, address_line, emirate_or_region, district
           ) VALUES (
-            ${TENANT_ID_CAP}, 'Cap', ${`c2-cap-${RUN_ID}`}, 'Addr', 'Dubai'
+            ${TENANT_ID_CAP}, 'Cap', ${`c2-cap-${RUN_ID}`}, 'Addr', 'Dubai', 'Test District'
           )
           RETURNING id
         `);

@@ -68,9 +68,9 @@ describe("C-8 — end-date sweeper service", () => {
 
       const cR = await tx.execute<IdRow>(sqlTag`
         INSERT INTO consignees (
-          tenant_id, name, phone, address_line, emirate_or_region
+          tenant_id, name, phone, address_line, emirate_or_region, district
         ) VALUES (
-          ${TENANT_ID}, 'C-8 Consignee', ${`c8-${RUN_ID}`}, 'Test Address', 'Dubai'
+          ${TENANT_ID}, 'C-8 Consignee', ${`c8-${RUN_ID}`}, 'Test Address', 'Dubai', 'Test District'
         )
         RETURNING id
       `);

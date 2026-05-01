@@ -76,10 +76,10 @@ describe("S-2 — tasks ↔ subscriptions link CHECK invariant fires at the sche
 
     const consignees = await sql<{ id: string }[]>`
       INSERT INTO consignees (
-        tenant_id, name, phone, address_line, emirate_or_region
+        tenant_id, name, phone, address_line, emirate_or_region, district
       ) VALUES (
         ${TENANT_A}, 'S-2 Link Consignee', ${CONSIGNEE_PHONE},
-        'Test Address', 'Dubai'
+        'Test Address', 'Dubai', 'Test District'
       )
       RETURNING id
     `;

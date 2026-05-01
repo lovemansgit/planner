@@ -28,6 +28,7 @@ export interface Consignee {
   readonly email: string | null;
   readonly addressLine: string;
   readonly emirateOrRegion: string;
+  readonly district: string;
   readonly deliveryNotes: string | null;
   readonly externalRef: string | null;
   readonly notesInternal: string | null;
@@ -47,6 +48,7 @@ export interface CreateConsigneeInput {
   readonly email?: string;
   readonly addressLine: string;
   readonly emirateOrRegion: string;
+  readonly district: string;
   readonly deliveryNotes?: string;
   readonly externalRef?: string;
   readonly notesInternal?: string;
@@ -63,6 +65,7 @@ export interface UpdateConsigneePatch {
   readonly email?: string;
   readonly addressLine?: string;
   readonly emirateOrRegion?: string;
+  readonly district?: string;
   readonly deliveryNotes?: string;
   readonly externalRef?: string;
   readonly notesInternal?: string;
