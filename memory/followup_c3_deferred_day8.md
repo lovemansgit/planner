@@ -122,19 +122,151 @@ Open question for Love: do existing pilot-tenant consignees already have distric
 
 ---
 
-## Aqib outstanding (14 SF empirical questions sent 2 May 2026)
+## Confirmed via Aqib (Group 1 — received 2 May 2026, late afternoon)
 
-Answers expected within hours. Fold confirmed answers back into THIS memo before EOD so Day 8's brief picks up the latest state. Categories:
+C-3 unblock path is FULLY RESOLVED. The remaining-defaults guesswork in
+the prior section is now empirical — Day 8 implements against
+confirmed values, not lean-and-revisit.
 
-1. Field naming inside `LocationPostPayloadDto` (district vs. area vs. neighbourhood)
-2. `paymentMethod` nesting under `deliveryInformation` vs. top-level
-3. `codAmount` / `totalShipmentValueAmount` expected values for prepaid meal plans (zero? declared value? merchant cost?)
-4. 23505-equivalent reconcile shape if SF behaviour changes (currently SF doesn't dedupe; if vendor commitment shifts, the reconcile path changes)
-5. Webhook auth — current understanding from Day 6 is per-tenant clientId/clientSecret; confirm no other auth header expected
-6. Label endpoint shape (Day 8/9 work, but capture if surfaced)
-7. (8 more — see Aqib email thread 2 May 2026)
+### Address payload — both `district` AND `city` mandatory, separate fields
 
-If answers don't arrive by EOD, Day 8 ships defaults as listed above and a follow-up captures the empirical confirmation when Aqib responds.
+- **API field name = `district`** — matches the codebase's existing
+  `DeliveryAddress.district` field. NO rename needed in
+  `src/modules/integration/types.ts`.
+- **Mandatory address fields per Aqib**: `addressLine1`, consignee
+  `name`, `phone`, `district`, `country` (countryCode), `city`.
+- **`city` is mandatory and SEPARATE from `district`**: a Dubai-based
+  meal plan delivery payload must carry BOTH `city: "Dubai"` AND
+  `district: "Al Quoz Industrial 1"` (using the warehouse example).
+  These are not interchangeable; SF will reject a payload that omits
+  either one.
+- **`shipFrom` does NOT need lat/lng** — the WhatsApp resolution
+  Love mentioned applies only to the consignee side. shipFrom is a
+  fixed warehouse address, not WhatsApp-resolved.
+
+### Payment + value fields — locked for prepaid meal plans
+
+- `paymentMethod = 'PrePaid'` — **top-level**, NOT nested under
+  `deliveryInformation` for the prepaid path. The existing
+  `task-client.ts` code that nests it (`deliveryInformation: { paymentMethod: ... }`)
+  is wrong for prepaid; needs un-nesting in C-3. (COD path may nest
+  it later — open scope, not pilot-blocking.)
+- `codAmount = 0` for prepaid. COD path is conditional:
+  `codAmount > 0` AND `paymentMethod = 'COD'` together.
+- `totalShipmentValueAmount = 0` acceptable for prepaid meal plans
+  (no need to track declared value when nothing is being collected
+  on delivery).
+- `totalShipmentQuantity = 1` confirmed — single bag per meal plan
+  delivery in pilot scope.
+- `volume = 0` acceptable.
+
+### Contract changes locked for C-3 PR
+
+In `src/modules/integration/types.ts`:
+
+```ts
+// BEFORE
+readonly latitude: number;
+readonly longitude: number;
+
+// AFTER
+readonly latitude?: number;
+readonly longitude?: number;
+```
+
+In `src/modules/integration/providers/suitefleet/task-client.ts`,
+`buildLocation` function — change unconditional spreads to conditional:
+
+```ts
+// BEFORE
+latitude: address.latitude,
+longitude: address.longitude,
+
+// AFTER
+...(address.latitude !== undefined && { latitude: address.latitude }),
+...(address.longitude !== undefined && { longitude: address.longitude }),
+```
+
+This parallels the existing conditional pattern for `district`,
+`addressLine2`, `addressCode`. Both type and build path flip together
+in the C-3 commit.
+
+Also un-nest `paymentMethod` in `buildSuiteFleetTaskBody`:
+
+```ts
+// BEFORE
+deliveryInformation: { paymentMethod: request.paymentMethod },
+
+// AFTER
+paymentMethod: request.paymentMethod,
+// (drop the deliveryInformation wrapper for the prepaid path; if a
+// COD-specific wrapper is needed later, re-introduce conditionally)
+```
+
+### Schema change locked — `consignees.district`
+
+`ALTER TABLE consignees ADD COLUMN district text NOT NULL` with backfill.
+Backfill strategy still Love's call (placeholder 'Unknown' vs.
+staged nullable-then-required); the empirical confirmation that
+`district` is the right field name removes the only API-side
+uncertainty.
+
+### `city` — open mapping question (not blocking)
+
+`consignees.emirate_or_region` currently captures values like "Dubai".
+For pilot tenants (UAE-only), "Dubai" is both the emirate AND the
+city — same string, distinct concepts. Two options for Day 8:
+
+1. **Re-use `emirate_or_region` as the city source** for SF payloads
+   (no schema change). Works for pilot. Surfaces a naming-vs-semantics
+   question if a future merchant has a city-vs-emirate distinction
+   (e.g., a tenant in Sharjah where the emirate is "Sharjah" but
+   the city might be "Sharjah" or a finer-grained area).
+2. **Add a separate `city` column** to consignees in the same
+   migration as `district`. Cleaner semantics; one extra column;
+   forward-compatible.
+
+Lean: option 1 for pilot — the empirical reality is one-string-fits-both
+in UAE pilot scope. Surface the option-2 schema as a follow-up if a
+non-Dubai/non-Abu-Dhabi merchant ever onboards. Day 8 PR explicitly
+documents this choice in the consignees migration header.
+
+### Updated Aqib outstanding list
+
+Group 1 (C-3 unblock): **FULLY RESOLVED** ✓
+
+Group 2 (label endpoint): partially resolved — the format and content
+shape are confirmed, but the exact endpoint URL/path is still pending.
+See dedicated section below.
+
+Groups 3+ (other categories from the original 14-question batch):
+status varies — capture in successor follow-ups when answers arrive.
+
+---
+
+## Label scope (FULLY RESOLVED via Aqib Group-2 — see dedicated memo)
+
+The label endpoint shape, security constraints, and Day-8 implementation
+scope are captured in
+`memory/followup_suitefleet_label_endpoint.md`. Summary:
+
+- **Endpoint**: `GET https://shipment-label.suitefleet.com/generate-label`
+  with `?taskId={id-or-csv}&type=indv-small&tz_offset=4&token=...&clientId=...`.
+  Returns rendered PDF binary directly. Bulk via comma-separated taskIds.
+- **Format**: `indv-small` (4x6) only — no per-merchant variation,
+  pure passthrough, no logo manipulation. Morning-brief §8 L4 logo-swap
+  plan dropped.
+- **Security constraint** (load-bearing): token-in-query MUST NOT reach
+  operator browsers. Planner backend fetches server-side, streams PDF
+  bytes back as `application/pdf`. Token stays inside Transcorp.
+- **Day 8 T2 commit scope**: new `task:print_labels` permission
+  (TENANT_SCOPED auto-pickup), new `task.labels_printed` audit event
+  (systemOnly: false), `POST /api/tasks/labels` route, multi-select
+  button on `/tasks`, `LastMileAdapter.printLabels(session, taskIds)`.
+
+**Cross-reference**: see `memory/followup_suitefleet_label_endpoint.md`
+for the full endpoint shape, security analysis, route + adapter
+contract, visibility-filter behaviour, and open post-pilot questions.
 
 ---
 
