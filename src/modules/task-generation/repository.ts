@@ -255,9 +255,14 @@ export async function countMatchingSubscriptions(
  *
  * Field defaults:
  *   - customer_order_number: deterministic 'SUB-<sub_id_short>-<YYYYMMDD>'.
- *     Stable across re-runs (joins ON CONFLICT cleanly) and identifiable
- *     in operator UIs. Day-7 brief did not lock a format; this is a
- *     judgment call surfaced at PR open.
+ *     `sub_id_short` is the first 12 hex chars of the subscription UUID
+ *     with dashes stripped (48 bits of entropy → ~10⁻⁶ collision rate
+ *     per tenant per year at the 7K cap; the 8-char variant proposed at
+ *     C-2 PR open carried 0.57%/year/tenant which is non-trivial since
+ *     customer_order_number has no UNIQUE constraint to fail-closed and
+ *     the failure mode is silent operator-confusion duplicates). Stable
+ *     across re-runs (joins ON CONFLICT cleanly), identifiable in
+ *     operator UIs.
  *   - created_via: 'subscription' — composite CHECK in 0010 requires
  *     this when subscription_id IS NOT NULL.
  *   - internal_status: 'CREATED' — task is local-only until pushed by
@@ -301,7 +306,7 @@ export async function bulkInsertTasksForSubscriptions(
       s.consignee_id,
       s.id,
       'subscription',
-      'SUB-' || substring(s.id::text, 1, 8) || '-' || to_char(${targetDate}::date, 'YYYYMMDD'),
+      'SUB-' || substring(replace(s.id::text, '-', ''), 1, 12) || '-' || to_char(${targetDate}::date, 'YYYYMMDD'),
       'CREATED',
       ${targetDate}::date,
       s.delivery_window_start,

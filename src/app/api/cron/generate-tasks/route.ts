@@ -167,7 +167,7 @@ export async function GET(req: Request): Promise<Response> {
     }
 
     perTenant.push(summariseOutcome(tenantId, outcome));
-    if (outcome.kind === "capped" || outcome.kind === "failed" || outcome.kind === "failed_partial") {
+    if (outcome.kind === "capped" || outcome.kind === "failed") {
       anyAbnormal = true;
     }
   }
@@ -255,13 +255,6 @@ type PerTenantSummary =
       kind: "failed";
       runId?: Uuid;
       message: string;
-    }
-  | {
-      tenantId: Uuid;
-      kind: "failed_partial";
-      runId: Uuid;
-      tasksCreatedBeforeFailure: number;
-      message: string;
     };
 
 function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): PerTenantSummary {
@@ -294,14 +287,6 @@ function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): Per
         tenantId,
         kind: "failed",
         runId: outcome.run.id,
-        message: outcome.errorText,
-      };
-    case "failed_partial":
-      return {
-        tenantId,
-        kind: "failed_partial",
-        runId: outcome.run.id,
-        tasksCreatedBeforeFailure: outcome.tasksCreatedBeforeFailure,
         message: outcome.errorText,
       };
   }

@@ -67,14 +67,8 @@
 -- the row with the tenant_id the service layer chose to walk.
 --
 -- -----------------------------------------------------------------------------
--- Status enum — five terminal states, one in-flight state
+-- Status enum — four terminal states, one in-flight state
 -- -----------------------------------------------------------------------------
--- Six values, with explicit `failed_partial` to distinguish a run that aborted
--- before any task INSERTs from one that aborted after some INSERTs landed.
--- Distinguishing these in the schema (rather than via a "partial" CHECK on
--- error_text) gives admin UIs and audit-trail rendering a clean discriminant
--- without parsing free-form fields.
---
 --   running              — row created at run start; not yet completed.
 --                          A row stuck in 'running' indicates the handler
 --                          crashed mid-flight (cron timeout, process kill).
@@ -100,11 +94,14 @@
 --                          task INSERTs landed (e.g., subscription query
 --                          failed, cap projection failed). error_text
 --                          captures the message. Zero tasks generated.
---   failed_partial       — error AFTER some task INSERTs already
---                          committed within the run. The completed
---                          tasks remain (forward-only); error_text
---                          captures what went wrong; the partial counts
---                          (tasks_created so far) are recorded.
+--
+-- A `failed_partial` value was considered for the case where a run aborts
+-- AFTER some task INSERTs already committed, but is not in this enum:
+-- under the current single-tx project+generate+finalise design, an error
+-- inside that block rolls back every INSERT, so partial-success is
+-- structurally impossible. Reserving an enum value for a code path that
+-- doesn't exist creates speculative scope; if a multi-tx emission design
+-- ever lands, that commit adds the value back with a real caller.
 --
 -- -----------------------------------------------------------------------------
 -- Index strategy
@@ -185,8 +182,7 @@ CREATE TABLE task_generation_runs (
       'completed',
       'capped',
       'skipped_already_run',
-      'failed',
-      'failed_partial'
+      'failed'
     )),
 
   CONSTRAINT task_generation_runs_window_strict

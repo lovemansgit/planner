@@ -98,17 +98,17 @@ function assertIsoDate(value: string, field: string): void {
 /**
  * Generate next-day tasks for one tenant for the given window.
  *
- * Outcome is one of five:
+ * Outcome is one of four:
  *   - completed             — generation succeeded; counts recorded.
  *   - capped                — projected count exceeded capThreshold;
  *                             zero tasks generated, run row recorded.
  *   - skipped_already_run   — a prior run exists for this window;
  *                             no-op, existing run returned.
- *   - failed                — error before any task INSERTs landed.
- *   - failed_partial        — error after some task INSERTs already
- *                             committed within the same transaction
- *                             (rare: requires post-INSERT failure
- *                             during finaliseRun + audit-emit step).
+ *   - failed                — error during the project+generate tx; the
+ *                             tx rolls back so zero tasks committed. The
+ *                             run row is updated to 'failed' on a best-
+ *                             effort separate tx; if that also fails,
+ *                             the row stays 'running' for ops to surface.
  *
  * Throws (caller is the cron handler; throws bubble to the handler's
  * top-level try/catch, which logs + returns 500 to Vercel):

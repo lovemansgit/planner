@@ -6,11 +6,11 @@
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
 /**
- * Six-state lifecycle of a task_generation_runs row. Mirrors the
+ * Five-state lifecycle of a task_generation_runs row. Mirrors the
  * `task_generation_runs_status_check` CHECK in 0012.
  *
  * - 'running' is the only non-terminal state. Transitions to one of the
- *   five terminal states before the cron handler returns. A row stuck
+ *   four terminal states before the cron handler returns. A row stuck
  *   in 'running' (completed_at IS NULL) indicates the handler crashed
  *   mid-flight.
  * - 'completed' and 'capped' are the two outcomes for a run that
@@ -19,16 +19,18 @@ import type { IsoTimestamp, Uuid } from "@/shared/types";
  *   (tenant, window). Captured here for the rare case where the
  *   service layer chooses to record the skipped attempt; the default
  *   path does NOT write a second row (returns the existing row).
- * - 'failed' / 'failed_partial' distinguish error-before-INSERT from
- *   error-after-INSERT.
+ * - 'failed' covers any unrecoverable error before completion. Under
+ *   the current single-tx project+generate+finalise design, partial-
+ *   success is structurally impossible — an error rolls back every
+ *   INSERT inside the block — so there is no 'failed_partial' state.
+ *   If a future multi-tx emission design lands, that commit adds it.
  */
 export type TaskGenerationRunStatus =
   | "running"
   | "completed"
   | "capped"
   | "skipped_already_run"
-  | "failed"
-  | "failed_partial";
+  | "failed";
 
 export interface TaskGenerationRun {
   readonly id: Uuid;
@@ -94,10 +96,4 @@ export type GenerateForWindowResult =
       readonly kind: "failed";
       readonly run: TaskGenerationRun;
       readonly errorText: string;
-    }
-  | {
-      readonly kind: "failed_partial";
-      readonly run: TaskGenerationRun;
-      readonly errorText: string;
-      readonly tasksCreatedBeforeFailure: number;
     };
