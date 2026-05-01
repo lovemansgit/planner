@@ -337,6 +337,36 @@ must be set in Vercel Production + Preview scopes for C-6 captures to
 activate. DSN-as-gate means missing DSN → silent no-op, not error.
 Operational confirmation before pilot.
 
+### Webhook auth + payload architecture (post-Day-7-close capture)
+Aqib delivered a live webhook capture from webhook.site after Day-7
+close. Full architectural details in
+`memory/followup_webhook_auth_architecture.md`.
+
+Highlights affecting Day-8 scope:
+
+- **Webhook auth is `clientid` + `clientsecret` lowercase headers** (NOT
+  Authorization/Bearer/HMAC). Per-merchant credentials.
+- **Body is a JSON ARRAY of event objects**, each with an explicit
+  `action` field. Receiver routes by action — no status-diff inference
+  needed.
+- **shipFrom auto-populated by SF** from merchant master — drop
+  `tenant-shipping.ts` from C-3 scope.
+- **`customer.code` REQUIRED** on every task create — new schema
+  column `tenants.suitefleet_customer_code`.
+- **Address shape pinned** per webhook capture: `addressLine1`,
+  `district`, `city`, `countryCode`, `contactPhone` required;
+  lat/lng nullable (SF resolves via WhatsApp).
+- **23505 reconcile regex**: `/Awb with value ([\w-]+) exists already/`
+  to extract AWB from SF duplicate-error messages.
+
+**Day 8 scope grows substantially.** Webhook auth/parsing/routing was
+originally Day-12 work; pulling forward to Day 8 alongside C-3 as a
+dedicated T3 commit. Schema migration (`consignees.district` +
+`tenants.suitefleet_customer_code` + new
+`tenant_suitefleet_webhook_credentials` table) + receiver hardening
+(auth check, array-parse, action-route, observation-only mode until
+auth lands).
+
 ---
 
 ## 7 · Watch-items for upcoming work
@@ -372,6 +402,7 @@ Open follow-ups and reviewer-flagged residuals across the project.
 | C-3 cron bulk push deferred | `followup_c3_deferred_day8.md` | Day-8 morning brief — every default empirically confirmed via Aqib Group-1 |
 | MP-13 cascade-cancel gap | `followup_mp_13_cascade_cancel.md` | Day 8/9 schema work — Option A (soft-delete via `deactivated_at`) recommended |
 | SF label endpoint | `followup_suitefleet_label_endpoint.md` | Day 8 T2 commit — token-in-query security rule load-bearing |
+| SF webhook auth + payload architecture | `followup_webhook_auth_architecture.md` | Day 8 T3 commit — auth (clientid/clientsecret headers), array-body parsing, action-based routing; pulls forward from Day 12 |
 | Aqib Groups 3+ outstanding | folded into `followup_c3_deferred_day8.md` | Captured as answers arrive |
 | Day 7 schedule drift | `notes/day7_schedule_drift.md` | Reference only — calendar Day-N vs plan Day-N mapping for future-Claude reading the plan documents |
 | `task_generation_runs` Drizzle alias | C-2 used raw `sqlTag` per repo convention | No drift; same as other repos. Aligned to project pattern. |
