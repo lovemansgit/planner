@@ -49,6 +49,7 @@ const SAMPLE_REQUEST: TaskCreateRequest = {
   shipFrom: {
     addressLine1: "Warehouse 1",
     city: "Dubai",
+    district: "Al Quoz Industrial 1",
     countryCode: "AE",
     latitude: 25.0,
     longitude: 55.0,
@@ -120,11 +121,15 @@ describe("buildSuiteFleetTaskBody — required fields and shape", () => {
     expect(body.consignee.location.contactPhone).toBe("+971500000000");
   });
 
-  it("places paymentMethod under deliveryInformation, not at the top level", () => {
+  it("places paymentMethod at the top level of the body (un-nested per Aqib Group-1 prepaid path)", () => {
     const body = buildSuiteFleetTaskBody(SAMPLE_REQUEST, 588) as {
-      deliveryInformation: { paymentMethod: string };
+      paymentMethod: string;
     };
-    expect(body.deliveryInformation.paymentMethod).toBe("PrePaid");
+    expect(body.paymentMethod).toBe("PrePaid");
+    // The deliveryInformation wrapper is gone for the prepaid path; a
+    // future COD path may re-introduce it conditionally on payment kind,
+    // but the prepaid path MUST send paymentMethod at the top level.
+    expect("deliveryInformation" in body).toBe(false);
   });
 
   it("maps internal kind to type field (DELIVERY / PICKUP)", () => {
@@ -189,7 +194,65 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
     expect(body.totalShipmentValueAmount).toBe(0);
   });
 
-  it("omits address.addressLine2 / district / addressCode when not provided", () => {
+  it("omits consignee.location.latitude / longitude when undefined (SF resolves via WhatsApp post-push)", () => {
+    // D8-3 contract relaxation: lat/lng are optional. When omitted on
+    // the input, the buildLocation conditional spread MUST drop them
+    // from the wire body (parallel to district / addressLine2 /
+    // addressCode pattern). SF resolves consignee coordinates server-
+    // side via WhatsApp when absent.
+    const consigneeNoCoords: TaskCreateRequest["consignee"] = {
+      ...SAMPLE_REQUEST.consignee,
+      address: {
+        ...SAMPLE_REQUEST.consignee.address,
+        latitude: undefined,
+        longitude: undefined,
+      },
+    };
+    const body = buildSuiteFleetTaskBody(
+      { ...SAMPLE_REQUEST, consignee: consigneeNoCoords },
+      588,
+    ) as { consignee: { location: Record<string, unknown> } };
+
+    expect("latitude" in body.consignee.location).toBe(false);
+    expect("longitude" in body.consignee.location).toBe(false);
+  });
+
+  it("omits shipFrom.latitude / longitude when undefined (warehouse address fixed in SF merchant master)", () => {
+    // The shipFrom side never carries lat/lng either — the warehouse
+    // address is registered in SF's merchant master at onboarding.
+    // Same conditional-spread behaviour as the consignee location.
+    const shipFromNoCoords: TaskCreateRequest["shipFrom"] = {
+      ...SAMPLE_REQUEST.shipFrom,
+      latitude: undefined,
+      longitude: undefined,
+    };
+    const body = buildSuiteFleetTaskBody(
+      { ...SAMPLE_REQUEST, shipFrom: shipFromNoCoords },
+      588,
+    ) as { shipFrom: Record<string, unknown> };
+
+    expect("latitude" in body.shipFrom).toBe(false);
+    expect("longitude" in body.shipFrom).toBe(false);
+  });
+
+  it("still passes through latitude / longitude when provided (additive relaxation)", () => {
+    // Type relaxation is additive. Existing callers that DO supply
+    // coordinates must continue to land them on the wire body as
+    // numbers.
+    const body = buildSuiteFleetTaskBody(SAMPLE_REQUEST, 588) as {
+      consignee: { location: { latitude: unknown; longitude: unknown } };
+      shipFrom: { latitude: unknown; longitude: unknown };
+    };
+    expect(body.consignee.location.latitude).toBe(25.1972);
+    expect(body.consignee.location.longitude).toBe(55.2744);
+    expect(body.shipFrom.latitude).toBe(25.0);
+    expect(body.shipFrom.longitude).toBe(55.0);
+  });
+
+  it("omits address.addressLine2 / addressCode when not provided", () => {
+    // district is REQUIRED on the contract (and on the wire) per
+    // Aqib Group-1 + D8-2 schema migration; it always lands. Only
+    // addressLine2 and addressCode are truly optional.
     const minimal: TaskCreateRequest = {
       ...SAMPLE_REQUEST,
       consignee: {
@@ -197,6 +260,7 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
         address: {
           addressLine1: "Plot 1",
           city: "Dubai",
+          district: "Al Quoz Industrial 1",
           countryCode: "AE",
           latitude: 25,
           longitude: 55,
@@ -207,8 +271,20 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
       consignee: { location: Record<string, unknown> };
     };
     expect("addressLine2" in body.consignee.location).toBe(false);
-    expect("district" in body.consignee.location).toBe(false);
     expect("addressCode" in body.consignee.location).toBe(false);
+  });
+
+  it("passes district through to body.consignee.location and body.shipFrom (required field, never dropped)", () => {
+    // Regression guard: district is required on the contract + on the
+    // wire per Aqib Group-1, so the unconditional spread in
+    // buildLocation MUST land it on every body it produces. Mirrors
+    // the additive lat/lng pass-through test pattern.
+    const body = buildSuiteFleetTaskBody(SAMPLE_REQUEST, 588) as {
+      consignee: { location: { district: unknown } };
+      shipFrom: { district: unknown };
+    };
+    expect(body.consignee.location.district).toBe("Jumeirah 3");
+    expect(body.shipFrom.district).toBe("Al Quoz Industrial 1");
   });
 });
 

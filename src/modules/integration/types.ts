@@ -45,20 +45,41 @@ export interface AuthenticatedSession {
 }
 
 /**
- * Postal/geographic address for a delivery endpoint. Latitude/longitude
- * are required because the provider expects numbers, not strings, and
- * because route optimisation downstream needs them. `addressCode` is an
- * optional internal warehouse/zone shortcode (provider-specific value
- * lives in the adapter's mapping, not here).
+ * Postal/geographic address for a delivery endpoint.
+ *
+ * `district` is REQUIRED on the wire per Aqib Group-1 confirmation
+ * (3 May 2026), and required in the type to enforce that at typecheck.
+ * Post-D8-2 the schema's NOT NULL constraint on `consignees.district`
+ * means every consignee row carries it; the adapter's body-build
+ * unconditionally lands it on the SF payload. Leaving the type
+ * optional would permit internal callers to silently produce a
+ * SF-rejected payload — wrong direction.
+ *
+ * Latitude/longitude are OPTIONAL per Aqib Group-1: SuiteFleet
+ * resolves consignee coordinates server-side via WhatsApp post-push
+ * when the create payload omits them. The shipFrom side never
+ * carries lat/lng either (warehouse address is fixed in SF's
+ * merchant master). Existing callers that DO supply coordinates are
+ * still accepted — the lat/lng relaxation is additive.
+ *
+ * `addressCode` is an optional internal warehouse/zone shortcode
+ * (provider-specific value lives in the adapter's mapping, not here).
+ *
+ * COUNTRY HANDLING — DO NOT add `countryId` to this contract under
+ * any framing. Outbound payload sends `countryCode='AE'` only; SF
+ * resolves the numeric `countryId` server-side from the alpha code.
+ * Adding `countryId` would couple the internal contract to a
+ * SuiteFleet-private numeric identifier that has no Planner-side
+ * meaning. Reviewer-locked posture (D8-3 review).
  */
 export interface DeliveryAddress {
   readonly addressLine1: string;
   readonly addressLine2?: string;
   readonly city: string;
-  readonly district?: string;
+  readonly district: string;
   readonly countryCode: string;
-  readonly latitude: number;
-  readonly longitude: number;
+  readonly latitude?: number;
+  readonly longitude?: number;
   readonly addressCode?: string;
 }
 

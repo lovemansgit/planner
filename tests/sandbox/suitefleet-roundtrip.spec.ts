@@ -301,6 +301,7 @@ describe("SuiteFleet sandbox — task create round-trip", () => {
         shipFrom: {
           addressLine1: "Warehouse S9",
           city: "Dubai",
+          district: "Al Quoz Industrial 1",
           countryCode: "AE",
           latitude: 25.0,
           longitude: 55.0,
@@ -387,6 +388,7 @@ describe("SuiteFleet sandbox — paymentMethod field resolution (resolved Day 6 
           address: {
             addressLine1: "Villa PM",
             city: "Dubai",
+            district: "Jumeirah 3",
             countryCode: "AE",
             latitude: 25.1972,
             longitude: 55.2744,
@@ -395,6 +397,7 @@ describe("SuiteFleet sandbox — paymentMethod field resolution (resolved Day 6 
         shipFrom: {
           addressLine1: "Warehouse PM",
           city: "Dubai",
+          district: "Al Quoz Industrial 1",
           countryCode: "AE",
           latitude: 25.0,
           longitude: 55.0,

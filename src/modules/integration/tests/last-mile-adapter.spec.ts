@@ -53,6 +53,7 @@ const SAMPLE_TASK: TaskCreateRequest = {
   shipFrom: {
     addressLine1: "Warehouse 1",
     city: "Dubai",
+    district: "Al Quoz Industrial 1",
     countryCode: "AE",
     latitude: 25.0,
     longitude: 55.0,

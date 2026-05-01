@@ -57,12 +57,14 @@
 // Tracked in memory/followup_createtask_idempotency.md.
 // -------------------------------------------------------------------
 //
-// S-8 sandbox capture also revealed: deliveryInformation.paymentMethod
-// we send is NOT echoed in the response. S-9 must verify whether
-// (a) we're sending it in the wrong shape, (b) SF stores it under a
-// different field, or (c) SF silently ignores it. Verification path:
-// GET /api/tasks/:id after creation, check whether paymentMethod
-// surfaces under any field name. Tracked in
+// S-8 sandbox capture revealed deliveryInformation.paymentMethod was
+// NOT echoed in the response — RESOLVED per Aqib Group-1 confirmation
+// (3 May 2026): for the prepaid path SF expects `paymentMethod` at
+// the TOP LEVEL of the create body, NOT nested under
+// `deliveryInformation`. D8-3 un-nests it accordingly. The COD path
+// may re-introduce a wrapper later (open scope, not pilot-blocking);
+// when that lands, conditional placement based on payment kind, not
+// a blanket re-nest. Tracked in
 // memory/followup_paymentmethod_field_resolution.md.
 
 import { CredentialError, ValidationError } from "../../../../shared/errors";
@@ -100,10 +102,10 @@ interface SuiteFleetLocationBody {
   readonly addressLine1: string;
   readonly addressLine2?: string;
   readonly city: string;
-  readonly district?: string;
+  readonly district: string;
   readonly countryCode: string;
-  readonly latitude: number;
-  readonly longitude: number;
+  readonly latitude?: number;
+  readonly longitude?: number;
   readonly addressCode?: string;
   readonly contactPhone: string;
 }
@@ -116,10 +118,10 @@ function buildLocation(
     addressLine1: address.addressLine1,
     ...(address.addressLine2 !== undefined && { addressLine2: address.addressLine2 }),
     city: address.city,
-    ...(address.district !== undefined && { district: address.district }),
+    district: address.district,
     countryCode: address.countryCode,
-    latitude: address.latitude,
-    longitude: address.longitude,
+    ...(address.latitude !== undefined && { latitude: address.latitude }),
+    ...(address.longitude !== undefined && { longitude: address.longitude }),
     ...(address.addressCode !== undefined && { addressCode: address.addressCode }),
     contactPhone,
   };
@@ -157,7 +159,7 @@ export function buildSuiteFleetTaskBody(
     deliveryStartTime: request.window.startTime,
     deliveryEndTime: request.window.endTime,
     deliveryType: "STANDARD",
-    deliveryInformation: { paymentMethod: request.paymentMethod },
+    paymentMethod: request.paymentMethod,
     ...(request.notes !== undefined && { notes: request.notes }),
     shipFrom: buildLocation(request.shipFrom, request.consignee.contactPhone),
     ...(request.signatureRequired !== undefined && {

@@ -172,6 +172,7 @@ describe("T-9 — LastMileAdapter end-to-end via assembly factory", () => {
       shipFrom: {
         addressLine1: "Warehouse T9",
         city: "Dubai",
+        district: "Al Quoz Industrial 1",
         countryCode: "AE",
         latitude: 25.0,
         longitude: 55.0,
