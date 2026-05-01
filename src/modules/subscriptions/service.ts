@@ -45,8 +45,13 @@
 //   consignees/service.ts and tasks/service.ts.
 
 import { emit } from "../audit";
-import { withTenant } from "../../shared/db";
-import { NotFoundError, ValidationError } from "../../shared/errors";
+import { withServiceRole, withTenant } from "../../shared/db";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+} from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
@@ -64,6 +69,7 @@ import {
 import type {
   CreateSubscriptionInput,
   Subscription,
+  SubscriptionUpdate,
   UpdateSubscriptionPatch,
 } from "./types";
 
@@ -534,4 +540,186 @@ export async function endSubscription(
   });
 
   return result.after;
+}
+
+// -----------------------------------------------------------------------------
+// autoPauseSubscriptionForRepeatedFailure (lifecycle: active → paused, system actor)
+// -----------------------------------------------------------------------------
+
+/**
+ * Input for the MP-14 auto-pause rule. Caller is the failed-push retry
+ * path (Day-8 / C-3 work) which detects that a single task's
+ * attempt_count has reached the threshold and triggers this method.
+ */
+export interface AutoPauseInput {
+  readonly subscriptionId: Uuid;
+  readonly taskId: Uuid;
+  readonly failureCount: number;
+  /**
+   * Short error summary — `failure_detail` from the failed_pushes row,
+   * truncated by the caller. The catalogue's metadataNotes warns
+   * against credentials/PII; the cron must redact before passing.
+   */
+  readonly lastError: string;
+}
+
+/**
+ * Internal result of the project+pause transaction. Exported as a type
+ * only for the race-handling try/catch in
+ * autoPauseSubscriptionForRepeatedFailure to declare its variable.
+ */
+type AutoPauseRunResult =
+  | { kind: "not_found" }
+  | { kind: "no_op"; current: Subscription }
+  | { kind: "paused"; transition: SubscriptionUpdate };
+
+/**
+ * MP-14: auto-pause a subscription whose pushed task has failed N
+ * times in a row (N=3 in pilot per memory/notes/day7_schedule_drift.md
+ * §"Day-7 row carry-forwards"). System-only — no `subscription:pause`
+ * permission consumed; the cron's authorisation lives in the
+ * CRON_SECRET layer one above. Mirrors the system-only posture of
+ * createTask / bulkCreateTasks per
+ * memory/decision_task_module_no_user_create_delete.md.
+ *
+ * Idempotent: if the subscription is already 'paused' or 'ended', the
+ * method is a no-op (no state transition, no audit emit). Same task
+ * could trigger this method multiple times if the cron retries are
+ * interleaved across passes; only the first reaches the active row.
+ *
+ * Why a dedicated `subscription.auto_paused` event (not reuse
+ * `subscription.paused`):
+ *   - Operator-driven pauses and system auto-pauses are operationally
+ *     distinct events. An operator pause is intent; an auto-pause is
+ *     a signal that something is broken upstream (SF API change,
+ *     consignee data corruption, repeated geocoding failure).
+ *   - Audit-log queries that count "operators pausing subscriptions"
+ *     should not be polluted by system noise; queries that count
+ *     "subscriptions auto-paused this week" should not be polluted by
+ *     operator actions.
+ *   - The 1:1 event-per-permission convention used by the rest of the
+ *     subscription lifecycle (subscription:pause → subscription.paused,
+ *     etc.) extends naturally: the system-only auto-pause path gets
+ *     its own event even though it has no permission.
+ *
+ * Throws:
+ *   - ForbiddenError    user actor reached this path (routing bug —
+ *                       only the cron / failed-push retry should call).
+ *   - ValidationError   no tenant context.
+ *   - NotFoundError     subscription does not exist in the tenant.
+ *
+ * Returns the subscription post-pause OR the unchanged row if it was
+ * already paused/ended (idempotent no-op path).
+ */
+export async function autoPauseSubscriptionForRepeatedFailure(
+  ctx: RequestContext,
+  input: AutoPauseInput,
+): Promise<Subscription> {
+  if (ctx.actor.kind !== "system") {
+    throw new ForbiddenError(
+      "subscription:auto_pause requires a system actor",
+    );
+  }
+  assertTenantScoped(ctx, "subscription:auto_pause");
+
+  const tenantId = ctx.tenantId;
+
+  // Use withServiceRole because the cron is a cross-tenant system
+  // actor (no user session has set app.current_tenant_id). The repo's
+  // pauseSubscription expects to run inside a tenant-scoped tx, so we
+  // bind the GUC inside the service-role transaction the same way
+  // demo-context does for setup writes.
+  //
+  // Race-safety mechanism (load-bearing — reviewer-verified at C-7 PR):
+  //   The repository's pauseSubscription does SELECT … FOR UPDATE
+  //   followed by a status re-check. Under two concurrent invocations
+  //   T1 / T2 that both observe `status='active'` at pre-check time:
+  //
+  //     1. T1's pauseRow call acquires the row lock, status check
+  //        passes, UPDATE commits, lock releases.
+  //     2. T2's pauseRow call blocks waiting for the lock; once
+  //        acquired, the post-lock status re-check sees `paused` and
+  //        the repo throws ConflictError.
+  //
+  //   We CATCH ConflictError below and return `no_op`. T1 emits one
+  //   `subscription.auto_paused`; T2 returns the now-paused row
+  //   without an emit. Audit-emit-once invariant preserved; idempotency
+  //   honored on the race-loser side without surfacing a 5xx to the
+  //   cron caller.
+  let result: AutoPauseRunResult;
+  try {
+    result = await withServiceRole(
+      `subscription:auto_pause for tenant ${tenantId} (subscription ${input.subscriptionId})`,
+      async (tx) => {
+        // Pre-check: idempotent no-op for paused/ended subscriptions.
+        const current = await findSubscriptionById(tx, input.subscriptionId);
+        if (!current) {
+          return { kind: "not_found" as const };
+        }
+        if (current.tenantId !== tenantId) {
+          // Cross-tenant access via system actor — surface as not-found
+          // to the caller (the cron passes the tenantId from its
+          // per-tenant loop; if it ever drifts from the subscription's
+          // owning tenant, that's a routing bug worth surfacing).
+          return { kind: "not_found" as const };
+        }
+        if (current.status !== "active") {
+          return { kind: "no_op" as const, current };
+        }
+
+        const transition = await pauseSubscriptionRow(tx, tenantId, input.subscriptionId);
+        if (transition === null) {
+          // Race: row vanished between the pre-check and the pause.
+          return { kind: "not_found" as const };
+        }
+        return { kind: "paused" as const, transition };
+      },
+    );
+  } catch (err) {
+    // Race-loser path — see header comment. T2's pauseSubscription
+    // call observed a non-active state under the FOR UPDATE lock and
+    // the repo threw ConflictError. T1 already paused and emitted;
+    // T2 is a no-op. We re-fetch the now-paused row to return a
+    // consistent shape to the caller.
+    if (err instanceof ConflictError) {
+      const refetched = await withServiceRole(
+        `subscription:auto_pause refetch for tenant ${tenantId}`,
+        async (tx) => findSubscriptionById(tx, input.subscriptionId),
+      );
+      if (refetched && refetched.tenantId === tenantId) {
+        return refetched;
+      }
+      // If we cannot re-fetch (vanished, cross-tenant), surface the
+      // original ConflictError rather than fabricate state.
+      throw err;
+    }
+    throw err;
+  }
+
+  if (result.kind === "not_found") {
+    throw new NotFoundError(
+      `subscription not found: ${input.subscriptionId}`,
+    );
+  }
+  if (result.kind === "no_op") {
+    return result.current;
+  }
+
+  await emit({
+    eventType: "subscription.auto_paused",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "subscription",
+    resourceId: input.subscriptionId,
+    metadata: {
+      subscription_id: input.subscriptionId,
+      task_id: input.taskId,
+      failure_count: input.failureCount,
+      last_error: input.lastError,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return result.transition.after;
 }

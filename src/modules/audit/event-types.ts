@@ -313,6 +313,17 @@ const EVENT_TYPES_DRAFT = {
       "import_id (uuid), row_count (int), file_hash (sha256 hex string), source_file_name (string). Brief §7 hard requirement.",
     systemOnly: false,
   },
+  // Day 7 / C-7 — MP-14 push-failure auto-pause rule.
+  "subscription.auto_paused": {
+    id: "subscription.auto_paused",
+    resource: "subscription",
+    action: "auto_paused",
+    description:
+      "A subscription was transitioned 'active' → 'paused' automatically by the system because one of its pushed tasks failed N times (N=3 in pilot). Distinct from `subscription.paused` (operator-driven) so audit-log queries can isolate auto-pause incidents from intentional pauses without parsing metadata. Counterpart resume is the operator-driven `subscription.resumed` (no auto-resume in pilot — operator decides whether to retry after fixing root cause).",
+    metadataNotes:
+      "subscription_id (uuid), failure_count (int — attempt_count on the failed_pushes row that triggered the pause), last_error (string — failure_detail or short summary, no credentials/PII), task_id (uuid — the task whose repeated failure tripped the threshold).",
+    systemOnly: true,
+  },
 
   // ---- task --------------------------------------------------------------
   "task.created": {
