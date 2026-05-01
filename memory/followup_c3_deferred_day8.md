@@ -81,20 +81,24 @@ The Day-8 cron payload-build path uses these defaults at the cron-service layer 
 
 ---
 
-## Day 8 scope — Transcorp `shipFrom` values
+## Day 8 scope — `shipFrom` config DROPPED (post-webhook-capture update)
 
-Hardcoded in a new `src/config/tenant-shipping.ts` keyed by tenantId. **All 3 pilot tenants share the same warehouse for now** (Transcorp's central facility):
+**Originally planned:** `src/config/tenant-shipping.ts` keyed by tenantId
+with hardcoded Transcorp warehouse values.
 
-```ts
-{
-  addressLine1: "Warehouse 23/24, Union Properties",
-  district: "Al Quoz Industrial 1",
-  city: "Dubai",
-  countryCode: "AE",
-}
-```
+**Webhook capture (post-Day-7 close, see
+`memory/followup_webhook_auth_architecture.md`) shows shipFrom is
+auto-populated by SF from the merchant master.** When we POST a task
+without a `shipFrom` field, SF fills it in automatically.
 
-Structure as per-tenant config from day one (even though all 3 entries are identical) so future per-tenant warehouses don't require code changes — only config additions. Later evolves into a `tenant_settings` table.
+**Day-8 task-create payloads OMIT `shipFrom` entirely.** No
+`tenant-shipping.ts` file. Operator-side action: confirm Transcorp's
+warehouse address is registered once in each pilot tenant's SF
+OpsPortal record at merchant onboarding.
+
+The previously-stated values (`Warehouse 23/24, Union Properties` etc.)
+are still the right values for the SF OpsPortal registration — they
+just live in SF, not in our codebase.
 
 ---
 
@@ -203,13 +207,40 @@ paymentMethod: request.paymentMethod,
 // COD-specific wrapper is needed later, re-introduce conditionally)
 ```
 
-### Schema change locked — `consignees.district`
+### Schema change locked — `consignees.district` + `tenants.suitefleet_customer_code`
 
 `ALTER TABLE consignees ADD COLUMN district text NOT NULL` with backfill.
 Backfill strategy still Love's call (placeholder 'Unknown' vs.
 staged nullable-then-required); the empirical confirmation that
 `district` is the right field name removes the only API-side
 uncertainty.
+
+**Plus** (added post-webhook-capture):
+`ALTER TABLE tenants ADD COLUMN suitefleet_customer_code text NOT NULL DEFAULT '';`
+followed by per-tenant backfill (TBC for Tabchilli; codes for the
+other 2 pilot merchants pending from Aqib), then drop the DEFAULT.
+
+The `customer.code` field is REQUIRED on every task-create POST per
+the live webhook capture (`memory/followup_webhook_auth_architecture.md`).
+Without it, SF can't scope the create to the right merchant. The C-3
+cron's payload-build reads `tenants.suitefleet_customer_code` per-tenant
+and passes it as `customer.code` on every POST.
+
+### 23505 reconcile path — AWB regex from error message
+
+When SF returns "Awb with value TBC-XXX exists already" on a duplicate
+POST, the adapter parses the AWB out, GETs the task from SF by AWB,
+stores the SF task ID locally, and marks the task as pushed.
+
+Regex for the error-message parse: `/Awb with value ([\w-]+) exists already/`
+— extract group 1 → AWB. The existing `task-client.ts` 23505 handling
+needs this routing branch added in C-3.
+
+This is the SF-side reconcile, distinct from the failed_pushes 23505
+routing (which is purely Postgres-side, on the partial UNIQUE on
+`failed_pushes(task_id) WHERE resolved_at IS NULL`). Two unrelated
+23505-handling paths in C-3 — different layers, same SQLSTATE
+coincidence.
 
 ### `city` — open mapping question (not blocking)
 
