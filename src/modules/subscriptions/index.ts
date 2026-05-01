@@ -27,7 +27,8 @@ export {
   listSubscriptions,
   pauseSubscription,
   resumeSubscription,
+  sweepEndedSubscriptions,
   updateSubscription,
 } from "./service";
 
-export type { AutoPauseInput } from "./service";
+export type { AutoPauseInput, SweepResult } from "./service";
