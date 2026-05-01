@@ -248,6 +248,11 @@ describe("S-2 — tasks ↔ subscriptions link CHECK invariant fires at the sche
     // With the default + a subscription_id provided, the composite CHECK
     // passes. This pins the production-path assumption: cron callers
     // pass subscription_id and let the default cover created_via.
+    //
+    // Date deliberately distinct from the GOOD-SUB test (2026-05-01)
+    // because Day-7 / C-2 introduced the partial UNIQUE on
+    // tasks(subscription_id, delivery_date) WHERE subscription_id IS NOT
+    // NULL — two tasks with the same (subscriptionId, date) now collide.
     const rows = await sql<{ created_via: string }[]>`
       INSERT INTO tasks (
         tenant_id, consignee_id, customer_order_number,
@@ -255,7 +260,7 @@ describe("S-2 — tasks ↔ subscriptions link CHECK invariant fires at the sche
         subscription_id
       ) VALUES (
         ${TENANT_A}, ${consigneeId}, ${`S2-DEFAULT-${RUN_ID}`},
-        '2026-05-01', '14:00', '16:00',
+        '2026-05-02', '14:00', '16:00',
         ${subscriptionId}
       )
       RETURNING created_via

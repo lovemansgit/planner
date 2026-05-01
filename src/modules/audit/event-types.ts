@@ -358,6 +358,43 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: true,
   },
 
+  // Day 7 / C-2 — nightly cron generation lifecycle. These are
+  // META events (one per cron invocation per tenant), not per-task.
+  // The cron also emits per-task `task.created` events for traceability;
+  // these record the cron-run-level facts (window, projection, counts).
+  // Distinct from `task.bulk_created` which is the bulk-import meta-event
+  // (different metadata shape: import_id vs window_start/window_end).
+  "task.bulk_generated": {
+    id: "task.bulk_generated",
+    resource: "task",
+    action: "bulk_generated",
+    description:
+      "Nightly cron walked subscriptions for a (tenant, window) and generated the next-day tasks. One emit per tenant per cron invocation. Pairs with per-task `task.created` events written during the same run. The run row id ties this event to the task_generation_runs forensic record.",
+    metadataNotes:
+      "run_id (uuid), window_start (iso), window_end (iso), subscriptions_walked (int), tasks_created (int), tasks_skipped_existing (int — pre-existing rows that the per-task ON CONFLICT skipped).",
+    systemOnly: true,
+  },
+  "task.bulk_generation_capped": {
+    id: "task.bulk_generation_capped",
+    resource: "task",
+    action: "bulk_generation_capped",
+    description:
+      "Nightly cron projected a task count exceeding the structural cap (memory/decision_daily_cutoff_and_throughput.md, currently 7,000 per tenant per run) and ABORTED before any tasks were generated. Hard abort, not partial generation — partial generation creates a silent operational half-state where some subscriptions have tomorrow's task and others don't. Human investigation required before the next window. Cron handler exits non-zero so Vercel logs flag the run as failed.",
+    metadataNotes:
+      "run_id (uuid), window_start (iso), window_end (iso), projected_count (int), cap_threshold (int — limit in effect at run-time, recorded so historical capped runs stay interpretable if the cap is later changed).",
+    systemOnly: true,
+  },
+  "task.bulk_generation_skipped_already_run": {
+    id: "task.bulk_generation_skipped_already_run",
+    resource: "task",
+    action: "bulk_generation_skipped_already_run",
+    description:
+      "Nightly cron was invoked for a (tenant, window) for which a row already exists in task_generation_runs. The UNIQUE (tenant_id, window_start, window_end) constraint prevented a duplicate run. Most commonly fires when Vercel retries a cron handler after a network blip. Idempotent no-op: the prior run's tasks are durable, no new ones generated, no audit pollution.",
+    metadataNotes:
+      "window_start (iso), window_end (iso), existing_run_id (uuid — the prior run for this window). No new run row is written for the skipped invocation; the existing row stays the canonical record.",
+    systemOnly: true,
+  },
+
   // ---- asset_tracking (Day 6 / B-2) --------------------------------------
   // Three lifecycle events for the read-through asset-tracking cache
   // per memory/decision_bag_tracking_mvp.md. The cache reads
