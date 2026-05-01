@@ -45,11 +45,31 @@ export interface AuthenticatedSession {
 }
 
 /**
- * Postal/geographic address for a delivery endpoint. Latitude/longitude
- * are required because the provider expects numbers, not strings, and
- * because route optimisation downstream needs them. `addressCode` is an
- * optional internal warehouse/zone shortcode (provider-specific value
- * lives in the adapter's mapping, not here).
+ * Postal/geographic address for a delivery endpoint.
+ *
+ * Latitude/longitude are OPTIONAL per Aqib Group-1 confirmation
+ * (3 May 2026): SuiteFleet resolves consignee coordinates server-side
+ * via WhatsApp post-push when the create payload omits them. The
+ * shipFrom side never carries lat/lng either (warehouse address is
+ * fixed in SF's merchant master). Existing callers that DO supply
+ * coordinates are still accepted — the type relaxation is additive.
+ *
+ * `district` is REQUIRED on the wire per Aqib Group-1, but the
+ * type still carries it as optional (`district?`) so internal callers
+ * have flexibility; the adapter's conditional spread mirrors the
+ * production data flow where district is always present after the
+ * D8-2 schema migration. Tighten to `district: string` if a future
+ * caller starts passing it through unconditionally.
+ *
+ * `addressCode` is an optional internal warehouse/zone shortcode
+ * (provider-specific value lives in the adapter's mapping, not here).
+ *
+ * COUNTRY HANDLING — DO NOT add `countryId` to this contract under
+ * any framing. Outbound payload sends `countryCode='AE'` only; SF
+ * resolves the numeric `countryId` server-side from the alpha code.
+ * Adding `countryId` would couple the internal contract to a
+ * SuiteFleet-private numeric identifier that has no Planner-side
+ * meaning. Reviewer-locked posture (D8-3 review).
  */
 export interface DeliveryAddress {
   readonly addressLine1: string;
@@ -57,8 +77,8 @@ export interface DeliveryAddress {
   readonly city: string;
   readonly district?: string;
   readonly countryCode: string;
-  readonly latitude: number;
-  readonly longitude: number;
+  readonly latitude?: number;
+  readonly longitude?: number;
   readonly addressCode?: string;
 }
 
