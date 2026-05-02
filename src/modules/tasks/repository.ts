@@ -390,6 +390,85 @@ export async function listTasksByTenant(tx: DbTx, tenantId: Uuid): Promise<reado
 }
 
 /**
+ * Day 8 / D8-4a — list tasks for a tenant that have NOT yet been
+ * pushed to the external system. The cron's bulk-push phase walks
+ * this set, builds payloads, calls the SF adapter, and marks tasks
+ * pushed via `markTaskPushed` on success.
+ *
+ * Filter: `pushed_to_external_at IS NULL` — covers both never-pushed
+ * tasks and tasks that failed to push (failed_pushes records exist
+ * but `pushed_to_external_at` stays null until a successful push
+ * lands).
+ *
+ * Order: oldest-first by created_at. Older tasks have higher
+ * operational priority (closer to delivery cutoff).
+ *
+ * Defence-in-depth tenant_id predicate alongside RLS, same posture
+ * as `listTasksByTenant`.
+ */
+export async function listUnpushedTasksByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+): Promise<readonly Task[]> {
+  const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
+    SELECT
+      t.*,
+      COALESCE(
+        (
+          SELECT json_agg(tp.* ORDER BY tp.position ASC)
+          FROM task_packages tp
+          WHERE tp.task_id = t.id
+        ),
+        '[]'::json
+      ) AS packages
+    FROM tasks t
+    WHERE t.tenant_id = ${tenantId}
+      AND t.pushed_to_external_at IS NULL
+    ORDER BY t.created_at ASC
+  `);
+  return rows.map(mapTaskWithPackages);
+}
+
+/**
+ * Day 8 / D8-4a — mark a task as pushed to the external system.
+ * Sets `external_id`, `external_tracking_number`, and
+ * `pushed_to_external_at = now()` atomically. Defence-in-depth
+ * tenant_id predicate.
+ *
+ * Idempotency posture: NO `WHERE pushed_to_external_at IS NULL`
+ * guard. If a future caller re-attempts a push for a task that's
+ * already pushed (race / cron retry / operator), the second call
+ * UPDATEs with the new external_id. Caller is responsible for not
+ * re-pushing already-pushed tasks (the cron's `listUnpushedTasksByTenant`
+ * filter is the upstream gate).
+ *
+ * Returns true if a row was updated, false otherwise (unknown id,
+ * RLS-hidden cross-tenant, or tenant_id mismatch).
+ */
+export async function markTaskPushed(
+  tx: DbTx,
+  tenantId: Uuid,
+  taskId: Uuid,
+  externalId: string,
+  externalTrackingNumber: string,
+): Promise<boolean> {
+  const result = await tx.execute(sqlTag`
+    UPDATE tasks
+    SET external_id = ${externalId},
+        external_tracking_number = ${externalTrackingNumber},
+        pushed_to_external_at = now()
+    WHERE id = ${taskId} AND tenant_id = ${tenantId}
+  `);
+  const count =
+    typeof (result as { count?: number }).count === "number"
+      ? (result as { count: number }).count
+      : Array.isArray(result)
+        ? result.length
+        : 0;
+  return count > 0;
+}
+
+/**
  * UPDATE selected scalar fields on one task, scoped to `tenantId` for
  * defence in depth alongside RLS. Only fields present on `patch` are
  * written. Identity columns, association columns, lifecycle columns,

@@ -12,6 +12,7 @@ import {
   buildSuiteFleetTaskBody,
   createSuiteFleetTaskClient,
   parseSuiteFleetTaskResponse,
+  SuiteFleetAwbExistsError,
 } from "../task-client";
 
 import type {
@@ -235,6 +236,26 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
     expect("longitude" in body.shipFrom).toBe(false);
   });
 
+  it("omits shipFrom entirely from the body when request.shipFrom is undefined (D8-4a wire-pollution fix)", () => {
+    // Per memory/followup_webhook_auth_architecture.md, SF auto-
+    // populates shipFrom from the merchant master when the create
+    // payload omits it entirely. Cron-path callers use a mapped
+    // Omit<TaskCreateRequest, 'shipFrom'> + cast to bypass the
+    // type-level requirement; the runtime omission MUST land on the
+    // wire so SF's merchant-master auto-population kicks in
+    // (instead of receiving a synthetic placeholder).
+    //
+    // Cast-bypass at runtime mirrors the cron-push service's
+    // call-site shape: `as TaskCreateRequest` with shipFrom undefined.
+    const requestNoShipFrom = {
+      ...SAMPLE_REQUEST,
+      shipFrom: undefined,
+    } as unknown as TaskCreateRequest;
+
+    const body = buildSuiteFleetTaskBody(requestNoShipFrom, 588);
+    expect("shipFrom" in body).toBe(false);
+  });
+
   it("still passes through latitude / longitude when provided (additive relaxation)", () => {
     // Type relaxation is additive. Existing callers that DO supply
     // coordinates must continue to land them on the wire body as
@@ -307,7 +328,10 @@ describe("createTask — request wire shape", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://api.suitefleet.com/api/tasks");
+    // D8-4a: customerId is now a query parameter on the URL (defensive
+    // add per SF API docs reading 4 May 2026, suitefleet.readme.io —
+    // empirical sandbox probes worked without it but docs say required).
+    expect(url).toBe("https://api.suitefleet.com/api/tasks?customerId=588");
     expect(init?.method).toBe("POST");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe(`Bearer ${SAMPLE_SESSION.token}`);
@@ -508,6 +532,52 @@ describe("createTask — error mapping", () => {
     }
     expect(captured).toBeInstanceOf(CredentialError);
     expect((captured as Error).cause).toBe(networkError);
+  });
+
+  // D8-4a: AWB-exists detection branch.
+  it("throws SuiteFleetAwbExistsError with the parsed AWB when SF returns 'Awb with value X exists already'", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      plainResponse("Awb with value MPL-12345678 exists already", 400),
+    );
+    let captured: unknown = null;
+    try {
+      await makeClient(fetchMock).createTask({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        request: SAMPLE_REQUEST,
+      });
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(SuiteFleetAwbExistsError);
+    expect((captured as SuiteFleetAwbExistsError).awb).toBe("MPL-12345678");
+    expect((captured as SuiteFleetAwbExistsError).httpStatus).toBe(400);
+    expect((captured as SuiteFleetAwbExistsError).responseBody).toContain("MPL-12345678");
+  });
+
+  it("falls through to ValidationError on a 4xx that does NOT match the AWB-exists pattern", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      plainResponse("validation failed: missing district", 400),
+    );
+    await expect(
+      makeClient(fetchMock).createTask({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        request: SAMPLE_REQUEST,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    // Negative-case guarantee: not the AWB-exists branch.
+    let captured: unknown = null;
+    try {
+      await makeClient(fetchMock).createTask({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        request: SAMPLE_REQUEST,
+      });
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).not.toBeInstanceOf(SuiteFleetAwbExistsError);
   });
 });
 

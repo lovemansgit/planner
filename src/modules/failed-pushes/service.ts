@@ -38,7 +38,7 @@ import { ForbiddenError, ValidationError } from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
-import { insertFailedPush } from "./repository";
+import { insertFailedPush, updateFailedPushAttempt } from "./repository";
 import type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
 
 // Closed set of valid failure reasons — runtime guard against bypass
@@ -139,6 +139,111 @@ export async function recordFailedPush(
     `task:push_failed for tenant ${tenantId} (task ${taskId})`,
     async (tx) => {
       return insertFailedPush(tx, tenantId, normalised);
+    },
+  );
+
+  await emit({
+    eventType: "task.push_failed",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "task",
+    resourceId: taskId,
+    metadata: {
+      task_id: taskId,
+      attempt_count: recorded.attemptCount,
+      failure_reason: recorded.failureReason,
+      http_status: recorded.httpStatus,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return recorded;
+}
+
+// -----------------------------------------------------------------------------
+// recordFailedPushAttempt
+// -----------------------------------------------------------------------------
+
+/**
+ * Day 8 / D8-4. Insert-or-update upsert path for repeated failures
+ * on the same task. Tries `insertFailedPush` first; on SQLSTATE
+ * 23505 (the partial UNIQUE on `(task_id) WHERE resolved_at IS NULL`
+ * — meaning an unresolved row already exists) routes to
+ * `updateFailedPushAttempt` which increments attempt_count and
+ * refreshes the failure context (reason, detail, http_status,
+ * payload). Mirrors the C-2 cron pattern (insert-then-update-on-
+ * conflict) so cron re-runs are idempotent.
+ *
+ * The resulting `attempt_count` reflects how many times this task
+ * has failed since the last resolution: 1 on first failure, N on
+ * the Nth attempt while the row remains unresolved. The MP-14
+ * auto-pause logic (Day 7 / C-7) reads this counter to detect
+ * "failed N times" → auto-pause subscription.
+ *
+ * Audit emit on every attempt (not just first failure): each
+ * attempt is independently observable in the audit log; the
+ * `attempt_count` metadata distinguishes first-failure from retry.
+ *
+ * Throws:
+ *   - ForbiddenError    user actor reached this path.
+ *   - ValidationError   missing required fields, no tenant context,
+ *                       invalid failureReason value.
+ *   - Other DB errors propagate as-is.
+ */
+export async function recordFailedPushAttempt(
+  ctx: RequestContext,
+  input: RecordFailedPushInput,
+): Promise<FailedPush> {
+  assertSystemActor(ctx, "task:push_failed");
+  assertTenantScoped(ctx, "task:push_failed");
+
+  const taskId = requireNonEmpty(input.taskId, "taskId");
+  if (!VALID_FAILURE_REASONS.has(input.failureReason)) {
+    throw new ValidationError(
+      `failureReason must be one of: ${Array.from(VALID_FAILURE_REASONS).join(", ")}`,
+    );
+  }
+
+  // Cap failure_detail at ~4KB. Long SF responses (HTML error pages,
+  // stack traces, multi-line vendor messages) bloat the audit and
+  // failed_pushes rows without adding diagnostic value beyond the
+  // first few thousand chars. Keep first 4000 chars; truncate marker
+  // at end so operators know it was capped.
+  const FAILURE_DETAIL_CAP = 4000;
+  const cappedDetail =
+    input.failureDetail !== undefined && input.failureDetail.length > FAILURE_DETAIL_CAP
+      ? `${input.failureDetail.slice(0, FAILURE_DETAIL_CAP)}…[truncated]`
+      : input.failureDetail !== undefined && input.failureDetail.trim().length > 0
+        ? input.failureDetail.trim()
+        : undefined;
+
+  const normalised: RecordFailedPushInput = {
+    taskId,
+    taskPayload: input.taskPayload,
+    failureReason: input.failureReason,
+    failureDetail: cappedDetail,
+    httpStatus: input.httpStatus,
+  };
+
+  const tenantId = ctx.tenantId;
+  const recorded = await withServiceRole(
+    `task:push_failed_attempt for tenant ${tenantId} (task ${taskId})`,
+    async (tx) => {
+      try {
+        return await insertFailedPush(tx, tenantId, normalised);
+      } catch (err) {
+        // SQLSTATE 23505 from the partial UNIQUE: an unresolved row
+        // already exists for this task. Route to UPDATE-attempt path.
+        const code = (err as { code?: string }).code;
+        if (code === "23505") {
+          return updateFailedPushAttempt(tx, tenantId, normalised);
+        }
+        // 23503 (FK violation) / P0001 (tenant-match trigger) / etc.
+        // surface as-is — these are programming errors, not retry
+        // conditions.
+        throw err;
+      }
     },
   );
 

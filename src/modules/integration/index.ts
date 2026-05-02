@@ -43,6 +43,7 @@ export {
   createSuiteFleetTaskClient,
   buildSuiteFleetTaskBody,
   parseSuiteFleetTaskResponse,
+  SuiteFleetAwbExistsError,
 } from "./providers/suitefleet/task-client";
 export type {
   SuiteFleetTaskClient,

@@ -134,3 +134,56 @@ export async function insertFailedPush(
   }
   return mapRow(rows[0]);
 }
+
+/**
+ * UPDATE the existing unresolved failed_pushes row for `taskId` —
+ * increments attempt_count, refreshes last_attempted_at + failure
+ * context (reason, detail, http_status, payload). Preserves
+ * first_failed_at (the original failure timestamp).
+ *
+ * Day 8 / D8-4: this is the cron retry path's UPDATE side. The
+ * service-layer caller (`recordFailedPushAttempt`) tries
+ * `insertFailedPush` first; on SQLSTATE 23505 from the partial
+ * UNIQUE on (task_id) WHERE resolved_at IS NULL, it routes here
+ * to upsert-via-update on the existing unresolved row. Mirrors
+ * the C-2 pattern (insert-then-update-on-conflict).
+ *
+ * Returns the updated row (post-increment). Throws if no
+ * unresolved row exists (the caller's 23505 detection is the
+ * gate; reaching here without a matching row means a race deleted
+ * the row between the conflicting INSERT and this UPDATE — surface
+ * as an error so the caller can log + Sentry-capture).
+ */
+export async function updateFailedPushAttempt(
+  tx: DbTx,
+  tenantId: Uuid,
+  input: RecordFailedPushInput,
+): Promise<FailedPush> {
+  const payloadJson = JSON.stringify(input.taskPayload);
+  // Defence-in-depth tenant_id predicate alongside RLS (same posture
+  // as the consignees / tasks UPDATE paths). The partial UNIQUE
+  // already scopes to one row per (task_id, unresolved); the
+  // tenant_id filter is belt-and-braces against any future caller
+  // that might construct a tenant_id mismatch.
+  const rows = await tx.execute<FailedPushRow>(sqlTag`
+    UPDATE failed_pushes
+    SET
+      attempt_count    = attempt_count + 1,
+      task_payload     = ${payloadJson}::jsonb,
+      failure_reason   = ${input.failureReason},
+      failure_detail   = ${input.failureDetail ?? null},
+      http_status      = ${input.httpStatus ?? null},
+      last_attempted_at = now()
+    WHERE task_id = ${input.taskId}
+      AND tenant_id = ${tenantId}
+      AND resolved_at IS NULL
+    RETURNING *
+  `);
+
+  if (rows.length === 0) {
+    throw new Error(
+      `updateFailedPushAttempt: no unresolved failed_pushes row for task ${input.taskId} in tenant ${tenantId} (race or programming error)`,
+    );
+  }
+  return mapRow(rows[0]);
+}
