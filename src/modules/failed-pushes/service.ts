@@ -33,13 +33,28 @@
 //     post-MVP operator UI's queue view.
 
 import { emit } from "../audit";
-import { withServiceRole } from "../../shared/db";
-import { ForbiddenError, ValidationError } from "../../shared/errors";
-import type { Actor, RequestContext } from "../../shared/tenant-context";
+import { requirePermission } from "../identity";
+import type { LastMileAdapter } from "../integration";
+import { withServiceRole, withTenant } from "../../shared/db";
+import { ForbiddenError, NotFoundError, ValidationError } from "../../shared/errors";
+import type { Actor, RequestContext, SystemActor } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
+// task-push types are consumed below for the retry path. Imported as
+// types only — the runtime function `pushSingleTask` is INJECTED as
+// a parameter to `retryFailedPush` rather than imported here, which
+// avoids a circular dependency (task-push already imports
+// failed-pushes' write primitives recordFailedPushAttempt +
+// markFailedPushResolved). The route handler at
+// src/app/api/failed-pushes/[id]/retry/route.ts is the orchestration
+// layer that imports both modules and wires the function into
+// retryFailedPush at call time.
+import type { SinglePushOutcome } from "../task-push";
+
 import {
+  findFailedPushById,
   insertFailedPush,
+  listUnresolvedByTenant,
   markUnresolvedAsResolved,
   updateFailedPushAttempt,
 } from "./repository";
@@ -311,4 +326,192 @@ export async function recordFailedPushAttempt(
   });
 
   return recorded;
+}
+
+// =============================================================================
+// listUnresolvedFailedPushes — Day 8 / D8-5
+// =============================================================================
+
+/**
+ * List unresolved failed_pushes rows for the requesting tenant. Gated
+ * by `failed_pushes:retry` — same permission protects both the read
+ * (admin UI list) and the write (retry button); reuses one perm
+ * because the surface is admin-only and they ship together.
+ *
+ * Tenant-scoped via `withTenant` so RLS does the boundary work
+ * (defence-in-depth alongside the explicit `WHERE tenant_id = $1`
+ * in the repo query). Cross-tenant rows are invisible.
+ *
+ * Read-not-audited per R-4 — listing the queue is operator-routine,
+ * not a state change.
+ */
+export async function listUnresolvedFailedPushes(
+  ctx: RequestContext,
+): Promise<readonly FailedPush[]> {
+  requirePermission(ctx, "failed_pushes:retry");
+  assertTenantScoped(ctx, "failed_pushes:list");
+  const tenantId = ctx.tenantId;
+  return withTenant(tenantId, async (tx) => listUnresolvedByTenant(tx, tenantId));
+}
+
+// =============================================================================
+// retryFailedPush — Day 8 / D8-5
+// =============================================================================
+// Operator-driven manual retry of a failed_pushes row. The
+// /admin/failed-pushes UI's retry button POSTs to
+// /api/failed-pushes/[id]/retry which calls here.
+//
+// Architectural posture (reviewer-locked):
+//   - User-attributed authorisation. Tenant Admin clicks retry; the
+//     route builds a USER ctx; this service requires
+//     `failed_pushes:retry`. The audit `failed_push.retried` event is
+//     emitted with that USER actor — the operator is on the hook
+//     for the decision to retry.
+//   - System-attributed execution. The actual SF push runs through
+//     `pushSingleTask` which requires a system actor (because the
+//     downstream recordFailedPushAttempt / markFailedPushResolved
+//     primitives are system-only). So this method synthesises a
+//     `system:dlq_retry` context for the push call, and
+//     pushSingleTask's downstream emits (task.pushed_via_reconcile /
+//     task.push_failed) carry the system actor.
+//   - The two layers are intentionally separate so audit-log queries
+//     can isolate "which operator initiated retries today" from
+//     "which retries succeeded vs went back to DLQ" without parsing
+//     metadata.
+//
+// Retry-failure posture: recordFailedPushAttempt (called via
+// pushSingleTask) does the C-2-style 23505 → UPDATE upsert. Existing
+// failed_pushes row's attempt_count increments; failure_detail
+// refreshes; first_failed_at is preserved. Mirrors the cron's retry
+// path so manual + automatic retries have identical DLQ semantics.
+
+const SYSTEM_DLQ_RETRY_ACTOR = "system:dlq_retry" satisfies SystemActor;
+
+/**
+ * Build a synthetic system context from a user ctx for the bridge
+ * call into task-push. Preserves tenantId and requestId so log
+ * correlation works (one request_id ties operator authorisation +
+ * downstream system push events together).
+ */
+function buildSystemDlqRetryContext(userCtx: RequestContext): RequestContext {
+  if (!userCtx.tenantId) {
+    throw new ValidationError("retryFailedPush: caller ctx must carry a tenantId");
+  }
+  return {
+    actor: {
+      kind: "system",
+      system: SYSTEM_DLQ_RETRY_ACTOR,
+      tenantId: userCtx.tenantId,
+      permissions: new Set(),
+    },
+    tenantId: userCtx.tenantId,
+    requestId: userCtx.requestId,
+    path: userCtx.path,
+  };
+}
+
+/**
+ * Result returned to the route handler. Carries the underlying
+ * SinglePushOutcome (so the route can render an outcome-specific
+ * message) plus the failed_push row at the moment of retry-dispatch
+ * (for /admin/failed-pushes UI updates).
+ */
+export interface RetryFailedPushResult {
+  readonly failedPush: FailedPush;
+  readonly outcome: SinglePushOutcome;
+}
+
+/**
+ * Type of the injected push function. Matches `pushSingleTask` from
+ * the task-push module exactly. The injection avoids the circular
+ * import that would otherwise arise from `task-push` already
+ * depending on this module's `recordFailedPushAttempt` and
+ * `markFailedPushResolved`.
+ */
+export type PushSingleTaskFn = (
+  ctx: RequestContext,
+  taskId: Uuid,
+  adapter: LastMileAdapter,
+) => Promise<SinglePushOutcome>;
+
+/**
+ * Retry a failed_pushes row. Idempotent guards:
+ *   - `failed_pushes:retry` permission required
+ *   - row must exist and be tenant-scoped (NotFoundError on miss)
+ *   - row must be unresolved (ValidationError on already-resolved)
+ *
+ * `pushTask` is injected (typically `pushSingleTask` from
+ * `@/modules/task-push`); see PushSingleTaskFn jsdoc for why this is
+ * a parameter rather than an import.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks failed_pushes:retry permission
+ *                       (CS Agent, Ops Manager, etc.)
+ *   - ValidationError   id missing/invalid, no tenant context, row
+ *                       already resolved
+ *   - NotFoundError     row not found in tenant
+ */
+export async function retryFailedPush(
+  ctx: RequestContext,
+  failedPushId: Uuid,
+  adapter: LastMileAdapter,
+  pushTask: PushSingleTaskFn,
+): Promise<RetryFailedPushResult> {
+  requirePermission(ctx, "failed_pushes:retry");
+  assertTenantScoped(ctx, "failed_pushes:retry");
+
+  const id = requireNonEmpty(failedPushId, "failedPushId");
+  const tenantId = ctx.tenantId;
+
+  // Look up via withTenant so RLS gates the read (defence-in-depth).
+  const failedPush = await withTenant(tenantId, async (tx) =>
+    findFailedPushById(tx, tenantId, id),
+  );
+  if (failedPush === null) {
+    throw new NotFoundError(`failed_pushes row not found: ${id}`);
+  }
+  if (failedPush.resolvedAt !== null) {
+    // Idempotency guard — operator double-click or concurrent retry
+    // race. Surface as ValidationError (400) so the UI can render
+    // "already resolved, refresh the list" without confusion.
+    throw new ValidationError(
+      `failed_pushes row ${id} is already resolved (resolved_at=${failedPush.resolvedAt}); refresh the list`,
+    );
+  }
+
+  // Bridge: synthesise system context to call into task-push via the
+  // injected push function.
+  const systemCtx = buildSystemDlqRetryContext(ctx);
+  const outcome = await pushTask(systemCtx, failedPush.taskId, adapter);
+
+  // Operator-attributed audit event. Emitted regardless of outcome —
+  // the operator's action is recorded; the outcome is metadata.
+  await emit({
+    eventType: "failed_push.retried",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "failed_push",
+    resourceId: failedPush.id,
+    metadata: {
+      task_id: failedPush.taskId,
+      failed_push_id: failedPush.id,
+      prior_attempt_count: failedPush.attemptCount,
+      retry_outcome: outcome.kind,
+    },
+    requestId: ctx.requestId,
+  });
+
+  // Re-fetch the row post-retry so the caller's response carries the
+  // updated state (recordFailedPushAttempt may have incremented
+  // attempt_count, or markFailedPushResolved may have closed it out
+  // on success). Read happens through withTenant for symmetry with
+  // the initial lookup.
+  const refreshed = await withTenant(tenantId, async (tx) =>
+    findFailedPushById(tx, tenantId, id),
+  );
+  return {
+    failedPush: refreshed ?? failedPush,
+    outcome,
+  };
 }

@@ -28,7 +28,18 @@ export type SystemActor =
   | "cron:end_expired"
   | "cron:scan_webhook_dlq"
   | "cron:webhook_worker"
-  | "webhook:suitefleet";
+  | "webhook:suitefleet"
+  // Day 8 / D8-5 — internal bridge for the operator-driven DLQ
+  // retry path. The /api/failed-pushes/[id]/retry route authorizes
+  // a USER actor via `failed_pushes:retry`, then retryFailedPush
+  // builds a context with this system actor to call into
+  // task-push/service.ts's pushSingleTask (which requires a system
+  // actor for assertSystemActor + recordFailedPushAttempt /
+  // markFailedPushResolved). Operator attribution stays on the
+  // operator-layer audit event (failed_push.retried, user actor);
+  // this system-actor identity surfaces only on the system-layer
+  // emits (task.pushed_via_reconcile / task.push_failed).
+  | "system:dlq_retry";
 
 /** Two-kind actor: human user (JWT) or system (cron / webhook / queue). */
 export type Actor =

@@ -370,6 +370,33 @@ const PERMISSIONS_DRAFT = {
     description: "View the tenant's own audit events. Cross-tenant events are not visible.",
     systemOnly: false,
   },
+
+  // ---- failed_pushes (Day 8 / D8-5) --------------------------------------
+  // The DLQ retry surface. failed_pushes itself is a system-only WRITE
+  // table (cron path is the canonical writer) but the retry endpoint
+  // gives operators a way to manually re-attempt failed SF pushes
+  // surfaced on the /admin/failed-pushes UI. Permission is
+  // tenant-scoped and intentionally NOT auto-picked-up by CS Agent —
+  // CS Agent stays read-only on subscriptions/tasks (the lifecycle
+  // permission test pattern at permissions.spec.ts §"subscription
+  // lifecycle permissions" is the precedent). Tenant Admin gets it
+  // via TENANT_SCOPED auto-pickup; Ops Manager via permsFor logic
+  // doesn't apply here (would only auto-grant if we used permsFor).
+  // CS Agent's explicit list does NOT include this perm.
+  //
+  // No `failed_pushes:read` is registered — listing failed pushes is
+  // a Tenant-Admin-only action exposed via the same admin UI; reuses
+  // `failed_pushes:retry` as the gate for both the read and the
+  // retry. If we later want a CS-readable surface (no retry button),
+  // split into two perms.
+  "failed_pushes:retry": {
+    id: "failed_pushes:retry",
+    resource: "failed_pushes",
+    action: "retry",
+    description:
+      "List unresolved failed_pushes rows and retry pushing them to SuiteFleet. Tenant-Admin-only — CS Agent stays read-only on the operational surface; the lifecycle-permission posture (subscription:pause/resume/end) is the precedent.",
+    systemOnly: false,
+  },
 } as const satisfies Record<Permission, PermissionDef>;
 
 /**

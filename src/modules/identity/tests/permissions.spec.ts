@@ -292,6 +292,51 @@ describe("subscription lifecycle permissions (Day 6 / S-4)", () => {
   });
 });
 
+describe("failed_pushes:retry permission (Day 8 / D8-5)", () => {
+  // Pins the auto-pickup behaviour for the new manual-DLQ-retry
+  // permission. Tenant Admin grants it automatically via
+  // TENANT_SCOPED. CS Agent is constructed from an EXPLICIT
+  // permission list and must remain read-only on operational
+  // surfaces — auto-pickup must never silently widen its surface.
+  // Same precedent as the subscription lifecycle permissions test
+  // above (S-4 watch-item).
+  //
+  // If a future PR drops CS Agent's explicit list in favour of
+  // permsFor() or similar, this test breaks and forces a conscious
+  // decision about CS Agent's write surface on /admin/failed-pushes.
+
+  it("registers failed_pushes:retry in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["failed_pushes:retry"]).toBeDefined();
+    expect(PERMISSIONS["failed_pushes:retry"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly", () => {
+    expect(PERMISSIONS["failed_pushes:retry"].resource).toBe("failed_pushes");
+    expect(PERMISSIONS["failed_pushes:retry"].action).toBe("retry");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    const perms = ROLES[TENANT_ADMIN_ROLE_SLUG].permissions;
+    expect(perms.has("failed_pushes:retry")).toBe(true);
+  });
+
+  it("CS Agent does NOT hold it (explicit list, read-only stays read-only)", () => {
+    const perms = ROLES["cs-agent"].permissions;
+    expect(perms.has("failed_pushes:retry")).toBe(false);
+  });
+
+  it("Ops Manager does NOT hold it (permsFor('subscription'/'task'/'consignee') doesn't include failed_pushes resource)", () => {
+    // Ops Manager's permission set is constructed from explicit
+    // permsFor() calls on consignee / subscription / task — NOT
+    // from the global TENANT_SCOPED filter. So a new tenant-scoped
+    // permission on a new resource is NOT auto-picked-up.
+    // failed_pushes is admin-only at the operational layer; this
+    // pin records the design choice.
+    const perms = ROLES["ops-manager"].permissions;
+    expect(perms.has("failed_pushes:retry")).toBe(false);
+  });
+});
+
 describe("Transcorp Sysadmin (Day-2 brief §6)", () => {
   it("is systemOnly", () => {
     expect(ROLES["transcorp-sysadmin"].systemOnly).toBe(true);
