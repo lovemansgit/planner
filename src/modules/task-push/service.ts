@@ -42,18 +42,28 @@
 // the first-run empirical capture before D8-4b commits to a parser).
 //
 // -----------------------------------------------------------------------------
-// shipFrom posture (D8-4a)
+// shipFrom posture (D8-4a — wire-pollution fix per reviewer)
 // -----------------------------------------------------------------------------
-// Per Aqib Group-1 + live webhook capture: SF auto-populates shipFrom
-// from the merchant master when the create payload omits it. The
-// internal `TaskCreateRequest` contract still requires shipFrom (a
-// `DeliveryAddress`); D8-4a passes a synthetic warehouse-shaped
-// shipFrom that SF will overwrite anyway. The right architectural
-// fix — making shipFrom optional on TaskCreateRequest and
-// conditionally spreading in `buildSuiteFleetTaskBody` — is a
-// future contract relaxation (parallel to the D8-3 lat/lng pattern);
-// out of D8-4a scope to avoid contract churn alongside the cron
-// wiring.
+// Per memory/followup_webhook_auth_architecture.md, SF auto-populates
+// shipFrom from the merchant master when the create payload omits
+// it entirely. Sending a synthetic placeholder = wire pollution; SF
+// would overwrite anyway but the request body carries fake data.
+//
+// D8-4a's wire-side fix:
+//   - buildSuiteFleetTaskBody conditionally spreads shipFrom only
+//     when defined — so `request.shipFrom === undefined` produces a
+//     payload with NO shipFrom field (SF auto-population kicks in).
+//   - The cron-path `buildTaskCreateRequest` returns
+//     Omit<TaskCreateRequest, "shipFrom"> so callers don't construct
+//     a synthetic placeholder. The adapter call casts through to
+//     TaskCreateRequest at the boundary.
+//
+// The TaskCreateRequest type still types shipFrom as required; the
+// type-level relaxation (parallel to the D8-3 lat/lng pattern) stays
+// Day 9+ to avoid contract churn alongside the cron wiring. The
+// runtime-side fix above is sufficient — the cast is a deliberate,
+// documented bridge between a relaxed cron-path type and the
+// stricter public adapter contract.
 
 import { emit } from "../audit";
 import { recordFailedPushAttempt, type FailureReason } from "../failed-pushes";
@@ -180,8 +190,17 @@ function classifyAdapterError(err: unknown): {
 }
 
 /**
+ * Cron-path TaskCreateRequest variant that omits shipFrom. SF
+ * auto-populates shipFrom from the merchant master when the create
+ * payload omits it entirely; the cron path deliberately doesn't
+ * construct a placeholder. See header `shipFrom posture` block.
+ */
+type CronTaskCreateRequest = Omit<TaskCreateRequest, "shipFrom">;
+
+/**
  * Map a Task + ConsigneeSnapshot + tenant customer_code into the
- * internal-language `TaskCreateRequest` the adapter expects.
+ * internal-language `TaskCreateRequest` the adapter expects (minus
+ * shipFrom — see CronTaskCreateRequest above).
  *
  * Locked defaults (per Aqib Group-1):
  *   - countryCode = 'AE' (UAE pilot)
@@ -190,25 +209,15 @@ function classifyAdapterError(err: unknown): {
  *   - codAmount = 0, declaredValue = 0 (prepaid)
  *   - city = consignee.emirate_or_region (one-string-fits-both for
  *     UAE pilot per option-1 lean in the C-3 deferred memo)
- *   - shipFrom = synthetic warehouse-shaped placeholder (SF auto-
- *     populates from merchant master; what we send is overwritten)
+ *   - shipFrom OMITTED — SF auto-populates from merchant master
  */
 function buildTaskCreateRequest(
   tenantId: Uuid,
   task: Task,
   consignee: ConsigneePushSnapshot,
-): TaskCreateRequest {
+): CronTaskCreateRequest {
   const consigneeAddress: DeliveryAddress = {
     addressLine1: consignee.addressLine,
-    city: consignee.emirateOrRegion,
-    district: consignee.district,
-    countryCode: "AE",
-  };
-  const shipFrom: DeliveryAddress = {
-    // SF overwrites this from merchant master. Kept as a synthetic
-    // placeholder until the contract is relaxed to allow optional
-    // shipFrom (out of D8-4a scope).
-    addressLine1: "Transcorp Warehouse — auto-populated by SF from merchant master",
     city: consignee.emirateOrRegion,
     district: consignee.district,
     countryCode: "AE",
@@ -223,7 +232,6 @@ function buildTaskCreateRequest(
       contactPhone: consignee.phone,
       address: consigneeAddress,
     },
-    shipFrom,
     window: {
       date: task.deliveryDate,
       startTime: task.deliveryStartTime,
@@ -455,7 +463,11 @@ export async function pushTasksForTenant(
 
     let pushResult;
     try {
-      pushResult = await adapter.createTask(session, request);
+      // Cast bridges the cron-path Omit<...,'shipFrom'> shape to the
+      // public TaskCreateRequest contract. buildSuiteFleetTaskBody's
+      // conditional shipFrom spread handles the runtime-undefined
+      // case. See header `shipFrom posture` for the full rationale.
+      pushResult = await adapter.createTask(session, request as TaskCreateRequest);
     } catch (err) {
       const classified = classifyAdapterError(err);
       const isAwbExists = err instanceof SuiteFleetAwbExistsError;

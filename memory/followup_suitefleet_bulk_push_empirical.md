@@ -114,9 +114,59 @@ Each row notes whether the guard fired during the first run AND whether it behav
 
 1. **Section C populated** with at least one real timeline response → unblocks the `getTaskByAwb` adapter method's response parser. D8-4b extracts the SF `id` field per the path documented in C, returns a `TaskCreateResult` shape, and the cron-push service wires the catch-and-reconcile-on-AwbExists branch.
 
-2. **Section A's query-param shape** confirmed → unblocks any defensive rollback if the query param caused production rejections.
+2. **Section A's query-param shape** confirmed → unblocks any defensive rollback if the query param caused production rejections (see rollback paths below).
 
 3. **Section B's regex match** confirmed → validates the parse-only AWB extraction; if the format changed, the regex needs updating in D8-4b.
+
+---
+
+## Rollback paths (per reviewer's D8-4a accept-with-note)
+
+### Rollback A — `customerId` query-param landed but SF rejected
+
+If the first cron run shows production SF returning a 4xx that wasn't seen in sandbox (the smoke probes 29 April 2026 succeeded WITHOUT the query param), the defensive add needs to roll back. Rollback is **two changes, not one** — both must land together to avoid breaking CI:
+
+1. **Code** — `src/modules/integration/providers/suitefleet/task-client.ts`, inside `createTask`:
+
+   ```ts
+   // Roll back to:
+   const url = `${baseUrl}/api/tasks`;
+   ```
+
+2. **Test assertion** — `src/modules/integration/providers/suitefleet/tests/task-client.spec.ts`, the "POSTs to /api/tasks with Authorization, Clientid, Content-Type headers" test:
+
+   ```ts
+   // Roll back to:
+   expect(url).toBe("https://api.suitefleet.com/api/tasks");
+   ```
+
+   The current assertion expects `…/api/tasks?customerId=588` and will fail if the URL reverts without updating it.
+
+3. **Empirical capture (this memo)** — Section A's "Did the query-param shape work?" should record the rejection + reasoning, with a pointer to the rollback PR.
+
+T2 commit per the protocol (touches source files; not schema, not auth). One PR, two file edits.
+
+### Rollback B — AWB regex doesn't match production response shape
+
+If Section B captures a duplicate-AWB response that doesn't match `/Awb with value ([\w-]+) exists already/`:
+
+1. **Code** — `src/modules/integration/providers/suitefleet/task-client.ts`, the `AWB_EXISTS_ERROR_REGEX` constant. Update to match the observed format.
+
+2. **Test** — task-client.spec.ts AWB-exists test fixture string update.
+
+3. **D8-4a guard tests** — `tests/unit/cron-push-rejects-unknown-district.spec.ts` does NOT test the AWB regex (separate concern — that's the per-task pre-flight skip). No update needed there.
+
+T2 commit. Surface at PR open with the original + new regex side-by-side.
+
+### Rollback C — `tenant.push_skipped` event misshaped
+
+Unlikely (the metadata shape is already locked via the watch-item memo), but if first-run shows the audit shape needs adjustment:
+
+1. **Code** — `src/modules/audit/event-types.ts`, the `tenant.push_skipped` registration block.
+2. **Code** — `src/modules/task-push/service.ts`, the `emit({ ... })` call inside the missing_customer_code guard.
+3. **Test** — `tests/unit/cron-push-rejects-missing-customer-code.spec.ts`, the assertion on `emitArg.metadata`.
+
+T2 commit if metadata shape only; T3 if the systemOnly flag changes (audit-policy boundary).
 
 ---
 

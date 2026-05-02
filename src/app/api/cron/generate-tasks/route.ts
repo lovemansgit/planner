@@ -167,7 +167,13 @@ export async function GET(req: Request): Promise<Response> {
     clock: () => new Date(),
   });
 
-  const perTenant: PerTenantSummary[] = [];
+  // D8-4a: per-tenant accumulator is a Map keyed by tenantId carrying
+  // BOTH phase outcomes (generation + push). Single entry per tenant
+  // in the response — clearer than two flat-array entries with
+  // different `kind` discriminators per tenant. Ops triage on a 500:
+  // open the response payload, find the tenant, see both phases at a
+  // glance.
+  const perTenantMap = new Map<Uuid, PerTenantPair>();
   let anyAbnormal = false;
   for (const tenantId of tenantIds) {
     const ctx = buildSystemContext(tenantId, requestId);
@@ -200,10 +206,13 @@ export async function GET(req: Request): Promise<Response> {
         tenant_id: tenantId,
         request_id: requestId,
       });
-      perTenant.push({
+      perTenantMap.set(tenantId, {
         tenantId,
-        kind: "failed",
-        message: err instanceof Error ? err.message : String(err),
+        generation: {
+          kind: "failed",
+          message: err instanceof Error ? err.message : String(err),
+        },
+        push: { kind: "skipped_due_to_generation_failure" },
       });
       anyAbnormal = true;
       // Skip the push phase if generation threw — generation throwing
@@ -213,7 +222,7 @@ export async function GET(req: Request): Promise<Response> {
       continue;
     }
 
-    perTenant.push(summariseOutcome(tenantId, outcome));
+    const generation = summariseGenerationOutcome(outcome);
     if (outcome.kind === "capped" || outcome.kind === "failed") {
       anyAbnormal = true;
     }
@@ -222,22 +231,20 @@ export async function GET(req: Request): Promise<Response> {
     // Push runs even if generation was 'capped' or returned
     // 'skipped_already_run' — the unpushed-tasks backlog is
     // independent of THIS run's generate phase.
+    let push: PushOutcomeSummary;
     try {
       const pushOutcome = await pushTasksForTenant(ctx, tenantId, adapter);
-      perTenant.push(summarisePushOutcome(pushOutcome));
-      if (pushOutcome.kind === "tenant_skipped" || pushOutcome.kind === "pushed") {
-        // tenant_skipped is operationally meaningful (operator needs to
-        // backfill customer_code) — flag as abnormal so Vercel logs
-        // surface it.
-        if (pushOutcome.kind === "tenant_skipped") anyAbnormal = true;
-        // Also flag when individual tasks landed in DLQ — operator
-        // needs to triage failed pushes.
-        if (
-          pushOutcome.kind === "pushed" &&
-          (pushOutcome.failedToDLQ > 0 || pushOutcome.awbExists > 0)
-        ) {
-          anyAbnormal = true;
-        }
+      push = summarisePushOutcome(pushOutcome);
+      if (pushOutcome.kind === "tenant_skipped") {
+        // operationally meaningful — operator needs to backfill
+        // customer_code; flag for Vercel-logs surfacing.
+        anyAbnormal = true;
+      }
+      if (
+        pushOutcome.kind === "pushed" &&
+        (pushOutcome.failedToDLQ > 0 || pushOutcome.awbExists > 0)
+      ) {
+        anyAbnormal = true;
       }
     } catch (err) {
       runLog.error(
@@ -253,22 +260,34 @@ export async function GET(req: Request): Promise<Response> {
         tenant_id: tenantId,
         request_id: requestId,
       });
-      perTenant.push({
-        tenantId,
+      push = {
         kind: "push_failed",
         message: err instanceof Error ? err.message : String(err),
-      });
+      };
       anyAbnormal = true;
     }
+
+    perTenantMap.set(tenantId, { tenantId, generation, push });
   }
 
   // --------------------------------------------------------------------------
-  // 5. Return summary
+  // 5. Aggregate + return summary
   // --------------------------------------------------------------------------
-  // 200 if every tenant landed cleanly (completed | skipped_already_run).
-  // 500 if any tenant hit capped / failed / failed_partial — Vercel logs
-  // flag this as a failed cron invocation, which is the operational
-  // signal we want for hard-cap exceedance per the throughput memo.
+  // Per-tenant array is enumerated in the same order tenants were
+  // walked (Map preserves insertion order in JS). The response body
+  // carries both per-tenant pairs AND a top-level summary rollup so
+  // ops triage doesn't require counting per-tenant entries.
+  //
+  // Status:
+  //   200 if every tenant landed cleanly (no anomalies).
+  //   500 if ANY tenant hit an abnormal outcome (generation capped /
+  //       failed; push tenant_skipped / push_failed; or any failedToDLQ
+  //       / awbExists > 0). Vercel logs flag this as a failed cron
+  //       invocation — operational signal for ops triage. The structured
+  //       per-tenant body lets ops see WHICH phase failed for WHICH
+  //       tenant without parsing message strings.
+  const perTenant = Array.from(perTenantMap.values());
+  const summary = computeRunSummary(perTenant);
   const status = anyAbnormal ? 500 : 200;
   const body = {
     request_id: requestId,
@@ -277,9 +296,10 @@ export async function GET(req: Request): Promise<Response> {
     target_date: targetDate,
     tenant_count: tenantIds.length,
     abnormal: anyAbnormal,
+    summary,
     per_tenant: perTenant,
   };
-  runLog.info({ status, abnormal: anyAbnormal }, "task generation cron run complete");
+  runLog.info({ status, abnormal: anyAbnormal, summary }, "task generation cron run complete");
   return NextResponse.json(body, { status });
 }
 
@@ -319,9 +339,20 @@ function buildSystemContext(tenantId: Uuid, requestId: string): RequestContext {
   };
 }
 
-type PerTenantSummary =
+// -----------------------------------------------------------------------------
+// Response body shape (D8-4a — per-tenant pair structure)
+// -----------------------------------------------------------------------------
+// Per-tenant entry carries BOTH phase outcomes side-by-side. Ops
+// triage opens the response, finds the tenant, sees:
+//   - generation: { kind: 'completed' | 'capped' | ... , ... }
+//   - push:       { kind: 'pushed' | 'tenant_skipped' | ... , ... }
+// without having to parse a flat array with mixed-kind entries.
+//
+// The top-level `summary` rollup counts each phase-kind across all
+// tenants — saves ops from counting entries by hand on a 500.
+
+type GenerationOutcomeSummary =
   | {
-      tenantId: Uuid;
       kind: "completed";
       runId: Uuid;
       subscriptionsWalked: number;
@@ -329,25 +360,23 @@ type PerTenantSummary =
       tasksSkippedExisting: number;
     }
   | {
-      tenantId: Uuid;
       kind: "capped";
       runId: Uuid;
       projectedCount: number;
       capThreshold: number;
     }
   | {
-      tenantId: Uuid;
       kind: "skipped_already_run";
       runId: Uuid;
     }
   | {
-      tenantId: Uuid;
       kind: "failed";
       runId?: Uuid;
       message: string;
-    }
+    };
+
+type PushOutcomeSummary =
   | {
-      tenantId: Uuid;
       kind: "pushed";
       attemptedCount: number;
       succeeded: number;
@@ -356,22 +385,51 @@ type PerTenantSummary =
       awbExists: number;
     }
   | {
-      tenantId: Uuid;
       kind: "tenant_skipped";
       reason: "missing_customer_code";
       skippedTaskCount: number;
     }
   | {
-      tenantId: Uuid;
       kind: "push_failed";
       message: string;
+    }
+  | {
+      // Generation phase threw — push never attempted. Distinct from
+      // 'push_failed' (which means push WAS attempted and threw) so
+      // ops can tell the failure mode at a glance.
+      kind: "skipped_due_to_generation_failure";
     };
 
-function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): PerTenantSummary {
+interface PerTenantPair {
+  tenantId: Uuid;
+  generation: GenerationOutcomeSummary;
+  push: PushOutcomeSummary;
+}
+
+interface RunSummary {
+  generation: {
+    completed: number;
+    capped: number;
+    skipped_already_run: number;
+    failed: number;
+  };
+  push: {
+    pushed_passes: number;
+    tenant_skipped: number;
+    push_failed: number;
+    skipped_due_to_generation_failure: number;
+    total_attempted: number;
+    total_succeeded: number;
+    total_failed_to_dlq: number;
+    total_skipped_district: number;
+    total_awb_exists: number;
+  };
+}
+
+function summariseGenerationOutcome(outcome: GenerateForWindowResult): GenerationOutcomeSummary {
   switch (outcome.kind) {
     case "completed":
       return {
-        tenantId,
         kind: "completed",
         runId: outcome.run.id,
         subscriptionsWalked: outcome.subscriptionsWalked,
@@ -380,7 +438,6 @@ function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): Per
       };
     case "capped":
       return {
-        tenantId,
         kind: "capped",
         runId: outcome.run.id,
         projectedCount: outcome.projectedCount,
@@ -388,13 +445,11 @@ function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): Per
       };
     case "skipped_already_run":
       return {
-        tenantId,
         kind: "skipped_already_run",
         runId: outcome.existingRun.id,
       };
     case "failed":
       return {
-        tenantId,
         kind: "failed",
         runId: outcome.run.id,
         message: outcome.errorText,
@@ -402,18 +457,15 @@ function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): Per
   }
 }
 
-/** Map task-push outcome → per-tenant cron-summary entry. */
-function summarisePushOutcome(outcome: PushTenantOutcome): PerTenantSummary {
+function summarisePushOutcome(outcome: PushTenantOutcome): PushOutcomeSummary {
   if (outcome.kind === "tenant_skipped") {
     return {
-      tenantId: outcome.tenantId,
       kind: "tenant_skipped",
       reason: outcome.reason,
       skippedTaskCount: outcome.skippedTaskCount,
     };
   }
   return {
-    tenantId: outcome.tenantId,
     kind: "pushed",
     attemptedCount: outcome.attemptedCount,
     succeeded: outcome.succeeded,
@@ -421,5 +473,45 @@ function summarisePushOutcome(outcome: PushTenantOutcome): PerTenantSummary {
     skippedDistrict: outcome.skippedDistrict,
     awbExists: outcome.awbExists,
   };
+}
+
+function computeRunSummary(perTenant: readonly PerTenantPair[]): RunSummary {
+  const summary: RunSummary = {
+    generation: { completed: 0, capped: 0, skipped_already_run: 0, failed: 0 },
+    push: {
+      pushed_passes: 0,
+      tenant_skipped: 0,
+      push_failed: 0,
+      skipped_due_to_generation_failure: 0,
+      total_attempted: 0,
+      total_succeeded: 0,
+      total_failed_to_dlq: 0,
+      total_skipped_district: 0,
+      total_awb_exists: 0,
+    },
+  };
+  for (const entry of perTenant) {
+    summary.generation[entry.generation.kind] += 1;
+    switch (entry.push.kind) {
+      case "pushed":
+        summary.push.pushed_passes += 1;
+        summary.push.total_attempted += entry.push.attemptedCount;
+        summary.push.total_succeeded += entry.push.succeeded;
+        summary.push.total_failed_to_dlq += entry.push.failedToDLQ;
+        summary.push.total_skipped_district += entry.push.skippedDistrict;
+        summary.push.total_awb_exists += entry.push.awbExists;
+        break;
+      case "tenant_skipped":
+        summary.push.tenant_skipped += 1;
+        break;
+      case "push_failed":
+        summary.push.push_failed += 1;
+        break;
+      case "skipped_due_to_generation_failure":
+        summary.push.skipped_due_to_generation_failure += 1;
+        break;
+    }
+  }
+  return summary;
 }
 

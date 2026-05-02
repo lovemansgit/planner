@@ -207,7 +207,19 @@ export function buildSuiteFleetTaskBody(
     deliveryType: "STANDARD",
     paymentMethod: request.paymentMethod,
     ...(request.notes !== undefined && { notes: request.notes }),
-    shipFrom: buildLocation(request.shipFrom, request.consignee.contactPhone),
+    // D8-4a fix: conditional spread on shipFrom. Per
+    // memory/followup_webhook_auth_architecture.md SF auto-populates
+    // shipFrom from the merchant master when the create payload omits
+    // it. Sending a synthetic placeholder = wire pollution; SF would
+    // overwrite anyway but the request body carries fake data.
+    // The TaskCreateRequest contract still types shipFrom as required
+    // (the contract-level relaxation parallel to the D8-3 lat/lng
+    // pattern stays Day 9+); cron-path callers use a mapped Omit<>
+    // type and cast through, so at runtime shipFrom is undefined and
+    // this conditional spread omits it from the wire body.
+    ...(request.shipFrom !== undefined && {
+      shipFrom: buildLocation(request.shipFrom, request.consignee.contactPhone),
+    }),
     ...(request.signatureRequired !== undefined && {
       signatureRequired: request.signatureRequired,
     }),

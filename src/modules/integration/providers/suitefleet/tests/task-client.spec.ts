@@ -236,6 +236,26 @@ describe("buildSuiteFleetTaskBody — optional-field absence", () => {
     expect("longitude" in body.shipFrom).toBe(false);
   });
 
+  it("omits shipFrom entirely from the body when request.shipFrom is undefined (D8-4a wire-pollution fix)", () => {
+    // Per memory/followup_webhook_auth_architecture.md, SF auto-
+    // populates shipFrom from the merchant master when the create
+    // payload omits it entirely. Cron-path callers use a mapped
+    // Omit<TaskCreateRequest, 'shipFrom'> + cast to bypass the
+    // type-level requirement; the runtime omission MUST land on the
+    // wire so SF's merchant-master auto-population kicks in
+    // (instead of receiving a synthetic placeholder).
+    //
+    // Cast-bypass at runtime mirrors the cron-push service's
+    // call-site shape: `as TaskCreateRequest` with shipFrom undefined.
+    const requestNoShipFrom = {
+      ...SAMPLE_REQUEST,
+      shipFrom: undefined,
+    } as unknown as TaskCreateRequest;
+
+    const body = buildSuiteFleetTaskBody(requestNoShipFrom, 588);
+    expect("shipFrom" in body).toBe(false);
+  });
+
   it("still passes through latitude / longitude when provided (additive relaxation)", () => {
     // Type relaxation is additive. Existing callers that DO supply
     // coordinates must continue to land them on the wire body as
