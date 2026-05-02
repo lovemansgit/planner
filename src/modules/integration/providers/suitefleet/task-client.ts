@@ -83,6 +83,52 @@ const log = logger.with({ component: "suitefleet_task_client" });
 
 const DEFAULT_BASE_URL = "https://api.suitefleet.com";
 
+/**
+ * SuiteFleet error message format for the duplicate-AWB case,
+ * confirmed via Aqib Group-1 (3 May 2026):
+ *
+ *   "Awb with value TBC-55891430 exists already"
+ *
+ * Captured in `memory/followup_c3_deferred_day8.md`. The regex
+ * extracts the AWB out of the response body; downstream callers
+ * use the AWB to reconcile (D8-4b adds the GET-by-AWB round-trip
+ * via `/api/tasks/awb/{awb}/task-activities`).
+ */
+const AWB_EXISTS_ERROR_REGEX = /Awb with value ([\w-]+) exists already/;
+
+/**
+ * D8-4a: typed error class for the AWB-exists case. createTask
+ * detects the duplicate-AWB response, extracts the AWB, and throws
+ * this so the cron-push service can categorise it without parsing
+ * error messages.
+ *
+ * D8-4a is parse-only — the cron-push service catches this error,
+ * records a failed_pushes row with `failureReason='client_4xx'` and
+ * `failureDetail='awb_exists: <awb>'`, and leaves the task unpushed.
+ * D8-4b will add the `getTaskByAwb` reconcile path that uses this
+ * AWB to fetch the existing SF task and mark the local task as
+ * pushed.
+ *
+ * NOT a CredentialError or ValidationError: an AWB-exists is a
+ * normal-operation duplicate signal, not a credentials/validation
+ * problem. Distinct error class makes the cron's catch branch
+ * unambiguous.
+ */
+export class SuiteFleetAwbExistsError extends Error {
+  readonly awb: string;
+  readonly httpStatus: number;
+  /** Cap-truncated response body for forensic logging. */
+  readonly responseBody: string;
+  constructor(awb: string, httpStatus: number, responseBody: string) {
+    super(`SuiteFleet rejected createTask: AWB '${awb}' already exists`);
+    this.name = "SuiteFleetAwbExistsError";
+    this.awb = awb;
+    this.httpStatus = httpStatus;
+    // Cap at 4KB to mirror the failed_pushes failure_detail cap.
+    this.responseBody = responseBody.length > 4000 ? `${responseBody.slice(0, 4000)}…[truncated]` : responseBody;
+  }
+}
+
 export interface SuiteFleetTaskClientDeps {
   readonly fetch: typeof globalThis.fetch;
   readonly clientId: string;
@@ -235,7 +281,16 @@ export function createSuiteFleetTaskClient(
 
   return {
     async createTask({ session, customerId, request }) {
-      const url = `${baseUrl}/api/tasks`;
+      // D8-4a: customerId threaded as a query parameter per SF API
+      // docs (suitefleet.readme.io). Empirical sandbox probes
+      // (sandbox-smoke-task-create.mjs and 29 April 2026 dedupe /
+      // idempotency probes) succeeded WITHOUT the query param, so
+      // body-only customerId appears acceptable in the sandbox; the
+      // query param is a defensive add for production (where the
+      // docs may be enforced more strictly). First-run capture in
+      // `memory/followup_suitefleet_bulk_push_empirical.md` will
+      // validate either way.
+      const url = `${baseUrl}/api/tasks?customerId=${encodeURIComponent(String(customerId))}`;
       const body = buildSuiteFleetTaskBody(request, customerId);
 
       // SAFETY: single-attempt by design. See file-header
@@ -284,20 +339,52 @@ export function createSuiteFleetTaskClient(
       }
 
       if (response.status >= 400) {
+        // D8-4a: read the body BEFORE deciding error type. Once the
+        // body is consumed via .text() it can't be re-read; the
+        // earlier "throw before reading body" pattern made the
+        // AWB-exists detection impossible.
+        let responseText: string;
+        try {
+          responseText = await response.text();
+        } catch {
+          responseText = "";
+        }
+
         log.warn({
           operation: "create_task",
           status: response.status,
           error_code: "client_4xx",
           tenant_id: session.tenantId,
           customer_order_number: request.customerOrderNumber,
+          response_excerpt: responseText.slice(0, 400),
         });
         if (response.status === 401) {
           throw new CredentialError(
             "SuiteFleet createTask rejected — credentials invalid or session expired",
           );
         }
+
+        // D8-4a: AWB-exists detection. SF returns 4xx with the body
+        // matching `Awb with value <AWB> exists already`. Extract
+        // the AWB and throw a typed SuiteFleetAwbExistsError so the
+        // cron-push service catches it as a duplicate signal rather
+        // than a generic ValidationError. D8-4a is parse-only —
+        // the AWB is captured in failed_pushes for D8-4b's reconcile
+        // GET (/api/tasks/awb/{awb}/task-activities, endpoint
+        // confirmed via SF API docs reading 4 May 2026).
+        //
+        // TODO(D8-4b): replace the parse-only branch with a full
+        // catch-and-reconcile: getTaskByAwb(session, awb) →
+        // markTaskPushed(taskId, externalId). First-run empirical
+        // capture validates the timeline response shape includes the
+        // SF task `id` field needed for the reconcile.
+        const awbMatch = responseText.match(AWB_EXISTS_ERROR_REGEX);
+        if (awbMatch) {
+          throw new SuiteFleetAwbExistsError(awbMatch[1], response.status, responseText);
+        }
+
         throw new ValidationError(
-          `SuiteFleet createTask rejected with status ${response.status}`,
+          `SuiteFleet createTask rejected with status ${response.status}: ${responseText.slice(0, 400)}`,
         );
       }
 

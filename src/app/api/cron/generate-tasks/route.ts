@@ -48,6 +48,8 @@ import { NextResponse } from "next/server";
 import { generateTasksForWindow } from "@/modules/task-generation";
 import type { GenerateForWindowResult } from "@/modules/task-generation";
 import { nextCalendarDateInDubai } from "@/modules/task-generation/dubai-date";
+import { createSuiteFleetLastMileAdapter } from "@/modules/integration";
+import { pushTasksForTenant, type PushTenantOutcome } from "@/modules/task-push";
 import { withServiceRole } from "@/shared/db";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
@@ -142,12 +144,35 @@ export async function GET(req: Request): Promise<Response> {
   runLog.info({ tenant_count: tenantIds.length }, "tenants enumerated for cron run");
 
   // --------------------------------------------------------------------------
-  // 4. Per-tenant generation
+  // 4. Per-tenant generation + push
   // --------------------------------------------------------------------------
+  // D8-4a: each tenant pass is now two phases:
+  //   (a) generateTasksForWindow — C-2 (Day 7), generates next-day
+  //       tasks from active subscriptions.
+  //   (b) pushTasksForTenant     — D8-4a (today), walks all unpushed
+  //       tasks for the tenant and pushes them to SF with the 5
+  //       req/sec throttle + the two fail-closed guards.
+  //
+  // The push phase runs regardless of the generation outcome —
+  // unpushed tasks may exist from prior runs (e.g. yesterday's
+  // 'capped' generation left unpushed leftovers). The push phase
+  // walks all unpushed tasks per tenant, so we always give the
+  // backlog a chance to drain.
+  //
+  // Adapter constructed once at the top of the handler and shared
+  // across all tenants. Per-tenant credentials resolve inside the
+  // adapter on each call.
+  const adapter = createSuiteFleetLastMileAdapter({
+    fetch: globalThis.fetch,
+    clock: () => new Date(),
+  });
+
   const perTenant: PerTenantSummary[] = [];
   let anyAbnormal = false;
   for (const tenantId of tenantIds) {
     const ctx = buildSystemContext(tenantId, requestId);
+
+    // ----- Phase (a): generation ---------------------------------------------
     let outcome: GenerateForWindowResult;
     try {
       outcome = await generateTasksForWindow(ctx, {
@@ -181,11 +206,58 @@ export async function GET(req: Request): Promise<Response> {
         message: err instanceof Error ? err.message : String(err),
       });
       anyAbnormal = true;
+      // Skip the push phase if generation threw — generation throwing
+      // is a hard infrastructure error (tenant_id missing, DB connection
+      // dead) that the push phase will likely repeat. Continue to the
+      // next tenant.
       continue;
     }
 
     perTenant.push(summariseOutcome(tenantId, outcome));
     if (outcome.kind === "capped" || outcome.kind === "failed") {
+      anyAbnormal = true;
+    }
+
+    // ----- Phase (b): push (D8-4a) -------------------------------------------
+    // Push runs even if generation was 'capped' or returned
+    // 'skipped_already_run' — the unpushed-tasks backlog is
+    // independent of THIS run's generate phase.
+    try {
+      const pushOutcome = await pushTasksForTenant(ctx, tenantId, adapter);
+      perTenant.push(summarisePushOutcome(pushOutcome));
+      if (pushOutcome.kind === "tenant_skipped" || pushOutcome.kind === "pushed") {
+        // tenant_skipped is operationally meaningful (operator needs to
+        // backfill customer_code) — flag as abnormal so Vercel logs
+        // surface it.
+        if (pushOutcome.kind === "tenant_skipped") anyAbnormal = true;
+        // Also flag when individual tasks landed in DLQ — operator
+        // needs to triage failed pushes.
+        if (
+          pushOutcome.kind === "pushed" &&
+          (pushOutcome.failedToDLQ > 0 || pushOutcome.awbExists > 0)
+        ) {
+          anyAbnormal = true;
+        }
+      }
+    } catch (err) {
+      runLog.error(
+        {
+          tenant_id: tenantId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "task push threw for tenant",
+      );
+      captureException(err, {
+        component: "cron_generate_tasks",
+        operation: "per_tenant_push",
+        tenant_id: tenantId,
+        request_id: requestId,
+      });
+      perTenant.push({
+        tenantId,
+        kind: "push_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
       anyAbnormal = true;
     }
   }
@@ -273,6 +345,26 @@ type PerTenantSummary =
       kind: "failed";
       runId?: Uuid;
       message: string;
+    }
+  | {
+      tenantId: Uuid;
+      kind: "pushed";
+      attemptedCount: number;
+      succeeded: number;
+      failedToDLQ: number;
+      skippedDistrict: number;
+      awbExists: number;
+    }
+  | {
+      tenantId: Uuid;
+      kind: "tenant_skipped";
+      reason: "missing_customer_code";
+      skippedTaskCount: number;
+    }
+  | {
+      tenantId: Uuid;
+      kind: "push_failed";
+      message: string;
     };
 
 function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): PerTenantSummary {
@@ -308,5 +400,26 @@ function summariseOutcome(tenantId: Uuid, outcome: GenerateForWindowResult): Per
         message: outcome.errorText,
       };
   }
+}
+
+/** Map task-push outcome → per-tenant cron-summary entry. */
+function summarisePushOutcome(outcome: PushTenantOutcome): PerTenantSummary {
+  if (outcome.kind === "tenant_skipped") {
+    return {
+      tenantId: outcome.tenantId,
+      kind: "tenant_skipped",
+      reason: outcome.reason,
+      skippedTaskCount: outcome.skippedTaskCount,
+    };
+  }
+  return {
+    tenantId: outcome.tenantId,
+    kind: "pushed",
+    attemptedCount: outcome.attemptedCount,
+    succeeded: outcome.succeeded,
+    failedToDLQ: outcome.failedToDLQ,
+    skippedDistrict: outcome.skippedDistrict,
+    awbExists: outcome.awbExists,
+  };
 }
 

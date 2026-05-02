@@ -112,6 +112,16 @@ const EVENT_TYPES_DRAFT = {
       "previous_status (string: closed|open|completed), new_status (string), reason (string). Note: original Day-2 metadataNotes spec'd booleans before C-5 finalised the three-state machine; updated in C-6 to match the actual state-machine alphabet.",
     systemOnly: true,
   },
+  "tenant.push_skipped": {
+    id: "tenant.push_skipped",
+    resource: "tenant",
+    action: "push_skipped",
+    description:
+      "Day 8 / D8-4. The cron's bulk-push phase fail-closed an entire tenant's batch because of a tenant-level configuration gap (e.g. missing suitefleet_customer_code). One event per tenant per cron pass — NOT one per task — because the cause is a tenant-level config gap, not a per-task failure. Surfaces operationally as one alert per tenant per pass instead of N alerts. System-only — only the cron's per-tenant push-service writes here.",
+    metadataNotes:
+      "tenant_id (uuid), reason (string union: 'missing_customer_code' for D8-4; extensible for future tenant-level skip causes like 'tenant_suspended'), skipped_task_count (int — number of tasks that would have been pushed in this pass).",
+    systemOnly: true,
+  },
 
   // ---- user --------------------------------------------------------------
   "user.created": {
