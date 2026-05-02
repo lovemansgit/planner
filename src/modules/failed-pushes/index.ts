@@ -11,4 +11,8 @@
 
 export type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
 
-export { recordFailedPush, recordFailedPushAttempt } from "./service";
+export {
+  markFailedPushResolved,
+  recordFailedPush,
+  recordFailedPushAttempt,
+} from "./service";

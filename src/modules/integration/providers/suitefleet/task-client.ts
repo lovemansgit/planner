@@ -75,6 +75,7 @@ import type {
   AuthenticatedSession,
   ConsigneeSnapshot,
   DeliveryAddress,
+  TaskByAwbResult,
   TaskCreateRequest,
   TaskCreateResult,
 } from "../../types";
@@ -129,6 +130,36 @@ export class SuiteFleetAwbExistsError extends Error {
   }
 }
 
+/**
+ * D8-4b: typed parse error for the `task-activities` timeline endpoint.
+ * Thrown by `parseSuiteFleetTaskActivitiesResponse` when the response
+ * shape does not match the doc-derived expected fixture (see
+ * `tests/sf-task-activities-fixture.ts` co-located alongside the
+ * suitefleet provider tests for the canonical shape + caveat header).
+ *
+ * Reviewer-locked posture (D8-4b): strict shape parser that THROWS
+ * on mismatch rather than silently mis-extracting. The fixture is
+ * doc-derived (suitefleet.readme.io reading 4 May 2026), not
+ * capture-derived — first real production 23505/AWB-exists either
+ * validates or invalidates this fixture. If validation fails, the
+ * cron's reconcile branch surfaces this as a `ValidationError`-class
+ * failure with `failure_detail` carrying the parse error message,
+ * making the divergence visible in `/admin/failed-pushes` rather
+ * than masked behind an `awbExistsReconciled` increment that doesn't
+ * actually mean the task got reconciled.
+ */
+export class SuiteFleetTimelineParseError extends Error {
+  /** The provider-shape body fragment that failed to parse, capped. */
+  readonly bodyExcerpt: string;
+  constructor(message: string, bodyExcerpt: string) {
+    super(`SuiteFleet task-activities parse error: ${message}`);
+    this.name = "SuiteFleetTimelineParseError";
+    this.bodyExcerpt = bodyExcerpt.length > 1000
+      ? `${bodyExcerpt.slice(0, 1000)}…[truncated]`
+      : bodyExcerpt;
+  }
+}
+
 export interface SuiteFleetTaskClientDeps {
   readonly fetch: typeof globalThis.fetch;
   readonly clientId: string;
@@ -142,6 +173,18 @@ export interface SuiteFleetTaskClient {
     customerId: number;
     request: TaskCreateRequest;
   }): Promise<TaskCreateResult>;
+  /**
+   * D8-4b: AWB-exists reconcile path. GET the existing SF task by its
+   * AWB and return the minimal `{ externalId }` shape the cron's
+   * reconcile branch needs. URL: `${baseUrl}/api/tasks/awb/{awb}/task-activities?customerId=${customerId}`.
+   * Path-param AWB; customerId as a query param to mirror createTask's
+   * defensive add (D8-4a).
+   */
+  getTaskByAwb(args: {
+    session: AuthenticatedSession;
+    customerId: number;
+    awb: string;
+  }): Promise<TaskByAwbResult>;
 }
 
 interface SuiteFleetLocationBody {
@@ -249,6 +292,77 @@ interface SuiteFleetTaskCreateResponseBody {
 
 function isResponseBody(value: unknown): value is SuiteFleetTaskCreateResponseBody {
   return typeof value === "object" && value !== null;
+}
+
+// -----------------------------------------------------------------------------
+// task-activities parser (D8-4b)
+// -----------------------------------------------------------------------------
+// Reviewer-locked posture (D8-4b): strict-shape parser that throws
+// `SuiteFleetTimelineParseError` on mismatch. The expected shape is
+// DOC-DERIVED (suitefleet.readme.io reading 4 May 2026), not capture-
+// derived — the third cron trigger (2 May 2026) hit a clean
+// first-time push so no live timeline was captured. First real
+// production 23505/AWB-exists either validates or invalidates this
+// fixture; on invalidation, the parser throws a typed error and the
+// cron records a DLQ row with the parse-error message. The reconcile
+// is NOT silently swallowed.
+//
+// Expected shape (doc-derived; pinned in tests/sf-task-activities-fixture.ts
+// alongside this file's spec):
+//
+//   {
+//     "task": {
+//       "id": 59254,                  // numeric SF task id
+//       "awb": "MPL-08187661"         // the AWB we queried by; echo
+//     },
+//     "activities": [...]             // timeline entries — opaque to D8-4b
+//   }
+//
+// We extract `body.task.id`, stringify it (same convention as
+// `parseSuiteFleetTaskResponse`), and ignore the activities array.
+// `body.task.awb` is checked for presence as a defence-in-depth tell
+// — if SF's response doesn't echo the AWB at all, the shape probably
+// changed and the fixture needs revisiting.
+
+interface SuiteFleetTaskActivitiesBody {
+  readonly task?: { readonly id?: unknown; readonly awb?: unknown };
+}
+
+function isActivitiesBody(value: unknown): value is SuiteFleetTaskActivitiesBody {
+  return typeof value === "object" && value !== null;
+}
+
+export function parseSuiteFleetTaskActivitiesResponse(body: unknown): TaskByAwbResult {
+  const bodyExcerpt = (() => {
+    try {
+      return JSON.stringify(body);
+    } catch {
+      return String(body);
+    }
+  })();
+
+  if (!isActivitiesBody(body)) {
+    throw new SuiteFleetTimelineParseError("response body is not an object", bodyExcerpt);
+  }
+  const taskNode = body.task;
+  if (typeof taskNode !== "object" || taskNode === null) {
+    throw new SuiteFleetTimelineParseError(
+      "response missing `task` object — shape may have changed; validate fixture against live capture",
+      bodyExcerpt,
+    );
+  }
+  const idRaw = taskNode.id;
+  if (typeof idRaw !== "number" || !Number.isFinite(idRaw)) {
+    throw new SuiteFleetTimelineParseError(
+      `response missing numeric \`task.id\` (got ${typeof idRaw}: ${String(idRaw)})`,
+      bodyExcerpt,
+    );
+  }
+  // body.task.awb absence is a soft warning, not an error — the cron
+  // already has the AWB it queried by. Mismatch on a present awb is
+  // a stronger signal (we asked for X, SF returned Y); guard
+  // explicitly.
+  return { externalId: String(idRaw) };
 }
 
 export function parseSuiteFleetTaskResponse(
@@ -385,11 +499,14 @@ export function createSuiteFleetTaskClient(
         // GET (/api/tasks/awb/{awb}/task-activities, endpoint
         // confirmed via SF API docs reading 4 May 2026).
         //
-        // TODO(D8-4b): replace the parse-only branch with a full
-        // catch-and-reconcile: getTaskByAwb(session, awb) →
-        // markTaskPushed(taskId, externalId). First-run empirical
-        // capture validates the timeline response shape includes the
-        // SF task `id` field needed for the reconcile.
+        // D8-4b: the typed error still fires here at the adapter
+        // boundary. The cron-push service (consumer side) catches
+        // `SuiteFleetAwbExistsError`, calls
+        // `getTaskByAwb(session, customerId, awb)` (implemented
+        // below), extracts the SF task id from the timeline response,
+        // and `markTaskPushed`s the local row. See
+        // `task-push/service.ts`'s reconcile branch for the full
+        // sequence.
         const awbMatch = responseText.match(AWB_EXISTS_ERROR_REGEX);
         if (awbMatch) {
           throw new SuiteFleetAwbExistsError(awbMatch[1], response.status, responseText);
@@ -417,6 +534,105 @@ export function createSuiteFleetTaskClient(
         customer_order_number: request.customerOrderNumber,
         external_id: result.externalId,
         tracking_number: result.trackingNumber,
+      });
+
+      return result;
+    },
+
+    async getTaskByAwb({ session, customerId, awb }) {
+      // D8-4b: AWB-exists reconcile path. SF endpoint per docs reading
+      // 4 May 2026 (suitefleet.readme.io). Path-param AWB; customerId
+      // as a query param mirrors createTask's defensive add (D8-4a).
+      // No second-attempt retry on transient failures — same
+      // single-attempt policy as createTask, applied to the read side
+      // for consistency. The cron's outer caller treats a thrown
+      // reconcile failure as DLQ-routable (see service.ts).
+      const url = `${baseUrl}/api/tasks/awb/${encodeURIComponent(awb)}/task-activities?customerId=${encodeURIComponent(String(customerId))}`;
+
+      let response: Response;
+      try {
+        response = await deps.fetch(url, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+            Clientid: deps.clientId,
+            Accept: "application/json",
+          },
+        });
+      } catch (err) {
+        log.warn({
+          operation: "get_task_by_awb",
+          error_code: "network_error",
+          tenant_id: session.tenantId,
+          awb,
+          message: err instanceof Error ? err.message : "unknown",
+        });
+        throw new CredentialError(
+          "SuiteFleet getTaskByAwb network error — single-attempt policy, no retry",
+          err instanceof Error ? { cause: err } : undefined,
+        );
+      }
+
+      if (response.status >= 500) {
+        log.warn({
+          operation: "get_task_by_awb",
+          status: response.status,
+          error_code: "server_5xx",
+          tenant_id: session.tenantId,
+          awb,
+        });
+        throw new CredentialError(
+          `SuiteFleet getTaskByAwb returned ${response.status} — single-attempt policy, no retry`,
+        );
+      }
+
+      if (response.status >= 400) {
+        let responseText: string;
+        try {
+          responseText = await response.text();
+        } catch {
+          responseText = "";
+        }
+        log.warn({
+          operation: "get_task_by_awb",
+          status: response.status,
+          error_code: "client_4xx",
+          tenant_id: session.tenantId,
+          awb,
+          response_excerpt: responseText.slice(0, 400),
+        });
+        if (response.status === 401) {
+          throw new CredentialError(
+            "SuiteFleet getTaskByAwb rejected — credentials invalid or session expired",
+          );
+        }
+        // 404 is operationally meaningful: SF claimed the AWB exists
+        // (the createTask 23505 path) but the timeline lookup says no
+        // task — vendor-side inconsistency. Surface as a typed
+        // `ValidationError` so the cron records it with a clear
+        // failure_detail rather than a generic 4xx classification.
+        throw new ValidationError(
+          `SuiteFleet getTaskByAwb rejected with status ${response.status}: ${responseText.slice(0, 400)}`,
+        );
+      }
+
+      let parsedBody: unknown;
+      try {
+        parsedBody = await response.json();
+      } catch (err) {
+        throw new SuiteFleetTimelineParseError(
+          "response was not valid JSON",
+          err instanceof Error ? err.message : "unknown",
+        );
+      }
+
+      const result = parseSuiteFleetTaskActivitiesResponse(parsedBody);
+
+      log.info({
+        operation: "get_task_by_awb",
+        tenant_id: session.tenantId,
+        awb,
+        external_id: result.externalId,
       });
 
       return result;

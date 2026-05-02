@@ -378,6 +378,28 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "task_id (uuid), attempt_count (int), failure_reason (enum), http_status (int, nullable for network/timeout).",
     systemOnly: true,
   },
+  // Day 8 / D8-4b — AWB-exists reconcile path. SF returned 23505/AWB-exists
+  // on createTask (i.e. the AWB already exists in SF, typically because a
+  // prior cron pass got the request through but the response was lost on
+  // the planner side). The reconcile path GETs the SF task by AWB,
+  // extracts the existing SF task id, and marks the local task as pushed
+  // with that id — closing the duplicate-physical-delivery loop without
+  // a second create. Distinct from `task.pushed` (which doesn't exist as
+  // a typed event yet) so audit-log queries can isolate reconcile-path
+  // pushes from clean first-attempt pushes; the metadata also flags
+  // whether a prior `failed_pushes` row was resolved as part of this
+  // reconcile (i.e. we're closing out a parse-only-era DLQ entry from
+  // a D8-4a-shipped pre-reconcile cron pass).
+  "task.pushed_via_reconcile": {
+    id: "task.pushed_via_reconcile",
+    resource: "task",
+    action: "pushed_via_reconcile",
+    description:
+      "Day 8 / D8-4b. The cron's bulk-push phase received a 23505/AWB-exists from SF on createTask, then GET /api/tasks/awb/{awb}/task-activities to extract the existing SF task id and marked the local task as pushed via that id. System-only — only the cron's reconcile branch writes here. Distinct from a hypothetical `task.pushed` so reconcile-path pushes are isolable in audit-log queries (operationally meaningful — repeated reconciles for the same tenant signal upstream duplicate-AWB exposure).",
+    metadataNotes:
+      "task_id (uuid), external_id (string — SF task id from the timeline GET, stringified), awb (string — the AWB parsed from the AWB-exists error message), customer_order_number (string — the planner-side order id we'd have sent on the original create), prior_failed_push_resolved (boolean — true when an unresolved failed_pushes row from a prior cron pass was resolved as part of this reconcile, false on first-time AWB-exists with no DLQ history).",
+    systemOnly: true,
+  },
 
   // Day 7 / C-2 — nightly cron generation lifecycle. These are
   // META events (one per cron invocation per tenant), not per-task.

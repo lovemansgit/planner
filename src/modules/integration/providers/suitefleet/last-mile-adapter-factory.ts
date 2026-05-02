@@ -138,6 +138,25 @@ export function createSuiteFleetLastMileAdapter(
       });
     },
 
+    async getTaskByAwb(session, awb) {
+      // D8-4b: same per-call construction as createTask. customerId is
+      // per-tenant; the underlying task-client routes the AWB into a
+      // path param and customerId as a query param (defensive, mirrors
+      // D8-4a's createTask URL shape).
+      const credentials = await resolveCredentials(session.tenantId);
+      const taskClient = createSuiteFleetTaskClient({
+        fetch: deps.fetch,
+        clock: deps.clock,
+        clientId: credentials.clientId,
+        baseUrl: deps.baseUrl,
+      });
+      return taskClient.getTaskByAwb({
+        session,
+        customerId: credentials.customerId,
+        awb,
+      });
+    },
+
     async fetchAssetTrackingByAwb(session, awb) {
       // Same per-call construction pattern as createTask — clientId
       // is per-tenant and resolveCredentials is the canonical

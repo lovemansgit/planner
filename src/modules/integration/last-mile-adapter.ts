@@ -33,6 +33,7 @@ import type {
   AuthenticatedSession,
   HeadersLike,
   InternalTaskStatus,
+  TaskByAwbResult,
   TaskCreateRequest,
   TaskCreateResult,
   WebhookEvent,
@@ -47,6 +48,22 @@ export interface LastMileAdapter {
     session: AuthenticatedSession,
     task: TaskCreateRequest,
   ): Promise<TaskCreateResult>;
+  /**
+   * Day 8 / D8-4b. Look up the existing provider-side task by its AWB
+   * and return the minimal `{ externalId }` shape the cron's
+   * AWB-exists reconcile branch needs. Throws typed errors so callers
+   * can branch on parse-vs-network-vs-auth without parsing messages
+   * (SuiteFleet implementation: `SuiteFleetTimelineParseError` on
+   * shape mismatch; `CredentialError` on auth failures or 5xx;
+   * `ValidationError` on other 4xx).
+   *
+   * The full timeline / task-activities payload is intentionally NOT
+   * exposed — see `TaskByAwbResult` jsdoc for the rationale.
+   */
+  getTaskByAwb(
+    session: AuthenticatedSession,
+    awb: string,
+  ): Promise<TaskByAwbResult>;
   /**
    * Fetch the asset-tracking records for a given AWB. Returns the
    * unwrapped `content[]` array from SF's Spring Data paginated

@@ -383,6 +383,7 @@ type PushOutcomeSummary =
       failedToDLQ: number;
       skippedDistrict: number;
       awbExists: number;
+      awbExistsReconciled: number;
     }
   | {
       kind: "tenant_skipped";
@@ -423,6 +424,7 @@ interface RunSummary {
     total_failed_to_dlq: number;
     total_skipped_district: number;
     total_awb_exists: number;
+    total_awb_exists_reconciled: number;
   };
 }
 
@@ -472,6 +474,7 @@ function summarisePushOutcome(outcome: PushTenantOutcome): PushOutcomeSummary {
     failedToDLQ: outcome.failedToDLQ,
     skippedDistrict: outcome.skippedDistrict,
     awbExists: outcome.awbExists,
+    awbExistsReconciled: outcome.awbExistsReconciled,
   };
 }
 
@@ -488,6 +491,7 @@ function computeRunSummary(perTenant: readonly PerTenantPair[]): RunSummary {
       total_failed_to_dlq: 0,
       total_skipped_district: 0,
       total_awb_exists: 0,
+      total_awb_exists_reconciled: 0,
     },
   };
   for (const entry of perTenant) {
@@ -500,6 +504,7 @@ function computeRunSummary(perTenant: readonly PerTenantPair[]): RunSummary {
         summary.push.total_failed_to_dlq += entry.push.failedToDLQ;
         summary.push.total_skipped_district += entry.push.skippedDistrict;
         summary.push.total_awb_exists += entry.push.awbExists;
+        summary.push.total_awb_exists_reconciled += entry.push.awbExistsReconciled;
         break;
       case "tenant_skipped":
         summary.push.tenant_skipped += 1;

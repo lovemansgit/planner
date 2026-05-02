@@ -38,7 +38,11 @@ import { ForbiddenError, ValidationError } from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
-import { insertFailedPush, updateFailedPushAttempt } from "./repository";
+import {
+  insertFailedPush,
+  markUnresolvedAsResolved,
+  updateFailedPushAttempt,
+} from "./repository";
 import type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
 
 // Closed set of valid failure reasons — runtime guard against bypass
@@ -159,6 +163,49 @@ export async function recordFailedPush(
   });
 
   return recorded;
+}
+
+// -----------------------------------------------------------------------------
+// markFailedPushResolved
+// -----------------------------------------------------------------------------
+
+/**
+ * Day 8 / D8-4b. Resolve the unresolved failed_pushes row for `taskId`,
+ * if one exists. System-only — the cron's AWB-exists reconcile branch
+ * is the canonical caller. Idempotent: returns `null` (and emits no
+ * event) when no unresolved row matches.
+ *
+ * NO audit emit is added here — the calling reconcile branch emits
+ * `task.pushed_via_reconcile` once per reconcile pass and threads the
+ * boolean `prior_failed_push_resolved` into that event's metadata.
+ * Emitting a second event from this method would double-count the
+ * reconcile in audit-log queries (one event per logical operation).
+ *
+ * `resolved_by` is set to NULL — the failed_pushes.resolved_by column
+ * is FK to users(id), so the synthetic system-actor identifier
+ * (e.g. 'cron:generate_tasks') can't land there. System identity is
+ * preserved in `resolution_notes` instead. The post-MVP operator-UI
+ * path will need a sibling method that accepts a real userId.
+ */
+export async function markFailedPushResolved(
+  ctx: RequestContext,
+  taskId: Uuid,
+  resolutionNotes: string,
+): Promise<FailedPush | null> {
+  assertSystemActor(ctx, "task:push_resolved");
+  assertTenantScoped(ctx, "task:push_resolved");
+
+  const normalisedTaskId = requireNonEmpty(taskId, "taskId");
+  const trimmedNotes = resolutionNotes.trim();
+  if (trimmedNotes.length === 0) {
+    throw new ValidationError("resolutionNotes must be non-empty");
+  }
+
+  const tenantId = ctx.tenantId;
+  return withServiceRole(
+    `task:push_resolved for tenant ${tenantId} (task ${normalisedTaskId})`,
+    async (tx) => markUnresolvedAsResolved(tx, tenantId, normalisedTaskId, null, trimmedNotes),
+  );
 }
 
 // -----------------------------------------------------------------------------

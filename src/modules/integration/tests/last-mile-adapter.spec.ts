@@ -81,6 +81,14 @@ class StubAdapter implements LastMileAdapter {
       createdAt: "2026-04-29T09:00:00.000Z",
     };
   }
+  async getTaskByAwb(
+    session: AuthenticatedSession,
+    awb: string,
+  ): Promise<import("../types").TaskByAwbResult> {
+    void session;
+    void awb;
+    return { externalId: "stub-recovered-id" };
+  }
   async verifyWebhookRequest(
     tenantId: string,
     headers: HeadersLike,
