@@ -50,13 +50,12 @@ import type { GenerateForWindowResult } from "@/modules/task-generation";
 import { nextCalendarDateInDubai } from "@/modules/task-generation/dubai-date";
 import { createSuiteFleetLastMileAdapter } from "@/modules/integration";
 import { pushTasksForTenant, type PushTenantOutcome } from "@/modules/task-push";
-import { withServiceRole } from "@/shared/db";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
 import type { Actor, RequestContext } from "@/shared/tenant-context";
 import type { Uuid } from "@/shared/types";
 
-import { sql as sqlTag } from "drizzle-orm";
+import { listCronEligibleTenantIds } from "./list-cron-eligible-tenants";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -122,11 +121,16 @@ export async function GET(req: Request): Promise<Response> {
   runLog.info({}, "task generation cron invocation accepted");
 
   // --------------------------------------------------------------------------
-  // 3. Enumerate tenants
+  // 3. Enumerate cron-eligible tenants
   // --------------------------------------------------------------------------
+  // β (Day 8): the eligibility filter
+  // (`suitefleet_customer_code IS NOT NULL AND <> ''`) is at the
+  // enumeration layer. Tenants without a customer_code never enter
+  // the per-tenant loop. See list-cron-eligible-tenants.ts for the
+  // production-readiness-gate rationale.
   let tenantIds: readonly Uuid[];
   try {
-    tenantIds = await listAllTenantIds();
+    tenantIds = await listCronEligibleTenantIds();
   } catch (err) {
     runLog.error(
       { error: err instanceof Error ? err.message : String(err) },
@@ -136,12 +140,15 @@ export async function GET(req: Request): Promise<Response> {
     // is an outage signal worth waking ops up for.
     captureException(err, {
       component: "cron_generate_tasks",
-      operation: "list_tenants",
+      operation: "list_cron_eligible_tenants",
       request_id: requestId,
     });
     return new Response(null, { status: 500 });
   }
-  runLog.info({ tenant_count: tenantIds.length }, "tenants enumerated for cron run");
+  runLog.info(
+    { tenant_count: tenantIds.length },
+    "cron-eligible tenants enumerated (filter: suitefleet_customer_code present)",
+  );
 
   // --------------------------------------------------------------------------
   // 4. Per-tenant generation + push
@@ -306,16 +313,6 @@ export async function GET(req: Request): Promise<Response> {
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
-
-async function listAllTenantIds(): Promise<readonly Uuid[]> {
-  return withServiceRole("cron:generate_tasks list tenants", async (tx) => {
-    type Row = { id: string } & Record<string, unknown>;
-    const rows = await tx.execute<Row>(sqlTag`
-      SELECT id FROM tenants ORDER BY created_at ASC
-    `);
-    return rows.map((r) => r.id);
-  });
-}
 
 /**
  * Build a system RequestContext for one per-tenant invocation. The
