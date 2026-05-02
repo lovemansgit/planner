@@ -2,26 +2,30 @@
 // SuiteFleet `GET /api/tasks/awb/{awb}/task-activities` response fixture
 // =============================================================================
 //
-// >>> DOC-DERIVED, NOT CAPTURE-DERIVED <<<
+// >>> DOC-INFERRED SHAPE, NOT CAPTURE-DERIVED <<<
 //
-// This fixture pins the response shape for the AWB-exists reconcile
-// path (D8-4b). The shape is reconstructed from SuiteFleet API docs
-// (suitefleet.readme.io reading 4 May 2026), NOT from a live capture.
-// The third cron trigger (2 May 2026) hit a clean first-time push so
-// no live timeline was captured pre-D8-4b.
+// Reconstructed from SuiteFleet API endpoint naming
+// (suitefleet.readme.io getTimelineByAwb reading 4 May 2026), NOT
+// from a documented schema OR a live response capture. The
+// readme.io getTimelineByAwb page didn't expose a schema dump in
+// what we fetched, so `{ task: { id, awb }, activities: [...] }`
+// below is a reasonable structural guess from the endpoint's name
+// — it is NOT attested by any SuiteFleet artefact. The third cron
+// trigger (2 May 2026) hit a clean first-time push so no live
+// timeline was captured pre-D8-4b.
 //
 // FIRST REAL PRODUCTION 23505/AWB-EXISTS VALIDATES OR INVALIDATES
-// THIS FIXTURE. If the production response shape diverges:
+// THIS SHAPE GUESS. If the production response diverges:
 //
-//   - The strict parser (`parseSuiteFleetTaskActivitiesResponse`)
+//   - Strict parser (`parseSuiteFleetTaskActivitiesResponse`)
 //     throws `SuiteFleetTimelineParseError` rather than silently
 //     mis-extracting. The cron's reconcile branch records a
-//     `failed_pushes` row with failure_detail starting with
+//     `failed_pushes` row with failure_detail prefixed
 //     `awb_exists_reconcile_failed: <awb>; getTaskByAwb error: <parse-msg>`.
 //
-//   - Operators on /admin/failed-pushes see the parse-error message
-//     directly. Update this fixture (and the parser if needed) and
-//     re-run the cron.
+//   - Operators see the parse-error message directly on
+//     /admin/failed-pushes. Update this fixture (and the parser if
+//     needed) and re-run the cron.
 //
 // Reviewer-locked posture (D8-4b): silent mis-extraction is the
 // failure mode we explicitly avoid. Strict shape parser + typed
