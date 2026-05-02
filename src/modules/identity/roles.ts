@@ -118,6 +118,12 @@ const ROLES_DRAFT = {
       "consignee:delete",
       "subscription:read",
       "task:read",
+      // Day 8 / D8-6 — CS Agent's hand-rolled list mirrors the
+      // "every role with task:read also grants task:print_labels"
+      // intent. Without this explicit add, CS Agent would see tasks
+      // but not be able to print their labels — operationally wrong
+      // for support investigations where they need the AWB sheet.
+      "task:print_labels",
       "audit_event:read",
     ]),
   },

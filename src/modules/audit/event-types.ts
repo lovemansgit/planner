@@ -401,6 +401,29 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: true,
   },
 
+  // Day 8 / D8-6 — operator-driven SuiteFleet label print. POST
+  // /api/tasks/labels triggers a server-side fetch to SF's
+  // generate-label endpoint and streams the rendered PDF back to
+  // the operator. The visibility filter at the route layer drops
+  // task IDs the requesting tenant doesn't own; the
+  // requested_count vs printed_count split surfaces that filter
+  // for forensic queries — useful when an operator says "I selected
+  // 30 tasks but only got 28 in the PDF."
+  //
+  // systemOnly: false because actor.kind === 'user' for the
+  // operator flow. The downstream SF call is server-side but
+  // attribution stays with the operator.
+  "task.labels_printed": {
+    id: "task.labels_printed",
+    resource: "task",
+    action: "labels_printed",
+    description:
+      "Day 8 / D8-6. An operator generated SuiteFleet shipment labels for one or more tasks via /api/tasks/labels. Server-side passthrough of the SF generate-label endpoint — token never reaches the operator browser. Single event per operator click; metadata captures the requested-vs-printed split so post-hoc queries can surface visibility-filter drops.",
+    metadataNotes:
+      "task_ids[] (uuid[] — IDs the operator submitted, after Zod validation but before the visibility filter), format (string — 'indv-small' in pilot; documented for future per-format dispatch), requested_count (int — task_ids.length), printed_count (int — count after the visibility filter; differs from requested when some submitted IDs aren't in the requesting tenant's task table).",
+    systemOnly: false,
+  },
+
   // Day 8 / D8-5 — manual DLQ retry from /admin/failed-pushes. Operator-
   // driven: a Tenant Admin clicks the retry button on the admin UI;
   // the route handler authorizes via `failed_pushes:retry`, then a

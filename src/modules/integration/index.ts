@@ -69,6 +69,15 @@ export type {
   SuiteFleetAssetTrackingClientDeps,
 } from "./providers/suitefleet/asset-tracking-client";
 
+export {
+  createSuiteFleetLabelClient,
+  buildSuiteFleetLabelUrl,
+} from "./providers/suitefleet/label-client";
+export type {
+  SuiteFleetLabelClient,
+  SuiteFleetLabelClientDeps,
+} from "./providers/suitefleet/label-client";
+
 // Day 5 / T-8 — assembly factory that combines the primitives above
 // into a single constructable LastMileAdapter instance.
 export { createSuiteFleetLastMileAdapter } from "./providers/suitefleet/last-mile-adapter-factory";

@@ -62,10 +62,13 @@ import type { Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
 
+import type { LastMileAdapter } from "../integration";
+
 import {
   findTaskById,
   insertTaskWithPackages,
   listTasksByTenant,
+  listVisibleTaskIds,
   updateTask as updateTaskRow,
 } from "./repository";
 import type {
@@ -665,3 +668,146 @@ export async function updateTask(
   return result.row;
 }
 
+
+// =============================================================================
+// printLabelsForTasks — Day 8 / D8-6
+// =============================================================================
+//
+// Operator-driven SuiteFleet label print. POST /api/tasks/labels calls
+// here with the task IDs the operator selected; the route streams the
+// returned PDF buffer back as application/pdf.
+//
+// Architectural rule (load-bearing — see
+// memory/followup_suitefleet_label_endpoint.md): the operator browser
+// MUST NEVER see the SF label URL or the bearer token. The URL is
+// constructed inside the SuiteFleet adapter (label-client.ts) and
+// fetched server-side; only the PDF bytes leave the deploy boundary.
+// This service sits between the route and the adapter — its
+// contract is `(taskIds, adapter) → PDF buffer + counts`, never a
+// URL string.
+//
+// Visibility filter (silent drop):
+//   The operator submits a list of task IDs. The service filters via
+//   listVisibleTaskIds — IDs that don't belong to the requesting
+//   tenant drop. Drops are silent (no per-ID 404/403) to avoid
+//   leaking cross-tenant existence. The audit event captures
+//   `requested_count` vs `printed_count` for forensic queries on
+//   support investigations like "operator selected 30 tasks but only
+//   28 came back in the PDF".
+//
+// Adapter injection:
+//   Mirrors the D8-5 retryFailedPush pattern — adapter is passed in
+//   by the route handler. Lets tests stub the SF call without going
+//   through the credential resolver.
+
+/**
+ * Pilot-scope upper bound on tasks per request. Bounds single-PDF
+ * size and limits the comma-separated taskId query length. SF's
+ * actual upper bound is undocumented; if production rejects long
+ * lists, lower this empirically (open question in
+ * followup_suitefleet_label_endpoint.md).
+ *
+ * The Zod schema at the route layer enforces this — the service
+ * trusts the input but documents the cap here for cross-reference.
+ */
+export const PRINT_LABELS_MAX_TASKS_PER_REQUEST = 100;
+
+/** Pilot scope: 4x6 indv-small label format only. */
+export const PRINT_LABELS_FORMAT = "indv-small" as const;
+
+export interface PrintLabelsForTasksResult {
+  /** Rendered PDF binary as returned by the SF endpoint. */
+  readonly pdfBuffer: Buffer;
+  /** Pilot-fixed format constant; passed through to the audit metadata. */
+  readonly format: typeof PRINT_LABELS_FORMAT;
+  /** task_ids.length — what the operator submitted. */
+  readonly requestedCount: number;
+  /**
+   * Count after the visibility filter. May differ from
+   * requestedCount when some submitted IDs aren't in the requesting
+   * tenant. Operationally meaningful — surfaces in the audit metadata.
+   */
+  readonly printedCount: number;
+  /**
+   * The actual IDs that survived the visibility filter — passed to
+   * the SF adapter and rendered into the PDF. Order is NOT
+   * input-preserved (Postgres `= ANY($1)` doesn't guarantee).
+   */
+  readonly printedTaskIds: readonly Uuid[];
+}
+
+/**
+ * Fetch SuiteFleet shipment-label PDFs for one or more tasks.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `task:print_labels`.
+ *   - ValidationError   no tenant context, empty input, or no tasks
+ *                       survived the visibility filter (operator
+ *                       submitted only cross-tenant or bogus IDs).
+ *   - CredentialError   SF auth/connectivity failure (mapped to 502
+ *                       at the route layer).
+ */
+export async function printLabelsForTasks(
+  ctx: RequestContext,
+  taskIds: readonly Uuid[],
+  adapter: LastMileAdapter,
+): Promise<PrintLabelsForTasksResult> {
+  requirePermission(ctx, "task:print_labels");
+  assertTenantScoped(ctx, "task:print_labels");
+  if (taskIds.length === 0) {
+    throw new ValidationError("printLabelsForTasks: taskIds must be non-empty");
+  }
+  const tenantId = ctx.tenantId;
+
+  // Visibility filter via withTenant + RLS (defence-in-depth alongside
+  // the explicit tenant_id WHERE in listVisibleTaskIds).
+  const printedIds = await withTenant(tenantId, async (tx) =>
+    listVisibleTaskIds(tx, tenantId, taskIds),
+  );
+  if (printedIds.length === 0) {
+    // Every submitted ID dropped by the filter. Distinct from "no
+    // tasks selected" — this means the operator submitted IDs but
+    // none belong to their tenant. Either a UI bug or a deliberate
+    // probe. Surface as 400 ValidationError; the audit metadata
+    // captures the requested-vs-printed split for forensic review.
+    throw new ValidationError(
+      "printLabelsForTasks: no submitted task IDs are visible in the tenant; refresh the list",
+    );
+  }
+
+  // Authenticate + render. The session token never leaves the
+  // adapter — see label-client.ts header.
+  const session = await adapter.authenticate(tenantId);
+  const pdfBuffer = await adapter.printLabels(session, printedIds);
+
+  // Audit emit — operator-attributed. task_ids carries the SUBMITTED
+  // list (pre-filter) so the audit is a faithful record of what the
+  // operator clicked; the requested-vs-printed split is in the
+  // counters.
+  await emit({
+    eventType: "task.labels_printed",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "task",
+    // No single resourceId — the event spans N tasks. Use the first
+    // submitted id as a representative anchor for the resourceId
+    // column; the full list is in metadata.task_ids[].
+    resourceId: taskIds[0]!,
+    metadata: {
+      task_ids: taskIds,
+      format: PRINT_LABELS_FORMAT,
+      requested_count: taskIds.length,
+      printed_count: printedIds.length,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return {
+    pdfBuffer,
+    format: PRINT_LABELS_FORMAT,
+    requestedCount: taskIds.length,
+    printedCount: printedIds.length,
+    printedTaskIds: printedIds,
+  };
+}
