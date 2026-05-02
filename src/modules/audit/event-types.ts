@@ -401,6 +401,33 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: true,
   },
 
+  // Day 8 / D8-5 — manual DLQ retry from /admin/failed-pushes. Operator-
+  // driven: a Tenant Admin clicks the retry button on the admin UI;
+  // the route handler authorizes via `failed_pushes:retry`, then a
+  // service-level bridge (retryFailedPush in failed-pushes/service.ts)
+  // builds an internal `system:dlq_retry` system context to call into
+  // the task-push module's pushSingleTask helper, which reuses the
+  // exact same per-task push logic as the cron loop.
+  //
+  // This event captures the OPERATOR ACTION (who clicked retry,
+  // against which task, what was the prior attempt count, what was
+  // the outcome). The downstream task push emits its own audit
+  // events (task.pushed_via_reconcile on AWB reconcile success,
+  // task.push_failed on retry failure) — this event sits one layer
+  // above and is operator-attributed, not system-attributed.
+  // systemOnly: false because actor.kind === 'user' for legitimate
+  // emits.
+  "failed_push.retried": {
+    id: "failed_push.retried",
+    resource: "failed_push",
+    action: "retried",
+    description:
+      "Day 8 / D8-5. A Tenant Admin manually retried an unresolved failed_pushes row from the /admin/failed-pushes UI. Operator-attributed (user actor); the downstream task-push outcome emits its own task.pushed_via_reconcile or task.push_failed event. Distinct from the cron-path retries (which are system-attributed via task.push_failed alone) so audit-log queries can isolate operator-initiated retries.",
+    metadataNotes:
+      "task_id (uuid), failed_push_id (uuid), prior_attempt_count (int — attempt_count BEFORE the retry; the post-retry value lands on the task.push_failed or task.pushed_via_reconcile event), retry_outcome (string union: 'succeeded' | 'awb_reconciled' | 'awb_exists' | 'failed_to_dlq' | 'skipped_district' | 'tenant_skipped' | 'task_already_pushed' | 'task_not_found').",
+    systemOnly: false,
+  },
+
   // Day 7 / C-2 — nightly cron generation lifecycle. These are
   // META events (one per cron invocation per tenant), not per-task.
   // The cron also emits per-task `task.created` events for traceability;

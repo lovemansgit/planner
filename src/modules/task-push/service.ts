@@ -112,7 +112,9 @@ import type { Uuid } from "../../shared/types";
 
 import { sql as sqlTag } from "drizzle-orm";
 
-import type { PushTenantOutcome } from "./types";
+import { findTaskById } from "../tasks/repository";
+
+import type { PushTenantOutcome, SinglePushOutcome } from "./types";
 
 const log = logger.with({ component: "task_push_service" });
 
@@ -742,5 +744,366 @@ export async function pushTasksForTenant(
     skippedDistrict,
     awbExists,
     awbExistsReconciled,
+  };
+}
+
+// =============================================================================
+// pushSingleTask — Day 8 / D8-5
+// =============================================================================
+// Single-task variant of the cron's per-iteration push logic. Reused by the
+// operator-driven DLQ retry path (failed-pushes/service.ts retryFailedPush).
+//
+// Mirrors the cron loop's per-task body:
+//   1. Load tenant config; fail-closed on missing customer_code.
+//   2. Load task; reject if not found or already pushed.
+//   3. Load consignee; pre-flight unknown_district guard.
+//   4. Authenticate, build payload, push.
+//   5. AWB-exists reconcile branch (mirror D8-4b).
+//   6. Success: markTaskPushed + (if from DLQ retry) markFailedPushResolved.
+//   7. Failure: recordFailedPushAttempt (with the load-bearing
+//      `awb_exists_reconcile_failed:` prefix on reconcile failures).
+//
+// What pushSingleTask does NOT do (intentional):
+//   - Throttle. Single-task = no inter-task pacing. Bulk retry from
+//     the admin UI throttles client-side at 5 req/sec by awaiting
+//     each route call with a 200ms delay between dispatches.
+//   - Emit `tenant.push_skipped`. That event is for the cron's
+//     bulk-pass scope; for single-task retries, the operator-layer
+//     `failed_push.retried` event carries the outcome.
+// =============================================================================
+
+/**
+ * Push one task to the last-mile adapter, returning a typed outcome
+ * the caller can branch on. System-actor-only (mirrors the cron's
+ * per-task primitives — recordFailedPushAttempt, markFailedPushResolved
+ * — which are all system-only).
+ *
+ * The retry path in failed-pushes/service.ts builds a synthetic
+ * `system:dlq_retry` actor before calling here; the user-attributed
+ * `failed_push.retried` event is emitted at THAT layer, not this one.
+ *
+ * Throws:
+ *   - ForbiddenError       user actor reached this path (routing bug).
+ *   - ValidationError      missing tenant context, or DB-level
+ *                          inconsistency (e.g. consignee row missing
+ *                          for an existing task).
+ */
+export async function pushSingleTask(
+  ctx: RequestContext,
+  taskId: Uuid,
+  adapter: LastMileAdapter,
+): Promise<SinglePushOutcome> {
+  assertSystemActor(ctx, "task-push:push_single_task");
+  if (!ctx.tenantId) {
+    throw new ValidationError("task-push:push_single_task requires a tenant context");
+  }
+  const tenantId = ctx.tenantId;
+  const taskLog = log.with({
+    tenant_id: tenantId,
+    task_id: taskId,
+    request_id: ctx.requestId,
+    component_op: "push_single_task",
+  });
+
+  // ---------------------------------------------------------------------------
+  // Step 1: tenant config + customer_code guard
+  // ---------------------------------------------------------------------------
+  const config = await withServiceRole(
+    `task-push:single load_config for tenant ${tenantId}`,
+    async (tx) => {
+      const rows = await tx.execute<TenantConfigRow>(sqlTag`
+        SELECT suitefleet_customer_code
+        FROM tenants
+        WHERE id = ${tenantId}
+      `);
+      const row = rows[0];
+      if (!row) {
+        throw new ValidationError(
+          `task-push:push_single_task tenant ${tenantId} not found`,
+        );
+      }
+      return {
+        tenantId,
+        suitefleetCustomerCode: row.suitefleet_customer_code,
+      } satisfies TenantPushConfig;
+    },
+  );
+  const customerCode = config.suitefleetCustomerCode?.trim();
+  if (!customerCode) {
+    taskLog.warn(
+      { reason: "missing_customer_code" },
+      "push_single_task tenant_skipped — customer_code missing",
+    );
+    return { kind: "tenant_skipped", reason: "missing_customer_code" };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 2: load task; reject if not found or already pushed
+  // ---------------------------------------------------------------------------
+  const task = await withServiceRole(
+    `task-push:single load_task ${taskId}`,
+    async (tx) => findTaskById(tx, taskId),
+  );
+  if (!task || task.tenantId !== tenantId) {
+    taskLog.warn({}, "push_single_task task_not_found (cross-tenant or missing)");
+    return { kind: "task_not_found" };
+  }
+  if (task.pushedToExternalAt !== null && task.externalId !== null) {
+    taskLog.info(
+      { external_id: task.externalId },
+      "push_single_task task_already_pushed — idempotent no-op",
+    );
+    return { kind: "task_already_pushed", externalId: task.externalId };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 3: load consignee + unknown_district guard
+  // ---------------------------------------------------------------------------
+  const consignee = await withServiceRole(
+    `task-push:single load_consignee for task ${task.id}`,
+    async (tx) => {
+      const rows = await tx.execute<ConsigneeRow>(sqlTag`
+        SELECT id, name, phone, email, address_line, emirate_or_region, district
+        FROM consignees
+        WHERE id = ${task.consigneeId}
+      `);
+      const row = rows[0];
+      if (!row) {
+        throw new ValidationError(
+          `task-push:push_single_task consignee ${task.consigneeId} not found for task ${task.id}`,
+        );
+      }
+      return {
+        id: row.id,
+        name: row.name,
+        phone: row.phone,
+        email: row.email,
+        addressLine: row.address_line,
+        emirateOrRegion: row.emirate_or_region,
+        district: row.district,
+      } satisfies ConsigneePushSnapshot;
+    },
+  );
+  if (consignee.district === UNKNOWN_DISTRICT_SENTINEL) {
+    taskLog.warn(
+      { reason: "unknown_district", consignee_id: consignee.id },
+      "push_single_task skipping — consignee.district is the UNKNOWN sentinel",
+    );
+    try {
+      await recordFailedPushAttempt(ctx, {
+        taskId: task.id,
+        taskPayload: { skipped_pre_flight: true, reason: "unknown_district" },
+        failureReason: "unknown",
+        failureDetail: `unknown_district: consignee ${consignee.id} (${consignee.name}) carries the 'UNKNOWN' district sentinel — not pushable until backfilled (see D8-2 migration)`,
+      });
+    } catch (err) {
+      captureException(err, {
+        component: "task_push_service",
+        operation: "single_task_unknown_district_dlq_write",
+        tenant_id: tenantId,
+        task_id: task.id,
+      });
+    }
+    return { kind: "skipped_district", district: consignee.district };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 4: authenticate + push
+  // ---------------------------------------------------------------------------
+  const session = await adapter.authenticate(tenantId);
+  const request = buildTaskCreateRequest(tenantId, task, consignee);
+
+  let pushResult;
+  try {
+    pushResult = await adapter.createTask(session, request as TaskCreateRequest);
+  } catch (err) {
+    // ---------------------------------------------------------------------
+    // D8-4b reconcile branch (mirror of pushTasksForTenant)
+    // ---------------------------------------------------------------------
+    if (err instanceof SuiteFleetAwbExistsError) {
+      const reconcileLog = taskLog.with({ awb: err.awb });
+      let reconcileResult;
+      try {
+        reconcileResult = await adapter.getTaskByAwb(session, err.awb);
+      } catch (reconcileErr) {
+        const classified = classifyReconcileError(err.awb, reconcileErr);
+        reconcileLog.warn(
+          {
+            failure_reason: classified.reason,
+            http_status: classified.httpStatus,
+          },
+          "push_single_task AWB-exists reconcile failed — recording to DLQ",
+        );
+        try {
+          await recordFailedPushAttempt(ctx, {
+            taskId: task.id,
+            taskPayload: request as unknown as Record<string, unknown>,
+            failureReason: classified.reason,
+            failureDetail: classified.detail,
+            httpStatus: classified.httpStatus,
+          });
+        } catch (dlqErr) {
+          captureException(dlqErr, {
+            component: "task_push_service",
+            operation: "single_dlq_write_reconcile_failed",
+            tenant_id: tenantId,
+            task_id: task.id,
+            awb: err.awb,
+          });
+        }
+        return {
+          kind: "awb_exists",
+          awb: err.awb,
+          reconcileErrorMessage: classified.detail,
+        };
+      }
+      // Reconcile success
+      let priorFailedPushResolved = false;
+      try {
+        await withServiceRole(
+          `task-push:single mark_pushed_via_reconcile for task ${task.id}`,
+          async (tx) =>
+            markTaskPushed(tx, tenantId, task.id, reconcileResult.externalId, err.awb),
+        );
+        const resolved = await markFailedPushResolved(
+          ctx,
+          task.id,
+          "reconciled-via-awb-D8-5-retry",
+        );
+        priorFailedPushResolved = resolved !== null;
+      } catch (markErr) {
+        // EDGE CASE — D8-4b watch-item:
+        // followup_reconcile_recovered_local_write_failure.md
+        captureException(markErr, {
+          component: "task_push_service",
+          operation: "single_mark_pushed_via_reconcile",
+          tenant_id: tenantId,
+          task_id: task.id,
+          awb: err.awb,
+          external_id: reconcileResult.externalId,
+        });
+        return {
+          kind: "awb_exists",
+          awb: err.awb,
+          reconcileErrorMessage: `mark_pushed_via_reconcile failed: ${markErr instanceof Error ? markErr.message : String(markErr)}`,
+        };
+      }
+      await emit({
+        eventType: "task.pushed_via_reconcile",
+        actorKind: ctx.actor.kind,
+        actorId: actorIdFor(ctx.actor),
+        tenantId,
+        resourceType: "task",
+        resourceId: task.id,
+        metadata: {
+          task_id: task.id,
+          external_id: reconcileResult.externalId,
+          awb: err.awb,
+          customer_order_number: request.customerOrderNumber,
+          prior_failed_push_resolved: priorFailedPushResolved,
+        },
+        requestId: ctx.requestId,
+      });
+      reconcileLog.info(
+        {
+          external_id: reconcileResult.externalId,
+          prior_failed_push_resolved: priorFailedPushResolved,
+        },
+        "push_single_task AWB-exists reconcile ok",
+      );
+      return {
+        kind: "awb_reconciled",
+        externalId: reconcileResult.externalId,
+        awb: err.awb,
+        priorFailedPushResolved,
+      };
+    }
+
+    // ---------------------------------------------------------------------
+    // Non-AWB push failure → DLQ
+    // ---------------------------------------------------------------------
+    const classified = classifyAdapterError(err);
+    taskLog.warn(
+      {
+        failure_reason: classified.reason,
+        http_status: classified.httpStatus,
+      },
+      "push_single_task createTask failed — recording to DLQ",
+    );
+    try {
+      await recordFailedPushAttempt(ctx, {
+        taskId: task.id,
+        taskPayload: request as unknown as Record<string, unknown>,
+        failureReason: classified.reason,
+        failureDetail: classified.detail,
+        httpStatus: classified.httpStatus,
+      });
+    } catch (dlqErr) {
+      captureException(dlqErr, {
+        component: "task_push_service",
+        operation: "single_dlq_write",
+        tenant_id: tenantId,
+        task_id: task.id,
+        original_error: classified.detail.slice(0, 200),
+      });
+    }
+    return {
+      kind: "failed_to_dlq",
+      failureReason: classified.reason,
+      httpStatus: classified.httpStatus,
+      failureDetail: classified.detail,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 5: success — mark task pushed; idempotent close-out of any stale
+  //          failed_pushes row (covers the operator clicking retry on a
+  //          row whose task was already marked pushed in a parallel cron
+  //          pass — markFailedPushResolved is no-op if no unresolved row)
+  // ---------------------------------------------------------------------------
+  try {
+    await withServiceRole(
+      `task-push:single mark_pushed for task ${task.id}`,
+      async (tx) =>
+        markTaskPushed(
+          tx,
+          tenantId,
+          task.id,
+          pushResult.externalId,
+          pushResult.trackingNumber,
+        ),
+    );
+    // Close out any unresolved DLQ row left from a prior failure;
+    // idempotent (returns null if there was none).
+    await markFailedPushResolved(ctx, task.id, "resolved-via-D8-5-retry-success");
+  } catch (err) {
+    // SF accepted but local UPDATE failed. Same Sentry-loud posture as
+    // the cron loop's success path. The next cron pass will see
+    // pushed_to_external_at IS NULL and re-attempt — duplicate-physical-
+    // delivery risk worth waking ops up for.
+    captureException(err, {
+      component: "task_push_service",
+      operation: "single_mark_pushed_after_sf_success",
+      tenant_id: tenantId,
+      task_id: task.id,
+      external_id: pushResult.externalId,
+    });
+    return {
+      kind: "failed_to_dlq",
+      failureReason: "unknown",
+      failureDetail: `mark_pushed_after_sf_success failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  taskLog.info(
+    {
+      external_id: pushResult.externalId,
+      tracking_number: pushResult.trackingNumber,
+    },
+    "push_single_task createTask ok",
+  );
+  return {
+    kind: "succeeded",
+    externalId: pushResult.externalId,
+    trackingNumber: pushResult.trackingNumber,
   };
 }

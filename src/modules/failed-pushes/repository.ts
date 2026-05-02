@@ -235,3 +235,59 @@ export async function markUnresolvedAsResolved(
   if (rows.length === 0) return null;
   return mapRow(rows[0]);
 }
+
+/**
+ * Day 8 / D8-5 — read path for the /admin/failed-pushes UI.
+ *
+ * Returns unresolved failed_pushes rows for the tenant, ordered by
+ * `last_attempted_at DESC` so the most recently-failed surface first
+ * (matches operator triage instinct: deal with what just broke).
+ *
+ * The cron's retry-iteration target uses the same query shape; if the
+ * cron ever needs a different ordering (oldest-first to avoid
+ * starving long-stale failures), it owns its own helper rather than
+ * coupling to this admin-UI ordering.
+ *
+ * Tenant-scoped via WHERE clause (defence-in-depth alongside RLS).
+ * Returns `[]` for tenants with no unresolved rows.
+ */
+export async function listUnresolvedByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+): Promise<readonly FailedPush[]> {
+  const rows = await tx.execute<FailedPushRow>(sqlTag`
+    SELECT *
+    FROM failed_pushes
+    WHERE tenant_id = ${tenantId}
+      AND resolved_at IS NULL
+    ORDER BY last_attempted_at DESC
+  `);
+  return rows.map(mapRow);
+}
+
+/**
+ * Day 8 / D8-5 — point-read for the retry path. Looks up a single
+ * failed_pushes row by id, scoped to the tenant for defence-in-depth.
+ *
+ * Returns `null` when no row matches (id wrong, RLS-hidden cross-tenant,
+ * or tenant_id mismatch). The retry service maps null → NotFoundError.
+ *
+ * Includes the `resolved_at` column in the result so the service layer
+ * can reject retry attempts on already-resolved rows (idempotency
+ * guard — a double-click on the retry button shouldn't re-push a task
+ * that just landed cleanly).
+ */
+export async function findFailedPushById(
+  tx: DbTx,
+  tenantId: Uuid,
+  id: Uuid,
+): Promise<FailedPush | null> {
+  const rows = await tx.execute<FailedPushRow>(sqlTag`
+    SELECT *
+    FROM failed_pushes
+    WHERE id = ${id}
+      AND tenant_id = ${tenantId}
+  `);
+  if (rows.length === 0) return null;
+  return mapRow(rows[0]);
+}

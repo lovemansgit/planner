@@ -10,5 +10,5 @@
 // handler at src/app/api/cron/generate-tasks/route.ts is the
 // canonical caller.
 
-export type { PushTenantOutcome } from "./types";
-export { pushTasksForTenant } from "./service";
+export type { PushTenantOutcome, SinglePushOutcome } from "./types";
+export { pushTasksForTenant, pushSingleTask } from "./service";
