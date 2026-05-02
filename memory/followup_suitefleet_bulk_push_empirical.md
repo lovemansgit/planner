@@ -1,13 +1,160 @@
 ---
 name: SuiteFleet bulk-push empirical capture (D8-4a first run)
-description: Placeholder for the first cron-pass empirical capture after D8-4a ships. Documents the actual SF response shape for the AWB-exists 4xx, validates the createTask URL-with-customerId-query-param shape, and provides the timeline-response sample needed to commit D8-4b's getTaskByAwb parser. Populate at first cron run.
+description: First-run empirical capture after D8-4a + α (sandbox tenant moved to position 1). Captures: the prerequisite chain that took 6+ rounds to clear (migration drift, customer_code backfill, deploy promotion, tenant iteration ordering, env var name mismatch), and partial SF wire-shape evidence pending the SUITEFLEET_SANDBOX_CUSTOMER_ID Vercel env fix.
 type: project
 ---
 
 # SuiteFleet bulk-push empirical capture
 
-**Captured:** placeholder (populate at first D8-4a cron pass)
+**Latest update:** 2 May 2026 — first two cron triggers attempted; both blocked before reaching SF.
 **Why this exists:** D8-4a deliberately defers several empirical questions to first-run capture rather than guess at PR-write time. This memo is the canonical landing place for those captures so D8-4b can land confidently.
+
+---
+
+## First-run prerequisites — what we cleared to get here
+
+The first-run capture surfaced **six prerequisites** that had to clear before any SF call could fire. Logging the chain so future trigger attempts have a checklist:
+
+| # | Gate | What broke | Fix applied |
+|---|---|---|---|
+| 1 | Migrations 0012 + 0013 not applied to production | DB schema 5 days behind git | Applied via node bridge (Studio precedent suspended permanently per Love) |
+| 2 | `tenants.suitefleet_customer_code` not backfilled for sandbox | Guard 2 fires fail-closed | `UPDATE tenants SET suitefleet_customer_code = 'MPL' WHERE id = '8bfc84b0...'` |
+| 3 | Production deploy 5d stale (no D8-4a code) | Cron route returns 404 | `vercel promote` to production from latest Preview |
+| 4 | CRON_SECRET unretrievable via `vercel env pull` | curl returns 401 | Switched to Path C — Vercel UI "Run Now" |
+| 5 | Sandbox tenant at position 194 in `created_at ASC` enumeration | Cron times out before reaching it | α: `UPDATE tenants SET created_at = '2024-01-01' WHERE id = '8bfc84b0...'` (now position 1) |
+| 6 | `SUITEFLEET_SANDBOX_CUSTOMER_ID` missing from Vercel Production env | Push throws at credential resolution | **Pending — this is where the second trigger blocked.** |
+
+339 stale test tenants are the upstream cause for #5 — see `followup_audit_rule_cascade_conflict.md` for the cleanup-mechanism gap.
+
+---
+
+## Second cron trigger — 2 May 2026 15:49:05 UTC
+
+`request_id: 978aaaef-e164-4146-8f83-9af3a88d8f21`
+`target_date: 2026-05-03` (Saturday — matches `days_of_week: [6, 7]`)
+`tenant_count: 340`
+
+α-fix worked: sandbox tenant processed FIRST. New finding surfaced at the credential-resolver layer.
+
+```json
+{"timestamp":"2026-05-02T15:49:15.454Z","level":"warn","component":"suitefleet_credential_resolver","operation":"resolve","tenant_id":"8bfc84b0-c139-4f43-b966-5a12eaa7a302","error_code":"missing_env_vars","missing_count":1}
+{"timestamp":"2026-05-02T15:49:15.454Z","level":"error","message":"task push threw for tenant","component":"cron_generate_tasks","tenant_id":"8bfc84b0-c139-4f43-b966-5a12eaa7a302","error":"SuiteFleet sandbox credentials missing from environment: SUITEFLEET_SANDBOX_CUSTOMER_ID"}
+```
+
+**Root cause:** Env-var-name mismatch.
+- Resolver in `src/modules/credentials/suitefleet-resolver.ts` reads:
+  - `SUITEFLEET_SANDBOX_USERNAME` ✓ (in Vercel)
+  - `SUITEFLEET_SANDBOX_PASSWORD` ✓ (in Vercel)
+  - `SUITEFLEET_SANDBOX_CLIENT_ID` ✓ (in Vercel)
+  - **`SUITEFLEET_SANDBOX_CUSTOMER_ID` ✗ (NOT in Vercel)**
+- Vercel has `SUITEFLEET_SANDBOX_ACCOUNT_ID` (different semantic — never wired up to the resolver).
+- Local `.env.local` has the correct name `SUITEFLEET_SANDBOX_CUSTOMER_ID=588`, which is why the sandbox smoke probes (`scripts/sandbox-smoke-task-create.mjs` etc.) work locally but production doesn't.
+
+**Next action:** add `SUITEFLEET_SANDBOX_CUSTOMER_ID=588` to Vercel Production + Preview scopes, then re-trigger.
+
+What we DO know from this trigger (partial empirical wins):
+- α-fix verified: sandbox at position 1 → processed first ✓
+- Generation phase succeeded for sandbox (no error before the push attempt) ✓
+- The push-phase try/catch wrapping correctly catches credential errors and emits a `task push threw for tenant` log line + Sentry capture (verifies the error-classification path) ✓
+
+What we still DON'T know — pending the env-var fix + third trigger:
+- `POST /api/tasks?customerId=588` query-param threading actually accepted by SF
+- AWB regex match (only fires on duplicate-AWB 4xx)
+- `customer.code: 'MPL'` body field accepted
+- Timeline response shape from `GET /api/tasks/awb/{awb}/task-activities` (D8-4b's parser dependency)
+
+---
+
+## Third cron trigger — 2 May 2026 15:57:46 UTC ✅ SF PUSH SUCCEEDED
+
+`request_id: 0223ca99-88e9-47ae-ae0d-4aa16faff9a5`
+`target_date: 2026-05-03` (Saturday — matches seed `days_of_week: [6, 7]`)
+`tenant_count: 340`
+`Production deploy: planner-n04cdgsyr` (with `SUITEFLEET_SANDBOX_CUSTOMER_ID=588` baked in)
+
+### Sandbox tenant push — happy-path success
+
+Sequence of events for tenant `8bfc84b0-c139-4f43-b966-5a12eaa7a302`:
+
+```
+15:57:54.388  suitefleet_credential_resolver  resolve  source=env                    ✓ env var fix worked
+15:57:54.985  suitefleet_auth_client          login    status=200                    ✓ SF auth via username/password
+                                                       access_expires_at=2026-05-03T15:57:54.894Z (24h JWT)
+                                                       refresh_expires_at=2026-10-29T15:57:54.894Z (~6 months)
+15:57:54.985  suitefleet_token_cache          login_session  outcome=ok              ✓ token cached
+15:57:56.054  suitefleet_credential_resolver  resolve  source=env                    (second resolve for createTask args)
+15:57:56.465  suitefleet_task_client          create_task                            ✓ POST /api/tasks succeeded
+                                              customer_order_number=SUB-42cbe3a73504-20260503
+                                              external_id=59254
+                                              tracking_number=MPL-08187661
+15:57:57.526  task_push_service               task-push createTask ok                ✓ markTaskPushed UPDATE OK
+                                              task_id=0b57b42c-723d-429d-8130-1b96f4e2805a
+15:57:57.526  task_push_service               task-push tenant pass complete         ✓ outcome rolled up
+                                              attempted=1 succeeded=1 failed_to_dlq=0
+                                              skipped_district=0 awb_exists=0
+```
+
+### Empirical findings (validations + new data)
+
+**Validated D8-4a code paths:**
+| Path | Status | Evidence |
+|---|---|---|
+| α (sandbox at position 1 via `created_at` UPDATE) | ✓ Worked | First per-tenant log entry was for `8bfc84b0...` |
+| Credential resolver reads `SUITEFLEET_SANDBOX_CUSTOMER_ID` from env | ✓ Worked post-fix | `source: "env"` log line; no `missing_env_vars` warn |
+| SF auth flow (username/password → 24h JWT) | ✓ Worked | `status: 200`, valid `access_expires_at` |
+| `POST /api/tasks?customerId=588` request | ✓ Accepted by SF | createTask returned a task with new SF id |
+| `customer.code: 'MPL'` body field | ✓ Accepted | Tracking number prefix is `MPL-...` confirming MPL was the merchant scope on the SF side |
+| `markTaskPushed` UPDATE on local task row | ✓ Worked | `task-push createTask ok` log fired post-success |
+| Task-push counters (attempted/succeeded/awb_exists/etc.) | ✓ Worked | Final tenant-pass-complete log shows expected shape |
+
+**SF response data captured (canonical wire-shape):**
+- SF task `id` is **numeric** (e.g. `59254`), stringified by the parser before storing in `tasks.external_id`
+- AWB format: **`MPL-08187661`** — confirms `{customer.code}-{numeric}` pattern from the webhook capture memo (Tabchilli equivalent was `TBC-55891430`)
+- Local-side task UUID: `0b57b42c-723d-429d-8130-1b96f4e2805a`
+- Customer order number generation: `SUB-{first-12-chars-of-subscriptionId}-{deliveryDate-YYYYMMDD}` (e.g. `SUB-42cbe3a73504-20260503`)
+
+**SF auth token TTLs (matches ADR-007):**
+- Access token: 24h
+- Refresh token: ~6 months
+
+### What we did NOT capture this run
+
+| Gap | Reason | D8-4b posture |
+|---|---|---|
+| AWB regex match against live SF response | First push was clean (no 23505/duplicate-AWB hit) — there was nothing for SF to reject as duplicate | Parser writes against the regex from Aqib Group-1 (`/Awb with value ([\w-]+) exists already/`) with an inline comment marking the empirical gap + a unit test pinning the parser shape |
+| Timeline response shape from `GET /api/tasks/awb/{awb}/task-activities` | D8-4b reconcile path not yet wired; first push didn't surface a 23505 anyway | Parser writes against the SF API docs reading (4 May 2026 — "task-activities" endpoint shape is documented) with explicit "this is unverified, validate on first 23505" comment |
+
+The "either outcome unblocks D8-4b" criterion holds: clean success means D8-4b's reconcile-path parser ships against the docs with anchored unit-test fixtures, not blind code.
+
+### Bonus finding — Webhook receiver creds also missing in Vercel
+
+After the cron push at 15:57:57, two POSTs hit `/api/webhooks/suitefleet/8bfc84b0-c139-4f43-b966-5a12eaa7a302` at 15:57:56 / 15:57:57 — those are SF firing initial webhook events for the just-created task. Both failed:
+
+```
+{"component":"suitefleet_webhook_credential_resolver","operation":"resolve",
+ "tenant_id":"8bfc84b0...","error_code":"missing_env_vars","missing_count":2}
+{"component":"suitefleet_webhook_receiver","operation":"resolve_creds",
+ "tenant_id":"8bfc84b0...","error_code":"webhook_creds_unavailable"}
+```
+
+**Missing:** `SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_ID` and `SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_SECRET` (count of 2 matches the 2 webhook env vars).
+
+These were never set in Vercel (per the earlier `vercel env ls` audit). Pre-D8-8 (webhook hardening), the webhook path is observation-only anyway — the missing creds prevent the receiver from logging anything useful, but no in-flight state is corrupted. **Day 9 follow-up alongside D8-8.**
+
+### Cron timeout — second-trigger details
+
+The second trigger (`978aaaef-e164-4146-8f83-9af3a88d8f21`, 15:49:05 UTC) timed out at the Vercel default of 300 seconds:
+```
+Vercel Runtime Timeout Error: Task timed out after 300 seconds
+```
+That's empirical confirmation of the timeout horizon. Post-D8-4b, the β fix (filter `listAllTenantIds()` to `WHERE suitefleet_customer_code IS NOT NULL`) drops enumeration from 340 → 1 tenants and avoids this entirely.
+
+### What this empirically unlocks for D8-4b
+
+1. **AWB format pattern confirmed** — D8-4b's `getTaskByAwb` adapter method can build the URL `${baseUrl}/api/tasks/awb/${encodeURIComponent(awb)}/task-activities` against an AWB shape that matches the regex.
+2. **Numeric SF task `id` confirmed** — D8-4b's response parser knows to extract `id` as a number and stringify before storing.
+3. **Auth + customer_code + customerId query-param plumbing all work end-to-end** — D8-4b builds on a foundation that's now empirically validated, not assumed.
+4. **Sentry/error-classification path empirically tested via the second trigger** — D8-4b's reconcile-failure error paths can mirror the same classification.
 
 ---
 
