@@ -23,6 +23,7 @@ export type {
   HeadersLike,
   InternalTaskStatus,
   PaymentMethod,
+  TaskByAwbResult,
   TaskCreateRequest,
   TaskCreateResult,
   TaskKind,
@@ -43,7 +44,9 @@ export {
   createSuiteFleetTaskClient,
   buildSuiteFleetTaskBody,
   parseSuiteFleetTaskResponse,
+  parseSuiteFleetTaskActivitiesResponse,
   SuiteFleetAwbExistsError,
+  SuiteFleetTimelineParseError,
 } from "./providers/suitefleet/task-client";
 export type {
   SuiteFleetTaskClient,

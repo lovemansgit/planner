@@ -11,9 +11,17 @@ import { CredentialError, ValidationError } from "../../../../../shared/errors";
 import {
   buildSuiteFleetTaskBody,
   createSuiteFleetTaskClient,
+  parseSuiteFleetTaskActivitiesResponse,
   parseSuiteFleetTaskResponse,
   SuiteFleetAwbExistsError,
+  SuiteFleetTimelineParseError,
 } from "../task-client";
+
+import {
+  DOC_DERIVED_AWB,
+  DOC_DERIVED_TASK_ACTIVITIES_RESPONSE,
+  DOC_DERIVED_TASK_ID,
+} from "./sf-task-activities-fixture";
 
 import type {
   AuthenticatedSession,
@@ -598,5 +606,195 @@ describe("parseSuiteFleetTaskResponse — response shape variants", () => {
     );
     expect(result.externalId).toBe("42");
     expect(typeof result.externalId).toBe("string");
+  });
+});
+
+// =============================================================================
+// D8-4b — task-activities parser + getTaskByAwb adapter
+// =============================================================================
+
+describe("parseSuiteFleetTaskActivitiesResponse — D8-4b doc-derived parser", () => {
+  it("extracts task.id from the doc-derived fixture and stringifies", () => {
+    // Happy path: shape matches the doc-derived expectation. Parser
+    // returns the minimal `{ externalId }` (string) with the SF task
+    // id stringified — same convention as parseSuiteFleetTaskResponse.
+    const result = parseSuiteFleetTaskActivitiesResponse(
+      DOC_DERIVED_TASK_ACTIVITIES_RESPONSE,
+    );
+    expect(result.externalId).toBe(String(DOC_DERIVED_TASK_ID));
+    expect(typeof result.externalId).toBe("string");
+  });
+
+  it("throws SuiteFleetTimelineParseError when body is not an object", () => {
+    // Strict shape rejection — null, primitives, arrays. The fixture
+    // caveat header rules: silent mis-extraction is the failure mode
+    // we avoid. A non-object body means SF responded with something
+    // other than the documented JSON shape (e.g. an HTML error page,
+    // or a string error message).
+    expect(() => parseSuiteFleetTaskActivitiesResponse(null)).toThrow(
+      SuiteFleetTimelineParseError,
+    );
+    expect(() => parseSuiteFleetTaskActivitiesResponse("not-an-object")).toThrow(
+      SuiteFleetTimelineParseError,
+    );
+    expect(() => parseSuiteFleetTaskActivitiesResponse(42)).toThrow(
+      SuiteFleetTimelineParseError,
+    );
+  });
+
+  it("throws SuiteFleetTimelineParseError when body is missing the task object", () => {
+    // Mis-shape case the fixture caveat directly covers: SF docs
+    // describe a `task` field at the top level. If the production
+    // response uses a different envelope (e.g. Spring Data
+    // `{ content: [...] }` like the asset-tracking endpoint), the
+    // parser MUST reject rather than silently extract from the
+    // wrong path.
+    let captured: unknown = null;
+    try {
+      parseSuiteFleetTaskActivitiesResponse({ activities: [] });
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(SuiteFleetTimelineParseError);
+    expect((captured as SuiteFleetTimelineParseError).message).toContain("`task`");
+    // The body excerpt is captured for forensic logging — operators
+    // see what SF actually returned in the failure_detail.
+    expect((captured as SuiteFleetTimelineParseError).bodyExcerpt).toContain("activities");
+  });
+
+  it("throws SuiteFleetTimelineParseError when task.id is missing or non-numeric", () => {
+    // SF returns task ids as numbers (confirmed by the third cron
+    // trigger empirical capture: id=59254 numeric). The parser
+    // accepts only finite numbers — string ids, NaN, missing values
+    // all reject. Stringification happens in the parser AFTER the
+    // type check, not as a coercion shortcut.
+    expect(() =>
+      parseSuiteFleetTaskActivitiesResponse({ task: {} }),
+    ).toThrow(SuiteFleetTimelineParseError);
+    expect(() =>
+      parseSuiteFleetTaskActivitiesResponse({ task: { id: "59254" } }),
+    ).toThrow(SuiteFleetTimelineParseError);
+    expect(() =>
+      parseSuiteFleetTaskActivitiesResponse({ task: { id: NaN } }),
+    ).toThrow(SuiteFleetTimelineParseError);
+  });
+});
+
+describe("createTask client — getTaskByAwb (D8-4b)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("GETs /api/tasks/awb/{awb}/task-activities with the AWB as a path param and customerId as a query param", async () => {
+    // Reviewer-load-bearing assertion: URL shape exactly matches the
+    // documented endpoint. AWB encoded into the path; customerId in
+    // a query param mirrors createTask's defensive add (D8-4a).
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(DOC_DERIVED_TASK_ACTIVITIES_RESPONSE),
+    );
+    const result = await makeClient(fetchMock).getTaskByAwb({
+      session: SAMPLE_SESSION,
+      customerId: 588,
+      awb: DOC_DERIVED_AWB,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `https://api.suitefleet.com/api/tasks/awb/${DOC_DERIVED_AWB}/task-activities?customerId=588`,
+    );
+    expect(init?.method).toBe("GET");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${SAMPLE_SESSION.token}`);
+    expect(headers.Clientid).toBe("transcorpsb");
+
+    // Result is the parsed minimal shape — id stringified.
+    expect(result).toEqual({ externalId: String(DOC_DERIVED_TASK_ID) });
+  });
+
+  it("URL-encodes special characters in the AWB (defensive — AWBs are alphanumeric in pilot but encoding is correct)", async () => {
+    // Pilot AWBs are `[A-Z]+-[0-9]+` (no encoding-sensitive
+    // characters) but `encodeURIComponent` is the correct call for
+    // path params. Pin the encoding behaviour with a synthetic
+    // AWB-like string that includes a slash; if a future merchant
+    // produces such an AWB, the URL stays well-formed.
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(DOC_DERIVED_TASK_ACTIVITIES_RESPONSE),
+    );
+    await makeClient(fetchMock).getTaskByAwb({
+      session: SAMPLE_SESSION,
+      customerId: 588,
+      awb: "MPL/8761",
+    });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("MPL%2F8761");
+  });
+
+  it("throws CredentialError on 401 and on 5xx without retry (single-attempt policy applies to read side)", async () => {
+    const fetchMock401 = vi.fn().mockResolvedValue(plainResponse("expired", 401));
+    await expect(
+      makeClient(fetchMock401).getTaskByAwb({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        awb: DOC_DERIVED_AWB,
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock401).toHaveBeenCalledTimes(1);
+
+    const fetchMock503 = vi.fn().mockResolvedValue(plainResponse("oops", 503));
+    await expect(
+      makeClient(fetchMock503).getTaskByAwb({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        awb: DOC_DERIVED_AWB,
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock503).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws ValidationError on 4xx (e.g. 404 — vendor-side AWB inconsistency)", async () => {
+    // 404 is the operationally interesting case: SF's createTask just
+    // told us the AWB exists (the 23505/AWB-exists branch), then SF's
+    // task-activities endpoint says no task. Vendor-side
+    // inconsistency. ValidationError carries the response body for
+    // forensics (lands in failure_detail via classifyAdapterError).
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("not found", 404));
+    await expect(
+      makeClient(fetchMock).getTaskByAwb({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        awb: DOC_DERIVED_AWB,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("throws CredentialError on network error without retry", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("ECONNRESET"));
+    await expect(
+      makeClient(fetchMock).getTaskByAwb({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        awb: DOC_DERIVED_AWB,
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws SuiteFleetTimelineParseError on non-JSON response body", async () => {
+    // 200 status + unparseable body = vendor returned a 200 page
+    // (HTML, plain text, etc.) where JSON was expected. Distinct
+    // from a 5xx (which would CredentialError) — surface the parse
+    // failure with a typed error so the cron records it under the
+    // `awb_exists_reconcile_failed:` prefix.
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("<html>", 200));
+    await expect(
+      makeClient(fetchMock).getTaskByAwb({
+        session: SAMPLE_SESSION,
+        customerId: 588,
+        awb: DOC_DERIVED_AWB,
+      }),
+    ).rejects.toBeInstanceOf(SuiteFleetTimelineParseError);
   });
 });

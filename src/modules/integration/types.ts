@@ -152,6 +152,27 @@ export interface TaskCreateResult {
 }
 
 /**
+ * Day 8 / D8-4b. Minimal result of `getTaskByAwb` — the cron's
+ * AWB-exists reconcile branch only needs the existing SF task id so it
+ * can `markTaskPushed` the local task. The full timeline payload is
+ * provider-private and intentionally NOT exposed on the adapter
+ * contract: callers that need richer task state should fetch it via
+ * a dedicated `getTask` method (not yet defined; out of scope for
+ * D8-4b). Keeping the contract minimal limits future provider churn —
+ * a different last-mile vendor with a different AWB-lookup shape only
+ * needs to populate `externalId`.
+ *
+ * `externalId` is a string here for parity with `TaskCreateResult` —
+ * SuiteFleet returns the task id as a number; the adapter
+ * implementation stringifies it before returning. Storage column is
+ * text (`tasks.external_id`) so the boundary type matches the
+ * eventual storage shape.
+ */
+export interface TaskByAwbResult {
+  readonly externalId: string;
+}
+
+/**
  * Minimal headers contract — matches the web `Headers` API so a real
  * request object can be passed straight in, but tests can supply a
  * trivial `{ get: (name) => ... }` mock without faking the full class.

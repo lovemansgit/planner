@@ -187,3 +187,51 @@ export async function updateFailedPushAttempt(
   }
   return mapRow(rows[0]);
 }
+
+/**
+ * Day 8 / D8-4b. Resolve the unresolved failed_pushes row for `taskId`,
+ * if one exists — sets resolved_at = now(), resolved_by, and
+ * resolution_notes. Idempotent: when no unresolved row exists the
+ * UPDATE matches zero rows and the function returns `null` rather
+ * than throwing.
+ *
+ * The cron's reconcile-via-AWB path (D8-4b) calls this AFTER the
+ * local task is marked pushed via `markTaskPushed`. The order
+ * matters: a caller that marks the failed_pushes row resolved
+ * before the task is actually pushed would briefly leave the
+ * system in an inconsistent state (no DLQ row, but task still
+ * unpushed) — the cron's next pass would re-attempt and create
+ * a NEW failed_pushes row, defeating the resolution.
+ *
+ * `resolvedBy` must be NULL for system-resolved entries — the
+ * schema column is a FK to users(id) ON DELETE SET NULL. The
+ * synthetic system-actor identifiers (e.g. 'cron:generate_tasks')
+ * are not UUIDs and would violate the FK. System identity is
+ * carried in `resolution_notes` instead. For user-resolved
+ * entries (post-MVP operator UI), pass the user's UUID.
+ *
+ * Returns the resolved row when one was updated, or `null` when
+ * no unresolved row existed (idempotent no-op).
+ */
+export async function markUnresolvedAsResolved(
+  tx: DbTx,
+  tenantId: Uuid,
+  taskId: Uuid,
+  resolvedBy: Uuid | null,
+  resolutionNotes: string,
+): Promise<FailedPush | null> {
+  const rows = await tx.execute<FailedPushRow>(sqlTag`
+    UPDATE failed_pushes
+    SET
+      resolved_at      = now(),
+      resolved_by      = ${resolvedBy},
+      resolution_notes = ${resolutionNotes}
+    WHERE task_id = ${taskId}
+      AND tenant_id = ${tenantId}
+      AND resolved_at IS NULL
+    RETURNING *
+  `);
+
+  if (rows.length === 0) return null;
+  return mapRow(rows[0]);
+}

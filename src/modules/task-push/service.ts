@@ -26,20 +26,43 @@
 //    string in JSONB; distinct from the DB-enum failure_reason).
 //
 // -----------------------------------------------------------------------------
-// 23505 / AWB-exists handling (D8-4a parse-only; D8-4b reconciles)
+// 23505 / AWB-exists handling (D8-4b reconcile)
 // -----------------------------------------------------------------------------
-// On `SuiteFleetAwbExistsError` from the adapter, D8-4a records a
-// failed_pushes row with the parsed AWB in failure_detail and
-// leaves the task unpushed. The task's `pushed_to_external_at` stays
-// NULL, so the next cron pass re-attempts the push, gets another
-// AWB-exists, increments attempt_count, etc. — a deliberate gap
-// pinned for first-run empirical capture in
-// memory/followup_suitefleet_bulk_push_empirical.md.
+// On `SuiteFleetAwbExistsError` from the adapter, D8-4b's reconcile
+// branch:
+//   1. Calls `adapter.getTaskByAwb(session, awb)` — GET
+//      /api/tasks/awb/{awb}/task-activities — to extract the existing
+//      SF task id from the timeline payload.
+//   2. Calls `markTaskPushed(taskId, externalId, awb)` to set
+//      external_id / external_tracking_number / pushed_to_external_at.
+//      tracking_number = the AWB itself (we already have it; SF echoes
+//      it back).
+//   3. Calls `markFailedPushResolved(ctx, taskId, "reconciled-via-awb-D8-4b")`
+//      to close out any unresolved failed_pushes row from a prior
+//      parse-only-era cron pass. Idempotent — no-op when no DLQ row
+//      exists. The boolean return value lands in the audit metadata.
+//   4. Emits `task.pushed_via_reconcile` with task_id / external_id /
+//      awb / customer_order_number / prior_failed_push_resolved.
+//   5. Increments `awbExistsReconciled` on PushTenantOutcome.
 //
-// D8-4b adds the `getTaskByAwb` reconcile path
-// (GET /api/tasks/awb/{awb}/task-activities, endpoint confirmed via
-// SF API docs reading 4 May 2026, but timeline response shape needs
-// the first-run empirical capture before D8-4b commits to a parser).
+// On reconcile FAILURE (getTaskByAwb threw — network, auth, parse
+// error, or 4xx other than the AWB-exists itself), the task stays
+// unpushed and a failed_pushes row is recorded with a distinguishing
+// failure_detail prefix `awb_exists_reconcile_failed: <awb>; getTaskByAwb error: <msg>`
+// (vs D8-4a's `awb_exists: <awb>` prefix). Operators on
+// /admin/failed-pushes can tell parse-only-era rows apart from
+// reconcile-attempted-and-failed rows. Counter posture: the failure
+// counts as `awbExists`, NOT a third counter — see
+// `task-push/types.ts` PushTenantOutcome jsdoc for the rationale.
+//
+// Doc-derived parser caveat: the timeline response shape the parser
+// validates against is from SF docs reading (suitefleet.readme.io,
+// 4 May 2026), not capture-derived. The third cron trigger
+// (2 May 2026) hit a clean first-time push so no live timeline was
+// captured. First production 23505/AWB-exists either validates or
+// invalidates the fixture; on invalidation the parser throws
+// `SuiteFleetTimelineParseError` which surfaces in failure_detail
+// as a clear divergence signal rather than silent mis-extraction.
 //
 // -----------------------------------------------------------------------------
 // shipFrom posture (D8-4a — wire-pollution fix per reviewer)
@@ -66,7 +89,11 @@
 // stricter public adapter contract.
 
 import { emit } from "../audit";
-import { recordFailedPushAttempt, type FailureReason } from "../failed-pushes";
+import {
+  markFailedPushResolved,
+  recordFailedPushAttempt,
+  type FailureReason,
+} from "../failed-pushes";
 import {
   type LastMileAdapter,
   type DeliveryAddress,
@@ -153,19 +180,19 @@ async function sleep(ms: number): Promise<void> {
  * those buckets. The pre-flight unknown-district guard does NOT
  * round-trip through this mapper — it uses 'unknown' directly with
  * a descriptive failure_detail string.
+ *
+ * D8-4b: SuiteFleetAwbExistsError is intentionally NOT handled here —
+ * the AWB-exists case routes through the reconcile branch (which
+ * doesn't classify as a generic failure unless the reconcile itself
+ * fails). The reconcile-failure path constructs its own classified
+ * shape inline via `classifyReconcileError` so the failure_detail
+ * carries the load-bearing `awb_exists_reconcile_failed:` prefix.
  */
 function classifyAdapterError(err: unknown): {
   reason: FailureReason;
   detail: string;
   httpStatus?: number;
 } {
-  if (err instanceof SuiteFleetAwbExistsError) {
-    return {
-      reason: "client_4xx",
-      detail: `awb_exists: '${err.awb}' (${err.responseBody.slice(0, 200)})`,
-      httpStatus: err.httpStatus,
-    };
-  }
   if (err instanceof CredentialError) {
     // CredentialError covers both 5xx and network errors per
     // task-client.ts's "single-attempt policy, no retry" handling;
@@ -186,6 +213,37 @@ function classifyAdapterError(err: unknown): {
   return {
     reason: "unknown",
     detail: err instanceof Error ? err.message.slice(0, 4000) : String(err).slice(0, 4000),
+  };
+}
+
+/**
+ * D8-4b: classify a reconcile-failure (i.e. SF returned 23505/AWB-exists
+ * AND getTaskByAwb subsequently threw). The `awb_exists_reconcile_failed:`
+ * prefix on `failureDetail` is load-bearing — operators on
+ * /admin/failed-pushes use it to tell parse-only-era DLQ rows
+ * (`awb_exists:` prefix, never seen in production but possible from a
+ * pre-D8-4b cron pass) apart from reconcile-attempted-and-failed rows.
+ *
+ * Reuses `classifyAdapterError` for the underlying reason/httpStatus
+ * extraction (CredentialError → network/server_5xx, ValidationError /
+ * SuiteFleetTimelineParseError → client_4xx, etc.) and prefixes the
+ * detail string. The SuiteFleetTimelineParseError class extends Error
+ * but not ValidationError; it falls into the catch-all 'unknown'
+ * bucket from classifyAdapterError, which is the right behaviour
+ * (the parser-mismatch is a vendor-shape divergence, not a
+ * client-side bug — 'unknown' is the most honest enum value). The
+ * detail string carries the explicit parse-error message regardless.
+ */
+function classifyReconcileError(awb: string, err: unknown): {
+  reason: FailureReason;
+  detail: string;
+  httpStatus?: number;
+} {
+  const inner = classifyAdapterError(err);
+  return {
+    reason: inner.reason,
+    detail: `awb_exists_reconcile_failed: '${awb}'; getTaskByAwb error: ${inner.detail}`.slice(0, 4000),
+    httpStatus: inner.httpStatus,
   };
 }
 
@@ -366,6 +424,7 @@ export async function pushTasksForTenant(
       failedToDLQ: 0,
       skippedDistrict: 0,
       awbExists: 0,
+      awbExistsReconciled: 0,
     };
   }
 
@@ -381,6 +440,7 @@ export async function pushTasksForTenant(
   let failedToDLQ = 0;
   let skippedDistrict = 0;
   let awbExists = 0;
+  let awbExistsReconciled = 0;
 
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
@@ -469,14 +529,128 @@ export async function pushTasksForTenant(
       // case. See header `shipFrom posture` for the full rationale.
       pushResult = await adapter.createTask(session, request as TaskCreateRequest);
     } catch (err) {
+      // ---------------------------------------------------------------------
+      // D8-4b: AWB-exists reconcile branch
+      // ---------------------------------------------------------------------
+      // SF returned 23505/AWB-exists. Try to close the loop by GETting
+      // the existing SF task by AWB and marking the local row pushed
+      // with the recovered SF id.
+      if (err instanceof SuiteFleetAwbExistsError) {
+        const reconcileLog = taskLog.with({ awb: err.awb });
+        let reconcileResult;
+        try {
+          reconcileResult = await adapter.getTaskByAwb(session, err.awb);
+        } catch (reconcileErr) {
+          const classified = classifyReconcileError(err.awb, reconcileErr);
+          reconcileLog.warn(
+            {
+              failure_reason: classified.reason,
+              http_status: classified.httpStatus,
+            },
+            "task-push AWB-exists reconcile failed — recording to DLQ",
+          );
+          try {
+            await recordFailedPushAttempt(ctx, {
+              taskId: task.id,
+              taskPayload: request as unknown as Record<string, unknown>,
+              failureReason: classified.reason,
+              failureDetail: classified.detail,
+              httpStatus: classified.httpStatus,
+            });
+          } catch (dlqErr) {
+            captureException(dlqErr, {
+              component: "task_push_service",
+              operation: "dlq_write_reconcile_failed",
+              tenant_id: tenantId,
+              task_id: task.id,
+              awb: err.awb,
+            });
+          }
+          // Reconcile failure counts as awbExists per reviewer-locked
+          // counter posture (two counters, not three — see
+          // PushTenantOutcome jsdoc).
+          awbExists++;
+          if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
+          continue;
+        }
+
+        // Reconcile success: mark task pushed with the recovered SF id;
+        // tracking_number = the AWB itself (we already have it).
+        let priorFailedPushResolved = false;
+        try {
+          await withServiceRole(
+            `task-push:mark_pushed_via_reconcile for task ${task.id}`,
+            async (tx) =>
+              markTaskPushed(tx, tenantId, task.id, reconcileResult.externalId, err.awb),
+          );
+          // Idempotent — null when no unresolved DLQ row existed.
+          // The boolean lands in the audit metadata so operators can
+          // trace which reconciles closed out a prior parse-only-era
+          // DLQ entry vs first-time AWB-exists with no DLQ history.
+          const resolved = await markFailedPushResolved(
+            ctx,
+            task.id,
+            "reconciled-via-awb-D8-4b",
+          );
+          priorFailedPushResolved = resolved !== null;
+        } catch (markErr) {
+          // Local-side write failed AFTER SF confirmed the task
+          // exists. The task is still unpushed locally; the next cron
+          // pass will re-attempt and hit AWB-exists again. Sentry
+          // loud — manual investigation needed (DB write failure on
+          // the reconcile path is a different shape from the
+          // post-create local write failure handled below).
+          captureException(markErr, {
+            component: "task_push_service",
+            operation: "mark_pushed_via_reconcile",
+            tenant_id: tenantId,
+            task_id: task.id,
+            awb: err.awb,
+            external_id: reconcileResult.externalId,
+          });
+          awbExists++;
+          if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
+          continue;
+        }
+
+        await emit({
+          eventType: "task.pushed_via_reconcile",
+          actorKind: ctx.actor.kind,
+          actorId: actorIdFor(ctx.actor),
+          tenantId,
+          resourceType: "task",
+          resourceId: task.id,
+          metadata: {
+            task_id: task.id,
+            external_id: reconcileResult.externalId,
+            awb: err.awb,
+            customer_order_number: request.customerOrderNumber,
+            prior_failed_push_resolved: priorFailedPushResolved,
+          },
+          requestId: ctx.requestId,
+        });
+
+        reconcileLog.info(
+          {
+            external_id: reconcileResult.externalId,
+            prior_failed_push_resolved: priorFailedPushResolved,
+          },
+          "task-push AWB-exists reconcile ok",
+        );
+        awbExistsReconciled++;
+        if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
+        continue;
+      }
+
+      // ---------------------------------------------------------------------
+      // Non-AWB push failure — classified DLQ write
+      // ---------------------------------------------------------------------
       const classified = classifyAdapterError(err);
-      const isAwbExists = err instanceof SuiteFleetAwbExistsError;
 
       taskLog.warn(
         {
           failure_reason: classified.reason,
           http_status: classified.httpStatus,
-          awb_exists: isAwbExists,
         },
         "task-push createTask failed — recording to DLQ",
       );
@@ -499,11 +673,7 @@ export async function pushTasksForTenant(
         });
       }
 
-      if (isAwbExists) {
-        awbExists++;
-      } else {
-        failedToDLQ++;
-      }
+      failedToDLQ++;
 
       if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
       continue;
@@ -558,6 +728,7 @@ export async function pushTasksForTenant(
       failed_to_dlq: failedToDLQ,
       skipped_district: skippedDistrict,
       awb_exists: awbExists,
+      awb_exists_reconciled: awbExistsReconciled,
     },
     "task-push tenant pass complete",
   );
@@ -570,5 +741,6 @@ export async function pushTasksForTenant(
     failedToDLQ,
     skippedDistrict,
     awbExists,
+    awbExistsReconciled,
   };
 }
