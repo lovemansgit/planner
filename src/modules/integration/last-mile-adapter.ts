@@ -65,6 +65,26 @@ export interface LastMileAdapter {
     awb: string,
   ): Promise<TaskByAwbResult>;
   /**
+   * Day 8 / D8-6. Generate shipment labels for one or more tasks and
+   * return the rendered PDF as a Buffer. Provider-internal URL
+   * construction (the SuiteFleet implementation builds a
+   * token-in-query URL against a separate label-domain endpoint and
+   * fetches it server-side; the URL never leaves the deploy
+   * boundary). The Buffer return shape is pilot-scope (≤100 tasks
+   * per request, few-MB PDFs); a future Streaming variant lifts the
+   * cap.
+   *
+   * Throws:
+   *   - `CredentialError`   auth failure or 5xx from the provider
+   *                         (single-attempt policy mirrors createTask)
+   *   - `ValidationError`   provider returned 4xx; response excerpt in
+   *                         message for forensic logging
+   */
+  printLabels(
+    session: AuthenticatedSession,
+    taskIds: readonly string[],
+  ): Promise<Buffer>;
+  /**
    * Fetch the asset-tracking records for a given AWB. Returns the
    * unwrapped `content[]` array from SF's Spring Data paginated
    * response — pagination wrapper handling lives inside the adapter

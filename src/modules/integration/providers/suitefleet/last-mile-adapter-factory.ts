@@ -54,6 +54,7 @@ import type {
 
 import { createSuiteFleetAssetTrackingClient } from "./asset-tracking-client";
 import { createSuiteFleetAuthClient } from "./auth-client";
+import { createSuiteFleetLabelClient } from "./label-client";
 import { mapSuiteFleetStatusToInternal } from "./status-mapper";
 import { createSuiteFleetTaskClient } from "./task-client";
 import { createSuiteFleetTokenCache } from "./token-cache";
@@ -85,6 +86,13 @@ export interface SuiteFleetLastMileAdapterDeps {
    * Forwarded to both the auth client and the per-call task client.
    */
   readonly baseUrl?: string;
+  /**
+   * Optional override for the SuiteFleet shipment-label base URL.
+   * Production uses the default (https://shipment-label.suitefleet.com);
+   * tests pass a mock URL. The label endpoint lives on a different
+   * subdomain than the regular SF API — see label-client.ts header.
+   */
+  readonly labelBaseUrl?: string;
 }
 
 /**
@@ -155,6 +163,20 @@ export function createSuiteFleetLastMileAdapter(
         customerId: credentials.customerId,
         awb,
       });
+    },
+
+    async printLabels(session, taskIds) {
+      // D8-6: per-call construction (same posture as createTask /
+      // getTaskByAwb). The label endpoint uses a different subdomain
+      // than the regular SF API — see label-client.ts header for the
+      // security rule on token-in-query.
+      const credentials = await resolveCredentials(session.tenantId);
+      const labelClient = createSuiteFleetLabelClient({
+        fetch: deps.fetch,
+        clientId: credentials.clientId,
+        baseUrl: deps.labelBaseUrl,
+      });
+      return labelClient.printLabels({ session, taskIds });
     },
 
     async fetchAssetTrackingByAwb(session, awb) {

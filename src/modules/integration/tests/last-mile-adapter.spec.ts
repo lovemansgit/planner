@@ -89,6 +89,13 @@ class StubAdapter implements LastMileAdapter {
     void awb;
     return { externalId: "stub-recovered-id" };
   }
+  async printLabels(
+    session: AuthenticatedSession,
+    taskIds: readonly string[],
+  ): Promise<Buffer> {
+    void session;
+    return Buffer.from(`stub-pdf-for-${taskIds.length}-tasks`);
+  }
   async verifyWebhookRequest(
     tenantId: string,
     headers: HeadersLike,

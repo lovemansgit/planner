@@ -362,6 +362,40 @@ export async function findTaskById(tx: DbTx, id: Uuid): Promise<Task | null> {
 }
 
 /**
+ * Day 8 / D8-6 — visibility filter for the label-print route.
+ *
+ * Returns the subset of `ids` that exist AND belong to `tenantId`.
+ * Cross-tenant IDs (and bogus / non-existent UUIDs) drop silently —
+ * the route handler must NOT 404 / 403 on a partial match (that
+ * would leak cross-tenant existence; an attacker submitting a list
+ * of UUIDs could probe for which ones live in some other tenant by
+ * watching error vs. success responses).
+ *
+ * Order is NOT preserved relative to the input — Postgres `= ANY($1)`
+ * doesn't guarantee row order. The caller must not depend on input
+ * ordering being preserved (the PDF page order from SF for a
+ * comma-separated taskId list is a separate concern handled inside
+ * the SF endpoint; this filter only concerns "which IDs survive
+ * the visibility check").
+ *
+ * Empty input returns []; the caller should bail before calling SF.
+ */
+export async function listVisibleTaskIds(
+  tx: DbTx,
+  tenantId: Uuid,
+  ids: readonly Uuid[],
+): Promise<readonly Uuid[]> {
+  if (ids.length === 0) return [];
+  type Row = { id: string } & Record<string, unknown>;
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id FROM tasks
+    WHERE id = ANY(${ids}::uuid[])
+      AND tenant_id = ${tenantId}
+  `);
+  return rows.map((r) => r.id);
+}
+
+/**
  * SELECT every task for `tenantId`, newest first, each with its
  * packages joined. The tenant filter is explicit alongside RLS — same
  * value, same result, but the WHERE clause makes the query

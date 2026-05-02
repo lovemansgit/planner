@@ -37,7 +37,11 @@ export {
   createTask,
   getTask,
   listTasks,
+  printLabelsForTasks,
   updateTask,
+  PRINT_LABELS_FORMAT,
+  PRINT_LABELS_MAX_TASKS_PER_REQUEST,
   type BulkCreateResult,
   type BulkValidationFailure,
+  type PrintLabelsForTasksResult,
 } from "./service";

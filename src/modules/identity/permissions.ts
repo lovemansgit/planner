@@ -344,6 +344,24 @@ const PERMISSIONS_DRAFT = {
     description: "Mark a task complete, update its delivery notes, or skip it.",
     systemOnly: false,
   },
+  // Day 8 / D8-6 — print SuiteFleet labels for one or more tasks.
+  // TENANT_SCOPED. Per Love's confirmation in
+  // memory/followup_suitefleet_label_endpoint.md: every role with
+  // task:read also grants print_labels — operators with read access
+  // can print labels for tasks they can see.
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup
+  //   - Ops Manager: permsFor('task') auto-pickup
+  //   - CS Agent: explicit-list addition (their construction is
+  //     hand-rolled, not auto-pickup; without an explicit add they'd
+  //     have task:read but not task:print_labels — wrong)
+  "task:print_labels": {
+    id: "task:print_labels",
+    resource: "task",
+    action: "print_labels",
+    description:
+      "Generate and download SuiteFleet shipment labels (4x6 indv-small format) for one or more tasks via /api/tasks/labels. Server-side passthrough of the SF generate-label endpoint — operator browser never sees the SF token (architectural rule per memory/followup_suitefleet_label_endpoint.md).",
+    systemOnly: false,
+  },
 
   // ---- asset_tracking (Day 6 / B-2) --------------------------------------
   // Read permission for the asset-tracking cache. The cache itself is

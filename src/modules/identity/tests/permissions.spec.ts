@@ -337,6 +337,51 @@ describe("failed_pushes:retry permission (Day 8 / D8-5)", () => {
   });
 });
 
+describe("task:print_labels permission (Day 8 / D8-6)", () => {
+  // Pins the auto-pickup behaviour for the new SuiteFleet label-print
+  // permission. Per memory/followup_suitefleet_label_endpoint.md the
+  // intent is: every role with task:read also grants task:print_labels
+  // (operators with read access can print labels for tasks they can
+  // see). Three roles must hold it:
+  //
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup (every non-systemOnly perm)
+  //   - Ops Manager:  permsFor("task") auto-pickup
+  //   - CS Agent:     EXPLICIT-list addition (their permission set is
+  //                   hand-rolled; without an explicit add they would
+  //                   have task:read but not task:print_labels — wrong)
+  //
+  // If a future PR drops CS Agent's explicit task:print_labels entry,
+  // this test breaks and forces a conscious decision about whether
+  // to revoke print access from CS Agent. Same precedent as the S-4
+  // lifecycle / D8-5 failed_pushes:retry tests above.
+
+  it("registers task:print_labels in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["task:print_labels"]).toBeDefined();
+    expect(PERMISSIONS["task:print_labels"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly (resource=task)", () => {
+    expect(PERMISSIONS["task:print_labels"].resource).toBe("task");
+    expect(PERMISSIONS["task:print_labels"].action).toBe("print_labels");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("task:print_labels")).toBe(true);
+  });
+
+  it("Ops Manager holds it (permsFor('task') auto-pickup)", () => {
+    expect(ROLES["ops-manager"].permissions.has("task:print_labels")).toBe(true);
+  });
+
+  it("CS Agent holds it (explicit-list addition — task:read implies print_labels)", () => {
+    expect(ROLES["cs-agent"].permissions.has("task:print_labels")).toBe(true);
+  });
+
+  it("CS Agent ALSO still holds task:read (sanity — the implication anchor stays)", () => {
+    expect(ROLES["cs-agent"].permissions.has("task:read")).toBe(true);
+  });
+});
+
 describe("Transcorp Sysadmin (Day-2 brief §6)", () => {
   it("is systemOnly", () => {
     expect(ROLES["transcorp-sysadmin"].systemOnly).toBe(true);
