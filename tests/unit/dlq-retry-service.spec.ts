@@ -36,13 +36,39 @@ vi.mock("../../src/modules/audit", async () => {
 });
 
 import { emit } from "../../src/modules/audit";
-import { retryFailedPush, type RetryFailedPushResult } from "../../src/modules/failed-pushes";
+import {
+  retryFailedPush,
+  type PushSingleTaskFn,
+  type RetryFailedPushResult,
+} from "../../src/modules/failed-pushes";
 import type { FailedPush } from "../../src/modules/failed-pushes";
 import type { LastMileAdapter } from "../../src/modules/integration";
-import type { SinglePushOutcome } from "../../src/modules/task-push";
+import { pushSingleTask, type SinglePushOutcome } from "../../src/modules/task-push";
 import { withTenant } from "../../src/shared/db";
 import { ForbiddenError, NotFoundError, ValidationError } from "../../src/shared/errors";
 import type { Actor, RequestContext } from "../../src/shared/tenant-context";
+
+// =============================================================================
+// Structural compatibility pin (reviewer-noted before D8-5 merge)
+// =============================================================================
+// PushSingleTaskFn is defined in failed-pushes/service.ts. The actual
+// pushSingleTask runtime function lives in task-push/service.ts. The
+// circular-import workaround (function injection at the route layer)
+// only buys us anything if the two stay structurally compatible —
+// otherwise a future signature drift in pushSingleTask would silently
+// break the contract retryFailedPush expects, and the cycle-avoidance
+// would be theatre.
+//
+// `satisfies` is a TS 4.9+ compile-time assertion. If pushSingleTask's
+// signature ever diverges from PushSingleTaskFn (extra/missing
+// params, return-type mismatch, parameter-type mismatch), this line
+// fails to compile and CI breaks at the typecheck step. Runtime
+// behaviour is unaffected.
+//
+// The line is intentionally module-level (not inside a describe block)
+// so the assertion fires at file-import time during typecheck — no
+// test runner needed to surface a regression.
+pushSingleTask satisfies PushSingleTaskFn;
 
 const mockWithTenant = vi.mocked(withTenant);
 const mockEmit = vi.mocked(emit);
