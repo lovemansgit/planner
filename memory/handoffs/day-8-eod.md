@@ -1,6 +1,6 @@
 ---
 name: Day 8 EOD handoff — Transcorp Subscription Planner pilot
-description: SCAFFOLD created mid-late-day at D8-7. End-of-day fills the empty sections (commits landed, counter-review patterns, test-count delta, watch-items, carry-forwards). Sections 1–3 (durable: identity / comms / tier protocol) and section 10 (acknowledge protocol) are pre-populated. Read before responding to the next-session brief from Love.
+description: SCAFFOLD created mid-late-day at D8-7; EOD-fill completed post-D8-6 closing-commit. 13 PRs merged (3 T1 memory + 6 T1 / 2 T2 / 3 T3 source) + 2 operational events. 603 → 686 unit tests (+83). Sections 1–3 (durable: identity / comms / tier protocol) and section 10 (acknowledge protocol) pre-populated; sections 4–9 EOD-filled. Read before responding to the next-session brief from Love.
 type: project
 ---
 
@@ -89,61 +89,160 @@ Love's call only.
 
 ## 4 · Counter-review patterns from Day 8 worth carrying forward
 
-<!-- FILL EOD: Reviewer pushbacks that materially improved Day 8 merges. -->
-<!-- Likely candidates as of mid-late-day:                             -->
-<!--   - D8-2 schema cluster review — `tenant_suitefleet_webhook_credentials` -->
-<!--     RLS pattern + audit-rule cascade conflict reasoning           -->
-<!--   - D8-3 contract-relaxation review — lat/lng optional + paymentMethod -->
-<!--     un-nesting; type/build path flipped together                   -->
-<!--   - D8-4a guard tests + parse-only-AWB posture review (PR #74     -->
-<!--     watch-item folded in)                                          -->
-<!--   - D8-4b reviewer notes folded mid-PR: failure_detail prefix     -->
-<!--     distinction + counter posture (two counters, not three)       -->
-<!--   - D8-4b fixture caveat wording — "doc-derived" → "doc-inferred  -->
-<!--     shape, not capture-derived" reflecting that readme.io didn't  -->
-<!--     expose a schema dump                                           -->
-<!--   - β review — production-readiness gate framing locked as design -->
-<!--     decision, not workaround                                       -->
-<!--   - D8-5/D8-6 patterns — TBD via reviewer-led handoff             -->
-<!-- Each section: what shipped, what reviewer asked, fix posture,    -->
-<!-- generalisable lesson.                                              -->
+Five reviewer pushbacks today materially improved merges. Each is a
+lesson worth internalising for future commits.
+
+### 4.1 Function-injection over circular import (D8-5 PR #83 — pre-merge)
+
+D8-5's first cut imported `pushSingleTask` from the task-push module
+into `failed-pushes/service.ts` for the retry path. The
+`import/no-cycle` ESLint rule caught it: task-push already imports
+failed-pushes' write primitives (`recordFailedPushAttempt`,
+`markFailedPushResolved`), so the additional dependency formed a
+cycle.
+
+Three resolution options surfaced:
+- (a) Extract `pushSingleTask` to a shared task-push-primitives module
+- (b) Inject the function as a parameter (function-injection)
+- (c) Have the route handler orchestrate three separate service calls
+
+(b) chosen — smallest blast radius. `retryFailedPush(ctx, id, adapter, pushTask)`
+takes the function as a parameter; the route handler is the orchestration
+layer that imports both modules and wires them together. Reviewer added
+the structural-compat pin: `pushSingleTask satisfies PushSingleTaskFn`
+at module level in the test file. If signatures diverge in a future
+PR, typecheck breaks at this line.
+
+**Lesson:** circular imports between modules that genuinely depend on
+each other (writes from A trigger reads from B which trigger writes
+back to A) are a real architectural signal. Function-injection at the
+orchestration layer is the cheapest fix when the cycle reflects
+genuine call-graph topology. The structural-compat pin (`satisfies`)
+prevents the injection from becoming theatre via signature drift.
+
+### 4.2 Three-role permission anchor surfaced pre-impl (D8-6 PR #84)
+
+D8-6's brief said "TENANT_SCOPED auto-pickup" for `task:print_labels`.
+Surface analysis surfaced two sub-questions BEFORE implementation:
+
+1. CS Agent's permission set is hand-rolled (explicit list, not
+   auto-pickup). Path A (add to explicit list) vs Path B (leave out)
+   surfaced for sign-off.
+2. Ops Manager uses `permsFor("task")` — `task:print_labels` with
+   resource="task" auto-picks up there too.
+
+User confirmed Path A pre-impl (every role with `task:read` also
+grants `print_labels`). Three-role invariant test pinned all three
+positions + the `task:read` anchor.
+
+**Lesson:** "TENANT_SCOPED auto-pickup" is shorthand for *one* role's
+membership rule, not a uniform statement about all three operational
+roles. Tenant Admin, Ops Manager, and CS Agent each construct their
+permission sets via a different mechanism (TENANT_SCOPED filter,
+permsFor() filter, explicit list). Surface this sub-question
+pre-impl; pin all three positions in the invariant test.
+
+### 4.3 Cross-tenant existence-leak vector closure (D8-6 PR #84)
+
+D8-6's visibility-filter design landed clean on first review because
+the leak vector was surfaced at PR open: returning per-ID 404s would
+let an attacker probe for cross-tenant existence by submitting a list
+of UUIDs and watching for 200 vs error responses. Solution: silent
+partial-drop with `requested_count` / `printed_count` split on audit
++ response headers. Hard-fail (ValidationError) only when EVERY ID
+drops, with a generic message that doesn't reveal which (if any)
+exist elsewhere.
+
+**Lesson:** any input that takes a list of resource IDs from an
+operator + returns success/failure per-ID is a potential
+existence-oracle. The default silent-partial-drop posture closes the
+vector; the requested-vs-printed counters preserve forensic
+traceability without leakage.
+
+### 4.4 Audit-trail asymmetry preserved across two PRs (D8-4b → D8-5)
+
+D8-4b established the operator-action vs system-outcome audit
+asymmetry: `task.pushed_via_reconcile` (system, from cron) +
+`task.push_failed` (system, from cron) on the system layer; nothing
+on the operator layer because there was no operator.
+
+D8-5 added the operator layer: `failed_push.retried` (user, from
+admin click) at the entry point. The downstream system events
+(`task.pushed_via_reconcile` / `task.push_failed`) emit from inside
+`pushSingleTask` with the `system:dlq_retry` actor. Two layers, two
+events, joined via shared `requestId` for forensic correlation.
+
+The `buildSystemDlqRetryContext(userCtx)` helper preserves
+`userCtx.requestId` — that's the load-bearing line. Reviewer
+explicitly verified this in the D8-5 review.
+
+**Lesson:** when an operator action triggers system execution, audit
+both layers separately. Operator-attributed audit captures *who
+clicked* and *what they intended*; system-attributed audit captures
+*what actually happened*. Joining via shared `requestId` is the
+forensic correlation anchor. Mirror this pattern in any future
+operator-triggers-system-action commit.
+
+### 4.5 Closing-commit follow-up surfacing (D8-6 self-review, today)
+
+The D8-6 closing-commit self-review (per Day 7 EOD §9 brief) surfaced
+two follow-ups that are NOT bugs in D8-6 — they're future-state gaps
+made visible by the self-review discipline:
+
+1. **Token-leak observability audit** — application logger is
+   host-only, but Vercel/Sentry/APM HTTP instrumentation may
+   auto-capture URLs with the token query param. Pre-Day-14 audit
+   gate. Filed at `memory/followup_label_token_observability_audit.md`.
+2. **`LABEL_TZ_OFFSET=4` hardcode** — works for UAE+Oman; KSA is
+   UTC+3. First non-UAE tenant onboard is the trigger. Filed at
+   `memory/followup_label_tz_offset_per_tenant.md`.
+
+Both are Day 9+ work, neither blocks D8-6 merge.
+
+**Lesson:** the closing-commit self-review IS the discipline. It
+catches future-state gaps that aren't bugs — they're the
+"this-is-fine-for-pilot-but-revisit-when-X" callouts that would
+otherwise rot in someone's head until X happens. Filing them as
+follow-ups before EOD-fill keeps Day N's memory delta accurate.
 
 ---
 
 ## 5 · What shipped today (Day 8 — 2 May 2026)
 
-<!-- FILL EOD: Commit table with PR # and tier. Through β + this scaffold: -->
+13 PRs merged to main. Working tree clean post-EOD-fill commit. Day 8
+sprint closed.
 
 | # | Commit | PR | Tier | HEAD |
 |---|--------|------|------|------|
-| D8-1 | chore(memory): Day 8 schedule + createBulk-vs-single-loop status | [#72](https://github.com/lovemansgit/planner/pull/72) | T1 | `<!-- FILL -->` |
-| Watch-items | chore(memory): D8-4 reviewer watch-items registration | [#74](https://github.com/lovemansgit/planner/pull/74) | T1 | `<!-- FILL -->` |
-| Sub-item | chore(memory): D8-4 watch-item 2 sub-item — tenant.push_skipped event registration | [#75](https://github.com/lovemansgit/planner/pull/75) | T1 | `<!-- FILL -->` |
-| D8-2 | feat(schema): consignees.district + tenants.suitefleet_customer_code + tenant_suitefleet_webhook_credentials | [#73](https://github.com/lovemansgit/planner/pull/73) | T3 | `<!-- FILL -->` |
+| D8-1 | chore(memory): Day 8 schedule + createBulk-vs-single-loop status | [#72](https://github.com/lovemansgit/planner/pull/72) | T1 | (squash-merged) |
+| Watch-items | chore(memory): D8-4 reviewer watch-items registration | [#74](https://github.com/lovemansgit/planner/pull/74) | T1 | (squash-merged) |
+| Sub-item | chore(memory): D8-4 watch-item 2 sub-item — tenant.push_skipped event registration | [#75](https://github.com/lovemansgit/planner/pull/75) | T1 | `b612cbe` |
+| D8-2 | feat(schema): consignees.district + tenants.suitefleet_customer_code + tenant_suitefleet_webhook_credentials | [#73](https://github.com/lovemansgit/planner/pull/73) | T3 | (squash-merged) |
 | D8-3 | feat(contract): lat/lng optional + paymentMethod un-nesting | [#76](https://github.com/lovemansgit/planner/pull/76) | T2 | `051b240` |
 | D8-4-prep | chore(seed): suitefleet_customer_code='MPL' for sandbox tenant | [#77](https://github.com/lovemansgit/planner/pull/77) | T1 | `e42a960` |
 | D8-4a | feat(task-push): SF bulk push foundation — task-push module + AWB regex + guards | [#78](https://github.com/lovemansgit/planner/pull/78) | T3 | `60a797c` |
 | D8-mid | chore(memory): D8-4b mid-day handoff + empirical capture + audit-rule test-hygiene update | [#79](https://github.com/lovemansgit/planner/pull/79) | T1 | `8fa016d` |
 | D8-4b | feat(task-push): SF push reconcile path — getTaskByAwb adapter + reconcile branch | [#80](https://github.com/lovemansgit/planner/pull/80) | T3 | `101fa95` |
 | β | feat(cron): tenant-enumeration filter — only tenants with suitefleet_customer_code | [#81](https://github.com/lovemansgit/planner/pull/81) | T2 | `3412d13` |
-| Vercel promote (β live) | operational `vercel promote` — Preview `planner-bnvmtgtpx` → Production `planner-bocff9fzq` | (no PR — operational) | n/a | n/a |
+| Vercel promote 1 (β live) | operational `vercel promote` — Preview `planner-bnvmtgtpx` → Production `planner-bocff9fzq` | (no PR — operational) | n/a | n/a |
 | Post-promote validation | second β trigger validated clean: `tenant_count: 1`, 8.2s, no timeout, `cron-eligible tenants enumerated` log line confirmed; request_id `035a444a-0444-4768-8dd5-ef8b962265f4` | (no PR — operational) | n/a | n/a |
-| D8-7 | chore(memory): Day 8 EOD handoff scaffolding (this file) + Vercel auto-promote escalation memo | `<!-- FILL EOD -->` | T1 | `<!-- this commit's HEAD -->` |
-| D8-5 | feat(failed-pushes): DLQ retry service + admin UI | `<!-- FILL EOD -->` | `<!-- FILL EOD -->` | `<!-- FILL EOD -->` |
-| D8-6 | feat(labels): SuiteFleet label passthrough route + adapter method | `<!-- FILL EOD -->` | `<!-- FILL EOD -->` | `<!-- FILL EOD -->` |
-| EOD-fill | chore(memory): Day 8 EOD fill — scaffold completed | `<!-- FILL EOD -->` | T1 | `<!-- FILL EOD -->` |
+| D8-7 | chore(memory): Day 8 EOD handoff scaffolding + Vercel auto-promote escalation memo | [#82](https://github.com/lovemansgit/planner/pull/82) | T1 | `7f7ecb2` |
+| D8-5 | feat(failed-pushes): DLQ retry service + admin UI + failed_pushes:retry permission + failed_push.retried audit event | [#83](https://github.com/lovemansgit/planner/pull/83) | T2 | `e3f2546` |
+| D8-6 | feat(labels): SuiteFleet label passthrough — printLabels adapter + service + route + permission + audit | [#84](https://github.com/lovemansgit/planner/pull/84) | T2 closing | `8565007` |
+| EOD-fill | chore(memory): Day 8 EOD fill + two D8-6 closing-commit follow-ups | (this commit) | T1 | (this commit's HEAD) |
 
-**Main HEAD at Day-8 close (pre-EOD-fill):** `<!-- FILL EOD -->`. The
+**Main HEAD at Day-8 close (pre-EOD-fill):** `8565007`. The
 EOD-fill T1 itself bumps HEAD; Day-9 morning sees that commit's sha as the
 starting point.
 
-**Test count delta over Day 8:** unit `<!-- FILL EOD: 603 → ??? -->`
-(641 at β merge; D8-5 + D8-6 + EOD-fill add their own deltas).
-Integration `<!-- FILL EOD: ~100 → ??? -->`. Lint + typecheck clean
-across every merge. Build clean (Vercel preview green on every PR).
+**Test count delta over Day 8:** unit **603 → 686 (+83)**, integration
+~100 (no integration suite changes today; all D8-N work pinned via
+unit tests). Lint + typecheck clean across every merge. Build clean
+(Vercel preview green on every PR). The +83 unit delta is the largest
+single-day swing of the project so far — pace observation in §9.
 
-**Memory delta** — `<!-- FILL EOD: list new files added today -->`. As
-of D8-7 scaffold, today's new memory files include:
+**Memory delta** — 9 new files (5 followup_, 1 handoff, 1 notes, plus
+the two closing-commit follow-ups filed alongside this EOD-fill):
 
 - `memory/notes/day8_schedule.md` (D8-1) — Day 8 calendar / commit
   plan / mid-day handoff trigger
@@ -160,17 +259,21 @@ of D8-7 scaffold, today's new memory files include:
 - `memory/followup_vercel_auto_promote_main_to_production.md` (D8-7 +
   β post-merge validation incident) — PRIORITY ELEVATED; auto-promote
   OFF means every urgent main-merge needs a manual `vercel promote`,
-  hit twice in one day on Day 8 (D8-4a deploy-stale + β deploy-stale)
+  hit THREE times on Day 8 (D8-4a deploy-stale + β deploy-stale +
+  D8-5/D8-6 backend merged but not deployed). Day 9 morning anchor.
+- `memory/followup_label_token_observability_audit.md` (EOD-fill, from
+  D8-6 closing-commit self-review) — application logger is host-only,
+  but Vercel/Sentry/APM HTTP instrumentation may auto-capture URLs
+  with the token query param; pre-Day-14 audit gate
+- `memory/followup_label_tz_offset_per_tenant.md` (EOD-fill, from D8-6
+  closing-commit self-review) — `LABEL_TZ_OFFSET=4` hardcode works
+  for UAE+Oman; first non-UAE/Oman tenant onboard is the trigger
 - `memory/handoffs/day-8-eod.md` (this file, D8-7 + EOD-fill)
-- `<!-- FILL EOD: D8-5 / D8-6 carry-forwards if any -->`
 - Plus the `MEMORY.md` index entries for each of the above
 
 ---
 
 ## 6 · What's queued for Day 9 (or open carry-forwards)
-
-<!-- FILL EOD: Day 9 candidate work + open Day 8 carry-forwards. -->
-<!-- Likely candidates as of mid-late-day:                       -->
 
 ### Day 9 priority order (urgency)
 
@@ -221,13 +324,23 @@ of D8-7 scaffold, today's new memory files include:
 - **C-4** (Day 7 carry-forward) — DLQ retry button calls into the service
   D8-5 lands. After D8-5 ships, C-4's service is "fully implemented but
   no UI"; admin UI can land standalone.
-- **<!-- FILL EOD: D8-5 / D8-6 outcomes — what shipped, what carried over -->**
+- **D8-5 outcomes:** shipped DLQ retry service + admin UI + permission +
+  audit. Three-role permission gating (Tenant Admin / Ops Manager /
+  CS Agent excluded). Function-injection over circular import per
+  reviewer note + structural-compat pin (`pushSingleTask satisfies PushSingleTaskFn`).
+  No carry-overs from D8-5 itself; the D8-4b
+  reconcile-recovered-local-write-failure follow-up (filed pre-D8-5)
+  remains a Day 9+ small-T2 candidate.
+- **D8-6 outcomes:** shipped SuiteFleet label passthrough — adapter
+  method + service + route + permission + audit. Backend ships
+  without UI; UI follows when /tasks list page is built (deferred).
+  Two new follow-ups filed at closing-commit self-review:
+  observability audit + tz_offset per-tenant. Both Day 9+, neither
+  blocking.
 
 ---
 
 ## 7 · Watch-items for upcoming work
-
-<!-- FILL EOD: Open follow-ups + reviewer-flagged residuals after D8-5/D8-6 land. -->
 
 ### Day-1 through Day-7 carry-forwards still open (consolidated)
 
@@ -262,13 +375,13 @@ of D8-7 scaffold, today's new memory files include:
 | Webhook env var gap | `followup_suitefleet_bulk_push_empirical.md` "Bonus finding" | Pair with D8-8 webhook hardening |
 | Vercel auto-promote policy | Day 8 production-deploy gap | Day 9+ deployment pipeline cleanup |
 | Env var parity CI | Day 8 `SUITEFLEET_SANDBOX_CUSTOMER_ID` gap | Consolidated with migration-drift CI as a single Day-9+ T2 |
-| `<!-- FILL EOD: D8-5 / D8-6 carry-forwards -->` | | |
+| Label-token observability audit | `followup_label_token_observability_audit.md` (D8-6 closing) | Pre-Day-14 audit gate — verify Vercel/Sentry/APM HTTP instrumentation doesn't auto-capture URLs with the bearer token query param |
+| Label tz_offset per-tenant | `followup_label_tz_offset_per_tenant.md` (D8-6 closing) | First non-UAE/Oman tenant onboard — `LABEL_TZ_OFFSET=4` hardcode breaks for KSA (UTC+3) and other GCC markets |
+| D8-6 UI follow-up | D8-6 PR #84 deferred | When `/tasks` list page is built — wire multi-select + Print Labels button into the existing POST /api/tasks/labels route |
 
 ---
 
 ## 8 · Open carry-forwards specific to Day 8 work
-
-<!-- FILL EOD: Things deliberately deferred from Day 8 — not lost, just queued. -->
 
 ### β filter — operational verification (CAPTURED post-validation)
 
@@ -307,13 +420,34 @@ production validates or invalidates. Strict parser throws
 visibility. Trigger to revisit: first production duplicate-AWB
 incident.
 
-### D8-5 / D8-6 — reviewer-led handoff
+### D8-5 / D8-6 — reviewer-led session outcomes (CAPTURED)
 
-`<!-- FILL EOD: capture D8-5 (DLQ retry + admin UI) and D8-6 (label
-passthrough) outcomes from the reviewer-led session. Both originally
-scoped as T2 commits; may bundle or split per reviewer judgment.
-Closing-commit posture applies to whichever lands as Day 8's closing
-commit. -->`
+Both shipped as separate T2 commits; not bundled. D8-6 is the day's
+closing commit per the §9 brief.
+
+**D8-5 (PR #83, T2):** DLQ retry service + admin UI + permission +
+audit event. Reviewer accepted with one note pre-merge — add a
+structural-compat pin (`pushSingleTask satisfies PushSingleTaskFn`)
+to prevent the function-injection cycle-avoidance from becoming
+theatre via signature drift. Fixup landed (`a9bf4de`); merged at
+`e3f2546`. Three-role permission distribution intentionally excludes
+CS Agent + Ops Manager (mirrors the subscription-lifecycle
+precedent — admin-only operational write). Test count delta: +22
+(5 permission invariant tests + 7 service tests + 10 pushSingleTask
+state-machine tests).
+
+**D8-6 (PR #84, T2 closing):** SuiteFleet label passthrough — backend
+only (UI deferred). Three-role permission distribution INCLUDES CS
+Agent + Ops Manager (Path A: every role with task:read also grants
+print_labels). Token-in-query security rule enforced via
+host-only logging + server-side fetch architecture. Two follow-ups
+filed at closing-commit self-review (observability audit, tz_offset
+per-tenant). Merged at `8565007`. Test count delta: +23 (6
+permission tests + 7 service tests + 10 label-client tests).
+
+Closing-commit posture (D8-6): no known semantic gaps. Two
+documented scope decisions flagged in the PR (UI deferred,
+production-validation deferred to first operator click).
 
 ### Test-hygiene cleanup (Day 9+ low urgency)
 
@@ -340,49 +474,135 @@ D8-5 or a Day 9 commit completes the trigger.
 
 ## 9 · Self-care, pace, pushback notes
 
-<!-- FILL EOD: Reviewer pushback culture, pace observations, closing-commit -->
-<!-- discipline, surfacing scope conflicts, auto-mode behaviour. Use the   -->
-<!-- Day-7 EOD §9 structure as template.                                    -->
+### Pushback culture
 
-### Pace observations (mid-late-day snapshot)
+Five reviewer pushbacks today landed cleanly without defensiveness;
+each materially improved the merge. The §4 lessons capture the
+durable patterns. Highlights of the durable shift:
 
-Day 8 shape so far:
+- **Function-injection over circular import** (D8-5) — the
+  `import/no-cycle` lint rule caught a real architectural signal.
+  Resolution chosen on first review: function-injection at the
+  orchestration layer, with a `satisfies` structural-compat pin
+  added pre-merge per reviewer note.
+- **Three-role permission anchor surfaced pre-impl** (D8-6) — Path A
+  vs Path B confirmed before code landed, not after. Three-role
+  invariant test pinned all three positions.
+- **Cross-tenant existence-leak vector closed at PR open** (D8-6) —
+  silent partial-drop posture explained in PR description; no
+  reviewer iteration needed on the security shape.
 
-- **3 T1** memory PRs at start (D8-1, watch-items, sub-item) — small,
-  fast, all auto-merged.
-- **1 T3** schema cluster (D8-2) — three columns + a new table; first
-  hard-stop-twice of the day.
-- **1 T2** contract relaxation (D8-3) — type + build path flipped
-  together; clean single hard stop.
-- **1 T1** sandbox seed (D8-4 prep) — operational MPL backfill.
-- **1 T3** D8-4a — task-push foundation, AWB regex parse-only, two
-  fail-closed guards. Largest single commit of the day.
-- **1 T1** mid-day handoff (D8-mid) at 19% context — preserved D8-4b
-  prep state for fresh session.
-- **1 T3** D8-4b — reconcile path; second hard-stop-twice. Two
-  reviewer-folded amendments (failure_detail prefix wording + counter
-  posture; fixture caveat wording).
-- **1 T2** β — production-readiness gate cron filter.
-- **1 T1** D8-7 (this scaffold).
+Pattern: the more architectural surface is locked in earlier days,
+the more the reviewer's role shifts from "catch the gap" to "verify
+the rule was applied." Day 8 saw this shift — most reviewer asks
+were verifications (e.g., `satisfies` pin), not interventions. The
+§4.1 / §4.5 pushbacks were the only "intervene" patterns; the rest
+were "verify."
 
-10 commits already merged or in flight, with D8-5 + D8-6 + EOD-fill
-ahead. Day 8 has decisively been a heavier day than Day 7 (8 commits)
-— matches the §9 Day-7 prediction that "Day 8 looks heavier still".
-Mid-day handoff at 19% context was the right call; without it, D8-4b
-would have hit the wall mid-PR.
+### Pace
 
-`<!-- FILL EOD: final commit count + heavier-than-Day-7 confirmation; -->`
-`<!-- specific reviewer pushbacks per §4 candidates;                  -->`
-`<!-- closing-commit hygiene of whatever lands as Day 8 closer        -->`
+Day 8 ran 13 PRs over the day (vs Day 7's 8 + EOD-fill = 9). Mix:
 
-### Auto mode (Day 8 observations)
+- **6 T1** memory PRs — D8-1, watch-items, sub-item, D8-mid handoff,
+  D8-7 EOD scaffold, EOD-fill (this commit). All auto-merged on
+  green CI per protocol.
+- **2 T2** source — D8-3 contract relaxation, β cron filter. Each
+  single-stop at PR open.
+- **2 T2 closing** — D8-5 DLQ retry + admin UI, D8-6 label passthrough.
+  Both rolled with no second hard stop per reviewer-instructed
+  sequencing. D8-6 is the day's closing commit (cron/DLQ/labels arc
+  ends here).
+- **3 T3** infrastructure — D8-2 schema cluster, D8-4a task-push
+  foundation, D8-4b reconcile path. Each hard-stop-twice. The §9
+  Day-7 prediction "Day 8 looks heavier still" held: 3 T3 in one day
+  is the practical ceiling on a hard-stop-twice protocol.
+- **2 operational events** — Vercel promote (β live), post-promote
+  validation trigger. No PR, but captured in the commit table for
+  forensic completeness.
 
-`<!-- FILL EOD: auto-mode-vs-explicit-instruction tensions; sequencing -->`
-`<!-- corrections if any; carry-forward updates to §2.                  -->`
+**Pace dynamics worth carrying forward:**
+
+D8-4a/4b's probe-then-commit pattern slowed those — the first
+empirical capture took 3 cron triggers + a stale-deploy detour
++ env-var fixes + α-fix UPDATE. But D8-5 (DLQ retry) and D8-6
+(label passthrough) ran fast on top of the established empirical
+foundation: the AWB regex was already pinned, the per-tenant
+guard already shipped, the audit-asymmetry pattern already
+validated. Net: Day 8 was higher-throughput than Days 6-7
+because the architectural foundation from earlier days is now
+load-bearing. **This is the curve flattening — feature velocity
+rises as primitive surface stabilises.**
+
+Test count delta supports the framing: +83 unit tests on Day 8 vs
++34 unit on Day 7. The +83 is concentrated in D8-4a (12) + D8-4b (21)
++ β (5) + D8-5 (22) + D8-6 (23). The probe-then-commit days (D8-4a,
+D8-4b) added more tests per commit (12, 21) than the build-on-foundation
+days (D8-5, D8-6 added 22, 23 each — comparable, but the implementation
+density was higher because primitive reuse meant less new
+surface to pin).
+
+Mid-day handoff at 19% context (D8-mid) was the right call; without
+it, D8-4b would have hit the wall mid-PR. The 25%-context handoff
+trigger from the morning brief held. Future days that span 3+ T3
+commits should plan for a mid-day handoff explicitly.
+
+### Closing-commit discipline
+
+D8-6 was Day 8's closing-commit candidate per the brief. The
+cron/DLQ/labels arc closed cleanly:
+
+- D8-2 schema cluster (T3) → D8-3 contract relaxation (T2) → D8-4a
+  task-push foundation (T3) → D8-4b reconcile path (T3) → β
+  enumeration filter (T2) → D8-5 DLQ retry (T2) → D8-6 label
+  passthrough (T2 closing).
+
+§4.7 hygiene held on D8-6: closing-commit self-review surfaced
+two follow-up memos (token-leak observability audit, tz_offset
+per-tenant) — neither is a bug; both are documented future-state
+gaps. Filing them as follow-ups before EOD-fill kept Day 8's
+memory delta accurate (9 files, not 7) and ensured Day 9's
+sequencing inherits them with named cross-refs.
+
+The closing-commit self-review IS the discipline. It catches
+future-state gaps that aren't bugs — they're the
+"this-is-fine-for-pilot-but-revisit-when-X" callouts that would
+otherwise rot in someone's head until X happens.
 
 ### Surfacing scope conflicts pre-PR
 
-`<!-- FILL EOD: scope conflicts surfaced today and how they resolved -->`
+Two scope conflicts surfaced today, both before code landed:
+
+- **D8-5 retry-failure UPDATE posture** — pre-impl analysis surfaced
+  the question "should retry-failure be UPDATE-existing or
+  INSERT-new?" Resolved in favour of UPDATE-existing (parallels
+  D8-4a `recordFailedPushAttempt` 23505 → UPDATE upsert; manual +
+  cron retries land identical DLQ semantics).
+- **D8-6 three-role permission** — pre-impl analysis surfaced Path A
+  (CS Agent gets it via explicit list) vs Path B (CS Agent excluded).
+  Confirmed Path A pre-impl per Love's verbal rule "every role with
+  task:read also grants print_labels."
+
+Pattern held: surface BEFORE bundling into a commit, never after.
+Carry forward to Day 9.
+
+### Auto mode (Day 8 observations)
+
+Auto mode covered cadence well — every T1 auto-merged on green CI;
+every T2 single-stopped at PR open OR rolled with no-second-hard-stop
+when reviewer-sequencing said so; every T3 hard-stopped twice as
+required. Reviewer-instructed sequencing held without the kind of
+correction that needed Day-7's mid-day pull-back.
+
+The "no second hard stop" mechanism worked smoothly for the D8-5 →
+D8-6 sequence: D8-5 hard-stop at PR open → "proceed to merge" → D8-5
+merged → D8-6 PR opened → CI green → D8-6 auto-merged. Reviewer
+confirmed the sequencing in the surface message; no friction.
+
+Three production-promote events today (D8-4a deploy-stale + β
+deploy-stale + D8-5/D8-6 backend merged but not deployed) is empirical
+signal that the auto-promote main → Production gap is the right Day 9
+morning anchor. Filed at PRIORITY ELEVATED in the auto-promote memo;
+Day 8's memory delta holds the receipts.
 
 ---
 
@@ -391,16 +611,14 @@ would have hit the wall mid-PR.
 Respond to the next-session brief with:
 
 1. Confirmation that you've read this document.
-2. Repo state confirmed: main HEAD `<!-- FILL EOD -->` (pre-EOD-fill
-   commit; the EOD-fill T1 itself bumps HEAD — `git log -1 --pretty=format:"%h"`
-   for the actual starting point), working tree clean,
-   `<!-- FILL EOD: NNN -->` unit baseline, `<!-- FILL EOD -->` integration
-   (run `npm run test:integration` against the test DB for the exact
-   figure if needed).
+2. Repo state confirmed: main HEAD `8565007` (pre-EOD-fill commit;
+   the EOD-fill T1 itself bumps HEAD — `git log -1 --pretty=format:"%h"`
+   for the actual starting point), working tree clean, **686** unit
+   baseline, ~100 integration (run `npm run test:integration` against
+   the test DB for the exact figure if needed).
 3. Durable memory verified: you've read `memory/MEMORY.md` and confirmed
    it's the durable repo store, not the agent-private ephemeral one.
-   Day 8 entries include `<!-- FILL EOD: count -->` new files listed in
-   §5's memory delta.
+   Day 8 entries include **9** new files listed in §5's memory delta.
 4. Awareness of carry-forwards: webhook env-var gap, D8-8 webhook
    hardening, D8-4b local-write-failure DLQ visibility gap, MP-14
    auto-pause caller wiring, MP-13 cascade-cancel schema work. Priority
