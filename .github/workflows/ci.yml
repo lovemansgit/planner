@@ -28,8 +28,20 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # `production` added 3 May 2026 — promotion PRs (main → production)
+    # need this workflow to fire so production's required-status-checks
+    # protection (Vercel + lint+typecheck+test) can satisfy. Originally
+    # main-only, authored at PR #12 (Day 1) before R-0-prep introduced
+    # the production branch model. See
+    # `memory/followup_promotion_runbook_first_execution_findings.md`
+    # finding #3 for the gap analysis.
+    branches: [main, production]
   push:
+    # No `production` here — production only updates via PR-merge of a
+    # promote/* branch, never via direct push (branch protection blocks
+    # force-push and direct-push isn't part of the documented promotion
+    # procedure). The push trigger here exists for main-branch
+    # post-merge runs only.
     branches: [main]
 
 # Cancel in-progress runs for the same PR/branch when a newer commit lands.
