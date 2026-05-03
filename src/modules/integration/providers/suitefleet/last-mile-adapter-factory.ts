@@ -76,10 +76,14 @@ export interface SuiteFleetLastMileAdapterDeps {
    */
   readonly resolveCredentials?: (tenantId: Uuid) => Promise<SuiteFleetCredentials>;
   /**
-   * Per-tenant SuiteFleet webhook credentials (clientId/clientSecret).
-   * Defaults to the canonical resolver. Override only in tests.
+   * Per-tenant SuiteFleet webhook credentials. Returns null when no
+   * credentials row exists for the tenant — the verifier treats null
+   * as "tier_1_only" (no Tier-2 credential gate). Defaults to the
+   * canonical DB-backed resolver. Override only in tests.
    */
-  readonly resolveWebhookCredentials?: (tenantId: Uuid) => Promise<SuiteFleetWebhookCredentials>;
+  readonly resolveWebhookCredentials?: (
+    tenantId: Uuid,
+  ) => Promise<SuiteFleetWebhookCredentials | null>;
   /**
    * Optional override for the SuiteFleet base URL. Production reads
    * the per-environment value from env; tests pass the sandbox URL.

@@ -31,6 +31,19 @@ vi.mock("../status-mapper", () => ({
   mapSuiteFleetStatusToInternal: vi.fn(),
 }));
 
+// D8-8: the canonical webhook resolver now reads from
+// tenant_suitefleet_webhook_credentials via withServiceRole, which
+// boots the postgres client at module-import. Mock @/shared/db so the
+// import doesn't trip the env-var fail-loud guard in node test env.
+// The factory test injects its own resolver via deps anyway, so the
+// real resolver's body is never invoked here.
+vi.mock("@/shared/db", () => ({
+  withServiceRole: vi.fn(),
+  withTenant: vi.fn(),
+  setServiceRoleObserver: vi.fn(),
+  db: {},
+}));
+
 import { createSuiteFleetAuthClient } from "../auth-client";
 import { mapSuiteFleetStatusToInternal } from "../status-mapper";
 import { createSuiteFleetTaskClient } from "../task-client";
@@ -83,7 +96,7 @@ const SAMPLE_CREDENTIALS: SuiteFleetCredentials = {
 
 const SAMPLE_WEBHOOK_CREDENTIALS: SuiteFleetWebhookCredentials = {
   clientId: "wh-client",
-  clientSecret: "wh-secret",
+  clientSecretHash: "$2a$10$" + "x".repeat(53),
 };
 
 const SAMPLE_TASK: TaskCreateRequest = {
@@ -262,8 +275,8 @@ describe("createTask", () => {
 
 describe("verifyWebhookRequest", () => {
   it("resolves webhook credentials for the supplied tenantId and delegates to verifySuiteFleetWebhook", async () => {
-    const expectedResult: WebhookVerificationResult = { ok: true };
-    mockVerifyWebhook.mockReturnValue(expectedResult);
+    const expectedResult: WebhookVerificationResult = { ok: true, authTier: "tier_2_passed" };
+    mockVerifyWebhook.mockResolvedValue(expectedResult);
 
     const adapter = buildAdapter();
     const headers: HeadersLike = { get: () => null };
@@ -279,7 +292,7 @@ describe("verifyWebhookRequest", () => {
       ok: false,
       reason: "missing_client_id",
     };
-    mockVerifyWebhook.mockReturnValue(failure);
+    mockVerifyWebhook.mockResolvedValue(failure);
 
     const adapter = buildAdapter();
     const result = await adapter.verifyWebhookRequest(
@@ -288,6 +301,19 @@ describe("verifyWebhookRequest", () => {
       {},
     );
     expect(result).toEqual(failure);
+  });
+
+  it("passes null to the verifier when no credentials row exists for the tenant (Tier 1)", async () => {
+    (resolveWebhookCredentials as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    const tier1Result: WebhookVerificationResult = { ok: true, authTier: "tier_1_only" };
+    mockVerifyWebhook.mockResolvedValue(tier1Result);
+
+    const adapter = buildAdapter();
+    const headers: HeadersLike = { get: () => null };
+    const result = await adapter.verifyWebhookRequest(TENANT_ID, headers, {});
+
+    expect(mockVerifyWebhook).toHaveBeenCalledWith(headers, null);
+    expect(result).toEqual(tier1Result);
   });
 });
 

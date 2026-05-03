@@ -104,7 +104,7 @@ class StubAdapter implements LastMileAdapter {
     void tenantId;
     void headers;
     void body;
-    return { ok: true };
+    return { ok: true, authTier: "tier_1_only" };
   }
   parseWebhookEvents(body: unknown): readonly WebhookEvent[] {
     void body;

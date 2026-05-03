@@ -31,15 +31,26 @@ export interface SuiteFleetCredentials {
 }
 
 /**
- * Resolved per-tenant SuiteFleet webhook secret. These values are
- * configured by Transcorp in SuiteFleet's portal and sent on every
- * inbound webhook as `X-Client-Id` / `X-Client-Secret` headers. They
- * are SEPARATE from `SuiteFleetCredentials` — the auth credentials are
- * for OUTBOUND calls; the webhook credentials are for verifying INBOUND
- * deliveries. Production stores them per-tenant in AWS Secrets Manager
- * at /transcorp/secrets/{tenantId}/suitefleet/webhook-credentials.
+ * Resolved per-tenant SuiteFleet webhook secret. Values are configured
+ * by the merchant operator in SuiteFleet's portal (when they choose to
+ * — credential configuration is opt-in per merchant per the P2 reshape
+ * memo) and sent on every inbound webhook as `clientid` / `clientsecret`
+ * lowercase headers (no dashes — see Day-7 empirical capture in
+ * `memory/followup_webhook_auth_architecture.md`).
+ *
+ * SEPARATE from `SuiteFleetCredentials` — auth credentials are for
+ * OUTBOUND calls; webhook credentials are for verifying INBOUND
+ * deliveries.
+ *
+ * Storage: per-tenant row in `tenant_suitefleet_webhook_credentials`
+ * (Day 8 / D8-2 schema). `clientSecretHash` is a bcrypt hash, NEVER
+ * plaintext — verification compares the inbound request's plaintext
+ * secret via `bcrypt.compare(plaintext, hash)`. The clientId is stored
+ * in plaintext because it is not a secret; it is the public-facing
+ * identifier the merchant types into the SuiteFleet portal alongside
+ * the secret.
  */
 export interface SuiteFleetWebhookCredentials {
   readonly clientId: string;
-  readonly clientSecret: string;
+  readonly clientSecretHash: string;
 }

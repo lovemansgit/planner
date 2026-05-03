@@ -67,3 +67,9 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Vercel auto-promote main → Production policy gap (PRIORITY ELEVATED)](followup_vercel_auto_promote_main_to_production.md) — auto-promote OFF means every urgent main-merge needs a manual `vercel promote`. Hit THREE times on Day 8 (D8-4a, β, D8-5+D8-6 merge). Operational risk vector. Day 9 morning anchor: lean Path A (auto-promote on green CI)
 - [D8-6 label-token observability audit](followup_label_token_observability_audit.md) — application logger is host-only, but Vercel/Sentry/APM HTTP instrumentation may auto-capture URLs with the bearer token query param. Pre-Day-14 audit gate
 - [D8-6 LABEL_TZ_OFFSET=4 hardcode → must become tenant-derived](followup_label_tz_offset_per_tenant.md) — works for UAE+Oman (UTC+4 year-round); KSA is UTC+3. First non-UAE tenant onboard is the trigger
+
+## Day 9 (3 May 2026)
+
+- [S3_WEBHOOK_ARCHIVE_PREFIX env-scope divergence](followup_env_scope_s3_webhook_archive_prefix.md) — pre-existing var scoped to all three (Dev + Preview + Prod); convention is Production + Preview only. Day-10 cleanup batch.
+- [D8-8 webhook auth model — credential-based verification not viable](followup_d8_8_webhook_auth_model.md) — SF webhook auth is opt-in per-merchant; production merchants don't configure Client ID/Secret. D8-8 must use IP allowlist / path-embedded tenant ID / HMAC (vendor-confirmed), NOT credentials. P2 webhook env-add aborted as a result.
+- [D8-2 migration comment framing](followup_d8_2_migration_comment_framing.md) — `0013_sf_integration_required_fields.sql` lines 102-104 frame credential verification as default; P2 reshape made it Tier-2-only. Day-10 docs-pass amendment, not D8-8's job.
