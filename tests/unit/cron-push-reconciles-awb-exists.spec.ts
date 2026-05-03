@@ -27,8 +27,24 @@
 //   2. Increment `awbExists` (NOT `awbExistsReconciled`).
 //   3. NOT emit `task.pushed_via_reconcile`.
 //
+// RULE (reconcile-recovered local-write-failure path — Day 9 / D8-4b
+// operator-visibility fix): When `getTaskByAwb` SUCCEEDED (we have
+// the recovered SF id) BUT the subsequent `markTaskPushed` local
+// UPDATE threw (DB connection drop, etc.), the cron MUST:
+//   1. Sentry-capture the markErr (was the only signal pre-D8-4b).
+//   2. Call `recordFailedPushAttempt` with failureDetail prefixed
+//      `reconcile_recovered_but_mark_pushed_failed: '<awb>' (sf_id: <id>); error: <msg>`
+//      so /admin/failed-pushes surfaces the row and the operator gets
+//      cut-and-paste recovery (recovered SF id is in the detail).
+//      Distinct from the two prefixes above so all three forensic
+//      categories grep apart on the DLQ.
+//   3. Increment `awbExists` (NOT `awbExistsReconciled`) — the loop
+//      didn't close cleanly.
+//   4. NOT emit `task.pushed_via_reconcile` — we don't claim the
+//      reconcile succeeded if the local write didn't land.
+//
 // Counter posture (reviewer-locked, D8-4b): two AWB counters, NOT
-// three. Reconcile failures count as `awbExists`. See
+// three. Reconcile failures (both shapes) count as `awbExists`. See
 // PushTenantOutcome jsdoc for the rationale.
 //
 // Why a named test file: same precedent as the D8-4a guard tests —
@@ -576,13 +592,13 @@ describe("D8-4b reconcile — markTaskPushed write failure (post-recovery)", () 
     vi.clearAllMocks();
   });
 
-  it("Sentry-captures markTaskPushed failures and counts as awbExists when local UPDATE throws after reconcile recovered the SF id", async () => {
+  it("Sentry-captures markTaskPushed failures, writes a DLQ row with reconcile_recovered_but_mark_pushed_failed prefix, and counts as awbExists", async () => {
     // SF reconciled successfully (we have the recovered id) but the
-    // local UPDATE failed — DB connection drop, etc. The next cron
-    // pass will re-attempt and hit AWB-exists again, then the
-    // reconcile path closes the loop on the retry. Sentry-loud per
-    // the service.ts comment for the post-create local UPDATE
-    // failure (same error mode, different code path).
+    // local UPDATE failed — DB connection drop, etc. Pre-D8-4b
+    // (Day 9) the only signal was Sentry; the operator had no
+    // /admin/failed-pushes surface. Day 9 D8-4b adds the DLQ row
+    // write so operators get cut-and-paste recovery (the recovered
+    // SF id lands in failure_detail).
     let serviceRoleCall = 0;
     mockWithServiceRole.mockImplementation(async (_label, fn) => {
       serviceRoleCall += 1;
@@ -622,6 +638,23 @@ describe("D8-4b reconcile — markTaskPushed write failure (post-recovery)", () 
     expect(captureContext.operation).toBe("mark_pushed_via_reconcile");
     expect(captureContext.task_id).toBe(TASK_ID);
     expect(captureContext.awb).toBe(AWB);
+
+    // Day 9 / D8-4b: DLQ row lands with the reconcile-recovered prefix.
+    // Three forensic prefixes now grep apart on /admin/failed-pushes:
+    //   - awb_exists:  D8-4a parse-only DLQ (pre-reconcile cron pass)
+    //   - awb_exists_reconcile_failed:  D8-4b getTaskByAwb-threw path
+    //   - reconcile_recovered_but_mark_pushed_failed:  D8-4b post-recovery local-write-failure (this case)
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const recordArg = mockRecord.mock.calls[0][1];
+    expect(recordArg.taskId).toBe(TASK_ID);
+    expect(recordArg.failureReason).toBe("unknown");
+    expect(recordArg.httpStatus).toBeUndefined();
+    expect(recordArg.failureDetail).toMatch(
+      /^reconcile_recovered_but_mark_pushed_failed: 'MPL-08187661' \(sf_id: 59254\); error:/,
+    );
+    // Carries the original mark-error message so the operator sees
+    // what failed (Sentry has the stack; DLQ has the human-readable line).
+    expect(recordArg.failureDetail).toContain("synthetic DB failure on markTaskPushed");
 
     // No task.pushed_via_reconcile audit event — we don't claim the
     // reconcile succeeded if the local write didn't land.
