@@ -85,3 +85,5 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 ## Day 10 (4 May 2026)
 
 - [P4 operator nav + landing page plan](plans/p4_operator_nav_plan.md) — top nav (horizontal header), permission-gated visibility per role, workflow-shortcut landing page (Today's tasks + Failed pushes), logout via POST form to existing /logout. Route-group `(app)/` migration; 4 page moves + 4 new files. T2. Reviewed alongside auth PR; no implementation today.
+- [Example data in user-facing help text](followup_example_data_in_user_facing_help.md) — prefer obviously-fake names (acme-corp, example-merchant) in script help/argparse/plan examples. Surfaced when "tabchilli" placeholder triggered a verification loop during P2 probe prep. Audit pass when adjacent edits land.
+- [CI-residue cleanup task — probe-merchant-a/b](followup_audit_rule_cascade_conflict_cleanup.md) — companion to audit_rule_cascade_conflict.md. Day-10 P2 probe seeds 2 throwaway tenants on top of the 339-row CI residue; tracks probe-specific teardown path (RULE-disable + DELETE) separately from the wider sweep that stays under the parent memo.
