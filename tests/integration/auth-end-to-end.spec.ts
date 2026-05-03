@@ -24,7 +24,13 @@
 import { randomUUID } from "node:crypto";
 
 import { sql as sqlTag } from "drizzle-orm";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+// `request-context.ts` carries `import "server-only"` to fail loud if a
+// browser bundle ever imports it. The vanilla Node test runtime can't
+// resolve the package; mock it to a no-op (precedent: webhook-receiver
+// integration test).
+vi.mock("server-only", () => ({}));
 
 import { withServiceRole } from "../../src/shared/db";
 import { resolveUserContext } from "../../src/shared/request-context";
