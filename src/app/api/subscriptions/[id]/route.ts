@@ -23,7 +23,7 @@ import { z } from "zod";
 
 import { getSubscription, updateSubscription } from "@/modules/subscriptions";
 import { UpdateSubscriptionBodySchema } from "@/modules/subscriptions/schemas";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { NotFoundError, ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../../_lib/error-response";
@@ -49,7 +49,7 @@ export async function GET(_req: Request, { params }: RouteContext): Promise<Next
   try {
     const { id: rawId } = await params;
     const id = parseId(rawId);
-    const ctx = await buildDemoContext(`/api/subscriptions/${id}`, requestId);
+    const ctx = await buildRequestContext(`/api/subscriptions/${id}`, requestId);
     const row = await getSubscription(ctx, id);
     if (!row) {
       throw new NotFoundError(`subscription not found: ${id}`);
@@ -76,7 +76,7 @@ export async function PATCH(req: Request, { params }: RouteContext): Promise<Nex
       throw new ValidationError(`request body invalid: ${parsed.error.message}`);
     }
 
-    const ctx = await buildDemoContext(`/api/subscriptions/${id}`, requestId);
+    const ctx = await buildRequestContext(`/api/subscriptions/${id}`, requestId);
     const updated = await updateSubscription(ctx, id, parsed.data);
     return NextResponse.json(updated);
   } catch (e) {

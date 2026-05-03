@@ -7,10 +7,11 @@
 // import flow (Transcorp Systems Team only); user-facing creation is
 // not in pilot scope.
 //
-// Auth wiring is deferred — every request goes through the demo
-// context (first tenant in DB, full Tenant Admin permission set).
-// When real auth lands, only `buildDemoContext` is replaced; this
-// file's permission gates and error mappings are unaffected.
+// Auth (Day 10): buildRequestContext resolves the Supabase Auth session
+// to a per-tenant RequestContext; UnauthorizedError surfaces as 401 via
+// errorResponse. Posture A graceful migration keeps the demo-context
+// fallthrough behind ALLOW_DEMO_AUTH=true (Preview-only) until the
+// post-soak Posture B follow-up retires it.
 
 import "server-only";
 
@@ -19,7 +20,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { listTasks } from "@/modules/tasks";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 
 import { errorResponse } from "../_lib/error-response";
 
@@ -33,7 +34,7 @@ export const revalidate = 0;
 export async function GET(): Promise<NextResponse> {
   const requestId = randomUUID();
   try {
-    const ctx = await buildDemoContext("/api/tasks", requestId);
+    const ctx = await buildRequestContext("/api/tasks", requestId);
     const rows = await listTasks(ctx);
     return NextResponse.json({ tasks: rows });
   } catch (e) {
