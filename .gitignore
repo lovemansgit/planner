@@ -42,3 +42,6 @@ next-env.d.ts
 # editor
 .idea
 .vscode
+
+# local working notes — tasks/todo.md is a private scratchpad, not a tracked artifact
+/tasks

@@ -4,14 +4,16 @@
 # Plan §11.2 #9 implementation — CI gate ships alongside the Vitest +
 # Playwright configs.
 #
-# Gate scope (per commit-10 prep approval):
-#   - lint              ESLint flat config, includes module-boundary rules
-#                       from PR #3.
-#   - typecheck         tsc --noEmit, strict mode.
-#   - test (unit only)  Vitest unit project. The integration project is
-#                       configured but NOT wired into CI yet — the test-DB
-#                       provisioning decision lands with the Day-2 R-3
-#                       isolation test. See vitest.config.ts comment block.
+# Gate scope:
+#   - lint               ESLint flat config, includes module-boundary rules
+#                        from PR #3.
+#   - typecheck          tsc --noEmit, strict mode.
+#   - test (unit)        Vitest unit project.
+#   - test (integration) Vitest integration project. Wired in by R-3
+#                        (Day 2) — runs against a postgres:17 service
+#                        container provisioned by scripts/setup-test-db.sh.
+#                        Provisioning choice rationale in the integration
+#                        job's comments below.
 #
 # Playwright is NOT in CI — the Vercel preview deployment provides the
 # real-environment runtime check, and Playwright in CI duplicates that
@@ -26,8 +28,20 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # `production` added 3 May 2026 — promotion PRs (main → production)
+    # need this workflow to fire so production's required-status-checks
+    # protection (Vercel + lint+typecheck+test) can satisfy. Originally
+    # main-only, authored at PR #12 (Day 1) before R-0-prep introduced
+    # the production branch model. See
+    # `memory/followup_promotion_runbook_first_execution_findings.md`
+    # finding #3 for the gap analysis.
+    branches: [main, production]
   push:
+    # No `production` here — production only updates via PR-merge of a
+    # promote/* branch, never via direct push (branch protection blocks
+    # force-push and direct-push isn't part of the documented promotion
+    # procedure). The push trigger here exists for main-branch
+    # post-merge runs only.
     branches: [main]
 
 # Cancel in-progress runs for the same PR/branch when a newer commit lands.
@@ -61,3 +75,79 @@ jobs:
 
       - name: Test (unit)
         run: npm run test
+
+  integration:
+    # Test-DB provisioning choice (R-3, Day 2):
+    #
+    # Picked GitHub Actions postgres:17 service container over the
+    # alternatives (dedicated Supabase test project / ephemeral Postgres
+    # via testcontainers / pg-mem) because:
+    #   - Standard pattern; widely understood by reviewers.
+    #   - Fresh DB per run — eliminates cross-PR pollution and the
+    #     audit-rule + cascade-delete cleanup issue surfaced in R-0
+    #     (memory/followup_audit_rule_cascade_conflict.md).
+    #   - No external dependencies — no separate Supabase project to
+    #     manage, no extra secrets in GitHub Actions.
+    #   - postgres:17 matches Supabase's runtime version, so any
+    #     version-specific behavior reproduces faithfully.
+    #
+    # Runs in parallel with the `ci` job above; both must pass for a
+    # green PR.
+    name: test (integration)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: testpw
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # GitHub Actions waits for the health check to pass before
+        # starting the steps, so the DB is ready by the time
+        # setup-test-db.sh runs.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install psql client
+        # The `postgres` service image ships with psql in the container,
+        # but the runner host doesn't have it — we run psql against the
+        # container from the host side, so install it on the host.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Provision test database
+        env:
+          PG_HOST: localhost
+          PG_PORT: "5432"
+          PG_SUPERUSER: postgres
+          PG_SUPERUSER_PW: testpw
+          PG_DATABASE: postgres
+          PG_APP_PW: app-testpw
+        run: bash scripts/setup-test-db.sh
+
+      - name: Test (integration)
+        env:
+          # The two pool URLs db.ts (R-0) requires. localhost:5432 against
+          # the postgres service container; pgbouncer/pooler is not in the
+          # picture for tests so the URLs are direct (no `:6543` and no
+          # `<role>.<project_ref>` username form).
+          SUPABASE_DATABASE_URL: postgres://postgres:testpw@localhost:5432/postgres
+          SUPABASE_APP_DATABASE_URL: postgres://planner_app:app-testpw@localhost:5432/postgres
+        run: npm run test:integration
