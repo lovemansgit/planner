@@ -25,8 +25,7 @@
 //      buildWebhookUrl; password is echoed only because the operator
 //      supplies it themselves, never generated here).
 //
-// Usage (from repo root, with .env.local sourced):
-//   set -a && source .env.local && set +a
+// Usage (from repo root):
 //   npm run onboard-merchant -- \
 //     --slug=tabchilli \
 //     --name="Tabchilli" \
@@ -34,14 +33,29 @@
 //     --admin-email=ops@tabchilli.com \
 //     --admin-password=<one-time>
 //
-// Required env (from .env.local or Vercel CLI shell):
+// Env loading: the script auto-loads `.env.local` from the repo root via
+// dotenv (added Day 10). No `set -a && source .env.local && set +a`
+// prefix needed. If a variable is already set in the parent shell
+// environment, the shell value wins (dotenv's default — non-overriding).
+//
+// Required env (typically from .env.local):
 //   SUPABASE_DATABASE_URL          — superuser pool (BYPASSRLS)
 //   NEXT_PUBLIC_SUPABASE_URL       — Supabase project URL
 //   SUPABASE_SERVICE_ROLE_KEY      — admin Auth API key
 //   PUBLIC_BASE_URL                — base URL displayed for the webhook receiver
 
+import { config as loadEnv } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import postgres from "postgres";
+
+// Auto-load .env.local from the repo root. The path is resolved
+// relative to the cwd; npm run sets cwd to the repo root by
+// convention, and direct `node scripts/...` invocation also resolves
+// from wherever the user ran it (the README guidance says repo root).
+// Silent on missing file — explicit `need*` checks below surface the
+// specific missing-var failure mode rather than a generic "no env file"
+// error that would mask the real issue on a CI runner.
+loadEnv({ path: ".env.local", quiet: true });
 
 const ARG_PATTERN = /^--([a-z][a-z0-9-]*)=(.*)$/;
 
