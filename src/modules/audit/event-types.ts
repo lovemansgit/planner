@@ -536,6 +536,31 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: false,
   },
 
+  // ---- webhook (Day 8 / D8-8) --------------------------------------------
+  // Tier-2 mismatch only — fired when the tenant has a credentials row
+  // in tenant_suitefleet_webhook_credentials AND the inbound request's
+  // clientid/clientsecret headers did not match the stored values.
+  // Distinct from Tier-1 (no creds row → no audit; legitimate state per
+  // memory/followup_d8_8_webhook_auth_model.md) and from unknown-tenant
+  // probes (silent 401, no audit — DDoS protection per Day-4 §10
+  // posture). Tier-2 mismatch IS a real signal: the merchant
+  // configured credentials, the inbound request claims to know them,
+  // but the values don't match — partial knowledge by an attacker, or
+  // a legitimate operator-side credential drift.
+  //
+  // systemOnly because no user actor triggers it; emitted by the
+  // receiver path under withServiceRole.
+  "webhook.auth_failed": {
+    id: "webhook.auth_failed",
+    resource: "webhook",
+    action: "auth_failed",
+    description:
+      "Day 8 / D8-8. An inbound SuiteFleet webhook request failed Tier-2 credential verification — the tenant has a credentials row in tenant_suitefleet_webhook_credentials but the request's clientid/clientsecret headers did not match the stored values. Distinct from Tier-1 absence (no creds row → no audit) and unknown-tenant probes (silent 401 → no audit). systemOnly because no user actor triggers it.",
+    metadataNotes:
+      "tenant_id (uuid), failure (enum 'creds_mismatch'), header_keys_present (string[] — names of credential-related headers seen on the request, lowercase, no values).",
+    systemOnly: true,
+  },
+
   // ---- db (system-internal) ----------------------------------------------
   "db.service_role.use": {
     id: "db.service_role.use",

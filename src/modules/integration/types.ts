@@ -182,13 +182,23 @@ export interface HeadersLike {
 }
 
 /**
- * Result of provider-specific webhook authentication. Reasons are a
- * closed union so the receiver can branch deterministically (and so the
- * future audit-event vocabulary for denied webhook attempts has a finite
- * set of categories).
+ * Result of provider-specific webhook authentication.
+ *
+ * Auth-tier semantics (Day 8 / D8-8):
+ *   - `tier_1_only`  — no per-tenant credentials configured for this
+ *     tenant; verification falls through to tenant-existence + payload-
+ *     shape gating only. Default outcome for production merchants who
+ *     do not opt in to credential-based webhook verification.
+ *   - `tier_2_passed` — per-tenant credentials configured AND the
+ *     request's headers matched the stored values via timing-safe
+ *     compare (clientId) and bcrypt.compare (clientSecret).
+ *
+ * Mismatch reasons are a closed union so the receiver branches
+ * deterministically and the audit-event vocabulary for Tier-2
+ * mismatches stays finite.
  */
 export type WebhookVerificationResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly authTier: "tier_1_only" | "tier_2_passed" }
   | {
       readonly ok: false;
       readonly reason:

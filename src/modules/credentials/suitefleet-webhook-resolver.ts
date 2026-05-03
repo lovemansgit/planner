@@ -1,72 +1,91 @@
-// SuiteFleet webhook credential resolver — Day 4 / S-4.
+// SuiteFleet webhook credential resolver.
 //
-// Returns the per-tenant SuiteFleet WEBHOOK secret used to authenticate
-// inbound webhook deliveries (X-Client-Id / X-Client-Secret headers).
-// Separate from `resolveSuiteFleetCredentials`, which returns the
-// OUTBOUND auth credentials (username/password/clientId/customerId).
+// Reads per-tenant webhook credentials from the
+// `tenant_suitefleet_webhook_credentials` table seeded by the Day-8 /
+// D8-2 schema migration. Returns null when no row exists for the
+// tenant — this is a legitimate state (the merchant has not opted in
+// to credential-based webhook verification) and the route handler
+// gracefully degrades to Tier 1 (tenant-existence + payload-shape
+// only) on a null return.
 //
-// Day 4 reads from environment variables; Day 5+ swaps to AWS Secrets
-// Manager at /transcorp/secrets/{tenantId}/suitefleet/webhook-credentials
-// without changing this function's signature.
-//
-// `tenantId` is accepted on the Day-4 implementation but ignored: the
-// same sandbox webhook secret authenticates every inbound delivery
-// during pilot dev. Day 5+ introduces dynamic-route per-tenant URLs
-// (`/api/webhooks/suitefleet/[tenantId]`) which feed real tenantIds
-// into this resolver — at which point the env reads here become
-// Secrets Manager lookups, again without touching the signature.
+// Day-8 / D8-8 reshape: the original Day-4 implementation read shared
+// sandbox env vars (SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_ID/SECRET) and
+// ignored the tenantId. P2 (3 May 2026) reversed the assumption that
+// every merchant configures credentials — production merchants
+// typically don't (memory/followup_d8_8_webhook_auth_model.md). The
+// resolver now reads from the per-tenant table designed in D8-2 and
+// returns null on absence.
 //
 // Logging: resolution emits a debug line with `tenant_id` + `source`
-// only. Credential values never reach the logger directly; the project
-// logger redacts clientSecret / token / etc. at the field level as a
-// defence-in-depth backstop.
+// only. Credential values never reach the logger; clientSecretHash is
+// per-row data but the project logger redacts secret-like field names
+// at the structured-logger layer as defence-in-depth.
 
-import { CredentialError } from "../../shared/errors";
+import { sql as sqlTag } from "drizzle-orm";
+
 import { logger } from "../../shared/logger";
+import { withServiceRole } from "../../shared/db";
 import type { Uuid } from "../../shared/types";
 
 import type { SuiteFleetWebhookCredentials } from "./types";
 
-const ENV_CLIENT_ID = "SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_ID";
-const ENV_CLIENT_SECRET = "SUITEFLEET_SANDBOX_WEBHOOK_CLIENT_SECRET";
-
 const log = logger.with({ component: "suitefleet_webhook_credential_resolver" });
 
-type EnvSource = Readonly<Record<string, string | undefined>>;
+const RESOLVE_REASON = "webhook receiver: resolve creds";
 
+/**
+ * Look up the per-tenant SuiteFleet webhook credentials. Returns the
+ * stored row when present (clientId plaintext + clientSecretHash bcrypt
+ * hash). Returns null when the tenant has no row — a legitimate state
+ * meaning the merchant has not configured credential-based verification.
+ *
+ * Throws on actual database errors (these surface as 500 in the route).
+ *
+ * Runs through `withServiceRole` because the webhook receiver has no
+ * tenant context bound at the request layer (the receiver IS what
+ * resolves the tenant). The `tenant_suitefleet_webhook_credentials`
+ * RLS policy filters on `app.current_tenant_id`, which would
+ * fail-closed under a `withTenant` wrapper. Service-role read is
+ * appropriate because this code is the boundary that GRANTS tenant
+ * context — credential lookup logically precedes per-tenant filtering.
+ */
 export async function resolveSuiteFleetWebhookCredentials(
   tenantId: Uuid,
-  env: EnvSource = process.env,
-): Promise<SuiteFleetWebhookCredentials> {
-  // tenantId is intentionally unused in the Day-4 path — see file-header docblock.
-  // TODO(Day-5): replace env reads with AWS Secrets Manager lookup at /transcorp/secrets/{tenantId}/suitefleet/webhook-credentials.
-  const clientId = env[ENV_CLIENT_ID];
-  const clientSecret = env[ENV_CLIENT_SECRET];
+): Promise<SuiteFleetWebhookCredentials | null> {
+  const row = await withServiceRole(RESOLVE_REASON, async (tx) => {
+    const result = await tx.execute<{
+      client_id: string;
+      client_secret_hash: string;
+    }>(sqlTag`
+      SELECT client_id, client_secret_hash
+      FROM tenant_suitefleet_webhook_credentials
+      WHERE tenant_id = ${tenantId}
+      LIMIT 1
+    `);
+    const rows = result as unknown as ReadonlyArray<{
+      client_id: string;
+      client_secret_hash: string;
+    }>;
+    return rows.length > 0 ? rows[0] : null;
+  });
 
-  const missing: string[] = [];
-  if (!clientId) missing.push(ENV_CLIENT_ID);
-  if (!clientSecret) missing.push(ENV_CLIENT_SECRET);
-
-  if (missing.length > 0) {
-    log.warn({
+  if (row === null) {
+    log.debug({
       operation: "resolve",
       tenant_id: tenantId,
-      error_code: "missing_env_vars",
-      missing_count: missing.length,
+      outcome: "no_row",
     });
-    throw new CredentialError(
-      `SuiteFleet webhook secrets missing from environment: ${missing.join(", ")}`,
-    );
+    return null;
   }
 
   log.debug({
     operation: "resolve",
     tenant_id: tenantId,
-    source: "env",
+    outcome: "row_present",
   });
 
   return {
-    clientId: clientId as string,
-    clientSecret: clientSecret as string,
+    clientId: row.client_id,
+    clientSecretHash: row.client_secret_hash,
   };
 }

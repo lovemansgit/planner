@@ -35,3 +35,5 @@ export {
   type GateStatus,
   type TenantGateState,
 } from "./migration-gate";
+
+export { tenantAcceptsWebhooks } from "./tenant-lookup";

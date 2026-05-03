@@ -153,7 +153,7 @@ function makeAdapter(records: readonly AssetTrackingPackage[]): LastMileAdapter 
       return records;
     },
     async verifyWebhookRequest() {
-      return { ok: true };
+      return { ok: true, authTier: "tier_1_only" };
     },
     parseWebhookEvents() {
       return [];
