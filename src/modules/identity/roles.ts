@@ -95,6 +95,11 @@ const ROLES_DRAFT = {
       ...permsFor("subscription"), // includes bulk_create
       ...permsFor("task"),
       "audit_event:read",
+      // Day 9 / P4a — webhook configuration page visibility. Operational
+      // debugging concern (is the webhook firing? are credentials drifting?)
+      // belongs to OM same as TA. Explicit add because ops-manager doesn't
+      // auto-pickup tenant/webhook_config-resource perms.
+      "webhook_config:read",
     ]),
   },
 
