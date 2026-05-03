@@ -81,7 +81,7 @@ export async function countTier2MismatchesLast24h(
       FROM audit_events
       WHERE tenant_id = ${tenantId}
         AND event_type = 'webhook.auth_failed'
-        AND created_at >= now() - interval '24 hours'
+        AND occurred_at >= now() - interval '24 hours'
     `);
     const rows = result as unknown as ReadonlyArray<{ count: number | string }>;
     const raw = rows[0]?.count ?? 0;

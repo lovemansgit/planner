@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 
 import { sql as sqlTag } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { ROLES } from "../../src/modules/identity";
 import {
@@ -77,17 +77,13 @@ describe("P4a — /admin/webhook-config queries (RBAC + cross-tenant)", () => {
     });
   });
 
-  afterAll(async () => {
-    await withServiceRole("P4a integration-test cleanup", async (tx) => {
-      await tx.execute(sqlTag`
-        DELETE FROM tenant_suitefleet_webhook_credentials
-        WHERE tenant_id IN (${TENANT_A}, ${TENANT_B})
-      `);
-      await tx.execute(sqlTag`
-        DELETE FROM tenants WHERE id IN (${TENANT_A}, ${TENANT_B})
-      `);
-    });
-  });
+  // No afterAll cleanup. CI runs against a fresh postgres:17 service
+  // container per workflow invocation, so test tenants are ephemeral
+  // by infrastructure. Manual cleanup attempts would also fail on
+  // tenants → audit_events FK because of the audit_events_no_delete
+  // RULE / CASCADE conflict captured in
+  // memory/followup_audit_rule_cascade_conflict.md (the same gap that
+  // produces stale test tenants on production today).
 
   describe("RBAC", () => {
     it("countTier2MismatchesLast24h: Tenant Admin actor succeeds", async () => {
