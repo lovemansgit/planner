@@ -35,7 +35,15 @@ forcing function for validation.
 git checkout production
 git pull origin production
 git checkout -b promote/<YYYY-MM-DD>-<short-summary>
-git merge origin/main                  # plain merge — see "Why not ff-only" footnote below
+
+# Pre-merge precondition (LOAD-BEARING — see "Why -X theirs" footnote):
+git fetch origin
+git log origin/main..origin/production --oneline
+# Expected: empty, OR only prior squash-merged promotion commits, OR
+# the known R-0-prep direct-push commit `15c55e4`. If anything else
+# appears (hotfix, divergent work), STOP and surface to a reviewer.
+
+git merge -X theirs origin/main --no-edit  # see "Why -X theirs" footnote below
 git push -u origin promote/<YYYY-MM-DD>-<short-summary>
 gh pr create --base production --head promote/<YYYY-MM-DD>-<short-summary> \
   --title "promote: <YYYY-MM-DD> — <summary>" \
@@ -66,10 +74,23 @@ squash-merge of the promotion PR collapses everything into a single
 clean commit on `production`, preserving the linear-history
 requirement on the production branch.
 
-If the merge surfaces actual content conflicts (not just SHA
-divergence — file edits in both trees that don't auto-merge), stop
-and surface to a reviewer before resolving. Conflicts at this layer
-mean a backport went sideways or a hotfix wasn't fully reconciled.
+`-X theirs` (the merge strategy option) is required for second-and-
+subsequent promotions because file-level add/add conflicts arise on
+every file modified by post-promotion main commits — production's
+HEAD is a squash-commit and main's HEAD reconstructs the same content
+via per-PR squashes plus new feature work. `-X theirs` resolves these
+add/adds in main's favor, which is safe by construction when the
+precondition check above passes (production has no contradicting work
+beyond prior squash-merged promotions or known content-equivalent
+direct-push commits). Full reasoning + safety analysis in
+`memory/followup_promotion_runbook_addadd_conflict_pattern.md`.
+
+If the merge surfaces conflicts where BOTH halves of the conflict
+markers contain non-empty content (i.e. real semantic disagreement,
+not the empty-vs-content add/add pattern), `-X theirs` would silently
+overwrite production-side changes. Stop and surface to a reviewer
+before resolving — this means a backport went sideways or a hotfix
+wasn't fully reconciled.
 
 ### 3. Review and merge
 
@@ -90,12 +111,24 @@ mean a backport went sideways or a hotfix wasn't fully reconciled.
 
 ```bash
 git checkout main
+git pull origin main                             # ← CRITICAL: see note below
 git branch -D promote/<YYYY-MM-DD>-<short-summary>
 git fetch origin --prune
 ```
 
 Promotion branches are throwaway — Vercel keeps the deployment record in
 its own history.
+
+**Important: before starting any new feature branch, the `git pull origin
+main` line above is load-bearing.** After step 3's squash-merge, the local
+working branch is `production` (per the `git pull origin production` in
+step 4 validation, or by leftover state from this procedure). Branching
+from `production` for new feature work parents the branch to production
+instead of main, which causes `mergeable: CONFLICTING` on the resulting
+PR + skipped CI runs (per the 3 May 2026 PR #93 → #94 close-and-reopen
+incident captured in `memory/followup_promotion_runbook_branch_state_risk.md`).
+The explicit `git checkout main && git pull origin main` resets local
+state to a clean main HEAD before the next feature branch starts.
 
 ---
 
@@ -171,6 +204,22 @@ bad and there is no obvious code fix:
 
 Rolling back is fast (Vercel re-promotion is seconds). The slow part is
 reconciling git state — do not skip it.
+
+---
+
+## Footnote — Why `-X theirs` on the local prepare step
+
+**Captured 3 May 2026 (Day 9 EOD second-promotion finding #5).**
+
+Plain `git merge origin/main` (the prior amendment from Day 9 morning) handles SHA divergence at the **commit** level (no fast-forward needed) but produces add/add conflicts at the **file** level on every file modified by post-promotion main commits. Production's HEAD is a squash-commit; main's HEAD reconstructs the same content via per-PR squashes plus new feature work; git can't auto-resolve.
+
+`-X theirs` tells git to favor the **incoming** side on add/add conflicts. In the promotion context, incoming = `origin/main` = the new content being promoted. By construction (verified by the precondition check), production has no contradicting work beyond prior squash-merged promotions or known content-equivalent direct-push commits — so `-X theirs` can't silently overwrite anything because there's nothing to overwrite.
+
+**Precondition (LOAD-BEARING):** `git log origin/main..origin/production --oneline` must return empty, OR only prior squash-merged promotion commits (`promote: <date> — ... (#XX)`), OR known content-equivalent direct-push commits (the R-0-prep `15c55e4` is the only such commit as of Day 9). If the output contains anything else — a hotfix that wasn't backported, a manual direct-push during incident response, divergent feature work — `-X theirs` is **NOT safe** and would silently overwrite production-only content. Stop and surface before resolving.
+
+The squash-merge of the promotion PR (step 3) collapses everything (the per-PR commits, the merge commit, all add/add resolutions) into a single clean commit on `production`. Linear-history protection on production is preserved by the squash, NOT by ff-only on the promote branch — these are independent mechanisms.
+
+Full pattern + safety reasoning in `memory/followup_promotion_runbook_addadd_conflict_pattern.md`.
 
 ---
 

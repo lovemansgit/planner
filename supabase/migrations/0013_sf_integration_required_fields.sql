@@ -99,9 +99,16 @@ ALTER TABLE tenants ADD COLUMN suitefleet_customer_code text;
 --   - rotated_at supports the rotation-with-grace flow when an operator
 --     cycles credentials in the Day-9 admin UI.
 --
--- Receiver hardening (D8-8) reads this table to look up the tenant's
--- credential pair on every webhook POST, then constant-time-compares
--- against the request headers. 401 on mismatch + emit `webhook.auth_failed`.
+-- Receiver hardening (D8-8) reads this table when a credentials row
+-- exists for the tenant (Tier 2 verification). When the row is absent,
+-- the receiver falls back to tenant-existence + payload-shape
+-- verification only (Tier 1, default for production merchants who
+-- don't configure SF webhook credentials per the Day-9 P2 reshape).
+-- 401 + audit `webhook.auth_failed` on Tier-2 mismatch only —
+-- Tier-1 absence and unknown-tenant probes are silent. See
+-- memory/followup_d8_8_webhook_auth_model.md for the auth-model
+-- reshape rationale + memory/followup_d8_2_migration_comment_framing.md
+-- for the comment-drift finding that triggered this amendment.
 -- =============================================================================
 
 CREATE TABLE tenant_suitefleet_webhook_credentials (
