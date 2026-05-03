@@ -610,6 +610,42 @@ export async function pushTasksForTenant(
             awb: err.awb,
             external_id: reconcileResult.externalId,
           });
+
+          // Day 9 / D8-4b operator-visibility: write a DLQ row so
+          // /admin/failed-pushes surfaces this case. failure_detail
+          // prefix is `reconcile_recovered_but_mark_pushed_failed:`,
+          // distinct from D8-4a's `awb_exists:` and D8-4b's
+          // `awb_exists_reconcile_failed:` so the three forensic
+          // prefixes grep apart in the DLQ. Carries the recovered
+          // SF id in the detail so the operator can cut-and-paste
+          // a manual UPDATE to set external_id without re-fetching
+          // from SF. Captured pre-D8-4b at
+          // memory/followup_reconcile_recovered_local_write_failure.md.
+          const markErrMessage = markErr instanceof Error ? markErr.message : "unknown";
+          const recoveryDetail = `reconcile_recovered_but_mark_pushed_failed: '${err.awb}' (sf_id: ${reconcileResult.externalId}); error: ${markErrMessage}`.slice(0, 4000);
+          try {
+            await recordFailedPushAttempt(ctx, {
+              taskId: task.id,
+              taskPayload: request as unknown as Record<string, unknown>,
+              failureReason: "unknown",
+              failureDetail: recoveryDetail,
+              // httpStatus omitted — local DB write failure has no HTTP context.
+            });
+          } catch (dlqErr) {
+            // DLQ write itself failed — Sentry-loud (parallels the
+            // dlq_write_reconcile_failed path above), but don't
+            // re-throw: the awbExists counter still increments and
+            // the loop continues so other tasks aren't blocked.
+            captureException(dlqErr, {
+              component: "task_push_service",
+              operation: "dlq_write_reconcile_recovered_mark_failed",
+              tenant_id: tenantId,
+              task_id: task.id,
+              awb: err.awb,
+              external_id: reconcileResult.externalId,
+            });
+          }
+
           awbExists++;
           if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
           continue;
