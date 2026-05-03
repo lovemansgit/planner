@@ -382,6 +382,47 @@ describe("task:print_labels permission (Day 8 / D8-6)", () => {
   });
 });
 
+describe("webhook_config:read permission (Day 9 / P4a)", () => {
+  // Pins the auto-pickup behaviour for the new webhook-configuration
+  // page read permission. /admin/webhook-config is admin-tier
+  // visibility (Tenant Admin + Ops Manager); CS Agent is EXCLUDED
+  // because webhook config is operator-only debugging surface, not
+  // CS-tier consignee/case work.
+  //
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup (every non-systemOnly perm)
+  //   - Ops Manager:  EXPLICIT-list addition (ops-manager doesn't
+  //                   auto-pickup tenant/webhook_config-resource perms;
+  //                   pattern matches its existing tenant:read explicit add)
+  //   - CS Agent:     NOT in explicit list — pattern matches D8-5
+  //                   failed_pushes:retry (admin-only operational surface)
+  //
+  // If a future PR adds CS Agent's explicit webhook_config:read entry,
+  // this test breaks and forces a conscious decision about widening
+  // CS Agent's surface to integration-config visibility.
+
+  it("registers webhook_config:read in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["webhook_config:read"]).toBeDefined();
+    expect(PERMISSIONS["webhook_config:read"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly (resource=webhook_config)", () => {
+    expect(PERMISSIONS["webhook_config:read"].resource).toBe("webhook_config");
+    expect(PERMISSIONS["webhook_config:read"].action).toBe("read");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("webhook_config:read")).toBe(true);
+  });
+
+  it("Ops Manager holds it (explicit-list addition)", () => {
+    expect(ROLES["ops-manager"].permissions.has("webhook_config:read")).toBe(true);
+  });
+
+  it("CS Agent does NOT hold it (admin-tier visibility, CS stays excluded)", () => {
+    expect(ROLES["cs-agent"].permissions.has("webhook_config:read")).toBe(false);
+  });
+});
+
 describe("Transcorp Sysadmin (Day-2 brief §6)", () => {
   it("is systemOnly", () => {
     expect(ROLES["transcorp-sysadmin"].systemOnly).toBe(true);
