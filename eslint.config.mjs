@@ -19,11 +19,19 @@ const MODULES = [
 // Generate one zone per directional module pair (8 × 7 = 56 zones).
 // Each zone says: code inside module X cannot import internal files of
 // module Y; only Y's index.ts is reachable.
+//
+// `from` and `except` must both be glob patterns (eslint-plugin-import
+// requires this — literal-path `except` entries trip the plugin's
+// "Restricted path exceptions must be glob patterns when `from` contains
+// glob patterns" check). The `**/` prefix on the except patterns lets
+// the plugin's glob matcher pair them against the resolved path.
+// Surfaced when C-21 introduced the first cross-module import
+// (identity → audit/index.ts).
 const moduleBoundaryZones = MODULES.flatMap((target) =>
   MODULES.filter((from) => from !== target).map((from) => ({
     target: `./src/modules/${target}/**/*`,
     from: `./src/modules/${from}/**/*`,
-    except: [`./src/modules/${from}/index.ts`, `./src/modules/${from}/index.tsx`],
+    except: [`**/modules/${from}/index.ts`, `**/modules/${from}/index.tsx`],
     message: `Module '${target}' must import from '${from}' via its public index.ts only — plan §3.4 and §11.3 non-negotiable.`,
   }))
 );
