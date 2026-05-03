@@ -17,7 +17,8 @@
     "test:integration": "vitest run --project integration",
     "test:sandbox": "vitest run --project sandbox",
     "test:e2e": "playwright test",
-    "onboard-merchant": "node scripts/onboard-merchant.mjs"
+    "onboard-merchant": "node scripts/onboard-merchant.mjs",
+    "teardown-merchant": "node scripts/teardown-merchant.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1037.0",
