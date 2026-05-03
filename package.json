@@ -16,12 +16,14 @@
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:sandbox": "vitest run --project sandbox",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "onboard-merchant": "node scripts/onboard-merchant.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1037.0",
     "@googlemaps/google-maps-services-js": "^3.4.2",
     "@sentry/nextjs": "^10.50.0",
+    "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.104.1",
     "@upstash/qstash": "^2.10.1",
     "@upstash/ratelimit": "^2.0.8",

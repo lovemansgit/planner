@@ -17,7 +17,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { deleteConsignee, getConsignee, updateConsignee } from "@/modules/consignees";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { NotFoundError, ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../../_lib/error-response";
@@ -58,7 +58,7 @@ export async function GET(_req: Request, { params }: RouteContext): Promise<Next
   try {
     const { id: rawId } = await params;
     const id = parseId(rawId);
-    const ctx = await buildDemoContext(`/api/consignees/${id}`, requestId);
+    const ctx = await buildRequestContext(`/api/consignees/${id}`, requestId);
     const row = await getConsignee(ctx, id);
     if (!row) {
       throw new NotFoundError(`consignee not found: ${id}`);
@@ -85,7 +85,7 @@ export async function PATCH(req: Request, { params }: RouteContext): Promise<Nex
       throw new ValidationError(`request body invalid: ${parsed.error.message}`);
     }
 
-    const ctx = await buildDemoContext(`/api/consignees/${id}`, requestId);
+    const ctx = await buildRequestContext(`/api/consignees/${id}`, requestId);
     const updated = await updateConsignee(ctx, id, parsed.data);
     return NextResponse.json(updated);
   } catch (e) {
@@ -102,7 +102,7 @@ export async function DELETE(_req: Request, { params }: RouteContext): Promise<N
   try {
     const { id: rawId } = await params;
     const id = parseId(rawId);
-    const ctx = await buildDemoContext(`/api/consignees/${id}`, requestId);
+    const ctx = await buildRequestContext(`/api/consignees/${id}`, requestId);
     await deleteConsignee(ctx, id);
     return new NextResponse(null, { status: 204 });
   } catch (e) {

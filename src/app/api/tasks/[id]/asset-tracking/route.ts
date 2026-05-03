@@ -23,7 +23,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getAssetTrackingForTask } from "@/modules/asset-tracking";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../../../_lib/error-response";
@@ -40,7 +40,7 @@ export async function GET(_req: Request, { params }: RouteContext): Promise<Next
   try {
     const { id: rawId } = await params;
     const id = parseId(rawId);
-    const ctx = await buildDemoContext(`/api/tasks/${id}/asset-tracking`, requestId);
+    const ctx = await buildRequestContext(`/api/tasks/${id}/asset-tracking`, requestId);
     const rows = await getAssetTrackingForTask(ctx, id);
     return NextResponse.json({ assetTracking: rows });
   } catch (e) {

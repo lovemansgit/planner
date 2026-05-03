@@ -19,6 +19,8 @@
 
 import { randomUUID } from "node:crypto";
 
+import { redirect } from "next/navigation";
+
 import {
   buildWebhookUrl,
   countTier2MismatchesLast24h,
@@ -26,8 +28,8 @@ import {
   tier2CredentialsConfigured,
   type Tier2MismatchSummary,
 } from "@/modules/webhooks";
-import { buildDemoContext } from "@/shared/demo-context";
-import { NoTenantConfiguredError } from "@/shared/errors";
+import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
+import { buildRequestContext } from "@/shared/request-context";
 
 import { CopyableUrl } from "./client";
 
@@ -41,11 +43,12 @@ export default async function WebhookConfigPage() {
   let mismatchSummary: Tier2MismatchSummary;
   let tier2Configured: boolean;
   try {
-    const ctx = await buildDemoContext("/admin/webhook-config", requestId);
-    // buildDemoContext throws NoTenantConfiguredError when the tenants
-    // table is empty, so by this point ctx.tenantId is non-null in
-    // practice. The defensive check satisfies the type narrow without
-    // putting JSX inside try (lint rule react-hooks/error-boundaries).
+    const ctx = await buildRequestContext("/admin/webhook-config", requestId);
+    // buildRequestContext throws UnauthorizedError on no session +
+    // NoTenantConfiguredError when the tenants table is empty (via the
+    // demo-context fallthrough), so by this point ctx.tenantId is
+    // non-null in practice. The defensive check satisfies the type
+    // narrow without putting JSX inside try.
     if (!ctx.tenantId) {
       throw new NoTenantConfiguredError();
     }
@@ -56,6 +59,9 @@ export default async function WebhookConfigPage() {
       tier2CredentialsConfigured(ctx),
     ]);
   } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      redirect("/login?next=" + encodeURIComponent("/admin/webhook-config"));
+    }
     if (err instanceof NoTenantConfiguredError) {
       return <SystemNotInitialised />;
     }
