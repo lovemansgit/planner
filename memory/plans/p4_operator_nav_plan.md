@@ -98,9 +98,49 @@ Tenant Admin gets all five via `TENANT_SCOPED` auto-pickup. Ops Manager gets fou
 
 ### Implementation pattern
 
-`(app)/layout.tsx` is a server component. It calls `buildRequestContext("/", requestId)` once per request and passes the resolved `permissions` (a `ReadonlySet<PermissionId>`) to the `<TopNav permissions={...} activePath={...} />` client component. The client filters the static `NAV_ITEMS` array by `permission` membership.
+`(app)/layout.tsx` is a server component. It calls `buildRequestContext("/", requestId)` once per request and passes the resolved `permissions` (a `ReadonlySet<PermissionId>`) to the `<TopNav permissions={...} activePath={...} />` client component. The client filters the **declarative `NAV_ITEMS` config** by `permission` membership.
 
 Permission-set membership is the source of truth — no role-name pattern matching, no role-list inference. If a custom role (post-pilot) carries `task:read`, it sees Tasks; the nav doesn't care which role granted the permission.
+
+### Declarative nav config — single source of truth (locked at counter-review)
+
+The nav MUST NOT use inline `if (permissions.has(...)) renderItem()` filtering. Instead, define a single `NAV_ITEMS` const at module scope mapping each nav item to its required permission, and filter declaratively at render time:
+
+```ts
+// src/app/(app)/nav-config.ts (new file)
+import type { PermissionId } from "@/modules/identity";
+
+export interface NavItem {
+  readonly label: string;
+  readonly path: string;
+  readonly permission: PermissionId;
+}
+
+export const NAV_ITEMS: readonly NavItem[] = [
+  { label: "Tasks",          path: "/tasks",                  permission: "task:read" },
+  { label: "Subscriptions",  path: "/subscriptions",          permission: "subscription:read" },
+  { label: "Consignees",     path: "/consignees",             permission: "consignee:read" },
+  { label: "Failed pushes",  path: "/admin/failed-pushes",    permission: "failed_pushes:retry" },
+  { label: "Webhook config", path: "/admin/webhook-config",   permission: "webhook_config:read" },
+] as const;
+```
+
+Then in the nav render:
+
+```tsx
+const visible = NAV_ITEMS.filter((item) => permissions.has(item.permission));
+return <nav>{visible.map(...)}</nav>;
+```
+
+**Why this matters:**
+
+1. **Single source of truth.** Adding a nav item is one entry in `NAV_ITEMS`; the visibility table in §2 of this plan can be regenerated from the config + the role catalogue. No drift between the comment block and the code.
+2. **Testability.** The unit test in §6 can iterate over `NAV_ITEMS` and assert each role's expected visibility set programmatically — currently it would need 5 hard-coded `expect()` calls per role test, which drift if a new nav item is added without updating the test.
+3. **Permission-catalogue audit-ability.** A grep for `NavItem.permission` immediately surfaces which nav links exist and what they gate on, in one place.
+4. **Future-proofing.** When a nav item needs additional metadata (icon, sort key, badge count, hover description), it's a single struct addition rather than scattered conditional blocks. Stays the right shape as the surface grows.
+5. **Avoids the `roles.ts` refactor anti-pattern.** Inline filtering tempts a future reviewer to bake role-name checks back in ("show this only for ops-manager") because it's just one more `if` block. The declarative shape forbids this — every nav item declares its permission, period.
+
+The `NAV_ITEMS` config is also where future P5+ work plugs in: when `/tasks` ships, no nav code changes — the config entry already exists. When P4b lands the credential-management subsection of `/admin/webhook-config`, no nav code changes — same path, same permission gate.
 
 ### Active-tab indication
 
