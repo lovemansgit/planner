@@ -415,6 +415,31 @@ const PERMISSIONS_DRAFT = {
       "List unresolved failed_pushes rows and retry pushing them to SuiteFleet. Tenant-Admin-only — CS Agent stays read-only on the operational surface; the lifecycle-permission posture (subscription:pause/resume/end) is the precedent.",
     systemOnly: false,
   },
+
+  // ---- webhook_config (Day 9 / P4a) --------------------------------------
+  // Read-only view of the inbound webhook configuration page at
+  // /admin/webhook-config: per-tenant URL display + Tier-2 mismatch
+  // count. NOT a credential-management permission — that lands as a
+  // separate permission alongside the rotation flow in P4b. Auto-pickup
+  // distribution:
+  //
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup
+  //   - Ops Manager:  EXPLICIT-list addition (ops-manager doesn't
+  //                   auto-pickup tenant-resource perms today; pattern
+  //                   matches its existing tenant:read explicit add)
+  //   - CS Agent:     NOT in explicit list — webhook config is admin-tier
+  //                   visibility, not CS-tier; pattern matches D8-5
+  //                   failed_pushes:retry (CS Agent excluded)
+  //
+  // Three-role invariant test pinned in permissions.spec.ts.
+  "webhook_config:read": {
+    id: "webhook_config:read",
+    resource: "webhook_config",
+    action: "read",
+    description:
+      "View the per-tenant inbound webhook configuration page (URL display + Tier-2 mismatch metrics). Read-only; credential management is a separate permission landing alongside the rotation flow.",
+    systemOnly: false,
+  },
 } as const satisfies Record<Permission, PermissionDef>;
 
 /**
