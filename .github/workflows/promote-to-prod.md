@@ -35,7 +35,7 @@ forcing function for validation.
 git checkout production
 git pull origin production
 git checkout -b promote/<YYYY-MM-DD>-<short-summary>
-git merge --ff-only origin/main      # fast-forward only — refuse if main has diverged
+git merge origin/main                  # plain merge — see "Why not ff-only" footnote below
 git push -u origin promote/<YYYY-MM-DD>-<short-summary>
 gh pr create --base production --head promote/<YYYY-MM-DD>-<short-summary> \
   --title "promote: <YYYY-MM-DD> — <summary>" \
@@ -58,10 +58,18 @@ EOF
 )"
 ```
 
-If `git merge --ff-only` fails, `production` has commits `main` does not —
-which should never happen except via hotfix. Stop and reconcile before
-proceeding (see "Hotfix" below for how the hotfix flow keeps the trees in
-sync).
+The merge produces a merge commit on the local promote branch when
+`production` and `main` have diverged in SHA terms (the common case
+after any backport-via-PR — see footnote). The merge commit is
+ephemeral — it lives on the throwaway promote branch only. Step 3's
+squash-merge of the promotion PR collapses everything into a single
+clean commit on `production`, preserving the linear-history
+requirement on the production branch.
+
+If the merge surfaces actual content conflicts (not just SHA
+divergence — file edits in both trees that don't auto-merge), stop
+and surface to a reviewer before resolving. Conflicts at this layer
+mean a backport went sideways or a hotfix wasn't fully reconciled.
 
 ### 3. Review and merge
 
@@ -132,9 +140,11 @@ A hotfix is a tactical patch, not a redesign. Resist scope expansion.
   ```
 
 Merge PR A first (production gets the fix), then PR B (main re-converges).
-If you merge PR B first, the next promotion PR from `main` will appear to
-"undo" the hotfix because `git merge --ff-only` will fail — main lacks the
-production-only commit.
+PR B's cherry-pick + squash-merge to `main` produces a content-equivalent
+but SHA-divergent commit relative to PR A on `production` — the next
+promotion PR's local prepare step will surface that divergence as a
+merge commit on the promote branch (see "Why not ff-only" footnote).
+That's expected; the squash-merge of the promotion PR collapses it away.
 
 ### 4. Validate, then audit
 
@@ -161,3 +171,45 @@ bad and there is no obvious code fix:
 
 Rolling back is fast (Vercel re-promotion is seconds). The slow part is
 reconciling git state — do not skip it.
+
+---
+
+## Footnote — Why not `--ff-only` on the local prepare step
+
+**Captured 3 May 2026 (Day 9 D8-8 promotion-PR first-execution finding).**
+
+Earlier versions of this runbook prescribed `git merge --ff-only origin/main`
+in the standard-promotion local prepare step. Empirically, that constraint
+is structurally impossible to satisfy after any backport-via-PR cycle:
+
+- Cherry-pick (the runbook's prescribed backport mechanism) creates a
+  NEW commit SHA on the backport branch, distinct from the original
+  source commit's SHA on `production`.
+- Squash-merge of the backport PR (project convention) creates ANOTHER
+  new SHA on `main`.
+- Result: `main` and `production` carry content-equivalent but
+  SHA-divergent commits. `git merge --ff-only` requires SHA-ancestor
+  relationship, not content equivalence — so it refuses.
+
+The same drift compounds with any direct-push to `production` that
+predates branch protection (the 27 April 2026 R-0-prep
+`chore(deploy): trigger Production build` commit was the first such
+case to surface).
+
+Plain `git merge` on the local promote branch handles SHA divergence
+cleanly: the merge commit reconciles the two trees, then step 3's
+squash-merge of the promotion PR collapses the merge commit (and all
+intermediate commits) into a single squash-commit on `production`.
+**Production's linear-history protection is preserved by the squash,
+not by `--ff-only` on the promote branch — these are independent.**
+
+Branch protection on `production` is unchanged: linear-history
+requirement still enforces clean history at the squash-merge layer.
+
+Cross-references:
+- `memory/followup_promotion_runbook_first_execution_findings.md` — the
+  3 May 2026 finding that drove this amendment
+- D8-8 PR #86 — the substantive PR that needed promoting and surfaced
+  the divergence problem on its first end-to-end run since R-0-prep
+- `docs/RUNBOOK.md` "Deployment topology" — branch model rationale
+  (R-0-prep, 27 April 2026)
