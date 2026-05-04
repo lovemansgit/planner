@@ -80,7 +80,7 @@ describe("Day 13 / T3 part 1 — exception-model RLS isolation", () => {
           delivery_window_start, delivery_window_end
         ) VALUES (
           ${TENANT_A}, ${consigneeA},
-          '2026-05-01', ${[1, 2, 3, 4, 5]},
+          '2026-05-01', '{1,2,3,4,5}'::int[],
           '14:00', '16:00'
         ) RETURNING id
       `);
@@ -93,7 +93,7 @@ describe("Day 13 / T3 part 1 — exception-model RLS isolation", () => {
           delivery_window_start, delivery_window_end
         ) VALUES (
           ${TENANT_B}, ${consigneeB},
-          '2026-05-01', ${[1, 2, 3, 4, 5]},
+          '2026-05-01', '{1,2,3,4,5}'::int[],
           '14:00', '16:00'
         ) RETURNING id
       `);
