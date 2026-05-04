@@ -110,3 +110,29 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 
 - [Diagnosis pattern — request trace before code instrumentation](followup_diagnosis_pattern_request_trace_first.md) — Day-12 /tasks slow-warm-hit (4-5s) was diagnosed via heavy-instrumentation plan (PR #129) but Vercel request inspector revealed the actual cause first: function execution 9ms, total 238ms, edge bom1 + function iad1 transatlantic split. Fix was a 1-line vercel.json edit (PR #130 region pin to bom1, co-locating with Supabase ap-south-1). Lesson: when symptom is "uniformly slow regardless of data volume," check request trace + region topology FIRST, before code-level instrumentation. Instrumentation answers "WHICH code path"; it doesn't answer "WHERE is the bottleneck (network/CPU/DB/geographic)."
 - [x-pathname middleware production anomaly](followup_x_pathname_production_anomaly.md) — PR #127 fix shipped via #132 squash; production GET /tasks (no session, with bypass token) redirects to /login?next=%2F instead of /login?next=%2Ftasks. Auth gate fires; UX nit only (operator lands on / post-login instead of /tasks). 4 hypotheses listed; most likely H1 (Vercel bypass-token path differs from real-operator path). Disambiguation probe: real expired/cleared session probe without bypass token. Open until that resolves.
+
+### Phase 2 deferrals from PLANNER_PRODUCT_BRIEF.md §4 (filed Day 12 evening)
+
+- [Configurable cutoff time per merchant](followup_configurable_cutoff_time_per_merchant.md) — MVP hardcoded 18:00 local; per-merchant config Phase 2.
+- [Configurable max_skips_per_subscription](followup_configurable_max_skips_per_subscription.md) — MVP unlimited; per-merchant cap Phase 2.
+- [Per-merchant blackout date editor](followup_per_merchant_blackout_date_editor.md) — MVP read-only display; editor Phase 2.
+- [Consignee notes + loyalty + internal-ID](followup_consignee_notes_loyalty_internal_id.md) — schema fields Phase 2 per BRD §6.1.1.
+- [Skip notifications via SMS](followup_skip_notifications_sms_to_consignee.md) — notification service Phase 2.
+- [Reconciliation job Planner ↔ SF](followup_reconciliation_job_planner_sf.md) — webhook + DLQ for MVP; active reconciliation Phase 2.
+- [Failed-attempt manual retry workflow](followup_failed_attempt_manual_retry_workflow.md) — delivery-level reattempt UI Phase 2 (webhook-level DLQ retry already in MVP).
+- [Webhook events admin UI](followup_webhook_events_admin_ui.md) — capture exists, viewer Phase 2.
+- [Credential rotation UX](followup_credential_rotation_ux.md) — gated on Secrets Manager swap.
+- [Integrations page (SF credential entry/test)](followup_integrations_page_credential_entry.md) — gated on per-tenant credentials.
+- [Audit log viewer UI](followup_audit_log_viewer_ui.md) — capture exists, viewer Phase 2.
+- [Reporting / BI dashboards](followup_reporting_bi_dashboards.md) — Supabase SQL editor for pilot.
+- [CSV export from consolidated calendar](followup_csv_export_consolidated_calendar.md) — read+filter for MVP, export Phase 2.
+- [Arabic / i18n UI toggle](followup_arabic_i18n_toggle.md) — English-only for pilot.
+- [Custom roles / impersonation / SSO](followup_custom_roles_impersonation_sso.md) — frozen catalogue + Supabase Auth for MVP.
+- [Transcorp-staff Phase 2 features](followup_transcorp_staff_phase2_features.md) — deactivation cleanup, brand assignment, cross-merchant metrics.
+- [Plan tier configurable list per merchant](followup_plan_tier_configurable_list.md) — free-text mealPlanName for MVP.
+- [Live SF refresh on IN_TRANSIT popover](followup_live_sf_refresh_in_transit.md) — cache-from-webhook commitment in MVP.
+- [Mobile responsive operator UI](followup_mobile_responsive_operator_ui.md) — desktop-first for pilot.
+- [Operator role differentiation in UI (Ops Manager vs CS Agent)](followup_operator_role_differentiation_ui.md) — catalogue exists, UI Phase 2.
+- [Append-without-skip override](followup_append_without_skip_override.md) — backend in MVP, UI Phase 2.
+- [Historical-correction workflow (skip on past)](followup_historical_correction_workflow.md) — MVP rejects past dates.
+- [Consignee timeline performance optimization](followup_consignee_timeline_performance_optimization.md) — DB view in MVP, denormalize-if-needed.
