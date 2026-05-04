@@ -603,6 +603,134 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "reason — the string passed to withServiceRole (e.g. 'audit emit: x.created').",
     systemOnly: true,
   },
+
+  // ---- subscription exception model (Day 13 / T3 part 1) -----------------
+  // Brief §3.1.2 vocabulary list — 9 events span two surfaces:
+  // subscription exceptions / lifecycle (#1–#5; tenant-operator surface)
+  // and merchant lifecycle (#7–#9; transcorp_staff surface, systemOnly).
+  //
+  // 7 NEW registrations land below. 2 events from the brief's list
+  // (subscription.paused at line ~320 + subscription.resumed at line
+  // ~330) already exist in the catalogue from earlier work — those
+  // pre-existing registrations describe the prior non-bounded
+  // active↔paused toggle; the part-2 service code will emit them with
+  // additional metadata (pause_start, pause_end, correlation_id) for
+  // the brief's bounded-pause posture (BRD §3.1.7) on top of the
+  // existing fields. Updating those registrations' metadataNotes is
+  // part-2 scope (service code change pairs with the doc change);
+  // part-1 keeps audit-vocabulary changes additive only.
+  //
+  // Causally-related events share `correlation_id` per brief §7 — see
+  // metadataNotes per event for which pairs share which id.
+  //
+  // Implementation in part 2 (Day 14): the service layer mints the
+  // correlation_id (uuid v7) at request entry and threads it through the
+  // emit pairs. Part 1 lands the registrations only.
+  //
+  // Audit-failed-attempts gap: per
+  // memory/followup_audit_failed_attempts.md, denied-event vocabulary
+  // (e.g., subscription.exception.denied) for permission-failed paths is
+  // separate part-2 scope. The events below cover the SUCCESS path only.
+
+  "subscription.exception.created": {
+    id: "subscription.exception.created",
+    resource: "subscription",
+    action: "exception.created",
+    description:
+      "Day 13 / T3. A subscription exception (skip / pause_window / address_override_one_off / address_override_forward / append_without_skip) was created. Emitted in the same database transaction as the originating service call. For type='skip' without skip_without_append=true, emitted alongside subscription.end_date.extended with shared correlation_id.",
+    metadataNotes:
+      "subscription_id (uuid), exception_id (uuid), type (enum — see subscription_exceptions_type_check), target_date (YYYY-MM-DD — start_date of the exception), compensating_date (YYYY-MM-DD or null — populated only for type='skip' without skip_without_append), correlation_id (uuid).",
+    systemOnly: false,
+  },
+
+  "subscription.end_date.extended": {
+    id: "subscription.end_date.extended",
+    resource: "subscription",
+    action: "end_date.extended",
+    description:
+      "Day 13 / T3. A subscription's end_date was extended. Causally paired with the originating event via correlation_id: skip flow pairs with subscription.exception.created; pause flow pairs with subscription.paused; append-without-skip flow pairs with subscription.exception.created (type='append_without_skip').",
+    metadataNotes:
+      "subscription_id (uuid), previous_end_date (YYYY-MM-DD), new_end_date (YYYY-MM-DD), correlation_id (uuid), triggered_by (enum 'skip' | 'pause_resume' | 'append_without_skip').",
+    systemOnly: false,
+  },
+
+  "subscription.address_override.applied": {
+    id: "subscription.address_override.applied",
+    resource: "subscription",
+    action: "address_override.applied",
+    description:
+      "Day 13 / T3. An address override was applied to a subscription — either one-off (single delivery) or forward (every delivery from this date onward). The originating subscription_exceptions row carries the type discriminator; this event surfaces the operator-visible effect (which delivery/effective-date got which address).",
+    metadataNotes:
+      "subscription_id (uuid), exception_id (uuid), target_date (YYYY-MM-DD — populated for one-off, null for forward) OR effective_from (YYYY-MM-DD — populated for forward, null for one-off), address_id (uuid).",
+    systemOnly: false,
+  },
+
+  // subscription.paused and subscription.resumed are NOT re-registered
+  // here — they pre-exist in the catalogue (lines ~320 / ~330). Brief's
+  // §3.1.2 list counts them as part of the 9-event vocabulary; part-2
+  // service code will emit them with bounded-pause metadata
+  // (pause_start, pause_end, correlation_id) on top of the existing
+  // fields. The metadataNotes update on those entries is paired with
+  // the part-2 service change (additive at the call-site, semantic
+  // refinement at the registration).
+
+  "consignee.crm_state.changed": {
+    id: "consignee.crm_state.changed",
+    resource: "consignee",
+    action: "crm_state.changed",
+    description:
+      "Day 13 / T3. A consignee's CRM state transitioned. Brief §3.1.1 six-state machine (ACTIVE / ON_HOLD / HIGH_RISK / INACTIVE / CHURNED / SUBSCRIPTION_ENDED). The consignee_crm_events table carries the same fact in append-only structured form for direct query; this event mirrors it in the audit_events stream so cross-resource forensic queries pick it up.",
+    metadataNotes:
+      "consignee_id (uuid), from_state (enum or null on initial create), to_state (enum), reason (string — operator-supplied, may be null).",
+    systemOnly: false,
+  },
+
+  // Merchant lifecycle events (transcorp_staff surface).
+  //
+  // systemOnly=true because these events are never emitted from a
+  // tenant-controlled call site. The Transcorp-staff createMerchant /
+  // activateMerchant / deactivateMerchant services (part 2) emit them
+  // under withServiceRole. Per plan §1.7.1, the lifecycle is:
+  //   create → 'provisioning' (DB default; merchant.created event)
+  //         → activateMerchant → 'active' (merchant.activated event,
+  //                                        from_status='provisioning')
+  //         → deactivateMerchant → 'inactive' (merchant.deactivated
+  //                                            event, from_status='active')
+  // 'suspended' is reserved (part-2 service-surface decision deferred per
+  // plan §6).
+
+  "merchant.created": {
+    id: "merchant.created",
+    resource: "merchant",
+    action: "created",
+    description:
+      "Day 13 / T3. A new merchant tenant was created via the Transcorp-staff createMerchant service. Tenant lands in tenants.status='provisioning' (DB default per §1.7.1 prod canon); event represents the row creation, not state transition. Activation is a separate Transcorp-staff action emitting merchant.activated.",
+    metadataNotes:
+      "tenant_id (uuid), slug (string), name (string), pickup_address (object: { line, district, emirate }).",
+    systemOnly: true,
+  },
+
+  "merchant.activated": {
+    id: "merchant.activated",
+    resource: "merchant",
+    action: "activated",
+    description:
+      "Day 13 / T3. A merchant tenant was activated via the Transcorp-staff activateMerchant service. Represents the tenants.status transition 'provisioning' → 'active' (lowercase per §1.7.1 prod canon). After activation, merchant operators can log in and operate within the tenant.",
+    metadataNotes:
+      "tenant_id (uuid), from_status (literal 'provisioning'), to_status (literal 'active').",
+    systemOnly: true,
+  },
+
+  "merchant.deactivated": {
+    id: "merchant.deactivated",
+    resource: "merchant",
+    action: "deactivated",
+    description:
+      "Day 13 / T3. A merchant tenant was deactivated via the Transcorp-staff deactivateMerchant service. Represents the tenants.status transition 'active' → 'inactive' (lowercase per §1.7.1 prod canon). Reversible — preserves all data; blocks new operator logins. Hard data archival follows post-pilot data lifecycle policy.",
+    metadataNotes:
+      "tenant_id (uuid), from_status (literal 'active'), to_status (literal 'inactive').",
+    systemOnly: true,
+  },
 } as const satisfies Record<string, EventTypeDef>;
 
 /**
