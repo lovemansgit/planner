@@ -66,14 +66,24 @@
 -- NOT apply (no audit-rule attached to this table).
 --
 -- -----------------------------------------------------------------------------
--- consignee_timeline_events VIEW — RLS via underlying tables
+-- consignee_timeline_events VIEW — RLS via underlying tables (security_invoker)
 -- -----------------------------------------------------------------------------
--- The view does not have its own RLS policy. Postgres views run with the
--- invoker's permissions by default (SECURITY INVOKER, the default), so
--- the underlying tables' RLS policies apply when a non-BYPASSRLS session
--- queries the view. A test in tests/integration/rls-tenant-isolation.spec.ts
--- (or a new file) verifies cross-tenant probes against the view return
--- zero rows.
+-- The view does not have its own RLS policy. **Critical:** Postgres views
+-- run with the view OWNER's permissions by default (SECURITY DEFINER
+-- semantic), and the owner here is `postgres` which has BYPASSRLS — so
+-- without explicit configuration the view would bypass RLS even when
+-- queried by planner_app under withTenant. CI integration test
+-- exception-model-rls-isolation.spec.ts caught this in run #25334096354 —
+-- the cross-tenant probe (withTenant(B) querying for tenant A's
+-- consignee_id) saw 2 rows instead of the expected 0.
+--
+-- WITH (security_invoker = true) flips the view to run with the QUERIER's
+-- permissions (Postgres 15+ feature; project runs on postgres:17 per
+-- .github/workflows/ci.yml). With that flag set, the underlying tables'
+-- RLS policies apply when a non-BYPASSRLS session queries the view.
+-- tests/integration/exception-model-rls-isolation.spec.ts pins this with
+-- a cross-tenant probe that asserts withTenant(B) querying for tenant A's
+-- consignee_id returns zero rows.
 --
 -- Three UNION ALL branches:
 --   1. consignee_crm_events  — CRM state transitions
@@ -193,7 +203,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON consignee_crm_events TO planner_app;
 -- applies when a tenant-scoped session queries the view. BYPASSRLS callers
 -- (withServiceRole) see all rows.
 
-CREATE VIEW consignee_timeline_events AS
+CREATE VIEW consignee_timeline_events
+  WITH (security_invoker = true) AS
 SELECT
   e.consignee_id,
   e.tenant_id,
