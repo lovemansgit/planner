@@ -18,7 +18,8 @@
     "test:sandbox": "vitest run --project sandbox",
     "test:e2e": "playwright test",
     "onboard-merchant": "node scripts/onboard-merchant.mjs",
-    "teardown-merchant": "node scripts/teardown-merchant.mjs"
+    "teardown-merchant": "node scripts/teardown-merchant.mjs",
+    "seed-subscriptions": "node scripts/seed-subscriptions.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1037.0",

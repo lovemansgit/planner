@@ -396,15 +396,36 @@ export async function listVisibleTaskIds(
 }
 
 /**
- * SELECT every task for `tenantId`, newest first, each with its
- * packages joined. The tenant filter is explicit alongside RLS — same
- * value, same result, but the WHERE clause makes the query
- * self-describing in logs and pg_stat.
+ * SELECT tasks for `tenantId`, newest first, each with its packages
+ * joined. The tenant filter is explicit alongside RLS — same value,
+ * same result, but the WHERE clause makes the query self-describing
+ * in logs and pg_stat.
  *
  * One round-trip total; packages arrive denormalised into a JSON
  * column and are deserialised by the mapper.
+ *
+ * Day 11 / P5 — opts adds offset-based pagination + status filter.
+ * Both fields optional and additive; absent opts preserves Day-7
+ * "every task" semantics so existing callers (cron paths, repository
+ * tests) keep working unchanged.
  */
-export async function listTasksByTenant(tx: DbTx, tenantId: Uuid): Promise<readonly Task[]> {
+export interface ListTasksOpts {
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly status?: TaskInternalStatus;
+}
+
+export async function listTasksByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: ListTasksOpts = {},
+): Promise<readonly Task[]> {
+  const { limit, offset = 0, status } = opts;
+  const statusFilter = status
+    ? sqlTag`AND t.internal_status = ${status}`
+    : sqlTag``;
+  const limitClause = limit !== undefined ? sqlTag`LIMIT ${limit}` : sqlTag``;
+  const offsetClause = offset > 0 ? sqlTag`OFFSET ${offset}` : sqlTag``;
   const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
     SELECT
       t.*,
@@ -418,9 +439,37 @@ export async function listTasksByTenant(tx: DbTx, tenantId: Uuid): Promise<reado
       ) AS packages
     FROM tasks t
     WHERE t.tenant_id = ${tenantId}
+      ${statusFilter}
     ORDER BY t.created_at DESC
+    ${limitClause}
+    ${offsetClause}
   `);
   return rows.map(mapTaskWithPackages);
+}
+
+/**
+ * Day 11 / P5 — count tasks for `tenantId` with the same optional
+ * status filter as listTasksByTenant. Used by the operator UI to
+ * render total counts + total page count without a second pass over
+ * every row.
+ */
+export async function countTasksByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: { readonly status?: TaskInternalStatus } = {},
+): Promise<number> {
+  const { status } = opts;
+  const statusFilter = status
+    ? sqlTag`AND internal_status = ${status}`
+    : sqlTag``;
+  type Row = { count: string | number };
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT COUNT(*)::int AS count FROM tasks
+    WHERE tenant_id = ${tenantId}
+      ${statusFilter}
+  `);
+  const raw = rows[0]?.count ?? 0;
+  return typeof raw === "string" ? Number.parseInt(raw, 10) : raw;
 }
 
 /**

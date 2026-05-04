@@ -48,6 +48,13 @@ export type Actor =
       userId: Uuid;
       tenantId: Uuid;
       permissions: ReadonlySet<Permission>;
+      // Day 11 / P4 — operator UI surfaces email + displayName on the
+      // landing-page header. Additive widening: existing call sites that
+      // construct a user-actor without these fields still typecheck via
+      // optional-property semantics. Real auth populates both from the
+      // public.users mirror; the demo path leaves them undefined.
+      email?: string;
+      displayName?: string | null;
       ipAddress?: string;
       userAgent?: string;
     }
