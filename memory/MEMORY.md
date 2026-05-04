@@ -1,5 +1,9 @@
 > Durable memory notes live in this directory and are tracked in git. Private agent memory at `~/.claude/projects/.../memory/` is for ephemeral working notes only.
 
+## Permanent product memory
+
+- [**Product Brief (Path 2-A)**](PLANNER_PRODUCT_BRIEF.md) — **load-bearing source of truth** for Planner scope, architecture, demo posture (May 12, 2026). Supersedes plan.docx §10 Day 11-13 in conflict. Reading discipline: every fresh session reads this first; every substantive PR references brief sections; amendments require explicit `decision_*.md` + version bump in §9. Currently at v1.1.
+
 ## Day 2 (27 April 2026)
 
 - [Vercel env scope convention](feedback_vercel_env_scope_convention.md) — Production + Preview only, never Development
