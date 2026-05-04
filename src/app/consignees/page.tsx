@@ -1,18 +1,15 @@
 // /consignees — read-only list view, Day-3 demo artifact.
 //
-// Server component. Fetches via the C-3 service path through the C-4
-// demo-context helper, so the full chain (RLS + permission check +
-// audit emit on writes — though list is not audited per R-4) is
-// exercised end-to-end against real tenant data. The list page is the
-// final piece that proves the Day-3 stack:
+// Server component. Fetches via the C-3 service path through
+// buildRequestContext (Day-10 P2 auth migration; previously the
+// Day-3 demo-context helper). Full chain exercised end-to-end:
 //
 //   migration (0004) → repository (C-2) → service + audit (C-3)
-//   → buildDemoContext (C-4) → server-rendered HTML (this file)
+//   → buildRequestContext (Day 10) → server-rendered HTML (this file)
 //
-// Auth is deferred per the Day-3 brief §8. buildDemoContext returns
-// a synthetic Tenant Admin context scoped to the first tenant in DB;
-// the page is unreachable in Vercel Production unless ALLOW_DEMO_AUTH
-// is explicitly opted in (gate at the top of buildDemoContext).
+// Auth (Day 10): UnauthorizedError redirects to /login; Posture A
+// graceful migration keeps the demo-context fallthrough behind
+// ALLOW_DEMO_AUTH=true (Preview-only) until the Posture B follow-up.
 //
 // Transcorp design language:
 //   - Background: warm off-white #FAF7F2
@@ -27,9 +24,11 @@
 
 import { randomUUID } from "node:crypto";
 
+import { redirect } from "next/navigation";
+
 import { listConsignees, type Consignee } from "@/modules/consignees";
-import { buildDemoContext } from "@/shared/demo-context";
-import { NoTenantConfiguredError } from "@/shared/errors";
+import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
+import { buildRequestContext } from "@/shared/request-context";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -39,9 +38,12 @@ export default async function ConsigneesPage() {
 
   let consignees: readonly Consignee[];
   try {
-    const ctx = await buildDemoContext("/consignees", requestId);
+    const ctx = await buildRequestContext("/consignees", requestId);
     consignees = await listConsignees(ctx);
   } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      redirect("/login?next=" + encodeURIComponent("/consignees"));
+    }
     if (err instanceof NoTenantConfiguredError) {
       return <SystemNotInitialised />;
     }

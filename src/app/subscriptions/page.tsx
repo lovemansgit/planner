@@ -22,9 +22,11 @@
 
 import { randomUUID } from "node:crypto";
 
+import { redirect } from "next/navigation";
+
 import { listSubscriptions, type Subscription } from "@/modules/subscriptions";
-import { buildDemoContext } from "@/shared/demo-context";
-import { NoTenantConfiguredError } from "@/shared/errors";
+import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
+import { buildRequestContext } from "@/shared/request-context";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -34,9 +36,12 @@ export default async function SubscriptionsPage() {
 
   let subscriptions: readonly Subscription[];
   try {
-    const ctx = await buildDemoContext("/subscriptions", requestId);
+    const ctx = await buildRequestContext("/subscriptions", requestId);
     subscriptions = await listSubscriptions(ctx);
   } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      redirect("/login?next=" + encodeURIComponent("/subscriptions"));
+    }
     if (err instanceof NoTenantConfiguredError) {
       return <SystemNotInitialised />;
     }

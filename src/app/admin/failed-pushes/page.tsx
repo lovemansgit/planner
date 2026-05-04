@@ -21,12 +21,14 @@
 
 import { randomUUID } from "node:crypto";
 
+import { redirect } from "next/navigation";
+
 import {
   listUnresolvedFailedPushes,
   type FailedPush,
 } from "@/modules/failed-pushes";
-import { buildDemoContext } from "@/shared/demo-context";
-import { NoTenantConfiguredError } from "@/shared/errors";
+import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
+import { buildRequestContext } from "@/shared/request-context";
 
 import { FailedPushesAdmin } from "./client";
 
@@ -38,9 +40,12 @@ export default async function FailedPushesAdminPage() {
 
   let rows: readonly FailedPush[];
   try {
-    const ctx = await buildDemoContext("/admin/failed-pushes", requestId);
+    const ctx = await buildRequestContext("/admin/failed-pushes", requestId);
     rows = await listUnresolvedFailedPushes(ctx);
   } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      redirect("/login?next=" + encodeURIComponent("/admin/failed-pushes"));
+    }
     if (err instanceof NoTenantConfiguredError) {
       return <SystemNotInitialised />;
     }

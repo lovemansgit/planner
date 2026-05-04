@@ -3,11 +3,11 @@
 // POST /api/consignees     consignee:create  → consignee.created
 // GET  /api/consignees     consignee:read    (no audit, per R-4)
 //
-// Auth wiring is deferred — every request goes through the demo
-// context (first tenant in DB, full Tenant Admin permission set).
-// When real auth lands, only `buildDemoContext` is replaced; this
-// file's permission gates, audit emits, and error mappings are
-// unaffected.
+// Auth (Day 10): buildRequestContext resolves the Supabase Auth session
+// to a per-tenant RequestContext; UnauthorizedError surfaces as 401 via
+// errorResponse. Posture A graceful migration keeps the demo-context
+// fallthrough behind ALLOW_DEMO_AUTH=true (Preview-only) until the
+// post-soak Posture B follow-up retires it.
 //
 // Validation: Zod schemas at the boundary catch shape errors (wrong
 // type, missing required field) before the service layer. The
@@ -22,7 +22,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { createConsignee, listConsignees } from "@/modules/consignees";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../_lib/error-response";
@@ -62,7 +62,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       throw new ValidationError(`request body invalid: ${parsed.error.message}`);
     }
 
-    const ctx = await buildDemoContext("/api/consignees", requestId);
+    const ctx = await buildRequestContext("/api/consignees", requestId);
     const created = await createConsignee(ctx, parsed.data);
     return NextResponse.json(created, { status: 201 });
   } catch (e) {
@@ -77,7 +77,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 export async function GET(): Promise<NextResponse> {
   const requestId = randomUUID();
   try {
-    const ctx = await buildDemoContext("/api/consignees", requestId);
+    const ctx = await buildRequestContext("/api/consignees", requestId);
     const rows = await listConsignees(ctx);
     return NextResponse.json({ consignees: rows });
   } catch (e) {

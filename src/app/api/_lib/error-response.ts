@@ -59,6 +59,12 @@ export function errorResponse(err: unknown): NextResponse {
       // unavailable) rather than 404 because the caller's request is
       // well-formed; the system isn't ready yet.
       return envelope(err, 503);
+    case "UNAUTHORIZED":
+      // No authenticated session. Distinct from FORBIDDEN (session
+      // present but permission insufficient). API consumers receive
+      // 401 + JSON envelope; page-level callers catch UnauthorizedError
+      // upstream and redirect to /login instead of bubbling here.
+      return envelope(err, 401);
     default: {
       // Exhaustiveness guard. If `err` here is anything other than
       // `never`, it's because a new variant was added to KnownAppError

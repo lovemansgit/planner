@@ -19,7 +19,7 @@ import { z } from "zod";
 
 import { resumeSubscription } from "@/modules/subscriptions";
 import { LifecycleNoBodySchema } from "@/modules/subscriptions/schemas";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../../../_lib/error-response";
@@ -38,7 +38,7 @@ export async function POST(req: Request, { params }: RouteContext): Promise<Next
     const id = parseId(rawId);
     rejectAnyBody(await req.json().catch(() => undefined));
 
-    const ctx = await buildDemoContext(`/api/subscriptions/${id}/resume`, requestId);
+    const ctx = await buildRequestContext(`/api/subscriptions/${id}/resume`, requestId);
     const updated = await resumeSubscription(ctx, id);
     return NextResponse.json(updated);
   } catch (e) {

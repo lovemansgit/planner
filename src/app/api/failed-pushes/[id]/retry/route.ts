@@ -34,7 +34,7 @@ import { z } from "zod";
 import { retryFailedPush } from "@/modules/failed-pushes";
 import { createSuiteFleetLastMileAdapter } from "@/modules/integration";
 import { pushSingleTask } from "@/modules/task-push";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../../../_lib/error-response";
@@ -57,7 +57,7 @@ export async function POST(req: Request, { params }: RouteContext): Promise<Next
     const id = parseId(rawId);
     rejectAnyBody(await req.json().catch(() => undefined));
 
-    const ctx = await buildDemoContext(`/api/failed-pushes/${id}/retry`, requestId);
+    const ctx = await buildRequestContext(`/api/failed-pushes/${id}/retry`, requestId);
     const adapter = createSuiteFleetLastMileAdapter({
       fetch: globalThis.fetch,
       clock: () => new Date(),
