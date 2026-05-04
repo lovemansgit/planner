@@ -250,7 +250,13 @@ async function main() {
     console.log(`Customer code:       ${tenant.suitefleet_customer_code}`);
     console.log(`Consignees seeded:   ${profile.consigneeCount}`);
     console.log(`Subscriptions:       ${profile.consigneeCount}`);
-    console.log(`First task tick:     next 12:00 UTC cron after ${today}`);
+    console.log(
+      `Delivery window:     ${profile.deliveryWindowStart}–${profile.deliveryWindowEnd} Asia/Dubai`,
+    );
+    console.log(
+      `Cadence:             ISO weekdays [${profile.daysOfWeek.join(", ")}] (${profile.daysOfWeek.length}/7)`,
+    );
+    console.log(`Cron generation:     12:00 UTC daily; first tick after ${today}`);
     console.log("─".repeat(72));
   } finally {
     await sql.end({ timeout: 5 });
