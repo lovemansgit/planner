@@ -130,6 +130,17 @@ const ROLES_DRAFT = {
       // for support investigations where they need the AWB sheet.
       "task:print_labels",
       "audit_event:read",
+      // Day 13 / T3 part 1 — exception-model surface. Brief §3.1.3
+      // gives CS Agent the default skip + address change workflows
+      // + CRM state transition. Explicitly NOT included:
+      // subscription:override_skip_rules (skip overrides are reserved
+      // to Tenant Admin and Ops Manager per the brief — CS Agent
+      // exercises default skip rules only).
+      "subscription:skip",
+      "subscription:change_address_rotation",
+      "subscription:change_address_one_off",
+      "subscription:change_address_forward",
+      "consignee:change_crm_state",
     ]),
   },
 

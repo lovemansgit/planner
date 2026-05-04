@@ -440,6 +440,124 @@ const PERMISSIONS_DRAFT = {
       "View the per-tenant inbound webhook configuration page (URL display + Tier-2 mismatch metrics). Read-only; credential management is a separate permission landing alongside the rotation flow.",
     systemOnly: false,
   },
+
+  // ---- subscription exception model (Day 13 / T3 part 1) -----------------
+  // Brief §3.1.3. Five new subscription-resource permissions and one
+  // consignee-resource permission for the operator-side surface; four
+  // merchant-resource permissions for Transcorp staff.
+  //
+  // Auto-pickup distribution for the tenant-side perms (1–6 below):
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup (catches all
+  //     non-systemOnly perms by construction in roles.ts)
+  //   - Ops Manager:  permsFor("subscription") and permsFor("consignee")
+  //     auto-pickup the new perms by resource
+  //   - CS Agent:     EXPLICIT-list addition for #1, #3, #4, #5, #6;
+  //     NOT for #2 (subscription:override_skip_rules — brief §3.1.3
+  //     reserves overrides to Ops Manager and above; CS Agent gets the
+  //     default skip but not the override variants)
+  //
+  // Auto-pickup distribution for the merchant-side perms (7–10):
+  //   - systemOnly=true → tenant-roles' TENANT_SCOPED filter excludes
+  //     them by construction
+  //   - transcorp-sysadmin: ALL set auto-pickup
+  //   - transcorp-systems: NOT included (narrow migration-cutover role)
+  //   - Dedicated transcorp-staff role with merchant:* is deferred to
+  //     part 2 per Option A of plan-PR conditional approval (see plan
+  //     §4 role-mapping note); for MVP, transcorp-sysadmin is the only
+  //     role exercising merchant:* perms.
+
+  "subscription:skip": {
+    id: "subscription:skip",
+    resource: "subscription",
+    action: "skip",
+    description:
+      "Day 13 / T3. Apply a default skip on a subscription delivery (with automatic tail-end reinsertion per the skip-and-append algorithm). Distinct from subscription:override_skip_rules — this permission grants the default rule only; override variants (move-to-date, skip-without-append, append-without-skip) require the override permission.",
+    systemOnly: false,
+  },
+
+  "subscription:override_skip_rules": {
+    id: "subscription:override_skip_rules",
+    resource: "subscription",
+    action: "override_skip_rules",
+    description:
+      "Day 13 / T3. Apply skip overrides — move skip to a specific compensating date instead of tail-end, skip without compensating insert (cancel-only), or append a delivery without a corresponding skip (goodwill / complaint resolution). Brief §3.1.3 reserves this to Tenant Admin and Ops Manager — CS Agent has subscription:skip but not this.",
+    systemOnly: false,
+  },
+
+  "subscription:change_address_rotation": {
+    id: "subscription:change_address_rotation",
+    resource: "subscription",
+    action: "change_address_rotation",
+    description:
+      "Day 13 / T3. Edit a subscription's per-weekday address rotation (which of the consignee's addresses receives delivery on Mon, Tue, etc.). Forward-going effect; existing materialized tasks are not touched (those would need a separate one-off or forward override).",
+    systemOnly: false,
+  },
+
+  "subscription:change_address_one_off": {
+    id: "subscription:change_address_one_off",
+    resource: "subscription",
+    action: "change_address_one_off",
+    description:
+      "Day 13 / T3. Override the delivery address for a single subscription delivery (one date only). Lands as a subscription_exceptions row with type='address_override_one_off'. Distinct from change_address_forward (which applies from a date onward).",
+    systemOnly: false,
+  },
+
+  "subscription:change_address_forward": {
+    id: "subscription:change_address_forward",
+    resource: "subscription",
+    action: "change_address_forward",
+    description:
+      "Day 13 / T3. Override the delivery address for all subscription deliveries from a given date onward. Lands as a subscription_exceptions row with type='address_override_forward'. Distinct from change_address_one_off (single date) and change_address_rotation (per-weekday default).",
+    systemOnly: false,
+  },
+
+  "consignee:change_crm_state": {
+    id: "consignee:change_crm_state",
+    resource: "consignee",
+    action: "change_crm_state",
+    description:
+      "Day 13 / T3. Transition a consignee's CRM state (ACTIVE / ON_HOLD / HIGH_RISK / INACTIVE / CHURNED / SUBSCRIPTION_ENDED per brief §3.1.1 line 153). Service-layer (part 2) enforces transition validity (e.g., CHURNED → ACTIVE requires explicit reactivation flow).",
+    systemOnly: false,
+  },
+
+  // Merchant lifecycle perms — systemOnly because granted only via
+  // transcorp-sysadmin's ALL set (Option A per plan §4 role-mapping;
+  // dedicated transcorp-staff role deferred to part 2).
+  "merchant:create": {
+    id: "merchant:create",
+    resource: "merchant",
+    action: "create",
+    description:
+      "Day 13 / T3. Create a new merchant tenant via the Transcorp-staff createMerchant flow. Creates the tenant row in tenants.status='provisioning' (DB default per plan §1.7.1); activation is a separate permission/action.",
+    systemOnly: true,
+  },
+
+  "merchant:read_all": {
+    id: "merchant:read_all",
+    resource: "merchant",
+    action: "read_all",
+    description:
+      "Day 13 / T3. Cross-tenant read access to the full merchant tenant list. Powers the /admin/merchants list view per brief §3.2.1.",
+    systemOnly: true,
+  },
+
+  "merchant:activate": {
+    id: "merchant:activate",
+    resource: "merchant",
+    action: "activate",
+    description:
+      "Day 13 / T3. Flip tenant.status from 'provisioning' to 'active' (lowercase per plan §1.7.1 prod canon). After activation, merchant operators can log in and operate within the tenant.",
+    systemOnly: true,
+  },
+
+  "merchant:deactivate": {
+    id: "merchant:deactivate",
+    resource: "merchant",
+    action: "deactivate",
+    description:
+      "Day 13 / T3. Flip tenant.status from 'active' to 'inactive' (lowercase per plan §1.7.1 prod canon). Reversible — preserves data, blocks new operator logins. Hard archival follows post-pilot data lifecycle policy.",
+    systemOnly: true,
+  },
 } as const satisfies Record<Permission, PermissionDef>;
 
 /**
@@ -491,6 +609,13 @@ export const API_KEY_FORBIDDEN_PERMISSIONS: ReadonlySet<PermissionId> = Object.f
     // System-only — definitionally not for API keys.
     "tenant:migration_import",
     "tenant:migration_gate_set",
+    // Day 13 / T3 part 1 — merchant lifecycle perms are systemOnly per
+    // plan §4 (Option A role-mapping); API keys must not mint or
+    // mutate merchant tenants.
+    "merchant:create",
+    "merchant:read_all",
+    "merchant:activate",
+    "merchant:deactivate",
     // Identity write paths — exfiltrated keys must not be able to mint/escalate.
     "api_key:create",
     "api_key:update",
