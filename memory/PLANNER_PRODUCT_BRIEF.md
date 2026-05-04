@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.1
-**Filed:** Day 12 (5 May 2026), evening
+**Version:** v1.2
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -107,11 +107,11 @@ Add `'SKIPPED'` to CHECK constraint. SKIPPED is semantically distinct from CANCE
 - `SKIPPED` = human-driven exception with compensating-date semantics
 - `CANCELED` = terminal stop (subscription ended, paused, or task cancelled outright)
 
-**`tasks.suitefleet_push_acknowledged_at` column:** `timestamptz NULL`. Populated when SuiteFleet POST returns 2xx. Surfaced on UI as integration-honesty indicator (§3.3.6).
+**`tasks.pushed_to_external_at` column:** `timestamptz NULL` — already present in `0006_task.sql:156` (existing column with identical semantic; v1.2 amendment §0.3 Option A keeps the existing column rather than rename). Populated when SuiteFleet POST returns 2xx (code-anchored at `src/modules/tasks/repository.ts:531-543` `markTaskPushed` UPDATE; call sites at `src/modules/task-push/service.ts:723-728` cron-loop + `:1098-1104` single-task, both AFTER `pushResult` materializes). Surfaced on UI as integration-honesty indicator (§3.3.6). **Contract surface for forthcoming materialization/push decoupling (Day-14 own T3 plan PR per `memory/followups/cron_materialization_push_coupling.md`). Day-13 part 1 (PR #139, merged 875bfc4) made no schema change to this column; Day-14 work uses its existing semantics as the integration-honesty marker.**
 
 **`webhook_events.raw_payload` column:** `jsonb NOT NULL`. Stores full SuiteFleet webhook payload at receipt time. Verify column exists; add migration if absent.
 
-**`tenants.status` column:** `text` with values `'ACTIVE'` / `'INACTIVE'`. Default `'ACTIVE'` on new tenant insert. Verify; add migration if absent.
+**`tenants.status` column:** `text NOT NULL` with values `'provisioning'`, `'active'`, `'suspended'`, `'inactive'`. Default `'provisioning'` on new tenant insert; transitions via Transcorp-staff `activateMerchant` (`provisioning → active`) and `deactivateMerchant` (`active → inactive`) services. `'suspended'` reserved (part-2 service-surface decision deferred per Day-13 plan §6). v1.2 amendment §1.7.1 — already in production with this 4-state lowercase canon; the original 2-state uppercase proposal was dropped at Day-13 plan-PR amendment time when prod verification (§0.2 Q1) surfaced the existing column. The 4-state is a better fit for the brief's separate `merchant.created` and `merchant.activated` audit events: `merchant.created` emits on `'provisioning'` (genuinely "created but not yet active") and `merchant.activated` emits on the `provisioning → active` transition (genuinely "activated"). PR #139 (merged 875bfc4) explicitly does NOT touch this column in `0017_tenants_pickup_address.sql`.
 
 **`tenants.pickup_address` columns:** Add `pickup_address_line text`, `pickup_district text`, `pickup_emirate text`. Captured at merchant creation by Transcorp staff; surfaces as ship-from on every task.
 
@@ -864,6 +864,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 |---|---|---|
 | v1.0 | 5 May 2026 (mid-day) | Initial filing. Path 2-A locked. Demo May 11. Incorporates Day-1 BRD partial + Day-1 reviewer note + Day-12 audit + Day-12 product vision dump. |
 | v1.1 | 5 May 2026 (evening) | Demo slipped to May 12. Comprehensive amendments per full Day-1 source review (BRD + Build Plan v1.0 + v1.1 delta + Claude Code prototype brief). Added: address rotation (per-weekday primary/alternative), four-step onboarding wizard, consolidated merchant calendar (`/calendar`), three-role permission catalogue, skip overrides (move-to-date, skip-without-append, append-without-skip via Phase 2), address change workflows (one-off + forward), consignee CRM states with transitions and timeline view, BRD-aligned bounded pause (replaces artificial split). Dropped: max_consecutive_skips. Phase 2: notes/loyalty/merchant-internal-ID. |
+| v1.2 | 5 May 2026 (post-Day-13 part-1 merge) | Two-amendment sync from Day-13 plan-PR conditional approval and prod schema verification. Filed at `memory/decision_brief_v1_2_amendments_d13_part1.md`. **§3.1.1 `tasks.suitefleet_push_acknowledged_at` → `tasks.pushed_to_external_at`** (§0.3 Option A) — existing column at `0006_task.sql:156` has identical semantic; rename rejected as cross-cutting churn for stylistic gain. **§3.1.1 `tenants.status` → 4-state lowercase canon** (`provisioning`/`active`/`suspended`/`inactive`, default `provisioning`) — adopted from prod (already shipped); 2-step `provisioning → active` lifecycle is a better fit for separate `merchant.created` vs `merchant.activated` audit events than the originally proposed 2-state uppercase. PR #139 (T3 part-1 code, merged 875bfc4) is the canonical schema landing; this brief amendment realigns the brief text post-hoc. |
 
 ---
 
