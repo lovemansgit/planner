@@ -51,6 +51,7 @@ import {
 import { buildDemoContext } from "./demo-context";
 import { withServiceRole } from "./db";
 import { UnauthorizedError } from "./errors";
+import { logLatency, measure } from "./latency-log";
 import type { RequestContext } from "./tenant-context";
 
 function requireEnv(name: string): string {
@@ -175,21 +176,38 @@ export interface ResolvedSession {
  * call sites go through the cached wrapper below.
  */
 export async function resolveSessionImpl(): Promise<ResolvedSession | null> {
-  const supabase = await getServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const overallStart = performance.now();
+  const supabase = await measure("resolveSession.getServerSupabase", () =>
+    getServerSupabase(),
+  );
+  const userResp = await measure("resolveSession.auth.getUser", () =>
+    supabase.auth.getUser(),
+  );
+  const user = userResp.data.user;
 
-  if (!user) return null;
+  if (!user) {
+    logLatency("resolveSession.total", performance.now() - overallStart, {
+      outcome: "no_session",
+    });
+    return null;
+  }
 
-  const resolved = await resolveUserContext(user.id);
+  const resolved = await measure("resolveSession.resolveUserContext", () =>
+    resolveUserContext(user.id),
+  );
   if (!resolved) {
+    logLatency("resolveSession.total", performance.now() - overallStart, {
+      outcome: "unprovisioned",
+    });
     // Auth.users row exists but no usable mirror / role-assignment.
     // Treated as unauthorized (account is not fully provisioned). The
     // operator path: re-run scripts/onboard-merchant.mjs or check
     // role_assignments by hand.
     throw new UnauthorizedError("user account is not provisioned");
   }
+  logLatency("resolveSession.total", performance.now() - overallStart, {
+    outcome: "ok",
+  });
   return { userId: user.id, resolved };
 }
 

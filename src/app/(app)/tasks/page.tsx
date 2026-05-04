@@ -35,6 +35,7 @@ import { redirect } from "next/navigation";
 import { listUnresolvedFailedPushes } from "@/modules/failed-pushes";
 import { countTasks, listTasks, type Task } from "@/modules/tasks";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
+import { measure } from "@/shared/latency-log";
 import { buildRequestContext } from "@/shared/request-context";
 
 import { TasksClient } from "./client";
@@ -66,14 +67,26 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   let totalCount: number;
   let failedPushTaskIds: ReadonlySet<string>;
   try {
-    const ctx = await buildRequestContext("/tasks", requestId);
-    [tasks, totalCount, failedPushTaskIds] = await Promise.all([
-      listTasks(ctx, { limit: PAGE_SIZE, offset, status }),
-      countTasks(ctx, { status }),
-      listUnresolvedFailedPushes(ctx).then(
-        (rows) => new Set(rows.map((r) => r.taskId)),
-      ),
-    ]);
+    const fetched = await measure("tasksPage.dataFetch", async () => {
+      const ctx = await measure("tasksPage.buildRequestContext", () =>
+        buildRequestContext("/tasks", requestId),
+      );
+      const [t, c, f] = await Promise.all([
+        measure("tasksPage.listTasks", () =>
+          listTasks(ctx, { limit: PAGE_SIZE, offset, status }),
+        ),
+        measure("tasksPage.countTasks", () => countTasks(ctx, { status })),
+        measure("tasksPage.listUnresolvedFailedPushes", () =>
+          listUnresolvedFailedPushes(ctx).then(
+            (rows) => new Set(rows.map((r) => r.taskId)),
+          ),
+        ),
+      ]);
+      return { tasks: t, totalCount: c, failedPushTaskIds: f };
+    });
+    tasks = fetched.tasks;
+    totalCount = fetched.totalCount;
+    failedPushTaskIds = fetched.failedPushTaskIds;
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/tasks"));
