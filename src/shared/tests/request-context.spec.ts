@@ -89,19 +89,36 @@ describe("resolveUserContext", () => {
 
   it("returns tenantId + permissions for a single-role user", async () => {
     mockExecute.mockResolvedValueOnce([
-      { tenant_id: "tenant-1", role_slug: "cs-agent" },
+      {
+        tenant_id: "tenant-1",
+        role_slug: "cs-agent",
+        email: "agent@planner.test",
+        display_name: "Aria Agent",
+      },
     ]);
     const result = await resolveUserContext("user-1");
     expect(result).not.toBeNull();
     expect(result?.tenantId).toBe("tenant-1");
     expect(result?.permissions.has("consignee:read")).toBe(true);
     expect(result?.permissions.has("user:create")).toBe(false);
+    expect(result?.email).toBe("agent@planner.test");
+    expect(result?.displayName).toBe("Aria Agent");
   });
 
   it("unions permissions across multiple roles", async () => {
     mockExecute.mockResolvedValueOnce([
-      { tenant_id: "tenant-1", role_slug: "cs-agent" },
-      { tenant_id: "tenant-1", role_slug: "ops-manager" },
+      {
+        tenant_id: "tenant-1",
+        role_slug: "cs-agent",
+        email: "agent@planner.test",
+        display_name: null,
+      },
+      {
+        tenant_id: "tenant-1",
+        role_slug: "ops-manager",
+        email: "agent@planner.test",
+        display_name: null,
+      },
     ]);
     const result = await resolveUserContext("user-1");
     // ops-manager grants subscription:bulk_create; cs-agent does not.
@@ -112,8 +129,18 @@ describe("resolveUserContext", () => {
 
   it("skips unknown role slugs without throwing (custom roles, post-pilot)", async () => {
     mockExecute.mockResolvedValueOnce([
-      { tenant_id: "tenant-1", role_slug: "tenant-admin" },
-      { tenant_id: "tenant-1", role_slug: "unknown-custom-role" },
+      {
+        tenant_id: "tenant-1",
+        role_slug: "tenant-admin",
+        email: "admin@planner.test",
+        display_name: null,
+      },
+      {
+        tenant_id: "tenant-1",
+        role_slug: "unknown-custom-role",
+        email: "admin@planner.test",
+        display_name: null,
+      },
     ]);
     const result = await resolveUserContext("user-1");
     // Tenant-admin's permissions should still be present.
@@ -125,7 +152,12 @@ describe("buildRequestContext", () => {
   it("returns the resolved RequestContext when session is present and user is provisioned", async () => {
     mockGetUser.mockResolvedValueOnce({ data: { user: { id: "user-1" } }, error: null });
     mockExecute.mockResolvedValueOnce([
-      { tenant_id: "tenant-1", role_slug: "tenant-admin" },
+      {
+        tenant_id: "tenant-1",
+        role_slug: "tenant-admin",
+        email: "tenant1@planner.test",
+        display_name: "Tenant One",
+      },
     ]);
 
     const ctx = await buildRequestContext("/api/tasks", "req-1");
@@ -134,6 +166,8 @@ describe("buildRequestContext", () => {
     if (ctx.actor.kind === "user") {
       expect(ctx.actor.userId).toBe("user-1");
       expect(ctx.actor.tenantId).toBe("tenant-1");
+      expect(ctx.actor.email).toBe("tenant1@planner.test");
+      expect(ctx.actor.displayName).toBe("Tenant One");
     }
     expect(ctx.tenantId).toBe("tenant-1");
     expect(ctx.requestId).toBe("req-1");

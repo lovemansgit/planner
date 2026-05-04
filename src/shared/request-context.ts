@@ -88,6 +88,8 @@ export async function getServerSupabase() {
 export interface ResolvedUserContext {
   readonly tenantId: string;
   readonly permissions: ReadonlySet<PermissionId>;
+  readonly email: string;
+  readonly displayName: string | null;
 }
 
 /**
@@ -110,9 +112,14 @@ export interface ResolvedUserContext {
  */
 export async function resolveUserContext(userId: string): Promise<ResolvedUserContext | null> {
   return await withServiceRole("auth: resolve user context", async (tx) => {
-    type Row = { tenant_id: string; role_slug: string };
+    type Row = {
+      tenant_id: string;
+      role_slug: string;
+      email: string;
+      display_name: string | null;
+    };
     const rows = await tx.execute<Row>(sqlTag`
-      SELECT u.tenant_id, r.slug AS role_slug
+      SELECT u.tenant_id, r.slug AS role_slug, u.email, u.display_name
       FROM users u
       JOIN role_assignments ra ON ra.user_id = u.id AND ra.tenant_id = u.tenant_id
       JOIN roles r ON r.id = ra.role_id
@@ -123,6 +130,8 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
     if (rows.length === 0) return null;
 
     const tenantId = rows[0].tenant_id;
+    const email = rows[0].email;
+    const displayName = rows[0].display_name;
     const permissions = new Set<PermissionId>();
     for (const row of rows) {
       const role = ROLES[row.role_slug as BuiltInRoleSlug];
@@ -131,7 +140,7 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
         permissions.add(p);
       }
     }
-    return { tenantId, permissions };
+    return { tenantId, permissions, email, displayName };
   });
 }
 
@@ -169,6 +178,8 @@ export async function buildRequestContext(
         userId: user.id,
         tenantId: resolved.tenantId,
         permissions: resolved.permissions,
+        email: resolved.email,
+        displayName: resolved.displayName,
       },
       tenantId: resolved.tenantId,
       requestId,
