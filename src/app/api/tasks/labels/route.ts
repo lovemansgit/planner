@@ -36,7 +36,7 @@ import {
   printLabelsForTasks,
   PRINT_LABELS_MAX_TASKS_PER_REQUEST,
 } from "@/modules/tasks";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../../_lib/error-response";
@@ -69,7 +69,7 @@ export async function POST(req: Request): Promise<Response> {
     }
     const { taskIds } = parsed.data;
 
-    const ctx = await buildDemoContext("/api/tasks/labels", requestId);
+    const ctx = await buildRequestContext("/api/tasks/labels", requestId);
     const adapter = createSuiteFleetLastMileAdapter({
       fetch: globalThis.fetch,
       clock: () => new Date(),

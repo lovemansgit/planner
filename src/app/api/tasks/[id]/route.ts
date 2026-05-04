@@ -22,7 +22,7 @@ import { z } from "zod";
 
 import { getTask, updateTask } from "@/modules/tasks";
 import { UpdateTaskBodySchema } from "@/modules/tasks/schemas";
-import { buildDemoContext } from "@/shared/demo-context";
+import { buildRequestContext } from "@/shared/request-context";
 import { NotFoundError, ValidationError } from "@/shared/errors";
 
 import { errorResponse } from "../../_lib/error-response";
@@ -48,7 +48,7 @@ export async function GET(_req: Request, { params }: RouteContext): Promise<Next
   try {
     const { id: rawId } = await params;
     const id = parseId(rawId);
-    const ctx = await buildDemoContext(`/api/tasks/${id}`, requestId);
+    const ctx = await buildRequestContext(`/api/tasks/${id}`, requestId);
     const row = await getTask(ctx, id);
     if (!row) {
       throw new NotFoundError(`task not found: ${id}`);
@@ -75,7 +75,7 @@ export async function PATCH(req: Request, { params }: RouteContext): Promise<Nex
       throw new ValidationError(`request body invalid: ${parsed.error.message}`);
     }
 
-    const ctx = await buildDemoContext(`/api/tasks/${id}`, requestId);
+    const ctx = await buildRequestContext(`/api/tasks/${id}`, requestId);
     const updated = await updateTask(ctx, id, parsed.data);
     return NextResponse.json(updated);
   } catch (e) {

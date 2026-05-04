@@ -28,7 +28,8 @@ export type AppErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "CREDENTIAL"
-  | "NO_TENANT_CONFIGURED";
+  | "NO_TENANT_CONFIGURED"
+  | "UNAUTHORIZED";
 
 export abstract class AppError extends Error {
   abstract readonly code: AppErrorCode;
@@ -106,6 +107,22 @@ export class NoTenantConfiguredError extends AppError {
 }
 
 /**
+ * Day 10. The actor has no authenticated session — login is required to
+ * proceed. Distinct from ForbiddenError (which means "session present but
+ * permission insufficient"). Maps to HTTP 401 at the API boundary; pages
+ * catch this and redirect to /login.
+ *
+ * Thrown by buildRequestContext (src/shared/request-context.ts) when no
+ * Supabase Auth session is present AND ALLOW_DEMO_AUTH is not opted in.
+ */
+export class UnauthorizedError extends AppError {
+  readonly code = "UNAUTHORIZED";
+  constructor(message: string = "login required") {
+    super(message);
+  }
+}
+
+/**
  * Closed union of every concrete typed error. Use as the parameter
  * type when you want exhaustiveness via `switch (err.code)` with a
  * `const _exhaustive: never = err` default branch.
@@ -116,7 +133,8 @@ export type KnownAppError =
   | NotFoundError
   | ConflictError
   | CredentialError
-  | NoTenantConfiguredError;
+  | NoTenantConfiguredError
+  | UnauthorizedError;
 
 /** Type guard: narrows `unknown` to `KnownAppError`. */
 export function isKnownAppError(err: unknown): err is KnownAppError {

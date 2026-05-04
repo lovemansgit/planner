@@ -149,6 +149,38 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "email — captured before the row went away.",
     systemOnly: false,
   },
+  // Day 10 — login surface. Two events for a single auth path; the
+  // success event is user-attributed (actor.kind='user' on the freshly
+  // resolved user), the failure event is system-attributed
+  // (actor.kind='system', actor_id='auth:login') because no user
+  // identity is established at the failure point.
+  //
+  // tenant_id resolution: success always carries the resolved tenant.
+  // failure carries the tenant when the submitted email matches a
+  // known user (tenant admins can audit-log their own users' failed
+  // attempts via RLS); tenant_id is null when the email is unknown,
+  // empty, or the failure is rate-limit before lookup. Cross-tenant
+  // visibility on null-tenant rows stays sysadmin-only by RLS.
+  "user.login_succeeded": {
+    id: "user.login_succeeded",
+    resource: "user",
+    action: "login_succeeded",
+    description:
+      "Day 10. A user successfully authenticated via /login. The freshly resolved user_id is the actor; tenant_id is the user's tenant. Email is NOT in metadata — derivable via the actor_id → users table join.",
+    metadataNotes:
+      "ip_address (string — request IP resolved from Vercel headers, may be null).",
+    systemOnly: false,
+  },
+  "user.login_failed": {
+    id: "user.login_failed",
+    resource: "user",
+    action: "login_failed",
+    description:
+      "Day 10. A login attempt at /login failed. Closes the auth-path slice of memory/followup_audit_failed_attempts.md. Password MUST NEVER appear in metadata under any encoding (not hashed, not prefixed, not first-N-chars, nothing). tenant_id is set when the email resolves to a known user (tenant admins see their own surface via RLS); tenant_id is null when email is unknown / empty or failure is pre-lookup.",
+    metadataNotes:
+      "email (string — submitted email, as-typed; only the email field, no other form fields), reason ('invalid_credentials' | 'rate_limited' | 'account_disabled' | 'unknown'), ip_address (string — request IP, may be null).",
+    systemOnly: false,
+  },
 
   // ---- role --------------------------------------------------------------
   // The built-in roles are seeded, not "created" via UI; these events fire
