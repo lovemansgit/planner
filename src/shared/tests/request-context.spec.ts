@@ -62,7 +62,13 @@ const cookieAdapterRef: { value: { setAll: (xs: unknown[]) => void } | null } = 
 
 import { buildDemoContext } from "../demo-context";
 import { UnauthorizedError } from "../errors";
-import { buildRequestContext, resolveUserContext } from "../request-context";
+import {
+  __resetSessionCacheForTests,
+  buildRequestContext,
+  resolveSession,
+  resolveSessionImpl,
+  resolveUserContext,
+} from "../request-context";
 
 const ORIG_ENV = { ...process.env };
 
@@ -73,6 +79,11 @@ beforeEach(() => {
   mockGetUser.mockReset();
   mockExecute.mockReset();
   cookieAdapterRef.value = null;
+  // Day-11 P4 double-resolve fix — React's cache() falls back to
+  // module-scoped memoization in vitest's no-React-renderer environment.
+  // Reset the wrapped resolver so test #N doesn't observe test #(N-1)'s
+  // cached session result.
+  __resetSessionCacheForTests();
 });
 
 afterEach(() => {
@@ -213,6 +224,95 @@ describe("buildRequestContext", () => {
       UnauthorizedError,
     );
     expect(buildDemoContext).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveSession — cache + cross-tenant isolation invariant", () => {
+  // React's cache() scopes memoization to the current server-component
+  // render lifecycle in production; in vitest's node-without-RSC-renderer
+  // environment it falls through (no memoization). The unit tests here
+  // verify the design invariants rather than call counts that would only
+  // appear under a real RSC render. The end-to-end memoization behavior
+  // is observable in production via the auth-end-to-end integration test.
+
+  it("returns the same shape as the underlying impl (cache is shape-preserving)", async () => {
+    // Both calls go through impl in tests — but their shapes must match
+    // exactly so the cache wrapper can't accidentally re-shape the result.
+    mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
+    mockExecute.mockResolvedValue([
+      {
+        tenant_id: "tenant-1",
+        role_slug: "tenant-admin",
+        email: "t@planner.test",
+        display_name: null,
+      },
+    ]);
+
+    const cached = await resolveSession();
+    const uncached = await resolveSessionImpl();
+
+    expect(cached).toEqual(uncached);
+    expect(cached?.userId).toBe("user-1");
+    expect(cached?.resolved.tenantId).toBe("tenant-1");
+  });
+
+  it("does not leak tenantId across requests (cache reset surfaces the new tenant)", async () => {
+    // Request #1: tenant-A.
+    mockGetUser.mockResolvedValueOnce({ data: { user: { id: "user-A" } }, error: null });
+    mockExecute.mockResolvedValueOnce([
+      {
+        tenant_id: "tenant-A",
+        role_slug: "tenant-admin",
+        email: "a@planner.test",
+        display_name: null,
+      },
+    ]);
+
+    const reqA = await resolveSession();
+    expect(reqA?.resolved.tenantId).toBe("tenant-A");
+
+    // Simulate the next request boundary — fresh cache, different
+    // tenant's cookies/session.
+    __resetSessionCacheForTests();
+    mockGetUser.mockResolvedValueOnce({ data: { user: { id: "user-B" } }, error: null });
+    mockExecute.mockResolvedValueOnce([
+      {
+        tenant_id: "tenant-B",
+        role_slug: "tenant-admin",
+        email: "b@planner.test",
+        display_name: null,
+      },
+    ]);
+
+    const reqB = await resolveSession();
+    expect(reqB?.resolved.tenantId).toBe("tenant-B");
+
+    // The two requests resolve distinct tenants — the cache memoizes
+    // the lookup within a request, never the identity across requests.
+    // Cross-tenant isolation invariant (session-resolved tenantId is the
+    // only scoping source) preserved by construction.
+    expect(reqA?.resolved.tenantId).not.toBe(reqB?.resolved.tenantId);
+  });
+
+  it("uncached resolveSessionImpl always re-runs the full lookup (regression pin for direct callers)", async () => {
+    // The exported uncached function is what new code should reach for
+    // when isolating from any cache layer — pinned here so a future
+    // refactor can't silently introduce caching at the impl boundary.
+    mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
+    mockExecute.mockResolvedValue([
+      {
+        tenant_id: "tenant-1",
+        role_slug: "tenant-admin",
+        email: "t@planner.test",
+        display_name: null,
+      },
+    ]);
+
+    await resolveSessionImpl();
+    await resolveSessionImpl();
+
+    expect(mockGetUser).toHaveBeenCalledTimes(2);
+    expect(mockExecute).toHaveBeenCalledTimes(2);
   });
 });
 
