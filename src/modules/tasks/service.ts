@@ -65,8 +65,10 @@ import { requirePermission } from "../identity";
 import type { LastMileAdapter } from "../integration";
 
 import {
+  countTasksByTenant,
   findTaskById,
   insertTaskWithPackages,
+  type ListTasksOpts,
   listTasksByTenant,
   listVisibleTaskIds,
   updateTask as updateTaskRow,
@@ -74,8 +76,11 @@ import {
 import type {
   CreateTaskInput,
   Task,
+  TaskInternalStatus,
   UpdateTaskPatch,
 } from "./types";
+
+export type { ListTasksOpts } from "./repository";
 
 // -----------------------------------------------------------------------------
 // Bulk-create result + error shapes
@@ -469,13 +474,35 @@ export async function getTask(ctx: RequestContext, id: Uuid): Promise<Task | nul
 }
 
 /**
- * List every task in the actor's tenant, newest first.
+ * List tasks in the actor's tenant, newest first. Day 11 / P5 — opts
+ * is optional and additive: callers without opts get the Day-7 "every
+ * task" semantics (cron paths, pre-pagination tests). The operator UI
+ * passes `{ limit, offset, status }` for paginated + filtered list views.
  */
-export async function listTasks(ctx: RequestContext): Promise<readonly Task[]> {
+export async function listTasks(
+  ctx: RequestContext,
+  opts: ListTasksOpts = {},
+): Promise<readonly Task[]> {
   requirePermission(ctx, "task:read");
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {
-    return listTasksByTenant(tx, ctx.tenantId!);
+    return listTasksByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day 11 / P5 — count tenant tasks (optionally filtered by status).
+ * Pairs with listTasks for paginated views; the UI surfaces total +
+ * page count without re-listing every row.
+ */
+export async function countTasks(
+  ctx: RequestContext,
+  opts: { readonly status?: TaskInternalStatus } = {},
+): Promise<number> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "task:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return countTasksByTenant(tx, ctx.tenantId!, opts);
   });
 }
 
