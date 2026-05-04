@@ -99,10 +99,39 @@ WHERE table_schema = 'public'
 ORDER BY table_name;
 ```
 
+#### §0-Q9 — Code-read confirmation: `pushed_to_external_at` populated AFTER SF returns 2xx (NOT before request initiation)
+
+This is a **code-read verification step (no SQL)** — the §0.3 Option A recommendation depends on this semantic match. Locked at plan-PR amendment time:
+
+`tasks.pushed_to_external_at` is set by `markTaskPushed` at [`src/modules/tasks/repository.ts:531-543`](../../src/modules/tasks/repository.ts#L531-L543):
+
+```sql
+UPDATE tasks
+SET external_id = ${externalId},
+    external_tracking_number = ${externalTrackingNumber},
+    pushed_to_external_at = now()
+WHERE id = ${taskId} AND tenant_id = ${tenantId}
+```
+
+`markTaskPushed` is invoked from two sites in [`src/modules/task-push/service.ts`](../../src/modules/task-push/service.ts), both **after** `pushResult` materializes from the SuiteFleet createTask call:
+
+| Call site | Lines | Path |
+|---|---|---|
+| Cron-loop success path | [723–728](../../src/modules/task-push/service.ts#L723-L728) | inside `// Success: mark task pushed` block |
+| Single-task success path | [1098–1104](../../src/modules/task-push/service.ts#L1098-L1104) | inside `// Step 5: success — mark task pushed` block |
+
+Two corroborating comments in the same file:
+- **Header at L35–37**: documents the order explicitly — "(2) Calls `markTaskPushed(taskId, externalId, awb)` to set external_id / external_tracking_number / pushed_to_external_at" — step (2) follows step (1), which is the SF push that returned 2xx.
+- **Sentry-loud at L1116–1119**: "the next cron pass will see `pushed_to_external_at IS NULL` and re-attempt — duplicate-physical-delivery risk worth waking ops up for" — confirms the column is the integration-honesty marker for confirmed-acknowledged-by-SF state, never request-initiated state.
+
+**Conclusion:** `tasks.pushed_to_external_at` semantic exactly matches the brief's intent for `suitefleet_push_acknowledged_at`. §0.3 Option A is safe.
+
+**Reviewer surfaces in PR comment alongside §0-Q1…Q8 SQL results.**
+
 ### §0.3 Decision: `tasks.suitefleet_push_acknowledged_at` vs `tasks.pushed_to_external_at`
 
 **Brief calls for** `tasks.suitefleet_push_acknowledged_at` ([§3.1.1](../PLANNER_PRODUCT_BRIEF.md)).
-**Existing column** at [`supabase/migrations/0006_task.sql:156`](../../supabase/migrations/0006_task.sql) is `pushed_to_external_at timestamptz` with the identical semantic ("populated when SF POST returns 2xx").
+**Existing column** at [`supabase/migrations/0006_task.sql:156`](../../supabase/migrations/0006_task.sql) is `pushed_to_external_at timestamptz` with the identical semantic ("populated when SF POST returns 2xx" — code-confirmed in §0-Q9 above).
 
 Three options:
 
@@ -126,7 +155,7 @@ Assuming §0.2 confirms the local-migration picture:
 
 - **Net-new tables (6):** `subscription_exceptions`, `subscription_materialization`, `subscription_address_rotations`, `consignee_crm_events`, `addresses`, `webhook_events`
 - **Net-new view (1):** `consignee_timeline_events`
-- **Column-add (5 columns across 2 tables):** `tenants.status`, `tenants.pickup_address_line`, `tenants.pickup_address_district`, `tenants.pickup_address_emirate`, `consignees.crm_state`
+- **Column-add (6 columns across 3 tables):** `tenants.status`, `tenants.pickup_address_line`, `tenants.pickup_address_district`, `tenants.pickup_address_emirate`, `consignees.crm_state`, `tasks.address_id` (nullable — locked at plan stage; see §1.3 + §2)
 - **CHECK extension (1):** `tasks_internal_status_check` adds `SKIPPED`
 - **No-op (per §0.3 Option A):** `tasks.pushed_to_external_at` — keep as-is
 
@@ -136,7 +165,7 @@ Next sequence is `0014_*`. Proposed split for atomic-review chunks:
 
 | Migration | Scope |
 |---|---|
-| `0014_addresses_and_subscription_address_rotations.sql` | net-new tables + RLS + indexes |
+| `0014_addresses_and_subscription_address_rotations.sql` | net-new tables + RLS + indexes + `tasks.address_id` nullable column-add (declared as future-generator schema dependency; see §1.3 + §2) |
 | `0015_subscription_exceptions_and_materialization.sql` | net-new tables + RLS + indexes + correlation_id design |
 | `0016_consignee_crm_state_and_events.sql` | column-add + net-new table + view + RLS |
 | `0017_tenants_status_and_pickup_address.sql` | column-add (×4) + tenant CHECK on status |
@@ -285,6 +314,28 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON addresses TO planner_app;
 **Backfill posture:** existing `consignees` rows have inline address fields per [`0004_consignee.sql`](../../supabase/migrations/0004_consignee.sql) (line, district, emirate, lat, lng). Migration ends with a single `INSERT INTO addresses … SELECT … FROM consignees` to seed the per-consignee primary address. Inline fields stay in `consignees` for now (deprecation deferred to Phase 2 — too cross-cutting for part 1).
 
 **Phase-2 deprecation note:** consignees inline address fields become stale once `addresses` is the source of truth. Phase 2 either drops the inline columns or makes them computed-from-primary. Filed as out-of-scope item §6.
+
+#### §1.3.1 `tasks.address_id` column-add (nullable, locked)
+
+The `tasks.address_id` schema dependency lands inside the same `0014_*` migration so the FK target table (`addresses`) exists in the same atomic step:
+
+```sql
+-- 0014_addresses_and_subscription_address_rotations.sql (continued)
+ALTER TABLE tasks
+  ADD COLUMN address_id uuid REFERENCES addresses(id) ON DELETE RESTRICT;
+
+CREATE INDEX tasks_address_idx ON tasks (address_id);
+```
+
+**Nullability — locked nullable at plan stage (§9 review-checklist no longer carries this question):**
+- Existing 845+ demo rows have no `address_id` value to backfill — making the column NOT NULL on day 1 forces a backfill migration that joins via `consignees → addresses (where is_primary=true)` and risks NULL-after-join for any consignee whose primary-address backfill (§1.3 above) hasn't landed yet
+- The brief never declares `tasks.address_id` NOT NULL; making it NOT NULL would be plan-side overreach
+- Service layer (part 2) handles missing-address validation when materializing new tasks AND when operator-initiated address overrides land
+- Phase 2 can promote to NOT NULL after a backfill sweep validates 100% population — the promotion is `ALTER TABLE tasks ALTER COLUMN address_id SET NOT NULL`, single-statement, after all backfilled
+
+**FK ON DELETE RESTRICT:** prevents deleting an address that is referenced by historical tasks. Phase-2 UI delete-address flow must handle the cascade-block message gracefully (mirrors `subscription_address_rotations.address_id` posture in §1.4).
+
+**No backfill in part 1:** part-1 migration adds the column; existing 845+ rows stay NULL. Generator code that populates this column on new INSERTs is **part 2** (Day 14 — see §2 for the deferral rationale and §6 for the part-2 scope statement).
 
 ### §1.4 `subscription_address_rotations`
 
@@ -472,91 +523,54 @@ Status-mapper at `src/modules/integration/providers/suitefleet/status-mapper.ts`
 
 ---
 
-## §2 Generator updates
+## §2 Generator schema dependencies (code changes deferred to part 2 post-decoupling)
 
-Generator scope = the bulk INSERT…SELECT path at [`src/modules/task-generation/repository.ts:284-326`](../../src/modules/task-generation/repository.ts#L284-L326) and the projection counter at [`countMatchingSubscriptions`](../../src/modules/task-generation/repository.ts#L227-L243). Two changes, both schema-aware (no service surface):
+**Plan-PR amendment posture:** all generator code changes from the original §2 draft are **deferred to part 2** per Condition 2 of the conditional approval. Two reasons drove the deferral:
 
-### §2.1 Address rotation honoring
+1. **Volumetric projection missing (v0.3 skill discipline).** The original §2 sketches changed the bulk-INSERT WHERE clause to add `NOT EXISTS` against `subscription_exceptions` per row and added a `COALESCE(...)` address-resolution sub-SELECT per row. At the 14-day horizon × per-tenant subscription counts (845 subs/Tue today, 1000+/merchant projected by Day 14), the per-row sub-SELECT cost was never measured. The Day-14 cron-decoupling plan PR will reshape the materialization path entirely — measuring this cost against an unstable target is wasted work.
+2. **Generator changes are useless without service-layer creating the exception rows.** A `NOT EXISTS … FROM subscription_exceptions` clause does nothing if no service can INSERT exceptions; address rotation honoring does nothing if no API can configure rotations. Both depend on part-2 service surface. Landing the generator changes in part 1 ships dead code.
 
-Materialization picks the address per the rotation, falling back to the consignee primary if no rotation row exists for the target weekday.
+This §2 therefore **declares schema dependencies only** — what tables/columns part-1 lands so part-2 generator work has the surface it needs. No code sketches; no `INSERT … SELECT` rewrites; no WHERE-clause edits; no test coverage in part-1 §5.
 
-```sql
--- Sketch: SELECT clause adds address resolution via LATERAL or LEFT JOIN
-INSERT INTO tasks (..., address_id, ...)
-SELECT
-  s.tenant_id, s.consignee_id, s.id, 'subscription',
-  'SUB-' || ... || '-' || to_char(${targetDate}::date, 'YYYYMMDD'),
-  'CREATED', ${targetDate}::date,
-  s.delivery_window_start, s.delivery_window_end,
-  'STANDARD', 'DELIVERY',
-  COALESCE(
-    (SELECT r.address_id
-     FROM subscription_address_rotations r
-     WHERE r.subscription_id = s.id
-       AND r.weekday = EXTRACT(ISODOW FROM ${targetDate}::date)::int),
-    (SELECT a.id FROM addresses a
-     WHERE a.consignee_id = s.consignee_id AND a.is_primary = true
-     LIMIT 1)
-  ) AS address_id
-FROM subscriptions s
-WHERE ...
-```
+### §2.1 Schema-dependency declarations (what part-1 lands so part-2 generator can use)
 
-**Schema dependency:** requires §1.3 `addresses` table + §1.4 `subscription_address_rotations` table. Adds `tasks.address_id uuid REFERENCES addresses(id)` as a column-add inside the same migration as §1.3 (or in §1.9 — reviewer chooses).
+Part-1 schema additions consumable by part-2 generator code:
 
-**Edge case:** consignee with NO primary address → COALESCE returns NULL → task lands without an address. Service-layer (part 2) decides whether to FAIL on this or default to consignee inline address (backwards compat). Plan flag: surface at part-1 review whether `tasks.address_id` should be NOT NULL or nullable.
+| Schema artifact (part-1 §1) | Part-2 generator behavior it enables |
+|---|---|
+| `addresses` table (§1.3) | Lookup of consignee primary address; address-by-id resolution for one-off / forward overrides |
+| `subscription_address_rotations` table (§1.4) | Per-weekday address rotation lookup at materialization time |
+| `tasks.address_id` nullable column (§1.3.1) | Generator INSERTs land the resolved address_id per the rotation/override-resolution rules part-2 implements |
+| `subscription_exceptions` table (§1.1) | Generator's WHERE clause gains `NOT EXISTS` checks against this table for skip + pause_window exclusion (part-2 design) |
+| `subscription_materialization` table (§1.2) | Per-subscription horizon-advance bookkeeping for the 14-day horizon walk (part-2 design) |
+| `tasks_internal_status_check` extension (§1.9) — `SKIPPED` value | Generator can choose to insert SKIPPED placeholder rows OR no-INSERT entirely; decision deferred to part 2 |
 
-### §2.2 Schema-aware exception application during materialization
+### §2.2 Decisions deferred to the Day-14 part-2 plan/code PR
 
-When the generator walks subscriptions for a target date, exceptions affecting that date must be honored at INSERT time:
+Originally proposed at this plan stage; **moved out of plan scope** under Condition 2:
 
-1. **`type='skip'` with `start_date = targetDate`** → skip the INSERT for that subscription (or insert with `internal_status='SKIPPED'`)
-2. **`type='pause_window'` covering `targetDate`** → skip the INSERT for that subscription (or insert with `internal_status='CANCELED'` and `reason='subscription_paused'`)
-3. **`type='address_override_one_off'` with `start_date = targetDate`** → use `address_override_id` instead of rotation lookup
-4. **`type='address_override_forward'` with `start_date <= targetDate`** → use `address_override_id` (overrides rotation forever for this subscription)
-5. **`type='append_without_skip'` with `compensating_date = targetDate`** → already handled by the standard INSERT path (the compensating_date IS the eligible date)
+- Address-rotation-honoring SQL shape (LATERAL vs sub-SELECT vs LEFT JOIN — needs volumetric projection)
+- Schema-aware skip / pause exception application at WHERE-clause level (needs measurement against the post-decoupling cron shape)
+- One-off vs forward address-override resolution precedence inside the materialization SELECT
+- SKIPPED-placeholder-INSERT vs no-INSERT decision when generator-time exceptions exist (originally a plan-stage decision; deferred to part-2 design where it can be measured against UI calendar-rendering needs from Day-15 wireframes)
+- 14-day horizon advance loop logic — explicitly part of the Day-14 cron decoupling T3 plan PR per [memory/followups/cron_materialization_push_coupling.md](../followups/cron_materialization_push_coupling.md) §5
 
-Generator-layer scope = WHERE clause adjustments + COALESCE address resolution above. Exception INSERTs themselves (creating the exception row) are **service-layer / part 2**.
+### §2.3 What part 1 does NOT touch in `src/modules/task-generation/`
 
-```sql
--- Sketch: extend the WHERE to exclude subscriptions covered by skip / pause exceptions on targetDate
-WHERE s.tenant_id = ${tenantId}
-  AND s.status = 'active'
-  AND s.start_date <= ${targetDate}::date
-  AND (s.end_date IS NULL OR s.end_date >= ${targetDate}::date)
-  AND EXTRACT(ISODOW FROM ${targetDate}::date)::int = ANY(s.days_of_week)
-  AND NOT EXISTS (
-    SELECT 1 FROM subscription_exceptions e
-    WHERE e.subscription_id = s.id
-      AND (
-        (e.type = 'skip' AND e.start_date = ${targetDate}::date)
-        OR (e.type = 'pause_window'
-            AND ${targetDate}::date BETWEEN e.start_date AND e.end_date)
-      )
-  )
-```
+Zero code changes to:
+- [`src/modules/task-generation/repository.ts`](../../src/modules/task-generation/repository.ts) — `bulkInsertTasksForSubscriptions` and `countMatchingSubscriptions` stay as-is
+- [`src/modules/task-generation/service.ts`](../../src/modules/task-generation/service.ts) — `generateTasksForWindow` stays as-is
+- [`src/modules/task-generation/types.ts`](../../src/modules/task-generation/types.ts) — type surface stays as-is
 
-`countMatchingSubscriptions` mirrors the same WHERE so cap projection stays accurate.
+Part-1 part of the cron path is schema-only; generator code touches start in part 2 (after Day-14 cron decoupling plan PR locks the post-decoupling cron shape).
 
-**Decision on SKIPPED-vs-no-INSERT:** plan recommends **no-INSERT** (skip the row entirely) because:
-- Audit trail of the skip lives in `subscription_exceptions` row + `subscription.exception.created` audit event — a placeholder `tasks.internal_status='SKIPPED'` row adds nothing
-- Avoids needing to UPDATE the row's `internal_status` after-the-fact (which the brief §3.1.4 step 9 calls for in the service-layer flow — that service-layer flow handles SAME-DAY skips of already-materialized tasks, distinct from the generator's avoid-create-on-future-skip case)
-- Calendar UI (part 2 / Day 15) sources `SKIPPED` indication from `subscription_exceptions`, not from `tasks.internal_status`
-
-**Note (per user instruction):** today's race-condition diagnostic ([memory/followups/cron_materialization_push_coupling.md](../followups/cron_materialization_push_coupling.md) §3) does NOT change generator scope. The `(tenant_id, target_date)` UNIQUE on `task_generation_runs` and the materialization↔push decoupling are own T3 plan PR work for Day 14.
-
-### §2.3 14-day horizon advance
-
-Brief [§3.1.5](../PLANNER_PRODUCT_BRIEF.md) calls for nightly per-tenant horizon-advance computing `target_horizon_date = today + 14 days` and writing `subscription_materialization` rows.
-
-**Part 1 scope:** schema only (table from §1.2). Generator's existing target-next-day-only behavior unchanged.
-**Part 2 scope:** cron handler change to walk horizon dates instead of next-day-only. Sequenced after the Day-14 decoupling plan PR per cron memo §5 (decoupling reshapes the cron handler).
+**Note (race-condition diagnostic):** today's race-condition findings in [memory/followups/cron_materialization_push_coupling.md](../followups/cron_materialization_push_coupling.md) §3 do not change part-1 scope. The `(tenant_id, target_date)` UNIQUE on `task_generation_runs` and the materialization↔push decoupling are own T3 plan PR work for Day 14.
 
 ---
 
 ## §3 Audit event registrations
 
-Per brief [§3.1.2](../PLANNER_PRODUCT_BRIEF.md). Add to `src/modules/audit/event-types.ts`. Brief lists 9 events (counted; user instruction said "8" — surface this discrepancy at plan review and confirm count).
+Per brief [§3.1.2](../PLANNER_PRODUCT_BRIEF.md). Add to `src/modules/audit/event-types.ts`. **Count locked at 9** per Condition 4 of plan-PR conditional approval (brief is source of truth). T1 follow-up memo will amend the bootstrap brief reference from "8" to "9" after this plan PR merges, so the next session does not re-encounter the drift.
 
 Each event below: payload shape + `systemOnly` flag (per brief §3.1.3 — `merchant.*` events are Transcorp-staff scoped; consignee/subscription events are merchant-operator).
 
@@ -672,20 +686,27 @@ Per-table CHECK assertions:
 - `webhook_events_dedup_idx` UNIQUE — duplicate INSERT for same `(suitefleet_task_id, action, event_timestamp)` → expect 23505
 - `tasks_internal_status_check` (extended) — UPDATE internal_status='SKIPPED' → expect success; INSERT internal_status='UNKNOWN' → expect 23514
 
-### §5.5 Generator-side test additions
+### §5.5 Generator-side tests — deferred to part 2
 
-Per §2 changes:
-- Address rotation honoring: seed subscription with rotation Mon→AddressX, Tue→AddressY; trigger generator for Mon target → assert task `address_id = AddressX`. Repeat for Tue. Repeat for Wed (no rotation row) → assert primary fallback.
-- Schema-aware skip exclusion: insert `subscription_exceptions(type='skip', start_date=targetDate)` for subscription S; trigger generator for targetDate → assert no task created for S.
-- Schema-aware pause exclusion: insert `subscription_exceptions(type='pause_window', start_date=A, end_date=B)`; trigger generator for date in [A, B] → assert no task created.
+Originally proposed (rotation honoring, schema-aware skip exclusion, schema-aware pause exclusion). **Removed from part-1 scope** under Condition 2 of conditional approval — generator code changes ship in part 2, so the corresponding tests ship there too. Listed in §6 part-2 scope for traceability.
+
+### §5.6 `tasks.address_id` schema-only test (column-add only)
+
+The column lands in part-1 but is not yet populated by any code path. Single test asserts:
+- `INSERT INTO tasks (… , address_id, …) VALUES (…, NULL, …)` succeeds (nullability locked per §1.3.1)
+- `INSERT INTO tasks (… , address_id, …) VALUES (…, '<existing addresses.id>', …)` succeeds (FK accepts valid uuid)
+- `INSERT INTO tasks (… , address_id, …) VALUES (…, '<random uuid>', …)` fails with FK violation 23503
+- `DELETE FROM addresses WHERE id = '<id-referenced-by-task>'` fails with FK violation 23503 (ON DELETE RESTRICT)
 
 ---
 
 ## §6 Out of scope (part 2 / Day 14 / Day-14-decoupling-plan-PR)
 
-### Part 2 (Day 14) — service layer + API routes
+### Part 2 (Day 14) — service layer + API routes + generator updates
 
 Per brief [§3.1.4](../PLANNER_PRODUCT_BRIEF.md) + [§3.1.9](../PLANNER_PRODUCT_BRIEF.md):
+
+**Service layer + API routes:**
 - `addSubscriptionException(ctx, subscriptionId, params)` service — full transactional flow with permission checks per type, audit emit pairs sharing correlation_id, idempotency check at the API boundary, cut-off enforcement
 - `pauseSubscription(ctx, subscriptionId, params)` service + auto-resume scheduler
 - `resumeSubscription(ctx, subscriptionId, params)` service
@@ -699,6 +720,15 @@ Per brief [§3.1.4](../PLANNER_PRODUCT_BRIEF.md) + [§3.1.9](../PLANNER_PRODUCT_
 - Integration tests covering end-to-end skip / pause / address override flows
 - Denied-event audit vocabulary (per [followup_audit_failed_attempts.md](../followup_audit_failed_attempts.md))
 - Brief amendment for §0.3 column-name decision (one-line per recommended Option A)
+
+**Generator code changes (deferred from part-1 §2 under Condition 2 — sequenced after Day-14 cron decoupling plan PR locks the post-decoupling cron shape):**
+- Address rotation honoring inside `bulkInsertTasksForSubscriptions` — LATERAL vs sub-SELECT vs LEFT JOIN shape locked after volumetric projection against post-decoupling cron
+- Schema-aware skip exclusion at WHERE clause (`NOT EXISTS` against `subscription_exceptions(type='skip', start_date=targetDate)`)
+- Schema-aware pause exclusion at WHERE clause (`NOT EXISTS` against `subscription_exceptions(type='pause_window'…)`)
+- One-off vs forward address-override resolution precedence inside the materialization SELECT
+- SKIPPED-placeholder-INSERT vs no-INSERT decision (originally proposed at part-1 plan stage; deferred to part-2 design where it can be measured against UI calendar-rendering needs from Day-15 wireframes)
+- 14-day horizon advance loop logic — explicitly shared scope with Day-14 cron decoupling T3 plan PR per [memory/followups/cron_materialization_push_coupling.md](../followups/cron_materialization_push_coupling.md) §5
+- Generator-side test additions (address rotation, skip exclusion, pause exclusion — originally part-1 §5.5; moved here for traceability)
 
 ### UI (Day 15+)
 
@@ -737,7 +767,8 @@ Listed only for traceability; no part-1 work:
 | Audit-rule cascade conflict on tenant DELETE ([followup_audit_rule_cascade_conflict.md](../followup_audit_rule_cascade_conflict.md)) | New tables use ON DELETE CASCADE on tenant_id but carry no audit-rule themselves; flagged |
 | Backfilling `addresses` from `consignees` inline fields concurrent-write race | Migration runs in maintenance window or wraps backfill in single tx; surface execution sequencing at code-PR review |
 | `consignee_timeline_events` view performance under load | View MVP-acceptable per brief §3.1.1; denormalize Phase 2 if needed |
-| `tasks.address_id` column add — nullable vs not-null decision | Surfaced in §2.1; reviewer decides at part-1 review |
+| `tasks.address_id` column ships nullable but eventually wants NOT NULL | Locked nullable per §1.3.1; Phase 2 promotes to NOT NULL after backfill sweep validates 100% population (single-statement `ALTER TABLE … SET NOT NULL`) |
+| `tasks.address_id ON DELETE RESTRICT` blocks clean address delete | Phase-2 UI delete-address flow must enumerate references (across both `subscription_address_rotations` and `tasks`) and prompt operator |
 | `subscription_address_rotations.address_id ON DELETE RESTRICT` blocks clean address delete | Phase-2 UI delete-address flow must enumerate references and prompt operator |
 | Migration filename split (six files) vs bundle (one file) | Surfaced in §0.5; reviewer decides at part-1 review |
 
@@ -753,26 +784,34 @@ Listed only for traceability; no part-1 work:
 - [memory/decision_task_module_no_user_create_delete.md](../decision_task_module_no_user_create_delete.md) — bimodal create/delete posture; relevant to part-2 service surface
 - [supabase/migrations/0006_task.sql](../../supabase/migrations/0006_task.sql) — `tasks_internal_status_check` current values; `pushed_to_external_at` existing column
 - [supabase/migrations/0004_consignee.sql](../../supabase/migrations/0004_consignee.sql) — Phase-2 deferral comment that §1.3 lifts
-- [src/modules/task-generation/repository.ts](../../src/modules/task-generation/repository.ts) — generator surface that §2 modifies
+- [src/modules/task-generation/repository.ts](../../src/modules/task-generation/repository.ts) — generator surface that **part-2** modifies (no part-1 code touch under Condition 2)
+- [src/modules/tasks/repository.ts:531-543](../../src/modules/tasks/repository.ts#L531-L543) — `markTaskPushed` UPDATE that locks the §0-Q9 semantic of `pushed_to_external_at`
+- [src/modules/task-push/service.ts](../../src/modules/task-push/service.ts) — call sites at L723–728 (cron-loop) + L1098–1104 (single-task) that confirm §0-Q9 ordering (mark-pushed AFTER SF 2xx)
 
 ---
 
 ## §9 Plan-PR review checklist
 
-For the reviewer (Love) at plan-PR review time:
+For the reviewer (Love) at plan-PR review time. Items previously surfaced but locked under conditional-approval Conditions 1–5 are crossed out for traceability.
 
-- [ ] §0.2 prod queries run; results pasted as PR comment; §0.4 net-new/column-add classification confirmed against actuals
-- [ ] §0.3 column-name decision locked (Option A keep, Option B rename, or Option C add-new)
+- [ ] §0.2 prod queries (Q1–Q8) run; results pasted as PR comment; §0.4 net-new/column-add classification confirmed against actuals
+- [ ] §0-Q9 code-read confirmation pasted in PR comment (locked at amendment time; reviewer re-confirms via the file:line anchors)
+- [ ] §0.3 column-name decision locked (Option A keep, Option B rename, or Option C add-new — Option A is the recommendation; if reviewer chooses B/C, scope grows)
 - [ ] §0.5 migration filename split confirmed (split 6 files vs bundle 1 file)
 - [ ] §1.3 `addresses` backfill posture confirmed (single migration tx OK vs maintenance window)
+- [ ] §1.5 CRM state list match against brief confirmed (verification pasted in PR comment per Condition 5)
 - [ ] §1.6 view vs denormalized table confirmed (view OK for MVP)
-- [ ] §2.1 `tasks.address_id` nullability confirmed
-- [ ] §2.2 SKIPPED-vs-no-INSERT decision confirmed
-- [ ] §3 audit event count confirmed (brief lists 9; user instruction said 8 — clarify)
 - [ ] §6 part-2 scope boundary confirmed; cron-decoupling sequencing acknowledged
 - [ ] Brief amendment per §0.3 Option A queued (separate small PR after part-1 code PR opens) OR §0.3 Option B/C selected and brief stays as-is
+- [ ] T1 follow-up memo queued: amend bootstrap brief reference from "8" to "9" audit events (per Condition 4) — after this plan PR merges
 
-After approval: T3 hard-stop #1 clears. Part-1 code PR opens. T3 hard-stop #2 fires at code-PR open for verification-only counter-review.
+**Locked under Conditional Approval — no longer reviewer decisions:**
+- ~~§2.1 `tasks.address_id` nullability~~ → **locked nullable** at plan stage (Condition 3); see §1.3.1 + §7
+- ~~§2.2 SKIPPED-vs-no-INSERT decision~~ → **deferred to part-2** under Condition 2; see §6 part-2 scope
+- ~~§3 audit event count clarification~~ → **locked at 9** per Condition 4 (brief is source of truth); §3 lead text updated
+- ~~§2 generator code changes~~ → **deferred to part-2** under Condition 2; §2 now declares schema dependencies only
+
+After approval: T3 hard-stop #1 clears. Love runs §0.2 prod verification queries (now including §0-Q9 code read). Plan PR merges. Part-1 code PR opens for T3 hard-stop #2 verification-only counter-review.
 
 ---
 
