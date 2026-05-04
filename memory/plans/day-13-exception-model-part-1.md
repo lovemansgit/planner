@@ -149,14 +149,15 @@ Three options:
 
 If the reviewer prefers **Option B** (rename), the part-1 code PR scope grows to include the rename migration + cross-cutting code touch. Surface preference at this plan PR review.
 
-### §0.4 Net-new vs column-add summary (pending §0.2 confirmation)
+### §0.4 Net-new vs column-add summary (locked against §0.2 actuals)
 
-Assuming §0.2 confirms the local-migration picture:
+§0.2 Q1–Q8 confirmed the local-migration picture with one drift: **`tenants.status` already exists in prod** (Q1) — see §1.7 amendment.
 
 - **Net-new tables (6):** `subscription_exceptions`, `subscription_materialization`, `subscription_address_rotations`, `consignee_crm_events`, `addresses`, `webhook_events`
 - **Net-new view (1):** `consignee_timeline_events`
-- **Column-add (6 columns across 3 tables):** `tenants.status`, `tenants.pickup_address_line`, `tenants.pickup_address_district`, `tenants.pickup_address_emirate`, `consignees.crm_state`, `tasks.address_id` (nullable — locked at plan stage; see §1.3 + §2)
+- **Column-add (5 columns across 3 tables):** `tenants.pickup_address_line`, `tenants.pickup_address_district`, `tenants.pickup_address_emirate`, `consignees.crm_state`, `tasks.address_id` (nullable — locked at plan stage; see §1.3 + §2)
 - **CHECK extension (1):** `tasks_internal_status_check` adds `SKIPPED`
+- **No-op — already in prod (per §0.2 Q1):** `tenants.status` exists as `text NOT NULL DEFAULT 'provisioning'` with CHECK `('provisioning', 'active', 'suspended', 'inactive')` — adopt prod's 4-state lowercase canon; see §1.7 amendment
 - **No-op (per §0.3 Option A):** `tasks.pushed_to_external_at` — keep as-is
 
 ### §0.5 Migration filename allocation
@@ -168,7 +169,7 @@ Next sequence is `0014_*`. Proposed split for atomic-review chunks:
 | `0014_addresses_and_subscription_address_rotations.sql` | net-new tables + RLS + indexes + `tasks.address_id` nullable column-add (declared as future-generator schema dependency; see §1.3 + §2) |
 | `0015_subscription_exceptions_and_materialization.sql` | net-new tables + RLS + indexes + correlation_id design |
 | `0016_consignee_crm_state_and_events.sql` | column-add + net-new table + view + RLS |
-| `0017_tenants_status_and_pickup_address.sql` | column-add (×4) + tenant CHECK on status |
+| `0017_tenants_pickup_address.sql` | column-add (×3) for `tenants.pickup_address_line / _district / _emirate`. **`tenants.status` is no-op per §1.7 amendment** — already in prod with 4-state lowercase canon |
 | `0018_webhook_events.sql` | net-new table + UNIQUE (deduplication) + RLS |
 | `0019_tasks_internal_status_skipped.sql` | CHECK extension only — single-statement migration |
 
@@ -443,16 +444,45 @@ GRANT SELECT ON consignee_timeline_events TO planner_app;
 
 **RLS on views:** views in Postgres run with the invoker's permissions by default; RLS policies on underlying tables apply transparently. Verify with cross-tenant probe test (§5).
 
-### §1.7 `tenants.status` + `tenants.pickup_address_*` (column-add ×4)
+### §1.7 `tenants.pickup_address_*` (column-add ×3) + `tenants.status` (no-op, adopt prod 4-state lowercase canon)
 
-Per brief [§3.1.1](../PLANNER_PRODUCT_BRIEF.md).
+Per brief [§3.1.1](../PLANNER_PRODUCT_BRIEF.md), amended against §0.2 Q1 actuals.
+
+#### §1.7.1 `tenants.status` — already in prod, no schema change in part 1
+
+§0.2 Q1 confirmed prod has `tenants.status text NOT NULL DEFAULT 'provisioning'` with CHECK `('provisioning', 'active', 'suspended', 'inactive')`. Q1a count: **340 rows `'provisioning'`, 3 rows `'active'` (MPL/DNR/FBU), 0 in suspended/inactive**.
+
+**Plan amendment:** the original draft proposed `ADD COLUMN status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE'))`. **Both the column-add AND the proposed 2-state uppercase enum are dropped.** Adopt prod's 4-state lowercase canon as the canonical state machine.
 
 ```sql
--- 0017_tenants_status_and_pickup_address.sql (sketch)
-ALTER TABLE tenants
-  ADD COLUMN status text NOT NULL DEFAULT 'ACTIVE'
-    CHECK (status IN ('ACTIVE', 'INACTIVE'));
+-- 0017_tenants_pickup_address.sql (sketch — status column NOT touched)
+-- tenants.status is already present (no migration); no-op here.
+-- Canonical state machine adopted from prod:
+--   'provisioning' (default on insert; new tenants land here)
+--      ↓ activateMerchant (transcorp_staff)
+--   'active'
+--      ↓ deactivateMerchant (transcorp_staff)
+--   'inactive'
+--   'suspended' (reserved; service surface decision deferred to part-2 §6)
+```
 
+**Lifecycle adopted:**
+- Tenant row created → lands in `'provisioning'` (DB default; createMerchant service does not need to set status)
+- Transcorp-staff `activateMerchant` → flips to `'active'`
+- Transcorp-staff `deactivateMerchant` → flips to `'inactive'`
+- `'suspended'` — reserved (decide in part-2 whether it's a new service action surface or stays operationally-set-only)
+
+**Why 4-state lowercase wins over the original 2-state uppercase proposal:**
+1. Already in prod with 343 rows behind it — changing it would require a data migration, not just a schema change
+2. The 2-step `provisioning → active` flow is a **better** fit for the brief's separate `merchant.created` and `merchant.activated` audit events ([§3.1.2](../PLANNER_PRODUCT_BRIEF.md)) — under the original 2-state ('ACTIVE' default), `merchant.created` would emit on a tenant that's already in its terminal active state, collapsing two semantic-distinct events into the same state. With prod's 4-state, `merchant.created` emits on `provisioning` (genuinely "created but not yet active") and `merchant.activated` emits on the `provisioning → active` transition (genuinely "activated").
+3. Lowercase is consistent with prod's existing convention for tenant status values; uppercase would introduce a casing-mismatch precedent
+
+**Brief amendment queued (combined with §0.3):** `PLANNER_PRODUCT_BRIEF.md §3.1.1` `tenants.status` line currently reads "`text` with values `'ACTIVE'` / `'INACTIVE'`. Default `'ACTIVE'` on new tenant insert." → amend to "`text NOT NULL` with values `'provisioning'`, `'active'`, `'suspended'`, `'inactive'`. Default `'provisioning'` on new tenant insert; transitions via Transcorp-staff `activateMerchant` / `deactivateMerchant` services. `'suspended'` reserved (part-2 service surface decision)." Filed in the single combined brief-amendment PR after part-1 code PR opens.
+
+#### §1.7.2 `tenants.pickup_address_*` (column-add ×3)
+
+```sql
+-- 0017_tenants_pickup_address.sql (sketch)
 ALTER TABLE tenants
   ADD COLUMN pickup_address_line     text,
   ADD COLUMN pickup_address_district text,
@@ -462,9 +492,9 @@ ALTER TABLE tenants
 -- new merchant onboarding via createMerchant service requires non-null per part 2).
 ```
 
-**No backfill required** for `pickup_address_*` — existing tenants (sandbox + 3 demo) get NULL; demo merchant ("Demo Bistro") created live via Transcorp-staff flow per brief [§5.1](../PLANNER_PRODUCT_BRIEF.md) supplies the values at create time.
+**No backfill required** for `pickup_address_*` — existing tenants (sandbox + 3 demo + 339 stale test tenants per [followup_audit_rule_cascade_conflict.md](../followup_audit_rule_cascade_conflict.md)) get NULL; demo merchant ("Demo Bistro") created live via Transcorp-staff flow per brief [§5.1](../PLANNER_PRODUCT_BRIEF.md) supplies the values at create time.
 
-**Operational note:** the demo Demo-Bistro flow ([brief §5.1 step 2](../PLANNER_PRODUCT_BRIEF.md)) requires `pickup_address_*` to be writable via the Transcorp-staff `createMerchant` API — that service is part 2.
+**Operational note:** the Demo-Bistro flow ([brief §5.1 step 2](../PLANNER_PRODUCT_BRIEF.md)) requires `pickup_address_*` to be writable via the Transcorp-staff `createMerchant` API — that service is part 2. The 340 `'provisioning'` rows in prod are likely the stale test tenants from earlier development phases — they will stay `'provisioning'` with NULL pickup_address indefinitely until the cleanup-mechanism gap (audit-rule cascade conflict) is resolved.
 
 ### §1.8 `webhook_events` (net-new table)
 
@@ -582,9 +612,9 @@ Each event below: payload shape + `systemOnly` flag (per brief §3.1.3 — `merc
 | 4 | `subscription.paused` | `subscription_id, pause_start, pause_end` | false | shares correlation_id with paired `end_date.extended` |
 | 5 | `subscription.resumed` | `subscription_id, actual_resume_date, new_end_date, correlation_id` | false | actor=user (manual) or system (auto-resume scheduler) |
 | 6 | `consignee.crm_state.changed` | `consignee_id, from_state, to_state, reason` | false | |
-| 7 | `merchant.created` | `tenant_id, slug, name, pickup_address` | **true** | Transcorp-staff only |
-| 8 | `merchant.activated` | `tenant_id` | **true** | Transcorp-staff only |
-| 9 | `merchant.deactivated` | `tenant_id` | **true** | Transcorp-staff only |
+| 7 | `merchant.created` | `tenant_id, slug, name, pickup_address` | **true** | Transcorp-staff only. Tenant lands in `'provisioning'` (DB default per §1.7.1); event represents the row creation, not state transition |
+| 8 | `merchant.activated` | `tenant_id, from_status: 'provisioning', to_status: 'active'` | **true** | Transcorp-staff only. Represents `provisioning → active` transition (lowercase per §1.7.1 prod canon) |
+| 9 | `merchant.deactivated` | `tenant_id, from_status: 'active', to_status: 'inactive'` | **true** | Transcorp-staff only. Represents `active → inactive` transition (lowercase per §1.7.1 prod canon) |
 
 **Correlation_id contract:** per brief §7 — the skip flow emits events 1 and 2 in the same database transaction with shared `correlation_id` (uuid v7). Pause flow emits events 4 and 2. Resume flow emits event 5 with the same `correlation_id` as the originating pause's event 2. **Service-layer enforcement is part 2.** Part 1 lands the audit registrations only.
 
@@ -608,8 +638,8 @@ Per brief [§3.1.3](../PLANNER_PRODUCT_BRIEF.md). Add to `src/modules/identity/p
 | 6 | `consignee:change_crm_state` | transition consignee CRM state | `tenant_admin`, `operations_manager`, `customer_service_agent` |
 | 7 | `merchant:create` | create new merchant tenant | `transcorp_staff` |
 | 8 | `merchant:read_all` | list/inspect all merchant tenants | `transcorp_staff` |
-| 9 | `merchant:activate` | flip tenant.status to ACTIVE | `transcorp_staff` |
-| 10 | `merchant:deactivate` | flip tenant.status to INACTIVE | `transcorp_staff` |
+| 9 | `merchant:activate` | flip `tenant.status` from `'provisioning'` to `'active'` (lowercase per §1.7.1 prod canon) | `transcorp_staff` |
+| 10 | `merchant:deactivate` | flip `tenant.status` from `'active'` to `'inactive'` (lowercase per §1.7.1 prod canon) | `transcorp_staff` |
 
 **Existing permissions referenced** (no add, just confirmation): `subscription:pause`, `subscription:resume` already in catalogue per brief §3.1.3.
 
@@ -719,7 +749,8 @@ Per brief [§3.1.4](../PLANNER_PRODUCT_BRIEF.md) + [§3.1.9](../PLANNER_PRODUCT_
 - Webhook deduplication wiring (§1.8 schema lands; part-2 receiver code uses it)
 - Integration tests covering end-to-end skip / pause / address override flows
 - Denied-event audit vocabulary (per [followup_audit_failed_attempts.md](../followup_audit_failed_attempts.md))
-- Brief amendment for §0.3 column-name decision (one-line per recommended Option A)
+- Brief amendment — single combined PR covers BOTH §0.3 column-name decision (one-line per recommended Option A) AND §1.7.1 `tenants.status` realignment to prod's 4-state lowercase canon
+- **`tenants.status = 'suspended'` service surface decision** (per §1.7.1) — deferred to part-2: decide whether `'suspended'` becomes an additional service action surface (e.g. `merchant:suspend` permission + `suspendMerchant` service + audit event) OR stays operationally-set-only (DB-only state, no API). Default posture if undecided: stays reserved, no part-2 service work, revisit Phase 2.
 
 **Generator code changes (deferred from part-1 §2 under Condition 2 — sequenced after Day-14 cron decoupling plan PR locks the post-decoupling cron shape):**
 - Address rotation honoring inside `bulkInsertTasksForSubscriptions` — LATERAL vs sub-SELECT vs LEFT JOIN shape locked after volumetric projection against post-decoupling cron
@@ -771,6 +802,9 @@ Listed only for traceability; no part-1 work:
 | `tasks.address_id ON DELETE RESTRICT` blocks clean address delete | Phase-2 UI delete-address flow must enumerate references (across both `subscription_address_rotations` and `tasks`) and prompt operator |
 | `subscription_address_rotations.address_id ON DELETE RESTRICT` blocks clean address delete | Phase-2 UI delete-address flow must enumerate references and prompt operator |
 | Migration filename split (six files) vs bundle (one file) | Surfaced in §0.5; reviewer decides at part-1 review |
+| `tenants.status` 2-step lifecycle (`provisioning → active`) creates a window where new tenants exist but can't yet be operated on | Service-layer (part-2) `createMerchant` returns the row in `'provisioning'`; UI surfaces "Pending activation" badge; `activateMerchant` is a separate Transcorp-staff action. Cron eligibility filter (`suitefleet_customer_code IS NOT NULL`) is independent of `status` — but part-2 should consider extending the filter to `status = 'active'` so `'provisioning'` tenants don't enter the cron walk before activation completes. |
+| `tenants.status = 'suspended'` semantics undefined for MVP | Per §1.7.1 + §6: reserved; service surface decision deferred to part-2. Default if undecided: DB-only state, no API. |
+| 340 prod rows in `'provisioning'` (likely stale test tenants per [followup_audit_rule_cascade_conflict.md](../followup_audit_rule_cascade_conflict.md)) noisy in admin merchant-list view | Part-2 admin merchant-list filters default to `status IN ('active', 'suspended')`; Transcorp staff opt-in to view `'provisioning'` / `'inactive'` rows. Stale-tenant cleanup remains the upstream resolution path (out of part-1 + part-2 scope). |
 
 ---
 
@@ -794,15 +828,16 @@ Listed only for traceability; no part-1 work:
 
 For the reviewer (Love) at plan-PR review time. Items previously surfaced but locked under conditional-approval Conditions 1–5 are crossed out for traceability.
 
-- [ ] §0.2 prod queries (Q1–Q8) run; results pasted as PR comment; §0.4 net-new/column-add classification confirmed against actuals
-- [ ] §0-Q9 code-read confirmation pasted in PR comment (locked at amendment time; reviewer re-confirms via the file:line anchors)
+- [x] §0.2 prod queries (Q1–Q8) run; results pasted as PR comment; §0.4 net-new/column-add classification confirmed against actuals **— complete; one drift (Q1 `tenants.status` already in prod) drove §1.7 amendment**
+- [x] §0-Q9 code-read confirmation pasted in PR comment (locked at amendment time; reviewer re-confirms via the file:line anchors) **— complete; builder re-verified on `origin/main` HEAD `18bbb2a`**
 - [ ] §0.3 column-name decision locked (Option A keep, Option B rename, or Option C add-new — Option A is the recommendation; if reviewer chooses B/C, scope grows)
-- [ ] §0.5 migration filename split confirmed (split 6 files vs bundle 1 file)
+- [ ] §0.5 migration filename split confirmed (split 6 files vs bundle 1 file) — note: `0017` rename to `0017_tenants_pickup_address.sql` per §1.7 amendment
 - [ ] §1.3 `addresses` backfill posture confirmed (single migration tx OK vs maintenance window)
-- [ ] §1.5 CRM state list match against brief confirmed (verification pasted in PR comment per Condition 5)
+- [ ] §1.5 CRM state list match against brief confirmed (verification pasted in PR comment per Condition 5; Love pastes after §1.7 amendment lands per latest sync)
 - [ ] §1.6 view vs denormalized table confirmed (view OK for MVP)
-- [ ] §6 part-2 scope boundary confirmed; cron-decoupling sequencing acknowledged
-- [ ] Brief amendment per §0.3 Option A queued (separate small PR after part-1 code PR opens) OR §0.3 Option B/C selected and brief stays as-is
+- [ ] §1.7 prod canon adoption confirmed (4-state lowercase `provisioning` / `active` / `suspended` / `inactive`; original 2-state uppercase proposal dropped)
+- [ ] §6 part-2 scope boundary confirmed; cron-decoupling sequencing acknowledged; `'suspended'` service surface decision deferred to part-2 acknowledged
+- [ ] **Brief amendment PR (combined per §6)** queued — single combined small PR covers BOTH §0.3 column-name decision (Option A) AND §1.7.1 `tenants.status` 4-state lowercase realignment. Filed after part-1 code PR opens.
 - [ ] T1 follow-up memo queued: amend bootstrap brief reference from "8" to "9" audit events (per Condition 4) — after this plan PR merges
 
 **Locked under Conditional Approval — no longer reviewer decisions:**
