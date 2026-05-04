@@ -34,6 +34,7 @@ export type {
 export {
   BulkValidationError,
   bulkCreateTasks,
+  countTasks,
   createTask,
   getTask,
   listTasks,
@@ -43,5 +44,6 @@ export {
   PRINT_LABELS_MAX_TASKS_PER_REQUEST,
   type BulkCreateResult,
   type BulkValidationFailure,
+  type ListTasksOpts,
   type PrintLabelsForTasksResult,
 } from "./service";
