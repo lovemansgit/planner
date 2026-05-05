@@ -211,15 +211,15 @@ The deleted cron-loop tests (`cron-push-rejects-unknown-district`, `cron-push-re
 |---|---|---|
 | §7.1-§7.4 tests on `day14/t3-cron-decoupling-code` | Not started; bootstrap doc PR #147 captures spec | Day-15 fresh Claude Code session |
 | Day-14 code PR open | Awaits tests; PR description template in PR #147 handoff §6 | Day-15 fresh session |
-| Migration 0020 production application | Awaits code PR merge; Love-action via Supabase SQL editor | Love (Day-15) |
-| `backfill-subscription-materialization` production run | Awaits migration 0020; smoke-tested dry-run today (860 active subs) | Love (Day-15 post-deploy) |
-| Posture B Stage 1 (Vercel UI env-var removal) | Awaits 48h gate ≥06:11 +0400 Dubai 2026-05-06 | Love (Day-15 morning) |
-| Posture B Stage 2 (code-cleanup PR) | Awaits Stage 1 verification | Builder + Love (Day-15) |
+| Migration 0020 production application | Awaits code PR merge; Claude Code applies via `supabase db push` (or `psql`) on Love's go-ahead | Claude Code (Love approves) |
+| `backfill-subscription-materialization` production run | Awaits migration 0020; Claude Code runs the npm script on Love's go-ahead; smoke-tested dry-run today (860 active subs) | Claude Code (Love approves) |
+| Posture B Stage 1 (Vercel env-var removal) | Awaits 48h gate ≥06:11 +0400 Dubai 2026-05-06; Claude Code runs `vercel env rm` on Love's go-ahead | Claude Code (Love approves) |
+| Posture B Stage 2 (code-cleanup PR) | Awaits Stage 1 verification | Claude Code (Love approves merge) |
 | Day-14 part-2 plan PR (service-layer surface) | Awaits cron-decoupling code PR merge per §8.1 | Day-15 / Day-16 fresh session |
 | Day-15+ feature work cascade | Gated on part-2 service layer | Per brief §6 |
-| Production batched promotion | 15 commits behind; Day-14 didn't promote | Love (Day-15 EOD per cadence) |
-| §0.6 QStash plan tier verification | Love checks Upstash dashboard before code PR opens | Love (Day-15 pre-PR) |
-| §11.2 row 6 — `QSTASH_FLOW_CONTROL_KEY` env-var (Production='sf-push-global-mvp', Preview='sf-push-global-preview') | Love-action via Vercel UI before code PR merges | Love (Day-15 pre-merge) |
+| Production batched promotion | 15 commits behind; Day-14 didn't promote; Claude Code runs `vercel promote` on Love's go-ahead | Claude Code (Love approves) |
+| §0.6 QStash plan tier verification | Claude Code checks via Upstash REST API before code PR opens | Claude Code |
+| §11.2 row 6 — `QSTASH_FLOW_CONTROL_KEY` env-var (Production='sf-push-global-mvp', Preview='sf-push-global-preview') | Claude Code runs `vercel env add` for both scopes before code PR merges | Claude Code (Love approves) |
 | §7.5 edge-case integration tests (6 rows) | Out of scope for code PR per merged plan; defer | Post-cron-decoupling-merge |
 | 23 Phase 2 deferrals from PR #136 | Unchanged | Phase 2 |
 
@@ -244,7 +244,7 @@ The deleted cron-loop tests (`cron-push-rejects-unknown-district`, `cron-push-re
 ## §9 Auto-memory governance refs (load-bearing for next session)
 
 - `feedback_t3_plan_prs_need_realtime_review.md` — gates code PR review (Day-15 fresh session opens against Love's real-time counter-review)
-- `feedback_claude_code_executes_default.md` — assigns Love as Vercel UI executor (env vars, manual deploy promotion, Supabase SQL editor for migration 0020)
+- `feedback_claude_code_executes_default.md` — Claude Code executes whatever has a CLI/API/script path (Vercel env-vars, deployments, migration apply via `supabase db push`, npm scripts, gh PR ops, Upstash REST). Love approves before execution; explicit instruction is the merge gate. Amended Day-14 EOD to retire the Vercel-UI-only carve-out from the original 3 May framing. (See file's Amendment block, 5 May 2026.)
 - `feedback_vercel_env_scope_convention.md` — governs `QSTASH_FLOW_CONTROL_KEY` per-environment posture (§11.2 row 6)
 - `feedback_always_surface_pr_url.md` — surface PR URL on its own line near top of response after `gh pr create`
 - `feedback_no_self_tier_escalation.md` — Day-14 part-2 plan PR is T3; awaits Love sign-off
