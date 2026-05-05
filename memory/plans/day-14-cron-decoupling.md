@@ -1054,23 +1054,56 @@ Grouped into five subsections for navigation. Each entry annotates which plan se
 
 ---
 
-## §11 Plan-PR review checklist
+## §11 Review checklist
 
-For the reviewer (Love) at plan-PR review time:
+Re-architected post-§0-§10 amendments. Split into two sub-checklists matching the T3 hard-stop-twice protocol: **§11.1 plan-PR approval gates** (Love clears at this PR's review to clear T3 hard-stop #1) and **§11.2 code-PR pre-merge gates** (consumed at the Day-14 code PR's verification-only counter-review to clear T3 hard-stop #2). Each row is anchored to §10 cross-refs and the relevant plan section so reviewers can trace decisions back to evidence.
 
-- [ ] §0.4 verification queries (Q1–Q4) run; results pasted as PR comment; no existing `(tenant_id, target_date)` duplicates surfaces
-- [ ] §0.5 migration count confirmed (single migration `0020`); no other schema changes in this PR
-- [ ] §1.2 mechanism choice locked (recommended A: QStash; alternatives B/C documented)
-- [ ] §2.4 SKIPPED-vs-no-INSERT decision confirmed (recommended: no-INSERT, audit lives in `subscription_exceptions`)
-- [ ] §3.3 one-time backfill posture confirmed (single migration tx OK vs separate script)
-- [ ] §3.4 cutover posture confirmed (no dual-write window — old cron handler IS the rewrite target)
-- [ ] §4.3 migration backfill caveat acknowledged (single-row off-by-one for off-hour manual-trigger rows is acceptable)
-- [ ] §5.2 retry posture confirmed (QStash native retry → existing `failed_pushes` DLQ; no new operator surface)
-- [ ] §6.3 SF rate-limit option locked (recommended A: QStash topic rate-limit at 5 msg/sec)
-- [ ] §8 part-2 boundary acknowledged (this plan does NOT cover the service-layer surface; that's a separate Day-14 plan PR)
-- [ ] §9 demo-dependency risk acknowledged (5-day buffer; surface ASAP if plan-PR review delays)
+### §11.1 Plan-PR approval checklist (clears T3 hard-stop #1)
 
-After approval: T3 hard-stop #1 clears. Day-14 code PR opens for T3 hard-stop #2 verification-only counter-review.
+For Love at this plan-PR review time. Each item asks "do you accept the plan's stated decision?" — if yes, check; if no, comment-amend before approval.
+
+#### Decisions to confirm (existing-rows, text-amended)
+
+- [ ] **§0.4 verification queries** — Q1 (QStash env vars present) and Q3 (push backlog sizing per fresh-butchers 114 tasks) land at code-PR prep. **Q2 found dupes exist** (20 r3-test-* fixture tenants × 5 rows each on 2026-05-02) — winning-row policy locked: keep `MAX(completed_at)` if any in group; else `MAX(started_at)`. **Q4 found `subscription_materialization` table NOT yet on prod** — escalates to §9 A1 hard-stop. Reference [§10.a brief] + [§10.b PR #139].
+- [ ] **§0.5 migration filename** — `0020_task_generation_runs_target_date_column_and_unique.sql` (renamed from `_unique.sql` to reflect 5-step transactional scope: column-add → backfill → dedupe → NOT NULL promotion → UNIQUE add). Reference [§10.c source code anchors §0.5].
+- [ ] **§1.2 mechanism choice (A: QStash) reframed** — A wins NOT because B fails the timeout dimension (§0.2 amendment showed B's in-handler 5-concurrent fits 300s envelope in ~112s) but because B couples push failures to materialization successes, lacks per-message retry, and offers no operational queue surface. B is rejected, not deferred (per §8.2 alternatives table). Reference [§10.a brief §3.1.5] + §1.2 / §0.2 amendments.
+- [ ] **§2.4 per-exception-type INSERT/no-INSERT table (replaces single-line decision)** — 5 rows: skip → no INSERT, pause_window → no INSERT, address_override_one_off → INSERT with override (Layer 1), address_override_forward → INSERT with override (Layer 2), append_without_skip → INSERT with rotation/primary fallback (no override). Reference §2.3 SQL + §2.4 amendment table.
+- [ ] **§3.3 backfill posture: one-time script, NOT migration** — `scripts/backfill-subscription-materialization.mjs` mirroring `seed-subscriptions.mjs` pattern. Migrations stay schema-only per project convention. CI / staging / integration tests do NOT run this; they get fresh `subscription_materialization` seeded by their own test fixtures. Removes the "every fresh DB clone re-seeds" failure mode. Reference [§10.c source-code §3.3] + `feedback_claude_code_executes_default.md` (auto-memory) for the run-procedure assignment to Love.
+- [ ] **§3.4 cutover posture + ±10min deploy/cron-tick caveat** — old cron handler IS the rewrite target (no dual-write window). Vercel deploy and `0 12 * * *` UTC cron tick must NOT overlap; **operational mitigation: do not deploy within ±10 minutes of 12:00 UTC.** Reference §3.4 amendment 7.
+- [ ] **§4.3 migration backfill timezone form** — `(window_start AT TIME ZONE 'Asia/Dubai')::date + 1` (replaces prior offset-arithmetic). Numerically identical for the canonical 12:00 UTC tick but explicit timezone-aware; survives DST and off-hour manual triggers without crossing day boundaries unexpectedly. Single-row off-by-one risk for very-off-hour manual triggers documented at §4.3 caveat. Reference §4.2 step (2) + §4.3.
+- [ ] **§5.2 retry posture pinned + failureCallback for DLQ** — `retries: 3`, exponential backoff (QStash default base 5s/max 60s), per-call timeout 30s. failureCallback URL `${PUBLIC_BASE_URL}/api/queue/push-task-failed` (signature-verified, writes existing `failed_pushes`). **No new operator surface** — existing `/admin/failed-pushes` UI absorbs the DLQ rows. **Client-side retry counting REJECTED** (§8.2 row); QStash owns retry state. Reference §5.2 amendments 4-5 + [§10.a `decision_brief_v1_2_amendments_d13_part1.md`].
+- [ ] **§6.3 SF rate-limit via QStash Flow Control (NOT topic rate-limits)** — Flow Control mechanism: `flowControl: { key: 'sf-push-global-mvp', rate: 5, period: '1s' }` on every `batchJSON` call from the materialization handler. Topic-level rate limits do NOT exist in `@upstash/qstash`. **MVP key locked** as `'sf-push-global-mvp'` (matches shared-credential reality per `decision_mvp_shared_suitefleet_credentials.md`); Phase 2 migration to `'sf-push:{tenant_id}'` is gated on Secrets Manager swap. Reference [§10.d FlowControl SDK shape] + §6.3 amendments + §8.3 Phase 2 interaction table.
+- [ ] **§8.1 part-2 boundary + sequencing rationale** — this plan does NOT cover the service-layer surface (`addSubscriptionException`, `pauseSubscription`, etc.); that's a separate Day-14 part-2 plan PR. Sequenced AFTER this decoupling lands per the three-reason rationale (data-flow dependency, behavioral dependency, same-day T3 contention) at §8.1 amendment 8. Reference §8.1.
+- [ ] **§9 demo-dependency cascade detail** — cron decoupling blocks Day-14 part-2 (service layer needs queue infrastructure stable per §8.1). Day-15+ feature work (4-step wizard, consignee-detail calendar, subscription detail, label generation) does NOT directly depend on decoupling — depends on Day-14 part-2 service-layer landing. **Cascade:** decoupling delays → part-2 delays → Day-15+ UI work delays → demo at risk on May 12. ~5-day buffer (May 6 → May 11) compresses fast under the cascade; surface ASAP if plan-PR review or implementation hits delays. Reference §9 A5 + [§10.a brief §6 day-by-day plan].
+
+#### NEW decisions to confirm (added by §0-§9 amendments — five new rows)
+
+- [ ] **§0.6 QStash quota tier verification (gating before code PR opens)** — projected throughput ~1,000 messages/day worst-case + ~7,500/week with retry budget; Upstash free tier (500/day) **insufficient**; pay-as-you-go covers demo at ~$0.01-$0.30/month. Love confirms current Upstash plan tier in dashboard before code PR opens; if free tier, upgrade to PAYG (no schema/code blocker; billing-config flip in Upstash console). Reference §0.6 + [§10.a `followups/cron_materialization_push_coupling.md`].
+- [ ] **§1.3 code-path retirement audit** — explicit table naming what dies vs survives post-cutover. **Retires (~500 lines):** `pushTasksForTenant` cron-loop variant + reconcile branch + per-iteration `markTaskPushed` call. **Survives (~330 lines):** `pushSingleTask` + reconcile branch + per-call `markTaskPushed` call (becomes the only post-cutover caller of `markTaskPushed`). The actual deletion lives in the implementation PR, not this plan PR — this list serves as the audit-trail for what gets deleted. Reference [§10.c source-code task-push/service.ts line ranges] + §1.3 retirement table.
+- [ ] **§2.2 null-address policy + audit-event-vs-counter decision** — refuse-to-materialize is the policy (row NOT inserted when 4-layer COALESCE returns NULL); operational counter `materialization.address_resolution_failed` is the MVP signal; **option (a) counter-only is the MVP default**, option (b) brief amendment to v1.3 making it the 10th audit event is Phase 2 IF observability shows ops-actionable. Confirm option (a) at plan-PR; option (b) is documented as Phase 2 escalation path at §9 B3 + §8.3 inline Phase 2 table.
+- [ ] **§2.5 materialization-phase throughput math + EXPLAIN ANALYZE verification (§0 verification item)** — steady-state estimate **9-15s** per handler invocation (3-5s × 3 tenants); cutover-day worst case **75-150s.** Both within Vercel 300s envelope. **Code-PR prep step:** run `EXPLAIN ANALYZE` on the canonical §2.3 INSERT…SELECT against staging data sized to full demo volume; pin actual numbers in code PR description. If cutover projects above ~200s, add Phase 0 horizon-throttle (advance 1-2 days/tick instead of 14-at-once on first run). Reference §2.5.
+- [ ] **§3.5 rollback story acknowledgment** — rollback path = `git revert` + Vercel redeploy (or `vercel promote previous-Production` for ~30s fast-revert). Data-state durability: `subscription_materialization` rows + `target_date` column are durable and additive; old handler ignores both. QStash queue drains naturally. Schema additions are additive; **one-way doors are on schema, not data**. Blast radius: cron handler runtime + push-queue endpoint only — does NOT affect existing UI surfaces, API routes, audit emissions, operator workflows. Forward-rolling cleanup script (NOT revert) is the path if data-corruption occurs pre-rollback. Reference §3.5.
+
+### §11.2 Code-PR pre-merge gates (clears T3 hard-stop #2)
+
+For the verification-only counter-review at code-PR open. These are NOT plan-PR decisions — they're pre-merge checks the implementing PR must pass. Each maps to a §9.A MVP-blocking risk with the gating mechanism stated.
+
+- [ ] **A1 — Migration 0015 application status confirmed.** Either (a) `subscription_materialization` table exists in production DB pre-merge, OR (b) PR description includes the manual SQL-editor application step Love runs after merge but before next cron tick, OR (c) CI-driven migration apply step is sequenced into the deploy pipeline. Without one of these, first post-deploy cron tick crashes. Reference §3.1 callout + §9 A1.
+- [ ] **A2 — `export const maxDuration = 300;` declaration present** in `src/app/api/queue/push-task/route.ts`. CI build-time grep test per §7.2 row 1 fails if absent. Without it, handler dies at 60s; §1.1 per-message envelope claim fails at runtime. Reference §5.1 amendment 3 + §7.2 row 1.
+- [ ] **A3 — Coupled deploy unit verified.** PR contains BOTH `supabase/migrations/0020_*.sql` AND `src/app/api/cron/generate-tasks/route.ts` rewrite. Migration apply step sequenced AFTER Vercel deploy completes (so the new handler is the first writer to encounter the NOT NULL on `target_date`). Reference §4.2 amendment 4 + §9 A3.
+- [ ] **A4 — Stale-`running` recovery CAS predicate present in code** — `WHERE id = $stale_id AND started_at = $original_stale_started_at RETURNING id`. Test from §7.5 row 1 (stale-running recovery under concurrency) passes. Without the CAS predicate, the recovery branch races with itself under concurrent invocations. Reference §4.4 amendment 2 + §7.5 row 1.
+- [ ] **A5 — Demo dependency tracking row** — surface to Love at code-PR open if implementation timeline slipped vs plan-PR-stated 5-day buffer. Day-14 part-2 plan PR cannot open until this code PR merges. Reference §8.1 + §9 A5.
+- [ ] **A6 — `QSTASH_FLOW_CONTROL_KEY` env-var configured per environment** — Production scope set to `'sf-push-global-mvp'`; Preview scope set to `'sf-push-global-preview'` (or env-equivalent isolated key); Local development unset (per `feedback_vercel_env_scope_convention.md` Production+Preview only). Verify via §0.4 Q1 env-presence check + Vercel UI inspection. Reference §6.3 amendment 3 + §9 A6.
+
+#### Code-PR-only verification items (not in plan-PR scope)
+
+- [ ] §7 test coverage: ~26 row tests (§7.1-§7.3) + §7.4 happy-path integration + §7.5 6-row edge-case integration tests, with §7.5 row 1 (stale-running) and §7.5 row 2 (Phase 1 reconciliation under burst) load-bearing.
+- [ ] §5.5 observability surface present: per-handler structured log with all 4 fields (`tenant_id`, `task_id`, `sf_latency_ms`, `outcome`); QStash queue depth gauge readable via `client.messages.list`; `failed_pushes` UI surface unchanged.
+- [ ] §7.1 enqueue test (D7-2 rewrite) asserts: N tasks → `ceil(N/100)` `batchJSON` calls; each message carries `deduplicationId: <task_id>`, `flowControl: { key: <env-var-resolved>, rate: 5, period: '1s' }`, `failureCallback: ${PUBLIC_BASE_URL}/api/queue/push-task-failed`, `retries: 3`. Tested at chunking boundaries N ∈ {50, 100, 250, 1001}.
+
+### §11.3 After plan-PR approval
+
+Once §11.1 fully checks: T3 hard-stop #1 clears. Day-14 code PR opens for T3 hard-stop #2 verification-only counter-review against §11.2 + the code-PR-only items.
 
 ---
 
