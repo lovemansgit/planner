@@ -1,14 +1,26 @@
 // Day-14 cron materialization↔push decoupling — REWRITTEN HANDLER per
 // memory/plans/day-14-cron-decoupling.md §2.1 (6-phase model).
 //
-// IN-PROGRESS: this surface is Phase 1 only; Phases 2-6 land in
-// subsequent surfaces under the same code-PR drafting session.
+// FEATURE-COMPLETE: all 6 phases implemented. Materialization-handler
+// side of the decoupling is done; queue-side handlers
+// (/api/queue/push-task per §5.1, /api/queue/push-task-failed per §5.2
+// amendment 5) are separate route files drafted in subsequent surfaces.
 //
 // The handler runs at the existing `0 12 * * *` UTC cron schedule
 // (vercel.json — unchanged per plan §0.1). Materialization-only post-
 // rewrite: phase (a) generation + phase (b) inline SF push from the
 // pre-Day-14 handler is replaced by a 6-phase pattern that decouples
 // push to QStash. See plan §1.1 for the full model.
+//
+// Response shape is FULL REDESIGN per plan §1.3 retirement table — no
+// legacy field name continuity (per_tenant.generation, summary.push,
+// PerTenantPair, RunSummary). The new shape reflects the 6-phase model
+// directly. Ops dashboards/alerting that grep the legacy shape need
+// rebuild post-cutover.
+//
+// HTTP status mirrors legacy posture: 500 if ANY tenant had abnormal
+// outcome (cap-gate fired, any phase threw, or Phase 5 chunk failure
+// > 0); 200 only on all-clean.
 
 import "server-only";
 
@@ -35,7 +47,39 @@ export const runtime = "nodejs";
 
 const log = logger.with({ component: "cron_generate_tasks" });
 
+/**
+ * Per-tenant outcome aggregated at handler exit for the Phase 6
+ * summary response. Captured at each terminal point inside the
+ * per-tenant loop — successful end-of-iteration OR `continue` on
+ * any-phase throw.
+ */
+interface PerTenantSummary {
+  tenantId: Uuid;
+  reconciliationCount: number;
+  newInsertedCount: number;
+  addressResolutionFailedCount: number;
+  advancedSubscriptionCount: number;
+  /** §4.4 conflict outcome kind; null when Phases 2-4 didn't run (Phase 1 throw) or threw. */
+  runRowOutcomeKind: string | null;
+  cappedByGate: boolean;
+  phase5EnqueuedCount: number;
+  phase5FailedChunks: number;
+  phase5TotalCount: number;
+  /**
+   * Which phase threw, if any. Captures observability one level
+   * finer than a single `threw: boolean` — surfaces at the per-row
+   * level whether the failure was in reconciliation, materialization,
+   * or enqueue.
+   */
+  failedPhase:
+    | "phase1_reconciliation"
+    | "phase2_4_materialize"
+    | "phase5_enqueue"
+    | null;
+}
+
 export async function GET(req: Request): Promise<Response> {
+  const handlerEntryMs = Date.now();
   const requestId = randomUUID();
   const requestLog = log.with({ request_id: requestId });
 
@@ -108,9 +152,12 @@ export async function GET(req: Request): Promise<Response> {
   );
 
   // --------------------------------------------------------------------------
-  // Per-tenant 6-phase loop — Phase 1 only; Phases 2-6 land in
-  // subsequent surfaces.
+  // Per-tenant 6-phase loop — feature-complete materialization handler.
+  // Each tenant captures a PerTenantSummary into perTenantMap at its
+  // terminal point (successful end-of-iteration OR `continue` on throw).
+  // Phase 6 aggregates the map into the handler-level summary at exit.
   // --------------------------------------------------------------------------
+  const perTenantMap = new Map<Uuid, PerTenantSummary>();
   for (const tenantId of tenantIds) {
     const tenantLog = requestLog.with({ tenant_id: tenantId });
 
@@ -160,6 +207,19 @@ export async function GET(req: Request): Promise<Response> {
       // loop continues to the next tenant. A failed reconciliation scan
       // means we miss self-healing this tick for this tenant; the next
       // tick re-attempts. Don't abort the whole cron run.
+      perTenantMap.set(tenantId, {
+        tenantId,
+        reconciliationCount: 0,
+        newInsertedCount: 0,
+        addressResolutionFailedCount: 0,
+        advancedSubscriptionCount: 0,
+        runRowOutcomeKind: null,
+        cappedByGate: false,
+        phase5EnqueuedCount: 0,
+        phase5FailedChunks: 0,
+        phase5TotalCount: 0,
+        failedPhase: "phase1_reconciliation",
+      });
       continue;
     }
     tenantLog.info(
@@ -225,6 +285,19 @@ export async function GET(req: Request): Promise<Response> {
       // Per plan §1.1 self-healing posture: per-tenant continue on
       // failure; next tick re-attempts. Phase 5 enqueue does NOT run
       // for this tenant on this tick.
+      perTenantMap.set(tenantId, {
+        tenantId,
+        reconciliationCount: reconciliationTaskIds.length,
+        newInsertedCount: 0,
+        addressResolutionFailedCount: 0,
+        advancedSubscriptionCount: 0,
+        runRowOutcomeKind: null,
+        cappedByGate: false,
+        phase5EnqueuedCount: 0,
+        phase5FailedChunks: 0,
+        phase5TotalCount: 0,
+        failedPhase: "phase2_4_materialize",
+      });
       continue;
     }
     tenantLog.info(
@@ -287,6 +360,19 @@ export async function GET(req: Request): Promise<Response> {
         tenant_id: tenantId,
         request_id: requestId,
       });
+      perTenantMap.set(tenantId, {
+        tenantId,
+        reconciliationCount: reconciliationTaskIds.length,
+        newInsertedCount: newInsertedTaskIds.length,
+        addressResolutionFailedCount,
+        advancedSubscriptionCount: advancedSubscriptionIds.length,
+        runRowOutcomeKind,
+        cappedByGate,
+        phase5EnqueuedCount: 0,
+        phase5FailedChunks: 0,
+        phase5TotalCount: phase5TaskIds.length,
+        failedPhase: "phase5_enqueue",
+      });
       continue;
     }
     tenantLog.info(
@@ -297,12 +383,105 @@ export async function GET(req: Request): Promise<Response> {
       },
       "phase 5 enqueue complete",
     );
+
+    // Successful end-of-iteration: capture full per-tenant summary.
+    perTenantMap.set(tenantId, {
+      tenantId,
+      reconciliationCount: reconciliationTaskIds.length,
+      newInsertedCount: newInsertedTaskIds.length,
+      addressResolutionFailedCount,
+      advancedSubscriptionCount: advancedSubscriptionIds.length,
+      runRowOutcomeKind,
+      cappedByGate,
+      phase5EnqueuedCount: phase5Enqueued,
+      phase5FailedChunks,
+      phase5TotalCount: phase5TaskIds.length,
+      failedPhase: null,
+    });
   }
 
   // --------------------------------------------------------------------------
-  // Phase 6 — handler-exit summary log + return
+  // PHASE 6 — handler-exit summary log + return.
+  //
+  // Aggregates per-tenant outcomes from perTenantMap into the handler-
+  // level summary. Response shape is full-redesign per plan §1.3 retirement
+  // table — no legacy field name continuity. Ops dashboards that grep
+  // legacy field names need rebuild.
+  //
+  // HTTP status:
+  //   200 — every tenant landed on the all-clean path (failedPhase=null,
+  //         cappedByGate=false, phase5FailedChunks=0)
+  //   500 — ANY tenant hit an abnormal outcome. Vercel cron logs flag
+  //         the run for ops triage; the structured per_tenant body lets
+  //         ops see WHICH phase failed for WHICH tenant without parsing
+  //         message strings.
   // --------------------------------------------------------------------------
-  // TODO: structured summary per tenant + total wall-clock + tasks_created
-  //       + tasks_enqueued + reconciliation_count
-  return NextResponse.json({ status: "phase_1_only_in_progress" }, { status: 200 });
+  const handlerExitMs = Date.now();
+  const totalWallClockMs = handlerExitMs - handlerEntryMs;
+
+  const perTenantSummaries = Array.from(perTenantMap.values());
+  const cappedTenants = perTenantSummaries.filter((t) => t.cappedByGate).length;
+  const failedPhase1 = perTenantSummaries.filter(
+    (t) => t.failedPhase === "phase1_reconciliation",
+  ).length;
+  const failedPhase2_4 = perTenantSummaries.filter(
+    (t) => t.failedPhase === "phase2_4_materialize",
+  ).length;
+  const failedPhase5 = perTenantSummaries.filter(
+    (t) => t.failedPhase === "phase5_enqueue",
+  ).length;
+
+  const summary = {
+    total_wall_clock_ms: totalWallClockMs,
+    tenant_count: tenantIds.length,
+    capped_tenants: cappedTenants,
+    failed_phase1_reconciliation: failedPhase1,
+    failed_phase2_4_materialize: failedPhase2_4,
+    failed_phase5_enqueue: failedPhase5,
+    total_reconciliation: perTenantSummaries.reduce(
+      (s, t) => s + t.reconciliationCount,
+      0,
+    ),
+    total_inserted: perTenantSummaries.reduce(
+      (s, t) => s + t.newInsertedCount,
+      0,
+    ),
+    total_advanced: perTenantSummaries.reduce(
+      (s, t) => s + t.advancedSubscriptionCount,
+      0,
+    ),
+    total_address_resolution_failed: perTenantSummaries.reduce(
+      (s, t) => s + t.addressResolutionFailedCount,
+      0,
+    ),
+    total_phase5_enqueued: perTenantSummaries.reduce(
+      (s, t) => s + t.phase5EnqueuedCount,
+      0,
+    ),
+    total_phase5_failed_chunks: perTenantSummaries.reduce(
+      (s, t) => s + t.phase5FailedChunks,
+      0,
+    ),
+    abnormal: perTenantSummaries.some(
+      (t) =>
+        t.cappedByGate ||
+        t.failedPhase !== null ||
+        t.phase5FailedChunks > 0,
+    ),
+  };
+
+  const status = summary.abnormal ? 500 : 200;
+  const body = {
+    request_id: requestId,
+    target_date: targetDate,
+    window_start: windowStart,
+    window_end: windowEnd,
+    summary,
+    per_tenant: perTenantSummaries,
+  };
+  requestLog.info(
+    { status, summary },
+    "phase 6 handler exit — materialization cron run complete",
+  );
+  return NextResponse.json(body, { status });
 }
