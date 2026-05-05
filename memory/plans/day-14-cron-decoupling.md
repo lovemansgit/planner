@@ -545,53 +545,104 @@ Per the [cron memo](../followups/cron_materialization_push_coupling.md) §3 Run-
 
 Adding `(tenant_id, target_date)` UNIQUE on `task_generation_runs` makes the safety hard at the schema layer. A second run for the same target_date hits SQLSTATE 23505 and short-circuits — same posture as the existing `(tenant_id, window_start, window_end)` UNIQUE.
 
+**Framing clarity (amendment 5 — what this UNIQUE does and does NOT do):** the existing `tasks` partial UNIQUE on `(subscription_id, delivery_date)` + the push gate (`pushed_to_external_at IS NULL`) already made the Run-A/Run-B race **idempotency-safe at the data layer** — duplicate task INSERTs from a second run hit the partial UNIQUE and are deduped; duplicate push attempts hit the push gate and are no-ops. The new run-row UNIQUE is therefore an **efficiency-and-cleanliness fix** (no wasted SF API budget on a doomed second pass, no duplicate audit churn from re-walking the same tenant set, no two run-rows confusing operational telemetry), **not a correctness fix on top of broken behavior**. A reviewer reading this section should not infer that the existing handler is incorrect; it's correct-but-noisy under concurrency, and §4 makes it correct-and-clean.
+
 ### §4.2 Migration shape — `0020_task_generation_runs_target_date_column_and_unique.sql`
+
+**Coupled-deploy callout (amendment 4):** This migration AND the new materialization handler MUST land in the same Vercel deploy. The NOT NULL constraint on `target_date` (added at step 5 below) breaks the existing handler's INSERT path — the legacy `task-generation/service.ts:223` insert at `status='completed'` does not write `target_date`, so a migration-only deploy without the handler swap = production cron breaks at the next tick. **Code PR pre-merge gate:** confirm both files (`supabase/migrations/0020_*.sql` AND `src/app/api/cron/generate-tasks/route.ts` rewrite) are in the same PR, both reach prod in the same Vercel deploy, and the post-merge migration apply step (§3.1 callout) is sequenced AFTER the deploy completes (so the new handler is the first writer to encounter the NOT NULL).
+
+The migration is wrapped in an explicit transaction (amendment D4-3) so partial failure rolls all five steps; Postgres DDL is auto-commit by default, which would leave the table in an intermediate state if any step fails mid-way.
 
 ```sql
 -- 0020_task_generation_runs_target_date_column_and_unique.sql (sketch — final lands in code PR)
 
--- Add target_date column. Initially nullable to allow the backfill step
--- to populate it; promoted to NOT NULL after backfill.
+BEGIN;
+
+-- (1) Add target_date column. Initially nullable to allow the backfill
+-- step (2) to populate it; promoted to NOT NULL at step (4).
 ALTER TABLE task_generation_runs
   ADD COLUMN target_date date;
 
--- Backfill: existing rows have target_date implicit in window_end's
--- next-calendar-day-in-Dubai computation. The cron handler computed
--- targetDate = nextCalendarDateInDubai(now) at handler entry; for
--- historical rows we approximate via window_start + 4h shift.
--- (4h shift = UTC→Dubai timezone offset; same calendar-day semantic the
--- handler uses.)
+-- (2) Backfill: existing rows have target_date implicit in window_start's
+-- Dubai-local-day. The cron handler computes targetDate as Dubai-tomorrow
+-- at handler entry; for historical rows we re-derive via the timezone-aware
+-- form below (amendment 1 — replaces the prior offset-arithmetic form
+-- '(window_start + INTERVAL 4 hours)::date + 1' which was numerically
+-- equivalent for the canonical 12:00 UTC tick but obscured the timezone
+-- intent and broke under DST or off-hour manual triggers).
 UPDATE task_generation_runs
-   SET target_date = (window_start + INTERVAL '4 hours')::date + 1
+   SET target_date = ((window_start AT TIME ZONE 'Asia/Dubai')::date + 1)
  WHERE target_date IS NULL;
 
+-- (3) Dedup per §0.4 Q2 winning-row policy (amendment D4-2).
+-- §0.4 Q2 probe found 20 r3-test-* fixture tenants with 5 dupe runs each
+-- on 2026-05-02 (production tenants meal-plan-scheduler / dr-nutrition /
+-- fresh-butchers have no dupes). Winning-row policy locked at §0.4: keep
+-- MAX(completed_at) within each (tenant_id, target_date) group if any row
+-- in the group has completed_at IS NOT NULL; else fall back to
+-- MAX(started_at). This preserves the most-recent successful run as row
+-- of record and treats fixture noise the same as production race-recovery.
+DELETE FROM task_generation_runs
+ WHERE id IN (
+   SELECT id FROM (
+     SELECT id,
+       ROW_NUMBER() OVER (
+         PARTITION BY tenant_id, target_date
+         ORDER BY
+           -- Completed rows ranked first within group; among completed,
+           -- most-recent completed_at wins. Among non-completed, most-recent
+           -- started_at wins.
+           (completed_at IS NULL),       -- false (= 0) sorts before true (= 1)
+           completed_at DESC NULLS LAST,
+           started_at DESC
+       ) AS rn
+     FROM task_generation_runs
+   ) ranked
+   WHERE ranked.rn > 1
+ );
+
+-- (4) Promote target_date to NOT NULL — every row now has it from step (2).
 ALTER TABLE task_generation_runs
   ALTER COLUMN target_date SET NOT NULL;
 
--- §0.4 Q2 verification: existing rows must have no (tenant_id, target_date)
--- duplicates pre-add. If duplicates exist, dedup step lands here BEFORE the
--- UNIQUE.
+-- (5) Add the new UNIQUE on (tenant_id, target_date). The pre-existing
+-- UNIQUE on (tenant_id, window_start, window_end) — see migration 0012
+-- — is RETAINED per §0.5 (amendment D4-4). It provides finer-grained
+-- idempotency for within-day re-runs (e.g., manual cron triggers at
+-- different UTC instants on the same target_date) even though the new
+-- (tenant_id, target_date) UNIQUE conceptually subsumes it. Both
+-- co-exist; the new one fires first on cron-tick re-runs, the old one
+-- remains as belt-and-braces.
 CREATE UNIQUE INDEX task_generation_runs_tenant_target_date_unique_idx
   ON task_generation_runs (tenant_id, target_date);
+
+COMMIT;
 ```
 
 ### §4.3 Backfill caveat
 
-The backfill UPDATE at §4.2 assumes `window_start + INTERVAL '4 hours'` matches the handler's `nextCalendarDateInDubai` computation. For all historical rows generated by the existing cron at 12:00 UTC, this is exact (12:00 UTC + 4h = 16:00 Dubai → next-day = (12:00 UTC + 4h)::date + 1).
+The backfill UPDATE at §4.2 step (2) uses `(window_start AT TIME ZONE 'Asia/Dubai')::date + 1` (amendment 1 — replaces the prior offset-arithmetic form). This explicitly converts the UTC-stored `window_start` to Dubai local time, takes the calendar date, adds one day. Result is identical for the canonical 12:00 UTC cron tick (12:00 UTC = 16:00 Dubai → next day) but the AT TIME ZONE form makes the timezone intent legible and survives DST transitions / off-hour manual triggers without the +4h offset arithmetic crossing a day boundary unexpectedly.
 
-For manual-trigger rows (where `window_start` is the manual-trigger UTC instant), the backfill is approximate but still correct as long as the manual trigger occurred between 00:00 and 20:00 UTC (Dubai 04:00–24:00). Outside that range the +4h shift crosses a calendar day and the backfill could mis-derive target_date by one day. Operational impact: a single historical row could be off by one day. Acceptable for a backfill of a handful of historical rows; surfaced in the migration header comment.
+For all historical rows generated by the existing cron at 12:00 UTC, the backfill is exact. For manual-trigger rows (where `window_start` is the manual-trigger UTC instant), the backfill remains correct as long as the manual trigger occurred during a Dubai-business-day; off-hour manual triggers (which are rare in practice — Day-13 morning's manual trigger was the only one observed) carry the same one-day risk as before but fall on the AT TIME ZONE conversion's Dubai-day, not the +4h-offset's UTC-day. Operational impact: a single historical row could be off by one day; acceptable for a backfill of a handful of historical rows; surfaced in the migration header comment.
 
-If §0.4 Q2 finds duplicates from this approximation, the dedup step runs before the UNIQUE add.
+The dedup step at §4.2 step (3) runs unconditionally — it will no-op if no duplicates exist (the `ROW_NUMBER() > 1` filter is empty), and clean up duplicates if they do (which §0.4 Q2 confirmed they do, all in r3-test-* fixture tenants). No conditional logic needed.
 
 ### §4.4 Handler reaction on conflict
 
-The materialization cron handler attempts the run-row INSERT for `(tenant_id, target_date)`. On 23505:
-- Read the existing row
-- If `status='completed'` → skip (idempotent re-run)
-- If `status='running'` → skip (concurrent run is winning the race)
-- If `status='failed'` → DO NOT auto-retry; ops triage decides
+The materialization cron handler attempts the run-row INSERT for `(tenant_id, target_date)`. On 23505, read the existing row and branch on `status`. The full status enum is **5 values** per `0012_task_generation_runs.sql:180-186`: `running`, `completed`, `capped`, `skipped_already_run`, `failed` (amendment 3 — the prior 3-branch list was incomplete).
 
-Same shape as the existing `(tenant_id, window_start, window_end)` conflict path at [`task-generation/repository.ts:118-163`](../../src/modules/task-generation/repository.ts#L118-L163), just keyed on `(tenant_id, target_date)` instead of the window tuple.
+| Existing row's `status` | Handler reaction | Reasoning |
+|---|---|---|
+| `completed` | **Skip; return short-circuit summary.** | Idempotent re-run — work is already done. No SF calls, no audit churn. |
+| `running` AND `started_at >= now() - interval '15 minutes'` | **Skip.** | A concurrent run is genuinely in flight (15-min threshold > materialization-phase wall-clock per §2.5 estimate of 9-15s steady-state, 75-150s cutover). Let it win the race. |
+| `running` AND `started_at < now() - interval '15 minutes'` | **STALE — recover (amendment 2, load-bearing).** | Prior tick crashed mid-execution and left the row pinned at `running` indefinitely. Without this branch, every subsequent tick hits 23505, sees `running`, skips, and the cron silently stops materializing for that tenant — a self-DOS vector under crash conditions. Recovery action: log warning, bump operational counter `cron.stale_running_detected` keyed on `{tenant_id, target_date, original_started_at}`, then UPDATE the stale row in-place to `started_at = now()` and proceed to materialize as if the row was fresh. The 15-minute threshold is conservative — at full demo volume the materialization phase completes in seconds (§2.5: 9-15s steady-state, 75-150s cutover-day worst case), and 15 minutes leaves headroom for a 4×-worse-than-cutover edge case before triggering recovery. |
+| `capped` | **Skip; return short-circuit summary.** | The volumetric guard fired on a prior tick (sub count exceeded the cap). Re-running won't change the cap state; ops decides whether to raise the cap or accept the truncation. |
+| `skipped_already_run` | **Skip; treat as completed.** | Existing handler emits this when the run-row UNIQUE on `(tenant_id, window_start, window_end)` rejected a same-window re-attempt. The new `(tenant_id, target_date)` UNIQUE makes this status semi-redundant for fresh writes but the historical rows persist with this value; treat as terminal-success. |
+| `failed` | **DO NOT auto-retry; surface to ops.** | Prior tick failed for a reason that auto-retry won't fix (e.g., bad credentials, schema drift, application-level bug). Ops triage decides whether to manually re-run. |
+
+Same general shape as the existing `(tenant_id, window_start, window_end)` conflict path at [`task-generation/repository.ts:118-163`](../../src/modules/task-generation/repository.ts#L118-L163), just keyed on `(tenant_id, target_date)` instead of the window tuple, plus the new stale-`running` recovery branch (which also applies to the existing path, post-amendment).
+
+**§7 test coverage to add (forward-reference for §7 amendments):** test cases for each of the 6 branches above, with the stale-`running` recovery branch as the load-bearing one (assert: stale row found → counter incremented → row updated → materialization proceeds → final state is correct).
 
 ---
 
