@@ -2,7 +2,7 @@
 
 ## Permanent product memory
 
-- [**Product Brief (Path 2-A)**](PLANNER_PRODUCT_BRIEF.md) — **load-bearing source of truth** for Planner scope, architecture, demo posture (May 12, 2026). Supersedes plan.docx §10 Day 11-13 in conflict. Reading discipline: every fresh session reads this first; every substantive PR references brief sections; amendments require explicit `decision_*.md` + version bump in §9. Currently at v1.1.
+- [**Product Brief (Path 2-A)**](PLANNER_PRODUCT_BRIEF.md) — **load-bearing source of truth** for Planner scope, architecture, demo posture (May 12, 2026). Supersedes plan.docx §10 Day 11-13 in conflict. Reading discipline: every fresh session reads this first; every substantive PR references brief sections; amendments require explicit `decision_*.md` + version bump in §9. Currently at v1.2.
 
 ## Day 2 (27 April 2026)
 
@@ -137,3 +137,17 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Append-without-skip override](followup_append_without_skip_override.md) — backend in MVP, UI Phase 2.
 - [Historical-correction workflow (skip on past)](followup_historical_correction_workflow.md) — MVP rejects past dates.
 - [Consignee timeline performance optimization](followup_consignee_timeline_performance_optimization.md) — DB view in MVP, denormalize-if-needed.
+
+## Day 13 (5 May 2026)
+
+- [Cron materialization↔push coupling](followups/cron_materialization_push_coupling.md) — root-cause memo for the Day-13 morning cron diagnostic. 845 × 660ms ≈ 558s wall-clock at full demo volume exceeds Vercel Pro 300s; serial single-in-flight per-task push inside the materialization loop drives the breach. Decoupling design captured for Day-14 substantive scope.
+- [Brief v1.2 amendments (Day-13 part 1)](decision_brief_v1_2_amendments_d13_part1.md) — two §3.1.1 amendments: (a) `tasks.pushed_to_external_at` retains existing column semantic (Option A from Day-13 plan §0.3), (b) `tenants.status` adopts prod's 4-state lowercase canon (`provisioning`/`active`/`suspended`/`inactive`).
+- [Day-13 part-1 reviewer watch-items](followups/d13_part1_watch_items.md) — `subscription_address_rotations` lacks `created_at`/`updated_at`; `webhook_events.received_at` unindexed. Part-2 / Phase-2 pickup.
+- [Posture B retirement runbook](operational/posture-b-retirement-runbook.md) — Stage 1 Vercel UI env-var removal + Stage 2 code-cleanup PR. §1 P5 query had two fail-open bugs (slug literal mismatch + join shape via users.tenant_id); fixed in PR #144 Day-14 morning.
+- [Day 13 EOD handoff](handoffs/day-13-eod.md) — 6 PRs merged (5 T1 + 1 T3 substantive). Headline: PR #139 backend exception model schema part-1 (6 migrations, 7 net-new audit events, 10 permissions, ~21 unit tests, ~145 integration tests). Two CI fixes during #139: `int[]` literal serialization mismatch + RLS bypass on `consignee_timeline_events` VIEW (caught by cross-tenant probe — `WITH (security_invoker = true)` flag fixed). Test baseline 787 → 808 (+21 unit) + ~159 integration.
+
+## Day 14 (5 May 2026)
+
+- [Day-14 cron materialization↔push decoupling plan](plans/day-14-cron-decoupling.md) — merged plan PR #145 (`27c5b8c`). 1110 lines across 11 sections after section-by-section reviewer counter-review (11 amendment fixups). §1.1 6-phase model + §2.3 4-layer COALESCE + §4.4 5-status branching with stale-running CAS recovery + §6.3 QStash flow-control mechanism. §11.2 9-gate code-PR pre-merge checklist.
+- [Day-14 tests + PR-open bootstrap handoff](handoffs/day-14-tests-bootstrap.md) — captures the 10-commit code branch state + §11.2 gate status + §7.1-§7.4 test coverage spec + PR description template. Code feature-complete on `day14/t3-cron-decoupling-code` (`72f4735`); fresh Day-15 session writes tests + opens PR.
+- [Day 14 EOD handoff](handoffs/day-14-eod.md) — 4 PRs merged (#144 Posture B P5 query fix, #145 cron plan, #146 status casing T1 fix, #147 tests bootstrap). Materialization handler feature-complete (Phases 1-6 + queue routes + `pushTasksForTenant` retirement -1737 lines + bootstrap script). Operations: PR #139 migrations applied to prod (Track B); migration 0020 NOT yet applied — coupled-deploy with code PR. Cron diagnostic clean; FBU 0-tasks was correct cadence. Posture B Stage 1 deferred to Day-15 morning ≥06:11 +0400 Dubai.
