@@ -156,6 +156,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     smsNotifications: false,
     deliverToCustomerOnly: false,
     pushedToExternalAt: null,
+    addressId: null,
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     packages: [],

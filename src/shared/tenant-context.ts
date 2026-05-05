@@ -39,7 +39,13 @@ export type SystemActor =
   // operator-layer audit event (failed_push.retried, user actor);
   // this system-actor identity surfaces only on the system-layer
   // emits (task.pushed_via_reconcile / task.push_failed).
-  | "system:dlq_retry";
+  | "system:dlq_retry"
+  // Day 14 — queue-driven push handler at /api/queue/push-task
+  // (cron-decoupling Phase 5 consumer per memory/plans/day-14-cron-decoupling.md
+  // §5.1). QStash POSTs to the route per `batchJSON` message; the route
+  // builds this system actor for `pushSingleTask` invocation, which
+  // requires assertSystemActor.
+  | "queue:push_task";
 
 /** Two-kind actor: human user (JWT) or system (cron / webhook / queue). */
 export type Actor =

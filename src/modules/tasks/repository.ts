@@ -105,6 +105,7 @@ type TaskRow = {
   sms_notifications: boolean;
   deliver_to_customer_only: boolean;
   pushed_to_external_at: Date | string | null;
+  address_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -219,6 +220,7 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
     smsNotifications: row.sms_notifications,
     deliverToCustomerOnly: row.deliver_to_customer_only,
     pushedToExternalAt: toIsoOrNull(row.pushed_to_external_at),
+    addressId: row.address_id,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     packages,
