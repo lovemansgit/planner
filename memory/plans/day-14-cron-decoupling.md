@@ -808,44 +808,83 @@ This decision is documented in §10 cross-references and surfaces on the §11 re
 
 ## §7 Test coverage
 
-### §7.1 Materialization cron tests
+Major expansion post-§0-§6 amendments — every amendment that introduced new behavior gets a corresponding test. §7 grows from the prior 14 rows to ~26 rows + §7.5 split for heavier integration tests.
+
+### §7.1 Materialization cron tests (~12 rows)
 
 | Test | What it pins |
 |---|---|
-| Materialization happy path: subscriptions A+B, both eligible Mon-Fri, today=Mon → 10 tasks generated for each (5 per sub × 2 weeks); subscription_materialization rows updated | New cron handler shape + horizon-advance |
-| Materialization with skip exception: sub A has skip exception on Wed of week 1 → 9 tasks generated for A (Mon, Tue, Thu, Fri × 2 weeks + Wed week 2) | §2.3 schema-aware skip exclusion |
-| Materialization with pause_window: sub B paused for week 1 → 5 tasks generated for B (week 2 only) | §2.3 schema-aware pause exclusion |
-| Materialization with address_rotation: sub C has rotation Mon→home, Tue→office, Wed (no rotation row) → tasks land with respective address_ids; Wed task uses primary fallback | §2.2 address-rotation honoring |
-| Materialization with address_override_forward: sub D has forward override starting Wed week 1 → tasks from Wed week 1 onward use override address | §2.3 forward-override resolution |
-| Run-row UNIQUE conflict: two concurrent calls for same (tenant, target_date) → second short-circuits per §4.4 | §4 idempotency hardening |
-| Materialization enqueues QStash message per task: assert N tasks → N enqueue calls (mocked QStash client) | §1.1 enqueue path |
+| **Happy path:** subscriptions A+B, both eligible Mon-Fri, today=Mon → 10 tasks generated for each (5 per sub × 2 weeks); `subscription_materialization` rows updated to today+14 | New cron handler shape + horizon-advance per §3.2 |
+| **Skip exception:** sub A has `skip` exception on Wed of week 1 → 9 tasks generated for A (Mon, Tue, Thu, Fri × 2 weeks + Wed week 2) | §2.3 skip-the-date EXISTS guard / §2.4 row 1 |
+| **Pause_window:** sub B paused for week 1 → 5 tasks generated for B (week 2 only) | §2.3 pause-the-date EXISTS guard / §2.4 row 2 |
+| **Address rotation:** sub C has rotation Mon→home, Tue→office, Wed (no rotation row) → tasks land with respective `address_id`s; Wed task uses Layer-4 primary fallback | §2.3 Layers 3-4 / §2.2 |
+| **Address_override_one_off (D7-5):** sub F has one-off override on Wed week 1 with `address_override_id = office` → only Wed week 1 task uses Layer-1 override; Thu/Fri/etc. of week 1 use rotation; Wed week 2 uses rotation (override didn't carry forward) | §2.3 Layer 1 / §2.4 row 3 |
+| **Address_override_forward + supersession (D7-1 tighten):** sub D has forward override starting Wed week 1 → tasks Wed week 1 onward use Layer-2 override A. **Two-step:** create second forward override starting Fri week 1 → tasks Fri week 1 onward switch to override B (most-recent `start_date` wins per §2.3 Layer 2 ORDER BY); Wed/Thu week 1 stay on override A | §2.3 Layer 2 ORDER BY DESC / §2.4 row 4 |
+| **Append_without_skip (NEW):** operator applies `append_without_skip` extending sub E's `end_date` from today+10 to today+12 → cron materializes 2 new tail-end tasks at today+11 and today+12 with rotation/primary fallback (no override applies); no `subscription_exceptions` row affects address resolution; `subscription.end_date.extended` audit emitted at exception-creation, NOT at materialization | §2.4 row 5 |
+| **Null-address quarantine (D7-4):** sub G has `consignee` with no rotation rows, no `is_primary=true` address, no override → row NOT materialized for G's eligible dates; `materialization.address_resolution_failed` counter incremented; `tasks` table has no row for `(G.id, target_date)`; `subscription_materialization` does NOT advance for G (the policy is per-row, not per-sub — but if NO row materializes for the entire horizon, horizon shouldn't advance either since there's nothing materialized) | §2.2 refuse-to-materialize policy |
+| **Horizon cap at S.end_date (NEW):** sub H has `end_date = today + 3` → only 3 days materialized (Mon, Tue, Wed if today is Sun); `materialized_through_date = today + 3` (NOT today + 14). Then operator applies `append_without_skip` extending end_date to today+5 → next tick fills the gap (days +4, +5); `materialized_through_date = today + 5` | §3.2 amendment 3 LEAST cap |
+| **PAUSED filter (NEW):** sub I has `status = 'PAUSED'` → no rows materialized for I; `subscription_materialization` does NOT advance for I. Then `resumeSubscription` flips I to `'ACTIVE'` → next tick re-enters I via the predicate; materializes from `materialized_through_date` to current `today + 14` | §3.2 amendment 4 PAUSED filter |
+| **Phase 1 reconciliation (D7-3, load-bearing):** seed 3 pre-existing tasks for tenant T with `pushed_to_external_at IS NULL` and `address_id IS NOT NULL` (i.e., from a prior tick that crashed between commit and enqueue). Run materialization cron. Assert: the 3 reconciliation rows appear in the post-commit `batchJSON` payload alongside any newly-inserted rows; mock-asserted QStash dedup absorbs duplicates if any of the 3 had been enqueued by a previous tick (test the `deduplicationId: task_id` is set per row) | §1.1 Phase 1 self-healing claim |
+| **Run-row UNIQUE conflict — happy-status branches:** two concurrent calls for same `(tenant, target_date)` → second hits 23505 + reads existing row + branches per §4.4 status. Test all 5 happy-status branches: `completed` skip, `running`-fresh skip, `capped` skip, `skipped_already_run` skip, `failed` no-auto-retry | §4.4 status enum 5 values |
+| **Run-row UNIQUE conflict — stale-running recovery (§4.4 amendment 2, load-bearing):** seed existing run-row with `status='running'` AND `started_at < now() - interval '15 minutes'`. Run materialization cron. Assert: stale row detected; `cron.stale_running_detected` counter bumped; row UPDATEd in-place to `started_at = now()`; materialization proceeds; final state is correct (tasks materialized, target_date row updated to status='completed') | §4.4 amendment 2 |
+| **Materialization enqueues via batchJSON (D7-2 rewrite):** materialize N tasks (tested with N=50, N=100, N=250, N=1001 to exercise chunking boundary). Assert: handler calls `batchJSON` exactly `ceil(N/100)` times; each call carries up to 100 messages; each message carries `deduplicationId: <task_id>`, `flowControl: { key: 'sf-push-global-mvp', rate: 5, period: '1s' }`, `failureCallback: ${PUBLIC_BASE_URL}/api/queue/push-task-failed`, `retries: 3`, `url: ${PUBLIC_BASE_URL}/api/queue/push-task` | §1.1 batchJSON + §6.3 flow control + §5.2 retry config + §5.2 failureCallback |
 
-### §7.2 Push handler tests
-
-| Test | What it pins |
-|---|---|
-| Push handler happy path: receive `{ tenant_id, task_id }` → SF createTask called → markTaskPushed called → 200 returned | §5.1 happy path |
-| Push handler skips already-pushed task: receive `{ tenant_id, task_id }` where `pushed_to_external_at IS NOT NULL` → SF NOT called → 200 returned | §5.3 idempotency layer 2 |
-| Push handler reconciles AwbExists: SF returns 4xx with AwbExists → existing D8-4b reconcile path runs → markTaskPushed called with reconciled external_id | §5.3 idempotency layer 3 |
-| Push handler throws on transient error: SF returns 5xx → handler throws → QStash retries (test asserts handler returned non-2xx, doesn't test QStash itself) | §5.2 retry trigger |
-| Push handler signature verification: missing/invalid QStash signature → 401 returned | §5.1 endpoint gate |
-
-### §7.3 Migration test for `0020`
+### §7.2 Push handler tests (~12 rows)
 
 | Test | What it pins |
 |---|---|
-| Existing rows backfill correctly: insert pre-migration row with `window_start = '2026-05-04T12:00:00Z'`, run migration, assert `target_date = '2026-05-05'` | §4.2 backfill correctness |
-| UNIQUE constraint catches duplicate (tenant_id, target_date): insert two rows → second hits 23505 | §4 schema enforcement |
+| **`maxDuration` build-time check (NEW, runtime-bug guard):** CI step greps `src/app/api/queue/push-task/route.ts` for `export const maxDuration = 300`. If absent, CI fails. (Unit test can assert the export exists at module level, but a build-time grep is the honest "does this declaration reach Vercel?" check.) | §5.1 amendment 3 — without this, the §1.1 envelope claim fails at runtime, never in tests |
+| **Happy path (D7-6 anchor):** receive `{ tenant_id, task_id }` → handler calls `pushSingleTask(tenant_id, task_id)` → `pushSingleTask` calls SF `createTask` → on 2xx, `markTaskPushed` (at [`tasks/repository.ts:531-549`](../../src/modules/tasks/repository.ts#L531-L549)) called → 200 returned | §5.1 happy path |
+| **`pushSingleTask` invocation (NEW, §5.1 amendment 6):** mock-spy on `pushSingleTask` and on the SF adapter. Assert handler calls `pushSingleTask`, NOT the adapter directly. If the handler bypassed `pushSingleTask`, the spy on the adapter would fire while the spy on `pushSingleTask` would not — that's the failure case. | §5.1 amendment 6 |
+| **Tenant-scoping mismatch (NEW, §5.1 amendment 1):** task in DB has `tenant_id = T1`; payload sends `tenant_id = T2`. Handler returns 400; no SF call made; no `markTaskPushed` call | §5.1 Step 1.4 defense-in-depth |
+| **address_id null guard (NEW, §5.1 amendment 2):** task in DB has `address_id IS NULL`. Handler returns 400; Sentry-capture `push.address_id_null` fired (mock-asserted); no SF call. Test that the failureCallback DLQ path receives this failure (assert via integration test in §7.5) | §5.1 Step 1.5 defense-in-depth |
+| **Already-pushed skip (Layer 2):** receive `{ tenant_id, task_id }` where `pushed_to_external_at IS NOT NULL` → SF NOT called → 200 returned | §5.3 Layer 2 |
+| **AwbExists reconcile (Layer 3):** SF returns 4xx with AwbExists → existing D8-4b reconcile path inside `pushSingleTask:1002` runs → `getTaskByAwb` called → `markTaskPushed` called with reconciled `external_id` | §5.3 Layer 3 |
+| **Transient 5xx → throws:** SF returns 5xx → handler throws (assert via the test framework's exception-asserting helper) → QStash retries (we test handler returned non-2xx, NOT QStash itself) | §5.2 retry trigger |
+| **Signature gate:** missing or invalid QStash signature → 401 returned; no body parsing | §5.1 `verifySignatureAppRouter` |
+| **Observability log shape (NEW, §5.5):** trigger handler under each `outcome` enum value; assert log line emitted with `{ tenant_id, task_id, sf_latency_ms: <number>, outcome: <one-of-5-states> }`. Outcome enum strict-check (no string drift): `success` / `awb_exists_reconciled` / `retry_throw` / `address_id_null_rejected` / `tenant_mismatch_rejected` | §5.5 observability surface |
+| **failureCallback handler — happy path (NEW, §5.2 amendment 5):** new endpoint `/api/queue/push-task-failed` receives QStash failure metadata `{ originalBody: { tenant_id, task_id }, error, retryCount }`, signature-verified via same `verifySignatureAppRouter`. Asserts: `failed_pushes` row inserted with `tenant_id`, `task_id`, `reason` derived from QStash error field, `retried_count` from QStash metadata; surfaces in `/admin/failed-pushes` UI (mock or via integration test) | §5.2 amendment 5 — failureCallback as DLQ signal source |
+| **failureCallback handler — signature gate:** unsigned POST to `/api/queue/push-task-failed` → 401; no DB write | §5.2 endpoint security |
 
-### §7.4 Integration test for end-to-end flow
+### §7.3 Migration test for `0020` (~6 rows)
 
-Single integration test that:
-1. Triggers the materialization cron handler (via test invocation, not real HTTP)
-2. Asserts tasks are inserted
-3. Asserts QStash messages enqueued (mocked QStash client)
-4. Triggers the push handler with a sample message
-5. Asserts SF createTask was called (mocked SF adapter)
-6. Asserts `pushed_to_external_at` is set
+| Test | What it pins |
+|---|---|
+| **Backfill correctness for canonical 12:00 UTC tick (D7-1 update for AT TIME ZONE):** insert pre-migration row with `window_start = '2026-05-04T12:00:00Z'`. Run migration. Assert `target_date = '2026-05-05'` (Dubai-tomorrow at 12:00 UTC = 16:00 Dubai → next day) | §4.2 step (2) backfill via AT TIME ZONE form |
+| **DST-boundary backfill (NEW):** insert row with `window_start = '2026-03-29T22:00:00Z'`. Run migration. Assert `target_date = '2026-03-30'`. Dubai is constant UTC+4 (no DST) so this is theoretical — but documents we considered DST and the AT TIME ZONE form survives the boundary | §4.3 amendment + due-diligence on DST |
+| **Dedup with winning-row policy (D7-7a):** seed 5 rows for `(tenant_id=T, target_date=2026-05-02)` with varied `(completed_at, started_at)` — 2 rows have non-null `completed_at` (different timestamps), 3 have null. Run migration. Assert: only 1 row survives for `(T, 2026-05-02)`; that row has the `MAX(completed_at)` (i.e., the most-recently-completed row wins among the 2 with `completed_at IS NOT NULL`). Re-run with all 5 rows having NULL completed_at; assert the row with `MAX(started_at)` survives | §4.2 step (3) + §0.4 Q2 winning-row policy |
+| **target_date column-add + NOT NULL promotion (D7-7b/c):** assert `target_date` column exists post-migration; assert `column_default IS NULL`; assert `is_nullable = 'NO'`. Then induce a row that backfill skipped (e.g., insert a row pre-migration with `window_start IS NULL` or some path that bypasses backfill); run migration; assert step 4 ALTER NOT NULL fails AND the BEGIN/COMMIT wrapper rolls all prior steps (target_date column NOT added, no dedup performed) | §4.2 steps (1)/(4) + transactional wrapper |
+| **BEGIN/COMMIT wrapper rollback (NEW):** induce a forced failure mid-migration (e.g., simulate a constraint violation on the dedup DELETE). Assert: no `target_date` column in `task_generation_runs` post-failure; existing rows unchanged; no UNIQUE index `task_generation_runs_tenant_target_date_unique_idx` exists. Proves the wrapper is intact | §4.2 amendment D4-3 |
+| **Pre-existing UNIQUE preserved (D7-7d):** run migration. Insert two rows with same `(tenant_id, window_start, window_end)` (the OLD UNIQUE columns). Assert: second insert hits 23505 — proves the OLD UNIQUE on `(tenant_id, window_start, window_end)` from migration 0012 is still enforced post-0020 | §4.2 amendment D4-4 |
+| **New UNIQUE catches dupe (existing, kept):** insert two rows with same `(tenant_id, target_date)`. Assert: second insert hits 23505 on `task_generation_runs_tenant_target_date_unique_idx` | §4.2 step (5) — new constraint |
+
+### §7.4 Integration test — happy path (~10 steps)
+
+Single happy-path integration test that exercises the full ingress → queue → egress pipeline against mock SF adapter:
+
+1. Pre-seed 1 tenant + 1 active subscription with rotation set up
+2. Pre-seed 1 row in `tasks` with `pushed_to_external_at IS NULL` and `address_id IS NOT NULL` (the cutover-backlog row)
+3. Trigger materialization cron handler (test-invoked, not real HTTP)
+4. Assert: 1 backlog row + 14 newly-materialized rows = 15 tasks now exist for the tenant
+5. Assert: post-commit `batchJSON` called once (≤100 messages, all 15 fit in 1 batch); each message carries `deduplicationId: <task_id>`, `flowControl: { key: 'sf-push-global-mvp', rate: 5, period: '1s' }`, `failureCallback: ${PUBLIC_BASE_URL}/api/queue/push-task-failed`, `retries: 3`
+6. Assert: `subscription_materialization.materialized_through_date = today + 14` (or capped at `S.end_date` if set)
+7. Assert: `task_generation_runs` row exists with `status='completed'`, `target_date = today + 14`, `tasks_created = 15`
+8. Trigger the push handler with one of the 15 messages (test-invoked POST to `/api/queue/push-task`)
+9. Assert: `pushSingleTask` invoked; mock SF adapter called; `pushed_to_external_at` set on that task; 200 returned
+10. Assert: structured log emitted with all 4 §5.5 fields and `outcome: 'success'`
+
+### §7.5 Integration tests — edge cases (NEW, heavier — integration-test schedule, not every PR)
+
+These tests require fuller fixtures and longer runtime; isolated from §7.4's "every PR" path:
+
+| Test | What it pins |
+|---|---|
+| **Stale-`running` recovery under concurrency:** seed 1 stale `running` row + 1 fresh `running` row for different tenants. Trigger 3 concurrent materialization handler invocations (simulating Run-A/Run-B/Run-C race). Assert: stale row recovered + materialized; fresh-running rows preserved (concurrent runs short-circuit on 23505 + skip); 1 of the 3 invocations wins the race per tenant | §4.4 amendment 2 + §4.4 happy-status branches |
+| **Phase 1 reconciliation under burst conditions:** seed 850 tasks across 3 tenants with `pushed_to_external_at IS NULL`. Trigger materialization cron. Assert: handler invokes `batchJSON` ceil(850/100) = 9 times; total messages enqueued = 850 + N newly-materialized; QStash mock asserts dedup absorbs duplicates if any pre-existing message ID overlaps; total wall-clock for materialization phase < 30s (matches §2.5 estimate) | §1.1 Phase 1 + §6.3 ingress-burst-then-flow-control |
+| **Flow-control rate-limit assertion:** integration test that runs against a real Upstash QStash test queue (not mock). Enqueue 50 messages with `flowControl: { key: 'sf-push-test-50', rate: 5, period: '1s' }`. Assert: messages delivered to handler at ~5/sec (allow 20% jitter); 50 messages take ≥10s wall-clock to fully drain | §6.3 Flow Control mechanism actually works at the QStash boundary |
+| **Full-volume integration with all 5 exception types:** seed 845 subscriptions across 3 tenants, each with one of the 5 exception types (skip, pause_window, address_override_one_off, address_override_forward, append_without_skip) interleaved. Trigger cron. Assert: per-exception-type behavior matches §2.4 row-by-row; `tasks` row count matches the expected projection (no over-materialization, no under-materialization) | §2.4 full table coverage |
+| **Cutover-backlog drainage end-to-end:** seed 114 tasks for fresh-butchers tenant with `pushed_to_external_at IS NULL` (matching §0.4 Q3 sized backlog). Run cutover sequence (apply migration 0020, run backfill script, trigger first cron tick). Assert: 114 backlog rows + 14×N new horizon rows enqueued via `batchJSON`; push handler mock-drains all messages; final state has all 114 + new rows with `pushed_to_external_at IS NOT NULL` | §3.4 cutover posture |
+| **Rollback path (per §3.5):** apply migration + new handler; materialize a subset; revert handler via mock git revert (in test, swap the route handler back to old version). Assert: old handler does NOT crash on the new schema (additive migration is durable); old handler picks up `pushed_to_external_at IS NULL` rows via its existing find-unpushed query and pushes them inline; no data corruption | §3.5 rollback story |
 
 ---
 
