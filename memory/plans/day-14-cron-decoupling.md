@@ -411,7 +411,7 @@ Without this verification, the post-amendment "total wall-clock seconds" claim i
 
 ## §3 14-day rolling horizon advance
 
-### §3.1 Subscription_materialization table (already shipped in PR #139)
+### §3.1 Subscription_materialization table (in PR #139 git, NOT yet on prod DB)
 
 Schema lands in PR #139's `0015_subscription_exceptions_and_materialization.sql`. One row per subscription:
 
@@ -424,51 +424,113 @@ CREATE TABLE subscription_materialization (
 );
 ```
 
-This Day-14 work seeds initial rows (one-time backfill, see §3.3) and adds the cron logic that reads + updates them.
+**Migration-deploy dependency (NEW callout per amendment 1, cross-referencing §0.4 Q4):** the `subscription_materialization` table exists in PR #139's git tree (commit `875bfc4`, merged Day-13 EOD) but **has NOT been applied to the production DB** as of Day-14 morning. The §0.4 Q4 probe against production at main HEAD `4731553` returned `relation "subscription_materialization" does not exist`.
 
-### §3.2 Horizon-advance algorithm
+**Code PR pre-merge gate MUST verify either:**
+- (a) `subscription_materialization` exists in production DB (i.e., PR #139's migrations 0014-0019 have been applied separately, e.g., via the next promotion's `apply-migrations` step), OR
+- (b) the code PR description includes the manual SQL-editor step Love runs against production after PR merge but before the next cron tick.
 
-Per [PLANNER_PRODUCT_BRIEF.md §3.1.5](../PLANNER_PRODUCT_BRIEF.md):
+**§3.3 backfill cannot run until 0015 lands on prod.** If both (a) and (b) miss, the first post-deploy cron tick will hit `relation does not exist` and crash, the new handler will never advance horizon, and old `pushed_to_external_at IS NULL` rows will never get re-enqueued. This makes the migration-deploy dependency a **hard-stop** condition on the code PR's pre-merge checklist (added in §11).
+
+This Day-14 work assumes the table is present at code-PR-merge time; it seeds initial rows via the one-time script (§3.3) and adds the cron logic that reads + updates them.
+
+### §3.2 Horizon-advance algorithm (per-subscription detail of §2.1's Phase 2-3 bulk operation)
+
+Per [PLANNER_PRODUCT_BRIEF.md §3.1.5](../PLANNER_PRODUCT_BRIEF.md). **Note:** §3.2 describes the per-subscription logic that the §2.1 sketch's bulk INSERT…SELECT realizes. Enqueue is NOT part of §3.2 — it lives at §2.1 Phase 5 post-commit and operates on the union of (Phase 1 reconciliation rows ∪ Phase 2 newly-inserted rows). Earlier draft incorrectly inlined the enqueue here, contradicting §2.1 — corrected per amendment 2:
 
 ```
-For each cron-eligible tenant:
-  For each active subscription S:
-    IF subscription_materialization[S].materialized_through_date < today + 14:
-      generate tasks for S in date range
-        (subscription_materialization[S].materialized_through_date + 1, today + 14)
-      apply per-weekday eligibility filter (s.days_of_week)
-      apply schema-aware exception exclusion (§2.3)
-      apply address-rotation lookup (§2.2)
-      enqueue QStash message per inserted task
-    UPDATE subscription_materialization[S].materialized_through_date = today + 14
-    UPDATE subscription_materialization[S].last_materialized_at = now()
+For each cron-eligible tenant (eligibility filter unchanged from existing β):
+  For each subscription S WHERE S.tenant_id = tenant
+                          AND S.status = 'ACTIVE':       # uppercase per brief §3.1.1
+    horizon_target = LEAST(today + 14, S.end_date)        # amendment 3: cap at S's natural end
+    IF subscription_materialization[S].materialized_through_date < horizon_target:
+      # Generation lives inside §2.1's Phase 2 single-tx bulk INSERT…SELECT —
+      # this pseudocode describes the per-row decision the SQL implements.
+      For target_date in (subscription_materialization[S].materialized_through_date + 1
+                          ... horizon_target):
+        IF EXTRACT(ISODOW FROM target_date) NOT IN S.days_of_week → skip
+        IF skip-the-date exception covers target_date (§2.3 EXISTS guard) → skip
+        IF address resolution returns NULL (§2.3 4-layer COALESCE) → skip + bump
+                                                                     §2.2 counter
+        ELSE → INSERT row with address_id from §2.3 COALESCE
+      UPDATE subscription_materialization[S].materialized_through_date = horizon_target
+                                            # amendment 3: capped end_date, not unconditional today+14
+      UPDATE subscription_materialization[S].last_materialized_at = now()
+  # Phase 4 of §2.1: insert task_generation_runs row, target_date = today + 14
+  # tx COMMIT here — the §2.1 Phase 2-4 boundary
+  # Phase 5 of §2.1: post-commit batchJSON enqueue runs OUTSIDE this loop
 ```
 
-### §3.3 One-time backfill
+**PAUSED-status handling (amendment 4):** subscriptions with `status='PAUSED'` are excluded by the `status = 'ACTIVE'` filter above. PAUSED subs do NOT advance horizon while paused. They re-enter the materialization set when `resumeSubscription` (Day-14 part-2 service surface) flips status back to `'ACTIVE'`; the next cron tick after resume picks them up via the same predicate. This means: (a) materialization stops advancing horizon during pause windows automatically, and (b) the resumeSubscription service does NOT need to manually re-materialize — the cron self-heals on next tick.
 
-On Day-14 deploy: one-time backfill INSERT seeding `subscription_materialization` for every existing active subscription with `materialized_through_date = today` (so the next cron tick generates the full 14-day horizon for each).
+**End_date capping (amendment 3):** without the `LEAST(today + 14, S.end_date)` cap, short-runway subscriptions (e.g., 3 days from `end_date`) get marked `materialized_through_date = today + 14` even though their natural end is at `today + 3`. This breaks two future flows:
+- **Skip extension:** if operator applies a skip on the last day, `addSubscriptionException` extends `S.end_date` to a new tail-end date; without the cap, the next cron sees `materialized_through_date >= new end_date` and skips re-materialization, leaving the appended task ungenerated.
+- **Append-without-skip:** same failure mode — operator-initiated tail-end addition extends `S.end_date`; cron must re-materialize the new dates.
 
-Backfill SQL sketch (lands in Day-14 code PR's first migration or in a one-time script per the existing `scripts/onboard-merchant.mjs` pattern):
+The cap fixes both by ensuring `materialized_through_date` never exceeds the subscription's own end. When `end_date` extends, the next tick sees `materialized_through_date < new horizon_target` and re-materializes the gap.
+
+**§3.2 is the per-subscription detail of §2.1's bulk operation, not a parallel sketch.** The bulk SQL implements this per-subscription logic across all eligible subs in a single INSERT…SELECT for performance; the pseudocode above documents what each per-row decision is.
+
+### §3.3 One-time backfill (script, NOT migration)
+
+**Locked as one-time script (amendment 6):** `scripts/backfill-subscription-materialization.mjs`, mirroring the existing `scripts/seed-subscriptions.mjs` pattern. Migrations stay schema-only per the project's existing convention (R-0 onward — no migration in this repo has data-mutation as its primary purpose). The choice matters because:
+
+- **Migration** would run on every fresh DB clone (CI, integration tests, staging) and re-seed materialization for whatever subscriptions exist there. Test fixtures get unwanted materialization rows; cleanup-then-re-seed becomes the test pattern. Brittle.
+- **One-time script** runs once on production, manually, by Love. CI / integration tests / staging do NOT run this; they get fresh `subscription_materialization` seeded by their own test fixtures (a per-test `INSERT INTO subscription_materialization (...) VALUES (...)` per the test's needs). Removes the "every fresh DB clone re-seeds" failure mode.
+
+**Run procedure** (lands in Day-14 code PR description):
+1. PR #139's migrations 0014-0019 applied to production (per §3.1 migration-deploy dependency callout — the `subscription_materialization` table must exist before the script runs).
+2. Day-14 code PR merged.
+3. Love runs `node scripts/backfill-subscription-materialization.mjs` against production credentials (`SUPABASE_DATABASE_URL` from `.env.local` or Vercel CLI env-pull). Script uses `withServiceRole` since it's a system-actor mutation.
+4. Script reports `<N> rows seeded; <M> conflicts skipped (already exist)`.
+5. Love confirms script output before the next cron tick at 12:00 UTC.
+
+**Backfill SQL sketch** (the script's `executePython`-equivalent body):
 
 ```sql
 INSERT INTO subscription_materialization
   (subscription_id, tenant_id, materialized_through_date)
 SELECT id, tenant_id, current_date
 FROM subscriptions
-WHERE status = 'active'
+WHERE status = 'ACTIVE'                                  -- amendment 5: uppercase
 ON CONFLICT (subscription_id) DO NOTHING;
 ```
+
+**Casing convention cross-reference (amendment 5):** `subscriptions.status = 'ACTIVE'` is **uppercase** per [`PLANNER_PRODUCT_BRIEF.md §3.1.1`](../PLANNER_PRODUCT_BRIEF.md) line 153 — the brief explicitly locks the consignee CRM-state vocabulary as uppercase, and the subscription status enum follows the same convention (PR #139 §1.1 audit registrations reference `subscription.paused` / `.resumed` events keyed off uppercase `'PAUSED'` / `'ACTIVE'`). Note this differs from `tenants.status` which is **lowercase 4-state** (`provisioning` / `active` / `suspended` / `inactive`) per the v1.2 brief amendment (`memory/decision_brief_v1_2_amendments_d13_part1.md`) — both are correct, they're different enums on different tables. The inconsistency is documented but not a bug.
 
 ### §3.4 Cutover posture
 
 The new materialization cron coexists with the old single-handler cron only at deploy boundary. Cutover sequence:
 
 1. Day-14 morning: deploy code PR; new materialization cron at the existing schedule
-2. Old single-handler cron handler retired in same deploy (the rewrite IS the route handler)
-3. First post-deploy cron tick: backfill rows from §3.3 land via migration; cron walks the now-populated subscription_materialization table and materializes 14 days for each subscription
-4. QStash messages enqueue per inserted task; push handler drains them async
+2. Old single-handler cron handler retired in same deploy (the rewrite IS the route handler — the file at `src/app/api/cron/generate-tasks/route.ts` gets replaced atomically)
+3. Love runs `scripts/backfill-subscription-materialization.mjs` against production per §3.3 run procedure
+4. First post-deploy cron tick: cron walks the now-populated `subscription_materialization` table and materializes up to 14 days for each subscription (capped at `S.end_date` per §3.2)
+5. QStash messages enqueue per inserted task via Phase 5 `batchJSON` per §1.1; push handler drains them async (the cutover backlog from prior days is picked up by Phase 1 reconciliation scan automatically — no separate `scripts/backfill-push-queue.mjs` needed; that script's job has been absorbed into §1.1 Phase 1)
 
-No old-vs-new dual-write window. The push handler drains the existing unpushed-task backlog (per §5.4) plus the new materialization output indistinguishably.
+No old-vs-new dual-write window. The push handler drains the existing unpushed-task backlog (per §1.1 Phase 1 reconciliation, NOT §5.4) plus the new materialization output indistinguishably.
+
+**Cutover-vs-cron-tick acknowledgment (amendment 7):** the cutover assumes the Vercel deploy and the `0 12 * * *` UTC cron tick do NOT overlap. **Operational mitigation: do not deploy within ±10 minutes of 12:00 UTC.** Vercel's atomic function-swap handles in-flight invocations cleanly, but the cron tick that fires during the swap window is non-deterministic on which handler version runs. Avoiding the deploy window sidesteps the question entirely.
+
+### §3.5 Rollback story (NEW per amendment 8)
+
+If the new materialization cron breaks in a way that needs to be reverted post-cutover:
+
+**Rollback path:** `git revert <Day-14-code-PR-merge-commit-sha>` on main + redeploy via Vercel auto-promote (or manual `vercel promote` per existing pattern). Reverts the route.ts file to the pre-decoupling handler; old cron logic resumes at next schedule tick.
+
+**Data-state durability:**
+- `subscription_materialization` rows seeded by §3.3 backfill **persist** in production DB. The old handler does NOT query this table, so the rows are inert; they don't break the old handler.
+- `task_generation_runs.target_date` column persists too (additive migration; old handler does not write or query the new column).
+- `tasks` rows materialized by the new handler before rollback persist with `pushed_to_external_at = NULL`. The old handler's "find unpushed" query at `task-push/service.ts:373-381` picks them up on its next tick and pushes them inline — exactly the existing flow.
+- QStash queue drains naturally — existing in-flight messages process via `/api/queue/push-task` (the route still exists post-rollback unless explicitly removed; if removed in the revert, in-flight messages 404 and re-enter QStash retry → DLQ).
+
+**One-way doors:** schema additions (`subscription_materialization`, `task_generation_runs.target_date`) are durable and additive — they don't break the old handler. The `(tenant_id, target_date)` UNIQUE on `task_generation_runs` is new and could theoretically collide with the old handler's run-row INSERTs if it generated rows with `target_date` populated by some other path; but since the old handler doesn't write `target_date`, the constraint is effectively vacuous from the old handler's perspective.
+
+**Blast radius:** revert affects (a) cron handler runtime, (b) push-queue endpoint behavior. Does NOT affect: existing UI surfaces, existing API routes, existing audit emissions, existing operator workflows.
+
+**Operational mitigation for the revert window:** if the new handler is failing at a tick boundary, the manual `vercel promote` of the previous Production deployment is faster than `git revert` (~30s vs ~5min). Per `memory/feedback_claude_code_executes_default.md`, Love runs the Vercel UI step.
+
+**What this rollback does NOT cover:** if the new handler corrupted data on its way down (e.g., wrote bad rows to `tasks` that the old handler then tries to push), the data-corruption is durable and revert alone won't fix it. Mitigation: §7 test coverage + §0 code-PR pre-flight aim to catch corruption pre-deploy. If corruption-post-deploy happens anyway, the fix is a forward-rolling data-cleanup script, not the revert.
 
 ---
 
