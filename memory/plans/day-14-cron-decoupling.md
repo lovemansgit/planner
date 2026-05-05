@@ -115,42 +115,67 @@ If this verification is deferred, it must be marked as a hard-stop condition on 
 ### §1.1 Two-cron model
 
 **Cron A (materialization, shipped via this PR):**
-- Schedule: same as today (`0 12 * * *` UTC)
-- Per tenant in eligibility set: bulk INSERT…SELECT into `tasks` for any `subscription_materialization.materialized_through_date < today + 14 days`
-- Per inserted row: `address_id` populated per per-tenant per-weekday rotation (with consignee primary fallback)
-- Per inserted row: `pushed_to_external_at = NULL` (the natural state after INSERT — `markTaskPushed` is the only writer)
-- Per-tenant: enqueue ONE QStash message per inserted task with payload `{ tenant_id, task_id }`
-- Update `subscription_materialization.materialized_through_date = today + 14 days`
-- Insert `task_generation_runs` row with `status='completed'` + `target_date = today + 14 days` (the new column added in §4)
-- **Total wall-clock:** seconds; no per-task SF call inside this handler
+
+Per-handler-invocation phases, in order:
+
+1. **Reconciliation scan (NEW — outbox-equivalent self-heal).** Before inserting any new tasks, scan `tasks WHERE pushed_to_external_at IS NULL AND tenant_id IN (eligibility set)` and collect their `(tenant_id, task_id)` tuples. This catches: (i) any rows that crashed between Phase 4 commit and Phase 5 enqueue on a previous tick; (ii) the initial cutover backlog (Q3 probe: 114 fresh-butchers tasks). The handler effectively treats `tasks WHERE pushed_to_external_at IS NULL` as the outbox — no separate outbox table, no separate drainer process. Recovery interval is next cron tick (24h worst-case under the `0 12 * * *` schedule).
+2. **Per-tenant bulk INSERT…SELECT into `tasks`** for any `subscription_materialization.materialized_through_date < today + 14 days`, including: (a) `address_id` populated per per-tenant per-weekday rotation (with consignee primary fallback), (b) `pushed_to_external_at = NULL` (natural state after INSERT — `markTaskPushed` is the only writer), (c) `idempotency_key` populated deterministically per task per the existing generator's pattern.
+3. **Update `subscription_materialization.materialized_through_date = today + 14 days`** for each tenant whose horizon advanced.
+4. **Insert `task_generation_runs` row** with `status='completed'` + `target_date = today + 14 days` (the new column added in §4). **Phase 4 is the transaction commit boundary** — Phases 1-4 run in a single per-tenant transaction.
+5. **Post-commit QStash batch enqueue** (the outbox-pattern AFTER-commit step). Collect the union of: (a) reconciliation scan tuples from Phase 1, (b) the rows just inserted in Phase 2. Batch-publish via `client.batchJSON([{url, body: {tenant_id, task_id}, deduplicationId: task_id}, ...])` (verified API name — `batchJSON` is the canonical primitive in `@upstash/qstash` per `node_modules/@upstash/qstash/client-CsM1dTnz.d.ts:2476`). **Chunk batches at 100 messages per call** as a conservative guard against the per-call request-size limit (the QStash REST API caps batch payload at ~1MB; at ~80 bytes/message that's ~12,500 max, but Upstash docs publicly documented limits are around 100-1000 per batch — Love verifies exact cap before code PR opens). At ~1,000 messages/day worst-case (§0.6) and 100/batch chunk size, that's ~10 sequential `batchJSON` calls per handler invocation; each call is one HTTPS round-trip (~50-150ms), total ~1-2s — well within the materialization handler's now-fast envelope. **`deduplicationId: task_id` is load-bearing:** it absorbs duplicate enqueues from Phase 1 reconciliation re-discovering rows that were already enqueued on a previous tick, making the at-least-once delivery semantics safe for the push side.
+6. **Total wall-clock:** seconds; no per-task SF call inside this handler.
+
+**Why this pattern (transactional outbox via `tasks` table, not a separate outbox table):**
+- **No new schema.** The `pushed_to_external_at IS NULL` predicate IS the unfilled-outbox query. Reuses an existing column.
+- **Self-healing.** Every tick re-scans null rows, so a crash between Phase 4 commit and Phase 5 enqueue heals on the next tick (24h worst case). Tighter recovery is post-MVP if availability demands it.
+- **Idempotent.** QStash `deduplicationId: task_id` absorbs duplicate enqueues, so re-discovering an already-enqueued row is a no-op at QStash side.
+- **Crash-safety.** Phase 4 commit before Phase 5 enqueue means the row exists durably before any external-side activity. The window where "row exists but no message" is bounded by next-tick interval.
+- **Trade-off accepted:** classical outbox-table-plus-drainer would give faster recovery (drainer can poll seconds-to-minutes), at the cost of an extra table + a second cron / drainer process. For MVP demo posture, next-tick recovery is acceptable; Phase 2 hardening can introduce the drainer if needed.
 
 **Cron B (push handler, new — receives QStash deliveries):**
 - Schedule: invoked per-message by QStash (push-driven, not pull-driven)
 - Endpoint: new `POST /api/queue/push-task` accepting QStash payload `{ tenant_id, task_id }`
-- Per invocation: call SF `createTask` for the one task; on success call `markTaskPushed` (existing `tasks/repository.ts:531-543`)
+- Per invocation: call SF `createTask` for the one task; on success call `markTaskPushed` (existing `tasks/repository.ts:531-549`)
 - On failure: rely on QStash retry semantics (see §5.2)
 - After N failed retries: lands in `failed_pushes` table (existing surface — DLQ unchanged)
 - Per-invocation timeout: independent of the cron handler — Vercel function timeout still 300s but the work per invocation is one SF call (~660ms), so no envelope concern
 
 ### §1.2 Mechanism choice — QStash
 
-Three candidate mechanisms surfaced in the cron memo:
+Three candidate mechanisms surfaced in the cron memo. **Note (post-§0.2 amendment):** the timeout dimension alone does NOT discriminate between A and B — in-handler parallelization with 5 concurrent in-flight pushes at 5 req/sec would resolve to ~112s for 845 tasks (845 × 660ms ÷ 5 ≈ 112s), which fits Vercel's 300s envelope. The argument for A over B is therefore NOT "B doesn't fit"; it's that B fits-but-doesn't-isolate.
 
 | Mechanism | Pro | Con |
 |---|---|---|
-| **A. QStash (Upstash)** | Already a dep; env vars already documented; HTTP-delivery to Vercel functions matches our serverless posture; native retry + DLQ; no new infrastructure | New external dependency in the critical path; cost scales with task volume |
-| B. Vercel function fan-out via per-tenant subrequest | No external dep | Per-Vercel-Pro 300s timeout still applies per subrequest; doesn't solve the problem at scale |
+| **A. QStash (Upstash)** | (i) Per-message retry semantics — QStash retries each push independently with native backoff; (ii) Materialization-independence — push failure does not roll back materialization, the row exists in `tasks` regardless; (iii) Per-message timeout envelope — each push gets the full 300s budget, not a fraction shared with 844 siblings; (iv) Operational visibility — queue depth, DLQ inspection, retry log are first-class observables; (v) Already provisioned; env vars already documented; matches existing serverless posture; (vi) No new infrastructure | New external dependency in the critical path; cost scales with task volume (quantified in §0.6 / pricing here) |
+| B. Vercel function fan-out via per-tenant subrequest with in-handler parallelization (5 concurrent in-flight at 5 req/sec) | (i) No external dep; (ii) Fits Vercel 300s envelope (~112s for 845 tasks per the §0.2 math); (iii) Simpler operationally (no queue to monitor) | (i) Per-handler retry — failure of any single SF call retries the whole 112s pass, not the failing task; (ii) Materialization-coupled — phase (b) push failure aborts the same handler that did phase (a) materialization, so a transient SF blip can roll back useful work; (iii) Shared-fraction timeout envelope — 845 tasks share 300s, so worst-case per-task budget is ~355ms; (iv) Limited operational visibility — no queue depth, no per-task retry log; (v) Still serial-fragile — once one SF call hangs near its envelope, the whole 5-way concurrency degrades |
 | C. Per-tenant workers (long-running process) | Maximum control | Requires hosting outside Vercel — out of architectural scope for MVP |
 
-**Recommendation: A (QStash).** Mechanism is already provisioned; the queue-push fan-out pattern is what the dep was added for; matches the existing serverless posture. **Cost:** at demo data (845 tasks/day) on Upstash's per-message pricing, this is well under $1/day. Operational risk is QStash-as-SPOF — mitigated by §5 retry posture and the existing `failed_pushes` DLQ.
+**Recommendation: A (QStash).** Not because B fails the timeout test, but because B couples push failures to materialization successes (i and ii above), gives no per-message retry primitive (iii), and offers no operational queue surface (iv). A's cost is negligible at demo volume (~$0.01/day at PAYG rate per §0.6). Operational risk is QStash-as-SPOF — mitigated by §5 retry posture and the existing `failed_pushes` DLQ.
 
-### §1.3 `tasks.pushed_to_external_at` as the contract surface
+### §1.3 `tasks.pushed_to_external_at` as the contract surface + code-path retirement
 
 Per [PLANNER_PRODUCT_BRIEF.md §3.1.1 v1.2 amendment](../PLANNER_PRODUCT_BRIEF.md) (PR #141 brief amendment):
 
 > Contract surface for forthcoming materialization/push decoupling (Day-14 own T3 plan PR).
 
 The decoupled push handler uses the existing column unchanged. Materialization leaves it NULL; push handler sets it via `markTaskPushed`. Consumers that read `pushed_to_external_at` (UI integration-honesty indicator per §3.3.6, the cron's "find unpushed" query at [`task-push/service.ts:373-381`](../../src/modules/task-push/service.ts#L373-L381)) require **zero changes** — the column semantic is preserved exactly.
+
+**Code-path retirement post-cutover** (named explicitly so reviewers don't have to ask "does the old loop still run in parallel?"):
+
+| Surface | Fate | Code anchor |
+|---|---|---|
+| `pushTasksForTenant` (bulk per-tenant cron-loop variant) | **RETIRES.** Last caller is the existing cron handler at `route.ts:243`; that caller goes away when the cron handler is replaced by the new materialization-only handler in §2. The whole 500-line function is dead code post-cutover. | [`task-push/service.ts:327`](../../src/modules/task-push/service.ts#L327) |
+| Reconcile-branch logic inside `pushTasksForTenant` (mid-loop SF-already-knows-this-AWB recovery from D8-4b) | **RETIRES with its parent.** The line ~586 reconcile branch is part of the bulk loop body. | [`task-push/service.ts:586`](../../src/modules/task-push/service.ts#L586) |
+| Per-iteration `markTaskPushed` call inside `pushTasksForTenant` success branch | **RETIRES with its parent.** | [`task-push/service.ts:727`](../../src/modules/task-push/service.ts#L727) |
+| `pushSingleTask` (single-task variant — currently called from DLQ retry UI per `failed_pushes:retry` permission) | **SURVIVES; gains a second caller.** Today: called from `/admin/failed-pushes` retry button. Post-cutover: also called from the new `/api/queue/push-task` QStash handler. The function body is unchanged. | [`task-push/service.ts:827`](../../src/modules/task-push/service.ts#L827) |
+| Reconcile-branch logic inside `pushSingleTask` (mid-call SF-already-knows-this-AWB recovery) | **SURVIVES.** Reuses the existing reconcile semantic for queue-handler retries that hit an already-pushed task. | [`task-push/service.ts:1002`](../../src/modules/task-push/service.ts#L1002) |
+| Per-call `markTaskPushed` call inside `pushSingleTask` success branch | **SURVIVES.** Becomes the only call site for `markTaskPushed` post-cutover. | [`task-push/service.ts:1104`](../../src/modules/task-push/service.ts#L1104) |
+| `markTaskPushed` (in `tasks/repository.ts`) | **SURVIVES.** Single caller post-cutover (`pushSingleTask`). | [`tasks/repository.ts:531-549`](../../src/modules/tasks/repository.ts#L531-L549) |
+| Existing cron handler at `/api/cron/generate-tasks/route.ts` (the 9-min-runtime offender) | **RETIRES; replaced by new handler.** The new materialization-only handler at the same path subsumes the schedule slot. | [`route.ts`](../../src/app/api/cron/generate-tasks/route.ts) |
+
+**Net effect on the codebase:** ~500 lines of `pushTasksForTenant` + its reconcile/markTaskPushed branches retire. ~330 lines of `pushSingleTask` + its branches stay. One new ~150-line handler is added at `/api/queue/push-task`. One new ~200-line materialization handler replaces the existing cron handler. Net diff is approximately neutral (-300 lines old code + ~350 lines new code), but the architectural posture changes substantially.
+
+**Code-path retirement is staged in the code PR, not this plan PR.** This list serves as the audit-trail for what gets deleted; the actual deletion lives in the implementation PR.
 
 ---
 
