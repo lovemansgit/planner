@@ -763,23 +763,46 @@ This subsection establishes that the surface exists — Phase 2 builds dashboard
 
 ### §6.1 No interface boundary change
 
-`src/modules/integration/providers/suitefleet/last-mile-adapter-factory.ts` and the `LastMileAdapter` interface surface stay unchanged. The push handler at §5.1 calls the same adapter methods as the old single-handler cron — `createTask`, `getTaskByAwb`, etc. The decoupling is at the **caller** layer (handler vs cron), not at the adapter layer.
+`src/modules/integration/providers/suitefleet/last-mile-adapter-factory.ts` and the `LastMileAdapter` interface surface stay unchanged. The decoupling is at the **caller** layer (handler vs cron), not at the adapter layer.
 
-### §6.2 SF auth caching unchanged
+**Indirect call path (clarification per amendment 1):** Adapter methods are called via `pushSingleTask` (per §5.1 Step 4), NOT directly. The queue handler invokes `pushSingleTask(tenant_id, task_id)`; `pushSingleTask` invokes the adapter. Interface surface and method signatures unchanged from current; only the **caller-of-`pushSingleTask`** set changes — pre-Day-14 it was just the DLQ retry UI; post-Day-14 it's the DLQ retry UI plus the new `/api/queue/push-task` queue handler. The queue handler does NOT bypass `pushSingleTask` to reach the adapter directly; if it did, it would lose the D8-4b reconcile branch (per §1.3 retirement table).
 
-Per the existing token cache at `src/modules/integration/providers/suitefleet/token-cache.ts` — 24h JWT cached per-tenant, refreshed on expiry. The push handler benefits from the cache the same way the single-handler cron did. No change.
+**`getTaskByAwb` fate (amendment 6 optional clarification):** the adapter's `getTaskByAwb` method is invoked only on the reconcile branch inside `pushSingleTask:1002`, never by the queue handler directly. Steady-state push flow uses `createTask` only; `getTaskByAwb` is the asymmetric-failure-recovery call, fired on AwbExists 4xx. Adapter surface is unchanged from current.
+
+### §6.2 SF auth caching unchanged + cold-start latency disclosure
+
+Per the existing token cache at `src/modules/integration/providers/suitefleet/token-cache.ts` — 24h JWT cached per-tenant, refreshed on expiry. The push handler benefits from the cache the same way the single-handler cron did. No change to the cache mechanism.
+
+**Cold-start auth latency disclosure (amendment 2):** the token cache is **in-memory per-Vercel-function-instance** — not a shared cross-instance cache. Cold-start auth refresh adds ~200-500ms to the first message landing on a fresh instance. At demo volume (~1,000 messages/day spread across ~3-5 active Vercel instances during a cron-tick burst), worst case is ~3-5 cold-auth round-trips per cron tick — one per instance, on its first message. Subsequent messages on the same instance hit the warm cache and pay only the SF call latency.
+
+**Why this is acceptable for MVP:** total cold-auth wall-clock per tick is ~3-5 × ~350ms ≈ 1-2s spread across instances (parallel, not serial). Under the §1.1 6-phase model this is invisible — the materialization handler doesn't wait on the queue handler; QStash absorbs the messages and releases at flow-control rate. The cold-auth latency just means the first message per instance takes ~1s instead of ~660ms.
+
+**Phase 2 hardening (deferred):** if observability shows this becoming a real-world bottleneck (e.g., very-spiky traffic patterns where cold-starts dominate), move auth to a shared Upstash Redis cache keyed on `sf-token:{tenant_id}` to amortize across instances. Out of scope for MVP; flagged here so the upgrade path is documented.
 
 ### §6.3 SF rate-limit posture
 
-Existing throttle is 5 req/sec inline in the cron. With QStash dispatching messages, we lose the inline throttle — QStash delivers as fast as the consumer accepts. Three options:
+**Where the existing throttle lives + what happens to it (D6-1 reframe):** the existing 5 req/sec throttle lives in `pushTasksForTenant` (cron-loop variant), which retires per §1.3. With the cron-loop function gone, the throttle disappears with it. We re-establish the throttle at the **QStash → push-handler edge** (egress) via Flow Control on the materialization-side `batchJSON` calls per §1.1 Phase 5.
 
-| Option | Mechanism |
-|---|---|
-| **A. QStash rate-limit per topic (recommended)** | QStash supports per-topic rate-limits; configure 5 msg/sec at the topic level |
-| B. Per-handler in-memory delay | Handler `await sleep(200ms)` before each SF call. Crude; doesn't scale across concurrent invocations |
-| C. SF-side: rely on SF rate-limiting | Accept 429s from SF; QStash retries them |
+**Mechanism (D6-2 fix):** QStash uses **Flow Control**, not topic-level rate limits. Verified against `node_modules/@upstash/qstash/client-CsM1dTnz.d.ts:142-180`: the `flowControl` parameter on `publishJSON`/`batchJSON` accepts `{ key, parallelism, rate, period }`. Topic-level rate limits do NOT exist in the SDK — the prior draft's "QStash rate-limit per topic" framing was wrong.
 
-**Recommendation: A.** Configured at QStash topic-create time; one-line config.
+**Ingress vs egress (amendment 4 clarification):** Flow Control governs the QStash → push-handler edge (**egress**). Materialization → QStash (**ingress**) bursts ~1,000 messages in ~1-2s per §1.1 amendment (10 sequential `batchJSON` calls × 100 messages each). QStash absorbs the burst and releases at the flow-control rate. **Ingress is intentionally unconstrained** — that's the queue's job, and it's why the materialization handler can advertise "total wall-clock seconds" in §1.1 even at full demo volume.
+
+**Three options + decision:**
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| **A. QStash Flow Control (RECOMMENDED)** | Pass `flowControl: { key: 'sf-push-global-mvp', rate: 5, period: '1s' }` on every `batchJSON` call from the materialization handler in §1.1 Phase 5. Flow-control key groups messages so cross-batch calls all count against the same rate budget. | **Adopted.** One-parameter config; no separate infrastructure; matches the egress-rate-limit pattern QStash is designed for. |
+| B. Per-handler in-memory delay | Handler `await sleep(200ms)` before each SF call | **Rejected.** Crude (doesn't scale across concurrent Vercel-instance invocations — each instance sleeps independently, so 5 instances ÷ 1 SF rate budget = 25 effective req/sec, blowing the budget by 5×). |
+| C. Rely on SF-side 429 throttling | Accept SF's 429 responses; let QStash retry them | **Rejected (amendment 5 explicit).** Deliberately overshoots the rate budget and burns QStash retries on 429s. Wasteful and noisy — every 429 is a doomed round-trip we paid for. Documented here so reviewers don't have to re-litigate. |
+
+**`flowControl.key` naming convention (amendment 3, load-bearing for per-tenant credential migration):**
+
+| Phase | Key | Reason |
+|---|---|---|
+| **MVP (this work)** | `sf-push-global-mvp` | Per `memory/decision_mvp_shared_suitefleet_credentials.md`, all tenants share a single SF sandbox credential (customer code 588). SF itself enforces a single rate budget across all tenants → global key matches reality. Per-tenant keying would over-throttle (each tenant gets `rate=5` but they all hit the same SF rate ceiling, so we'd serialize what could safely run in parallel). |
+| **Phase 2 (deferred)** | `sf-push:{tenant_id}` | Per-tenant credential isolation per `memory/followup_secrets_manager_swap_critical_path.md` — once each tenant has its own SF customer code with its own rate budget, per-tenant keying becomes correct. Migration to per-tenant key is gated on the Secrets Manager swap and lands together with that work; not a separate Day-N task. |
+
+This decision is documented in §10 cross-references and surfaces on the §11 review checklist; the MVP key is locked here so the implementing PR doesn't have to re-decide.
 
 ---
 
