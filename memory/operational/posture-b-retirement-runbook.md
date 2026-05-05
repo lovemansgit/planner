@@ -26,10 +26,17 @@ Before removing the env var, verify the soak window has produced clean signals:
 | P2 | 48h soak elapsed since Day-10 production deploy | Vercel Deployments → Production | Deploy timestamp ≥ 48h before now |
 | P3 | Operator-side login flow exercised on Production at least once during soak | Vercel logs filter `path:/login` OR `audit_events.event_type='user.login_succeeded'` query | ≥1 successful login from a real operator session |
 | P4 | Zero `audit_events.event_type='user.login_failed'` rows that map to known operators in the soak window | `SELECT COUNT(*) FROM audit_events WHERE event_type='user.login_failed' AND created_at > now() - interval '48 hours'` | Zero, OR all counts trace to expected dev/test attempts |
-| P5 | Three demo merchants (MPL/DNR/FBU) each have ≥1 `tenant-admin` role-assignment | `SELECT t.slug, COUNT(*) FROM role_assignments ra JOIN users u ON u.id = ra.user_id JOIN tenants t ON t.id = u.tenant_id JOIN roles r ON r.id = ra.role_id WHERE r.slug = 'tenant-admin' GROUP BY t.slug` | Each slug returns ≥1 |
+| P5 | Three demo merchants (MPL → `meal-plan-scheduler`, DNR → `dr-nutrition`, FBU → `fresh-butchers`) each have ≥1 `tenant-admin` role-assignment | `SELECT t.slug, COUNT(*) FROM role_assignments ra JOIN roles r ON r.id = ra.role_id JOIN tenants t ON t.id = ra.tenant_id WHERE r.slug = 'tenant-admin' AND t.slug IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers') GROUP BY t.slug ORDER BY t.slug` | Each of the three slugs returns ≥1 |
 | P6 | No production code path that depends on the demo fallback (no NODE_ENV-bypass code is live) | grep main HEAD: `process.env.ALLOW_DEMO_AUTH` | Should appear only at `src/shared/request-context.ts:264` + `src/shared/demo-context.ts` (the gate it guards) |
 
 If any pre-flight check fails: STOP, surface to Love, do not proceed to Stage 1.
+
+**P5 query — amendment history (Day 14 morning, post-PR-#142):** the original query had two bugs that produced fail-open false-negatives:
+
+1. **Slug literal mismatch.** The original `WHERE t.slug IN ('mpl', 'dnr', 'fbu')` used informal abbreviations from Day-8/Day-12 memos rather than canonical production slugs. Actual production slugs are `meal-plan-scheduler` / `dr-nutrition` / `fresh-butchers`. The MPL/DNR/FBU shorthand survives in section headers and decision memos for narrative simplicity but does not match the `tenants.slug` column.
+2. **Join shape via `users.tenant_id`.** The original `JOIN users u ON u.id = ra.user_id JOIN tenants t ON t.id = u.tenant_id` joined tenants through users, but `role_assignments.tenant_id` is the canonical FK to tenants and is the column the RBAC layer reads against. Joining via users introduces a silent dependency on `users.tenant_id` being set correctly on every operator row — when that column is NULL or stale, the row drops out and the merchant falsely appears to have no tenant-admin. **This is fail-open semantics:** the absence of evidence becomes evidence of absence, and the runbook gate passes-then-fails when it should fail-then-fail. The amended query joins `tenants` directly via `role_assignments.tenant_id`, which is the FK the RBAC code path actually traverses, so the runbook check now exactly mirrors the runtime authorization path.
+
+The amended query was probed against the production DB on Day 14 morning (main HEAD `4731553`): all three demo merchants returned 1 tenant-admin each (`meal-plan-scheduler` / `dr-nutrition` / `fresh-butchers`), confirming the substantive intent of the runbook P5 check. The original query's fail-open semantics caused this same probe to falsely report all three as MISSING, surfacing the bug at the moment the runbook was first executed.
 
 ---
 
