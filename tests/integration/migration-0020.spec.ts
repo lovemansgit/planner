@@ -170,15 +170,20 @@ describe("§7.3 — migration 0020 verification", () => {
     };
 
     async function pickWinningLabel(rows: RankedRow[]): Promise<string> {
-      // VALUES literal preserves NULL completed_at semantics; the postgres
-      // driver's array splat (per §7.1 fix) doesn't apply here because we
-      // pass a single JSON parameter that the lateral function unpacks.
+      // postgres-js maps JS arrays to Postgres arrays natively, including
+      // null elements (which become Postgres NULL inside the array).
+      // unnest with parallel arrays unpacks them into rows for the CTE
+      // — drives the same ORDER BY ranking as the migration's DELETE.
+      const labels = rows.map((row) => row.label);
+      const completedAts = rows.map((row) => row.completed_at);
+      const startedAts = rows.map((row) => row.started_at);
       const r = await sql<{ label: string }[]>`
-        WITH input(label, completed_at, started_at) AS (
-          SELECT (x->>'label')::text,
-                 NULLIF(x->>'completed_at','')::timestamptz,
-                 (x->>'started_at')::timestamptz
-            FROM jsonb_array_elements(${JSON.stringify(rows)}::jsonb) AS x
+        WITH input AS (
+          SELECT * FROM unnest(
+            ${labels}::text[],
+            ${completedAts}::timestamptz[],
+            ${startedAts}::timestamptz[]
+          ) AS t(label, completed_at, started_at)
         ),
         ranked AS (
           SELECT label,

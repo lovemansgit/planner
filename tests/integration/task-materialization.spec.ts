@@ -675,14 +675,22 @@ describe("§7.1 — task-materialization integration", () => {
         `),
       );
 
-      // Tick 2: a different target_date to avoid run-row UNIQUE conflict.
-      // (The (tenant_id, target_date) UNIQUE on task_generation_runs would
-      // otherwise route this through the §4.4 idempotent-skip branch.)
+      // Tick 2: a different target_date AND different (window_start, window_end)
+      // to avoid run-row UNIQUE conflicts. The (tenant_id, target_date)
+      // UNIQUE from migration 0020 needs a fresh target_date. The pre-
+      // existing (tenant_id, window_start, window_end) UNIQUE from 0012
+      // (retained per §0.5 amendment D4-4 + gate 6) also needs a fresh
+      // window. In production, every cron tick has a new `now()` so both
+      // UNIQUEs are naturally distinct; tests must mirror that pattern.
       const tick2Target = "2026-05-19"; // one day later
+      const tick2WindowStart = "2026-05-05T12:00:00Z";
+      const tick2WindowEnd = "2026-05-05T13:00:00Z";
       await withServiceRole("paused mat 2", (tx) =>
         materializeTenant(tx, {
           ...standardInput(t.tenantId),
           targetDate: tick2Target,
+          windowStart: tick2WindowStart,
+          windowEnd: tick2WindowEnd,
         }),
       );
       const tasks = await listTenantTasks(t.tenantId);
@@ -745,14 +753,17 @@ describe("§7.1 — task-materialization integration", () => {
           ) RETURNING id
         `);
         // Already-pushed: should be excluded by `pushed_to_external_at IS NULL`.
+        // subscription_id NULL with created_via='manual_admin' satisfies
+        // tasks_creation_source_invariant CHECK.
         await tx.execute(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, subscription_id, customer_order_number,
+            created_via,
             delivery_date, delivery_start_time, delivery_end_time,
             address_id, pushed_to_external_at, created_at
           ) VALUES (
             ${t.tenantId}, ${sub.consigneeId}, NULL,
-            'PUSHED', '2026-04-04', '09:00', '11:00',
+            'PUSHED', 'manual_admin', '2026-04-04', '09:00', '11:00',
             ${sub.primaryAddressId}, now(), ${pushed}::timestamptz
           )
         `);
@@ -760,11 +771,12 @@ describe("§7.1 — task-materialization integration", () => {
         await tx.execute(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, subscription_id, customer_order_number,
+            created_via,
             delivery_date, delivery_start_time, delivery_end_time,
             address_id, created_at
           ) VALUES (
             ${t.tenantId}, ${sub.consigneeId}, NULL,
-            'NULL-ADDR', '2026-04-05', '09:00', '11:00',
+            'NULL-ADDR', 'manual_admin', '2026-04-05', '09:00', '11:00',
             NULL, ${nullAddr}::timestamptz
           )
         `);
