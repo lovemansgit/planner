@@ -27,7 +27,7 @@ Current single-handler cron at [`src/app/api/cron/generate-tasks/route.ts`](../.
 | Eligibility filter | [`list-cron-eligible-tenants.ts:74-86`](../../src/app/api/cron/generate-tasks/list-cron-eligible-tenants.ts#L74-L86) | `WHERE suitefleet_customer_code IS NOT NULL AND <> ''` |
 | Per-tenant phase (a) — generation | [`route.ts:191-198`](../../src/app/api/cron/generate-tasks/route.ts#L191-L198) → [`task-generation/service.ts:120-358`](../../src/modules/task-generation/service.ts#L120-L358) | Bulk INSERT…SELECT into `tasks`; fast (single round-trip per tenant) |
 | Per-tenant phase (b) — push | [`route.ts:243`](../../src/app/api/cron/generate-tasks/route.ts#L243) → [`task-push/service.ts`](../../src/modules/task-push/service.ts) | Walks unpushed tasks, calls SF createTask per task at 5 req/sec throttle |
-| Per-task push completion | [`tasks/repository.ts:531-543`](../../src/modules/tasks/repository.ts#L531-L543) `markTaskPushed` | UPDATE sets `external_id`, `external_tracking_number`, `pushed_to_external_at = now()` AFTER SF 2xx |
+| Per-task push completion | [`tasks/repository.ts:531-549`](../../src/modules/tasks/repository.ts#L531-L549) `markTaskPushed` | UPDATE sets `external_id`, `external_tracking_number`, `pushed_to_external_at = now()` AFTER SF 2xx (declaration L531, UPDATE statement L538-544; verified against main HEAD `4731553`) |
 | Run-row lifecycle | [`task-generation/repository.ts:118-163`](../../src/modules/task-generation/repository.ts#L118-L163) `insertRunOrGetExisting` + finaliseRun | UNIQUE on `(tenant_id, window_start, window_end)`; cron handler computes `window_start = now()` at handler entry |
 | Per-task SF push throttle | `task-push/service.ts` constants | 5 req/sec → 200ms minimum interval between pushes |
 
@@ -37,10 +37,11 @@ Per the [cron memo](../followups/cron_materialization_push_coupling.md) §2 empi
 
 - **Per-task push latency:** ~660ms average (range 655–720ms across MPL + DNR samples)
 - **Per-tenant generation latency:** sub-second (single bulk INSERT…SELECT)
-- **Per-cron pass at full demo volume (845 subs/Tue):** 845 × 660ms ≈ **558s ≈ 9.3 minutes**
+- **Concurrency model:** **serial single-in-flight** within a tenant — verified at [task-push/service.ts:3-4](../../src/modules/task-push/service.ts#L3-L4) header comment ("Single-loop, sequential, throttled at 5 req/sec") + [:121](../../src/modules/task-push/service.ts#L121) constant docstring ("5 req/sec — sequential await sleep(200ms) between SF calls") + the `await sleep(SF_THROTTLE_MS)` calls between every loop iteration ([:508](../../src/modules/task-push/service.ts#L508), [:575](../../src/modules/task-push/service.ts#L575), [:650](../../src/modules/task-push/service.ts#L650), [:679](../../src/modules/task-push/service.ts#L679), [:716](../../src/modules/task-push/service.ts#L716), [:759](../../src/modules/task-push/service.ts#L759)). One outbound SF call lives at any moment per tenant. Pacing the loop is pessimistic-by-design — the 200ms `await sleep` runs even after empty/early-exit branches, simplifying the rate-limit math at the cost of throughput. **The 558s figure is therefore wall-clock-correct, not throughput-bound: parallelizing within the existing handler (e.g., 5 concurrent in-flight pushes at 5 req/sec rate-limit) would already collapse it to ~112s and fit Vercel's 300s envelope.** The decoupling proposal is still preferred because it: (i) gives push its own per-message envelope rather than tenant-bundled, (ii) inherits QStash retry semantics natively (§5.2), (iii) keeps phase (a) materialization independent of SF auth/rate hiccups, (iv) makes Run-A/Run-B race in §4 a non-issue per-message. But the urgency framing should be: "currently breaches 300s on serial-only design" rather than "fundamentally cannot fit Vercel".
+- **Per-cron pass at full demo volume (845 subs/Tue):** 845 × 660ms ≈ **558s ≈ 9.3 minutes** (serial single-in-flight)
 - **Vercel Pro function timeout:** 300s
 
-Verdict: phase (b) push dominates wall-clock; phase (a) generation does not. Decoupling phase (a) from phase (b) takes the cron handler from "9 minutes" to "seconds" with phase (b) shifted to a queue with its own timeout envelope.
+Verdict: phase (b) push dominates wall-clock; phase (a) generation does not. Decoupling phase (a) from phase (b) takes the cron handler from "9 minutes" to "seconds" with phase (b) shifted to a queue with its own timeout envelope. Decoupling is preferred over in-handler parallelization for the four reasons above, despite the in-handler-parallel option also being technically sufficient on the timeout dimension alone.
 
 ### §0.3 QStash dep + env confirmation
 
@@ -57,21 +58,55 @@ QStash is the recommended mechanism per §1.2 design.
 | # | Verification | Command / location |
 |---|---|---|
 | Q1 | QSTASH_TOKEN + QSTASH_URL present in Vercel Production env (Production + Preview scope per `feedback_vercel_env_scope_convention.md`) | Vercel UI → Settings → Environment Variables |
-| Q2 | Existing `task_generation_runs` rows for any (tenant, target_date) tuple — confirm **no current duplicates** before adding `(tenant_id, target_date)` UNIQUE in §4 | `SELECT tenant_id, target_date, COUNT(*) FROM task_generation_runs GROUP BY 1, 2 HAVING COUNT(*) > 1` |
-| Q3 | Count of rows with `pushed_to_external_at IS NULL` per tenant — sizing the initial push backlog the new system will inherit on cutover | `SELECT t.slug, COUNT(*) FROM tasks ta JOIN tenants t ON t.id = ta.tenant_id WHERE ta.pushed_to_external_at IS NULL GROUP BY t.slug` |
-| Q4 | `subscription_materialization` (shipped in PR #139 / migration 0015) currently has zero rows — confirm baseline before §3 horizon-advance backfill | `SELECT COUNT(*) FROM subscription_materialization` |
+| Q2 | Existing `task_generation_runs` rows for any (tenant, target_date) tuple — `target_date` does NOT yet exist on the table (§0.5), so use surrogate `(tenant_id, (window_start AT TIME ZONE 'UTC')::date)`. Probe runs against main HEAD `4731553` against production DB show **20 tenants with 5 dupe runs each on 2026-05-02**, all `r3-test-*` integration-test fixtures sharing the production DB. The sample shows 5 distinct `(window_start, window_end)` tuples per (tenant, date), legitimately admitted by the current UNIQUE on `(tenant_id, window_start, window_end)`. **Real production tenants (meal-plan-scheduler / dr-nutrition / fresh-butchers) have no current dupes.** Migration §4 must dedupe regardless because the new UNIQUE on `(tenant_id, target_date)` will collide with the test-fixture dupes. **Winning-row policy (locked here so §4 doesn't have to invent it):** within each `(tenant_id, target_date)` group, keep `MAX(completed_at)` if any row in the group has `completed_at IS NOT NULL`; else fall back to `MAX(started_at)`. This preserves the "most-recent successful run" as the row of record and treats fixture noise the same as production race-recovery — both reduce to a single survivor per (tenant, date). | `SELECT tenant_id, (window_start AT TIME ZONE 'UTC')::date AS d, COUNT(*) FROM task_generation_runs GROUP BY 1, 2 HAVING COUNT(*) > 1 ORDER BY 3 DESC` |
+| Q3 | Count of rows with `pushed_to_external_at IS NULL` per tenant — sizing the initial push backlog the new system will inherit on cutover. Probe (main HEAD `4731553`, prod DB): only `fresh-butchers` shows backlog (114 unpushed); other 2 demo merchants are 0. Initial backlog ≈ 114 messages on cutover, well within QStash quota irrespective of tier (§0.6). | `SELECT t.slug, COUNT(*) FROM tasks ta JOIN tenants t ON t.id = ta.tenant_id WHERE ta.pushed_to_external_at IS NULL GROUP BY t.slug` |
+| Q4 | `subscription_materialization` (shipped in PR #139 / migration 0015) currently has zero rows — confirm baseline before §3 horizon-advance backfill. **Probe (main HEAD `4731553`, prod DB): table does NOT exist on production yet** — confirms PR #139's migrations 0014-0019 haven't been applied to prod. Adds a dependency: §3 horizon-advance backfill is gated on PR #139's migrations being applied to production before the code PR ships, OR on the code PR's own migration step including 0014-0019. Resolution direction (TBD): if `Day-14 EOD batched promotion + apply-migrations` is Love's pattern, then PR #139's migrations apply at promotion time and §3 backfill runs after. Surface to Love before §3 reads. | `SELECT COUNT(*) FROM subscription_materialization` |
 
-Q2 is the most important — if existing duplicates exist, the §4 migration must wrap the constraint add with a dedup step.
+Q2 is the most important and is now resolved — winning-row policy locked above. Q4 is the new load-bearing dependency: PR #139 migrations must reach the production DB before the §3 backfill runs.
 
 ### §0.5 Migration filename allocation
 
-Next sequence after PR #139's `0019` is `0020_*`. Proposed split:
+Next sequence after PR #139's `0019` is `0020_*`. Proposed scope (renamed to reflect the actual change set, not just the constraint add):
 
 | Migration | Scope |
 |---|---|
-| `0020_task_generation_runs_target_date_unique.sql` | Per-tenant per-target-date UNIQUE; needs `target_date` column-add to `task_generation_runs` (currently the schema carries `window_start`/`window_end` but not `target_date`) + UNIQUE constraint + backfill from existing rows |
+| `0020_task_generation_runs_target_date_column_and_unique.sql` | Three operations in dependency order: (1) ALTER TABLE add `target_date date` column, nullable initially; (2) backfill `target_date = (window_start AT TIME ZONE 'UTC')::date` for all existing rows; (3) dedupe per Q2 winning-row policy (delete losers within each `(tenant_id, target_date)` group); (4) ALTER TABLE set `target_date` NOT NULL; (5) ADD CONSTRAINT UNIQUE on `(tenant_id, target_date)`. The pre-existing UNIQUE on `(tenant_id, window_start, window_end)` is retained — it provides finer-grained idempotency for within-day re-runs even if conceptually subsumed by the new constraint. |
 
-Single migration. The decoupled cron path itself is service-layer change, not schema.
+Single migration; transaction-wrapped so partial failure rolls all five steps. The decoupled cron path itself is service-layer change, not schema.
+
+### §0.6 QStash quota check (NEW — gating before code PR opens)
+
+Per Love amendment: the plan must surface Upstash QStash plan tier, request budget on that tier, and projected throughput before the code PR opens.
+
+**Projected throughput at full demo volume:**
+
+| Source | Per-day | Per-week | Notes |
+|---|---|---|---|
+| Materialization-cron push (steady state) | ~845 messages × 7 days = **~5,900/week** | The 845 figure is from the cron memo §2 (845 subs/Tue at full demo volume); other days vary by `days_of_week` distribution. Assume worst-case all-7-days-1000 for headroom = **~7,000/week** budget. |
+| Initial push backlog at cutover (one-time) | 114 messages | 0 | Q3 probe — fresh-butchers only |
+| Retries (QStash native, see §5.2) | Bounded by `Upstash-Retried` cap × per-message DLQ floor | Estimate 5% retry × 845/day = ~42/day = ~300/week | Real number depends on §5.2 DLQ posture and SF reliability; budget +10% over base. |
+| **Combined budget** | **~1,000/day worst-case** | **~7,500/week** | Budget for headroom + cutover spikes |
+
+**Upstash QStash plan tiers (per public docs at upstash.com/pricing — Love verifies current):**
+
+| Tier | Daily message limit | Pricing |
+|---|---|---|
+| Free | 500 messages/day | $0 |
+| Pay-as-you-go | Unlimited | $1 per 100k messages above free tier |
+| Fixed/Pro | Higher caps + reserved concurrency | Varies |
+
+**Verdict (TBD pending Love verification):**
+
+- **Free tier is INSUFFICIENT** at 1,000 messages/day worst-case (the cap is 500/day).
+- **Pay-as-you-go covers the demo with negligible cost** (1,000/day × 30 days × ~$1/100k = ~$0.30/month).
+- If current Upstash account is on free tier, this is a **gating** item before code PR — must upgrade to pay-as-you-go (no schema/code blocker; just a billing-config flip in Upstash console).
+
+**Action for Love (before code PR opens):**
+1. Confirm current Upstash plan tier in Upstash dashboard → Account → Billing.
+2. If on free tier: upgrade to pay-as-you-go.
+3. If already on pay-as-you-go or Pro: no action needed; surface the tier in the code PR description for audit-trail.
+
+If this verification is deferred, it must be marked as a hard-stop condition on the code PR rather than discovered at deploy time.
 
 ---
 
