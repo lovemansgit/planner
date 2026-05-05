@@ -62,15 +62,27 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   // --------------------------------------------------------------------------
-  // Handler entry — compute target horizon date (Phase 0b per plan §2.1)
+  // Handler entry — compute target horizon date + window timestamps
+  // (Phase 0b per plan §2.1; window timestamps mirror legacy run-row shape)
   // --------------------------------------------------------------------------
   // target_date = today + 14 days in Asia/Dubai per plan §3.2.
   // Per-subscription cap to LEAST(target, COALESCE(end_date, target))
   // is applied inside the §2.3 INSERT…SELECT (Phase 2 SQL); the handler-
   // level value here is the unconditional 14-day horizon shared by all
   // tenants on this invocation.
-  const targetDate = computeTargetDateInDubai(new Date());
-  requestLog.info({ target_date: targetDate }, "target horizon date computed");
+  //
+  // windowStart / windowEnd preserve the legacy task_generation_runs
+  // window shape — runs carry both target_date AND window timestamps for
+  // operational continuity. windowEnd = windowStart + 1h matches the
+  // pre-Day-14 cutoff window semantic.
+  const now = new Date();
+  const targetDate = computeTargetDateInDubai(now);
+  const windowStart = now.toISOString();
+  const windowEnd = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  requestLog.info(
+    { target_date: targetDate, window_start: windowStart, window_end: windowEnd },
+    "target horizon date computed",
+  );
 
   // --------------------------------------------------------------------------
   // Handler entry — enumerate cron-eligible tenants (unchanged β filter)
@@ -180,19 +192,29 @@ export async function GET(req: Request): Promise<Response> {
     let newInsertedTaskIds: readonly Uuid[];
     let addressResolutionFailedCount: number;
     let advancedSubscriptionIds: readonly Uuid[];
+    let runRowOutcomeKind: string;
+    let cappedByGate: boolean;
     try {
       const phaseResult = await withServiceRole(
         `cron:materialize for tenant ${tenantId}`,
         async (tx) =>
-          materializeTenant(tx, { tenantId, targetDate, requestId }),
+          materializeTenant(tx, {
+            tenantId,
+            targetDate,
+            windowStart,
+            windowEnd,
+            requestId,
+          }),
       );
       newInsertedTaskIds = phaseResult.newInsertedTaskIds;
       addressResolutionFailedCount = phaseResult.addressResolutionFailedCount;
       advancedSubscriptionIds = phaseResult.advancedSubscriptionIds;
+      runRowOutcomeKind = phaseResult.runRowOutcome.kind;
+      cappedByGate = phaseResult.cappedByGate;
     } catch (err) {
       tenantLog.error(
         { error: err instanceof Error ? err.message : String(err) },
-        "phases 2-3 materialization threw",
+        "phases 2-4 materialization threw",
       );
       captureException(err, {
         component: "cron_generate_tasks",
@@ -210,8 +232,10 @@ export async function GET(req: Request): Promise<Response> {
         new_inserted_count: newInsertedTaskIds.length,
         address_resolution_failed_count: addressResolutionFailedCount,
         advanced_subscription_count: advancedSubscriptionIds.length,
+        run_row_outcome: runRowOutcomeKind,
+        capped_by_gate: cappedByGate,
       },
-      "phases 2-3 materialization complete",
+      "phases 2-4 materialization complete",
     );
 
     // ----- PHASE 3 — UPDATE subscription_materialization (per §3.2) ----------
@@ -219,13 +243,9 @@ export async function GET(req: Request): Promise<Response> {
     // See src/modules/task-materialization/service.ts for the UPDATE.
 
     // ----- PHASE 4 — INSERT task_generation_runs row (per §4.4) --------------
-    // TODO next surface: status='completed', target_date, started_at,
-    //       completed_at, counters; on 23505 conflict, branch per §4.4
-    //       status table including stale-running CAS recovery
-    //       (§4.4 amendment 2: WHERE id = $stale_id AND
-    //       started_at = $original_stale_started_at RETURNING id).
-    //       Phase 4 will fold into the same materializeTenant call,
-    //       extending its tx to cover all of Phases 2-3-4 before commit.
+    // Folded into the materializeTenant call above (Phases 2-3-4 single tx).
+    // See src/modules/task-materialization/run-row.ts for the §4.4 6-status
+    // conflict-resolution state machine + stale-running CAS recovery branch.
 
     // ----- (commit boundary — Phases 2-4 single tx) --------------------------
 

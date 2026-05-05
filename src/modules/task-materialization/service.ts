@@ -6,21 +6,32 @@
 // different orchestration (6-phase model with QStash decoupling at
 // Phase 5 instead of inline SF push).
 //
-// IN-PROGRESS: this surface implements Phases 2-3 (bulk INSERT…SELECT +
-// §2.2 quarantine counter emission + horizon advance via UPDATE on
-// subscription_materialization). Phase 4 (run-row write with §4.4
-// stale-running CAS branching) lands in the next surface under the
-// same code-PR drafting session.
+// This surface implements Phases 2-3-4 in a single withServiceRole tx:
+//   - Phase 2: cap-check → bulk INSERT…SELECT → §2.2 quarantine counter
+//   - Phase 3: UPDATE subscription_materialization horizon advance
+//   - Phase 4: INSERT task_generation_runs at terminal status (writeRunRowPhase4)
+//
+// Phase 5 (post-commit batchJSON enqueue) and Phase 6 (handler-exit
+// summary) live in the cron route handler, NOT this module. This
+// module's contract ends at Phase 4 commit.
 //
 // Caller wraps in withServiceRole; this function expects an open tx.
-// Phases 2-3 currently run in their own short-lived withServiceRole
-// block; the next surface extends the same tx to cover Phase 4 before
-// commit. Re-INSERT idempotency holds via the partial UNIQUE on
-// (subscription_id, delivery_date) per 0012:230-232 — re-runs of the
-// same target_date for the same subscription collapse to ON CONFLICT
-// DO NOTHING. Re-UPDATE idempotency on subscription_materialization
-// is natural: setting materialized_through_date to the same value is
-// a no-op, and the WHERE filters out rows that already advanced.
+// All three phases run inside the same tx; commit happens when the
+// withServiceRole block returns. Re-INSERT idempotency holds via the
+// partial UNIQUE on (subscription_id, delivery_date) per 0012:230-232 —
+// re-runs of the same target_date for the same subscription collapse
+// to ON CONFLICT DO NOTHING. Re-UPDATE idempotency on
+// subscription_materialization is natural. Run-row idempotency holds
+// via the new (tenant_id, target_date) UNIQUE from migration 0020 +
+// the §4.4 6-branch conflict resolution in writeRunRowPhase4.
+//
+// Cap-gate: per Q4 direction, the cap protects against bulk INSERT DB
+// pressure. If projected_count (cardinality of eligible_dates pre-
+// quarantine) exceeds capThreshold, Phases 2-3 are SKIPPED and Phase 4
+// writes the run-row at status='capped'. The cap-gate runs as a
+// separate SELECT before the INSERT (one extra round-trip; the
+// alternative of folding it into a CTE-with-CASE adds SQL complexity
+// for negligible runtime savings at the cardinality this scan returns).
 
 import { sql as sqlTag } from "drizzle-orm";
 
@@ -29,12 +40,31 @@ import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
 import type { Uuid } from "@/shared/types";
 
+import type { RunRowOutcome } from "./run-row";
+import { writeRunRowPhase4 } from "./run-row";
+
 const log = logger.with({ component: "task_materialization_service" });
+
+/**
+ * Hard cap on per-tenant projected materialization count per cron tick.
+ * Inherited from legacy task-generation/route.ts:72; relevance under the
+ * 14-day horizon model: at full demo volume (~280 subs × 14 days = ~3920
+ * candidates per tenant), this is 1.78× headroom. Triggers only on
+ * extreme cases (e.g., a tenant onboarding 1000+ subs at once, or a
+ * generate_series bug expanding the date range incorrectly).
+ *
+ * On cap-gate fire: Phase 2-3 SKIP entirely; Phase 4 writes status='capped'.
+ */
+const TASK_MATERIALIZATION_CAP = 7000;
 
 export interface MaterializeTenantInput {
   tenantId: Uuid;
   /** ISO date in Asia/Dubai (e.g., '2026-05-19'). Computed at handler entry per §3.2. */
   targetDate: string;
+  /** ISO timestamp — start of the cron invocation (windowStart). Used for run-row metadata. */
+  windowStart: string;
+  /** ISO timestamp — windowStart + 1h. Used for run-row metadata. */
+  windowEnd: string;
   /** Request id from the cron handler — propagated for log/Sentry context. */
   requestId: string;
 }
@@ -56,9 +86,21 @@ export interface MaterializeTenantResult {
    * (~280 at full demo volume). Used by Phase 6 logging + observability.
    * Note: a subscription appears here even if Phase 2 produced zero
    * INSERTs for it — Phase 3 horizon-advance is independent of row
-   * production per §3.2 plan intent.
+   * production per §3.2 plan intent. On the capped path, this is empty
+   * (Phase 3 also SKIPs).
    */
   advancedSubscriptionIds: readonly Uuid[];
+  /**
+   * Phase 4 run-row outcome — describes which §4.4 conflict branch fired
+   * (or 'inserted' on the happy path). Used by Phase 6 logging + the
+   * cap-gate observability surface.
+   */
+  runRowOutcome: RunRowOutcome;
+  /**
+   * Whether the cap-gate fired this tick. When true, Phases 2-3 SKIPped
+   * and Phase 4 wrote status='capped'.
+   */
+  cappedByGate: boolean;
 }
 
 /**
@@ -122,21 +164,132 @@ export interface MaterializeTenantResult {
  * (a sub whose entire 14-day window was skip-excluded should still
  * advance its horizon, since the calendar progressed).
  *
+ * Phase 4 — INSERT task_generation_runs at terminal status
+ * ('completed' on happy path; 'capped' when cap-gate fires). On
+ * 23505 conflict against (tenant_id, target_date) UNIQUE per
+ * migration 0020, branches per §4.4 6-status table including the
+ * stale-running CAS recovery branch (§4.4 amendment 2 + §9 A4).
+ * See run-row.ts for the conflict-resolution state machine.
+ *
  * Returns newInsertedTaskIds[] (Phase 2 RETURNING id) for Phase 5
  * to enqueue, addressResolutionFailedCount (Phase 2 quarantine
- * counter) for Phase 6 logging, and advancedSubscriptionIds[] (Phase 3
- * RETURNING) for Phase 6 logging + observability.
+ * counter) for Phase 6 logging, advancedSubscriptionIds[] (Phase 3
+ * RETURNING) for Phase 6 logging, runRowOutcome (Phase 4 §4.4 branch
+ * fired) for Phase 6 logging + observability, and cappedByGate flag
+ * for the cap-gate observability surface.
  */
 export async function materializeTenant(
   tx: DbTx,
   input: MaterializeTenantInput,
 ): Promise<MaterializeTenantResult> {
-  const { tenantId, targetDate, requestId } = input;
+  const { tenantId, targetDate, windowStart, windowEnd, requestId } = input;
   const tenantLog = log.with({ tenant_id: tenantId, request_id: requestId });
+  const startedAt = new Date().toISOString();
 
   // ---------------------------------------------------------------------------
-  // INSERT…SELECT — happy-path materialization with 4-layer COALESCE address
-  // resolution + skip-the-date EXISTS guard + refuse-to-materialize guard.
+  // CAP-CHECK — count eligible_dates pre-quarantine to gate Phase 2-3.
+  //
+  // Per Q4 direction: if projected_count exceeds capThreshold, SKIP
+  // Phase 2 INSERT and Phase 3 UPDATE; Phase 4 writes status='capped'.
+  // The cap is a defensive guardrail — at full demo volume this never
+  // fires (~3,920 candidates per tenant; cap is 7,000), but extreme
+  // cases (e.g., a tenant onboarding 1000+ subs) need the gate.
+  //
+  // The CTE structure here mirrors Phase 2's INSERT CTE chain
+  // (candidate_dates → eligible_dates) so the projected_count value
+  // matches what Phase 2 would attempt to INSERT (pre-quarantine).
+  // Quarantined rows are INCLUDED in projected_count because they
+  // contribute to DB pressure during Phase 2's INSERT…SELECT
+  // computation (the CTE chain materializes them up to the WHERE
+  // refuse-to-materialize guard before excluding).
+  //
+  // subscriptions_walked is folded into this same query as a
+  // distinct count of subscription_ids in eligible_dates — the
+  // "subscriptions the cron considered for materialization" metric
+  // that the legacy run-row carried for ops visibility.
+  // ---------------------------------------------------------------------------
+  type CapCheckRow = {
+    projected_count: number;
+    subscriptions_walked: number;
+  };
+  const capRows = await tx.execute<CapCheckRow>(sqlTag`
+    WITH candidate_dates AS (
+      SELECT
+        s.id            AS subscription_id,
+        d::date         AS delivery_date
+      FROM subscriptions s
+      JOIN subscription_materialization sm
+        ON sm.subscription_id = s.id
+      CROSS JOIN LATERAL generate_series(
+        GREATEST(sm.materialized_through_date + 1, s.start_date),
+        LEAST(${targetDate}::date, COALESCE(s.end_date, ${targetDate}::date)),
+        INTERVAL '1 day'
+      ) AS d
+      WHERE s.tenant_id = ${tenantId}
+        AND s.status = 'active'
+        AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
+    ),
+    eligible_dates AS (
+      SELECT cd.*
+      FROM candidate_dates cd
+      WHERE NOT EXISTS (
+        SELECT 1 FROM subscription_exceptions e
+        WHERE e.subscription_id = cd.subscription_id
+          AND (
+            (e.type = 'skip' AND e.start_date = cd.delivery_date)
+            OR (e.type = 'pause_window'
+                AND cd.delivery_date BETWEEN e.start_date AND e.end_date)
+          )
+      )
+    )
+    SELECT
+      COUNT(*)::int                              AS projected_count,
+      COUNT(DISTINCT subscription_id)::int       AS subscriptions_walked
+    FROM eligible_dates
+  `);
+
+  const projectedCount = capRows[0]?.projected_count ?? 0;
+  const subscriptionsWalked = capRows[0]?.subscriptions_walked ?? 0;
+
+  if (projectedCount > TASK_MATERIALIZATION_CAP) {
+    tenantLog.warn(
+      {
+        event: "task_materialization.capped",
+        projected_count: projectedCount,
+        cap_threshold: TASK_MATERIALIZATION_CAP,
+        subscriptions_walked: subscriptionsWalked,
+      },
+      "cap-gate fired — skipping Phases 2-3, writing run-row at status='capped'",
+    );
+
+    const cappedRunRowOutcome = await writeRunRowPhase4(tx, {
+      tenantId,
+      targetDate,
+      windowStart,
+      windowEnd,
+      startedAt,
+      capThreshold: TASK_MATERIALIZATION_CAP,
+      projectedCount,
+      subscriptionsWalked,
+      tasksCreated: 0,
+      tasksSkippedExisting: 0,
+      status: "capped",
+      requestId,
+    });
+
+    return {
+      newInsertedTaskIds: [],
+      addressResolutionFailedCount: 0,
+      advancedSubscriptionIds: [],
+      runRowOutcome: cappedRunRowOutcome,
+      cappedByGate: true,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // PHASE 2 — INSERT…SELECT — happy-path materialization with 4-layer COALESCE
+  // address resolution + skip-the-date EXISTS guard + refuse-to-materialize
+  // guard.
   // ---------------------------------------------------------------------------
   type InsertedRow = { id: Uuid };
   const insertedRows = await tx.execute<InsertedRow>(sqlTag`
@@ -432,9 +585,52 @@ export async function materializeTenant(
 
   const advancedSubscriptionIds = advancedRows.map((row) => row.subscription_id);
 
+  // ---------------------------------------------------------------------------
+  // tasks_skipped_existing counter derivation (per Q2 option (b)):
+  //
+  //   total_eligible_with_resolved_address = INSERTed + skipped-via-ON-CONFLICT
+  //   (quarantined rows excluded — they fail the resolved_address_id IS NOT NULL
+  //   predicate and don't reach the INSERT). Therefore skipped count = total - inserted.
+  //
+  // Cap-check's projected_count counted ALL eligible_dates rows (pre-
+  // quarantine). Quarantined-row count comes from quarantinedRows.length.
+  // Therefore total_eligible_with_resolved_address = projected_count -
+  // quarantinedRows.length. No extra query needed — derived from data
+  // already in hand.
+  // ---------------------------------------------------------------------------
+  const totalEligibleWithResolvedAddress =
+    projectedCount - quarantinedRows.length;
+  const tasksSkippedExistingCount =
+    totalEligibleWithResolvedAddress - newInsertedTaskIds.length;
+
+  // ---------------------------------------------------------------------------
+  // PHASE 4 — INSERT task_generation_runs row at status='completed'.
+  //
+  // Single-statement INSERT directly at terminal status; on 23505 conflict
+  // against (tenant_id, target_date) UNIQUE per migration 0020, branches
+  // per §4.4 6-status table including stale-running CAS recovery.
+  // See run-row.ts for the conflict-resolution state machine.
+  // ---------------------------------------------------------------------------
+  const runRowOutcome = await writeRunRowPhase4(tx, {
+    tenantId,
+    targetDate,
+    windowStart,
+    windowEnd,
+    startedAt,
+    capThreshold: TASK_MATERIALIZATION_CAP,
+    projectedCount,
+    subscriptionsWalked,
+    tasksCreated: newInsertedTaskIds.length,
+    tasksSkippedExisting: tasksSkippedExistingCount,
+    status: "completed",
+    requestId,
+  });
+
   return {
     newInsertedTaskIds,
     addressResolutionFailedCount: quarantinedRows.length,
     advancedSubscriptionIds,
+    runRowOutcome,
+    cappedByGate: false,
   };
 }
