@@ -16,7 +16,6 @@ import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-// TODO Phase 5: import QStash client + flowControl + failureCallback
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
 import { withServiceRole } from "@/shared/db";
@@ -24,6 +23,7 @@ import type { Uuid } from "@/shared/types";
 
 import { listReconciliationCandidatesByTenant } from "@/modules/tasks/repository";
 import { computeTargetDateInDubai } from "@/modules/task-materialization/dubai-date";
+import { enqueueTaskPushBatch } from "@/modules/task-materialization/queue";
 import { materializeTenant } from "@/modules/task-materialization/service";
 import { listCronEligibleTenantIds } from "./list-cron-eligible-tenants";
 
@@ -250,15 +250,53 @@ export async function GET(req: Request): Promise<Response> {
     // ----- (commit boundary — Phases 2-4 single tx) --------------------------
 
     // ----- PHASE 5 — post-commit batchJSON enqueue (per §1.1, §5.2, §6.3) ----
-    // TODO: union(reconciliationTaskIds, newInsertedTaskIds)
-    //       chunk at 100 messages
-    //       batchJSON with deduplicationId: task_id,
-    //         flowControl: { key: env.QSTASH_FLOW_CONTROL_KEY, rate: 5,
-    //                        period: '1s' },
-    //         failureCallback: PUBLIC_BASE_URL + '/api/queue/push-task-failed',
-    //         retries: 3
-    //       Failures here are logged + Sentry-captured but do NOT roll back
-    //       Phase 4 commit; next-tick reconciliation re-discovers missed rows.
+    // Phase 5 runs OUTSIDE the Phase 2-4 tx (the withServiceRole block above
+    // has already committed). Already-committed materialization rows are
+    // durable; failed Phase 5 enqueue does NOT roll back.
+    //
+    // Even on capped path (Phases 2-3 SKIPped, newInsertedTaskIds empty),
+    // Phase 1 reconciliation rows from earlier ticks are still enqueued —
+    // capped only blocks NEW materialization, not draining prior-tick
+    // backlog. Per Q4 direction.
+    //
+    // Per Q5 (b): chunk failures inside enqueueTaskPushBatch are logged +
+    // Sentry-captured + counted but do NOT throw. enqueueTaskPushBatch
+    // throws ONLY on env-var misconfiguration (QSTASH_TOKEN /
+    // PUBLIC_BASE_URL / QSTASH_FLOW_CONTROL_KEY missing); a throw here
+    // means the cron handler is misconfigured. Per-tenant continue per
+    // §1.1 self-healing — next tick re-attempts.
+    const phase5TaskIds = [...reconciliationTaskIds, ...newInsertedTaskIds];
+    let phase5Enqueued = 0;
+    let phase5FailedChunks = 0;
+    try {
+      const phase5Result = await enqueueTaskPushBatch({
+        tenantId,
+        taskIds: phase5TaskIds,
+        requestId,
+      });
+      phase5Enqueued = phase5Result.enqueuedCount;
+      phase5FailedChunks = phase5Result.failedChunks;
+    } catch (err) {
+      tenantLog.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        "phase 5 enqueue threw on env-var misconfig",
+      );
+      captureException(err, {
+        component: "cron_generate_tasks",
+        operation: "phase5_enqueue",
+        tenant_id: tenantId,
+        request_id: requestId,
+      });
+      continue;
+    }
+    tenantLog.info(
+      {
+        phase5_enqueued: phase5Enqueued,
+        phase5_failed_chunks: phase5FailedChunks,
+        phase5_total: phase5TaskIds.length,
+      },
+      "phase 5 enqueue complete",
+    );
   }
 
   // --------------------------------------------------------------------------
