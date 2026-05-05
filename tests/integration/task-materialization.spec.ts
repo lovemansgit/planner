@@ -154,6 +154,13 @@ async function seedSubscription(
       primaryAddressId = aR[0].id;
     }
 
+    // days_of_week passed as Postgres array-literal text + cast.
+    // Drizzle's sqlTag splats JS arrays into separate parameters
+    // ($6,$7,$8,...), which Postgres parses as a row constructor and
+    // can't cast to integer[]. Building the text form `{1,2,3,4,5}`
+    // keeps the parameter as a single string that Postgres parses as
+    // an array literal.
+    const dowText = `{${(input.daysOfWeek ?? DOW_MON_FRI).join(",")}}`;
     const sR = await tx.execute<{ id: Uuid }>(sqlTag`
       INSERT INTO subscriptions (
         tenant_id, consignee_id, status,
@@ -162,7 +169,7 @@ async function seedSubscription(
       ) VALUES (
         ${input.tenantId}, ${consigneeId}, ${input.status ?? "active"},
         ${input.startDate ?? SUB_START}, ${input.endDate ?? SUB_END},
-        ${input.daysOfWeek ?? DOW_MON_FRI}::integer[],
+        ${dowText}::integer[],
         '09:00', '11:00'
       )
       RETURNING id
