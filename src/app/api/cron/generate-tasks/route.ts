@@ -16,8 +16,6 @@ import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-// TODO Phase 2: import new materialization service (or inline SQL) per
-//                plan §2.3 4-layer COALESCE
 // TODO Phase 5: import QStash client + flowControl + failureCallback
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
@@ -25,6 +23,8 @@ import { withServiceRole } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
 import { listReconciliationCandidatesByTenant } from "@/modules/tasks/repository";
+import { computeTargetDateInDubai } from "@/modules/task-materialization/dubai-date";
+import { materializeTenantPhase2 } from "@/modules/task-materialization/service";
 import { listCronEligibleTenantIds } from "./list-cron-eligible-tenants";
 
 export const dynamic = "force-dynamic";
@@ -64,11 +64,13 @@ export async function GET(req: Request): Promise<Response> {
   // --------------------------------------------------------------------------
   // Handler entry — compute target horizon date (Phase 0b per plan §2.1)
   // --------------------------------------------------------------------------
-  // TODO Phase 3: target_date = today + 14 days in Asia/Dubai per
-  //               plan §3.2 (capped at S.end_date per amendment 3 inside
-  //               the per-subscription INSERT…SELECT — the handler-level
-  //               value here is the unconditional 14-day horizon).
-  // const targetDate = computeTargetDateInDubai(new Date());
+  // target_date = today + 14 days in Asia/Dubai per plan §3.2.
+  // Per-subscription cap to LEAST(target, COALESCE(end_date, target))
+  // is applied inside the §2.3 INSERT…SELECT (Phase 2 SQL); the handler-
+  // level value here is the unconditional 14-day horizon shared by all
+  // tenants on this invocation.
+  const targetDate = computeTargetDateInDubai(new Date());
+  requestLog.info({ target_date: targetDate }, "target horizon date computed");
 
   // --------------------------------------------------------------------------
   // Handler entry — enumerate cron-eligible tenants (unchanged β filter)
@@ -154,11 +156,55 @@ export async function GET(req: Request): Promise<Response> {
     );
 
     // ----- PHASE 2 — bulk INSERT…SELECT into tasks (per §2.1, §2.3) ----------
-    // TODO: 4-layer COALESCE address resolution
-    //         (override_one_off → override_forward → rotation → primary)
-    //       + skip-the-date EXISTS guards (skip + pause_window)
-    //       + refuse-to-materialize guard (§2.2 — COALESCE IS NOT NULL)
-    //       + RETURNING id for newInsertedTaskIds[]
+    // Single per-tenant bulk INSERT with 4-layer COALESCE address resolution
+    // (override_one_off → override_forward → rotation → primary) + skip-the-
+    // date EXISTS guards (skip + pause_window) + refuse-to-materialize guard
+    // (§2.2 — COALESCE IS NOT NULL) + RETURNING id for Phase 5 enqueue.
+    //
+    // The §2.2 quarantine counter emission runs in a second statement
+    // INSIDE the same withServiceRole tx (option-b two-pass per §2.2
+    // amendment direction). Cardinality is small; same-tx semantics
+    // eliminate the inconsistency window with concurrent paths.
+    //
+    // Phase 2 currently runs in its own short-lived withServiceRole block;
+    // subsequent surfaces (Phase 3-4) extend the same tx to cover horizon
+    // advance + run-row write before commit. Re-INSERT idempotency holds
+    // via the partial UNIQUE on (subscription_id, delivery_date) per
+    // 0012:230-232 — re-runs of the same target_date for the same
+    // subscription collapse to ON CONFLICT DO NOTHING.
+    let newInsertedTaskIds: readonly Uuid[];
+    let addressResolutionFailedCount: number;
+    try {
+      const phase2Result = await withServiceRole(
+        `cron:phase2_materialize for tenant ${tenantId}`,
+        async (tx) =>
+          materializeTenantPhase2(tx, { tenantId, targetDate, requestId }),
+      );
+      newInsertedTaskIds = phase2Result.newInsertedTaskIds;
+      addressResolutionFailedCount = phase2Result.addressResolutionFailedCount;
+    } catch (err) {
+      tenantLog.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        "phase 2 materialization threw",
+      );
+      captureException(err, {
+        component: "cron_generate_tasks",
+        operation: "phase2_materialize",
+        tenant_id: tenantId,
+        request_id: requestId,
+      });
+      // Per plan §1.1 self-healing posture: per-tenant continue on
+      // failure; next tick re-attempts. Phase 5 enqueue does NOT run
+      // for this tenant on this tick.
+      continue;
+    }
+    tenantLog.info(
+      {
+        new_inserted_count: newInsertedTaskIds.length,
+        address_resolution_failed_count: addressResolutionFailedCount,
+      },
+      "phase 2 materialization complete",
+    );
 
     // ----- PHASE 3 — UPDATE subscription_materialization (per §3.2) ----------
     // TODO: SET materialized_through_date = LEAST(today + 14, S.end_date)
