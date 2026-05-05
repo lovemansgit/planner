@@ -545,10 +545,10 @@ Per the [cron memo](../followups/cron_materialization_push_coupling.md) §3 Run-
 
 Adding `(tenant_id, target_date)` UNIQUE on `task_generation_runs` makes the safety hard at the schema layer. A second run for the same target_date hits SQLSTATE 23505 and short-circuits — same posture as the existing `(tenant_id, window_start, window_end)` UNIQUE.
 
-### §4.2 Migration shape — `0020_task_generation_runs_target_date_unique.sql`
+### §4.2 Migration shape — `0020_task_generation_runs_target_date_column_and_unique.sql`
 
 ```sql
--- 0020_task_generation_runs_target_date_unique.sql (sketch — final lands in code PR)
+-- 0020_task_generation_runs_target_date_column_and_unique.sql (sketch — final lands in code PR)
 
 -- Add target_date column. Initially nullable to allow the backfill step
 -- to populate it; promoted to NOT NULL after backfill.
@@ -610,7 +610,7 @@ export const POST = verifySignatureAppRouter(async (req: Request) => {
   // 2. Skip if pushed_to_external_at IS NOT NULL (idempotent — covers QStash redelivery)
   // 3. Resolve SF credentials per tenant (existing src/modules/credentials/suitefleet-resolver.ts)
   // 4. Call SF createTask via existing adapter (src/modules/integration/providers/suitefleet/...)
-  // 5. On 2xx: markTaskPushed (existing tasks/repository.ts:531-543)
+  // 5. On 2xx: markTaskPushed (existing tasks/repository.ts:531-549)
   // 6. On AwbExists 4xx: reconcile via existing D8-4b path (task-push/service.ts handlers)
   // 7. On other failure: throw — QStash retries per §5.2
 });
@@ -765,11 +765,12 @@ Decision deferred: whether `'suspended'` becomes an additional service action su
 - [memory/decision_brief_v1_2_amendments_d13_part1.md](../decision_brief_v1_2_amendments_d13_part1.md) — `tasks.pushed_to_external_at` brief amendment that locks the contract surface name
 - PR #138 (Day-13 plan, merged `8772aae`) — sequencing predecessor
 - PR #139 (Day-13 part-1 code, merged `875bfc4`) — `subscription_materialization` table + `tasks.address_id` + `subscription_address_rotations` + audit/permission surfaces consumed by this Day-14 work
-- PR #141 (brief v1.2 amendment, in flight) — locks the `tasks.pushed_to_external_at` column reference
+- PR #141 (brief v1.2 amendment, merged `ea377d1`) — locks the `tasks.pushed_to_external_at` column reference
+- [memory/project_brief_audit_event_count_correction.md](../../../.claude/projects/-Users-lovemans-Code-planner/memory/project_brief_audit_event_count_correction.md) — locks the brief's audit-event vocabulary at 9 events; consumed by §2.2 / §2.4 amendments to prevent materialization-time audit emissions
 - [vercel.json](../../vercel.json) — current cron schedule
 - [src/app/api/cron/generate-tasks/route.ts](../../src/app/api/cron/generate-tasks/route.ts) — current handler being rewritten
 - [src/modules/task-push/service.ts](../../src/modules/task-push/service.ts) — current per-task push code being repurposed for the QStash handler
-- [src/modules/tasks/repository.ts:531-543](../../src/modules/tasks/repository.ts#L531-L543) — `markTaskPushed` UPDATE (unchanged contract surface)
+- [src/modules/tasks/repository.ts:531-549](../../src/modules/tasks/repository.ts#L531-L549) — `markTaskPushed` UPDATE (unchanged contract surface; declaration L531, UPDATE statement L538-544)
 - [package.json L30](../../package.json#L30) — QStash dep already present
 - [.env.example](../../.env.example) — QSTASH_URL + QSTASH_TOKEN env documentation
 
