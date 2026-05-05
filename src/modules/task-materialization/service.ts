@@ -6,18 +6,21 @@
 // different orchestration (6-phase model with QStash decoupling at
 // Phase 5 instead of inline SF push).
 //
-// IN-PROGRESS: this surface is Phase 2 only (bulk INSERT…SELECT +
-// §2.2 quarantine counter emission); Phases 3-4 (horizon advance,
-// run-row write) land in subsequent surfaces under the same code-PR
-// drafting session.
+// IN-PROGRESS: this surface implements Phases 2-3 (bulk INSERT…SELECT +
+// §2.2 quarantine counter emission + horizon advance via UPDATE on
+// subscription_materialization). Phase 4 (run-row write with §4.4
+// stale-running CAS branching) lands in the next surface under the
+// same code-PR drafting session.
 //
 // Caller wraps in withServiceRole; this function expects an open tx.
-// Phase 2 currently runs in its own short-lived withServiceRole block;
-// subsequent surfaces extend the same tx to cover Phases 3-4 before
+// Phases 2-3 currently run in their own short-lived withServiceRole
+// block; the next surface extends the same tx to cover Phase 4 before
 // commit. Re-INSERT idempotency holds via the partial UNIQUE on
 // (subscription_id, delivery_date) per 0012:230-232 — re-runs of the
 // same target_date for the same subscription collapse to ON CONFLICT
-// DO NOTHING.
+// DO NOTHING. Re-UPDATE idempotency on subscription_materialization
+// is natural: setting materialized_through_date to the same value is
+// a no-op, and the WHERE filters out rows that already advanced.
 
 import { sql as sqlTag } from "drizzle-orm";
 
@@ -47,11 +50,22 @@ export interface MaterializeTenantResult {
    * structured warn-log per tuple).
    */
   addressResolutionFailedCount: number;
+  /**
+   * Subscription IDs whose `materialized_through_date` was advanced by
+   * Phase 3. Cardinality bounded by per-tenant active sub count
+   * (~280 at full demo volume). Used by Phase 6 logging + observability.
+   * Note: a subscription appears here even if Phase 2 produced zero
+   * INSERTs for it — Phase 3 horizon-advance is independent of row
+   * production per §3.2 plan intent.
+   */
+  advancedSubscriptionIds: readonly Uuid[];
 }
 
 /**
- * Phase 2 of the §2.1 6-phase model — single per-tenant bulk
- * INSERT…SELECT into tasks for every (subscription, date) tuple where:
+ * Phases 2-3 of the §2.1 6-phase model.
+ *
+ * Phase 2 — single per-tenant bulk INSERT…SELECT into tasks for every
+ * (subscription, date) tuple where:
  *   - subscription.status = 'active' (lowercase per
  *     0009_subscription.sql:136-137; corrected by PR #146)
  *   - candidate_date in (GREATEST(materialized_through_date + 1,
@@ -96,10 +110,24 @@ export interface MaterializeTenantResult {
  *     quarantined tuples in one round-trip without DELETE/RETURNING
  *     gymnastics)
  *
- * Returns newInsertedTaskIds[] from RETURNING id for Phase 5 to
- * enqueue, and addressResolutionFailedCount for Phase 6 logging.
+ * Phase 3 — UPDATE subscription_materialization to advance
+ * materialized_through_date for every active subscription whose
+ * current horizon is below the per-subscription cap of
+ * LEAST(targetDate, COALESCE(end_date, targetDate)). Per §3.2
+ * amendment 3, the cap ensures we don't claim materialization past
+ * a subscription's natural end. Per the implementation choice (c)
+ * locked at Phase 3 review: horizon advances for ALL qualifying
+ * subs, regardless of whether Phase 2 produced any INSERTs for them
+ * — Phase 3 horizon-advance is independent of Phase 2 row production
+ * (a sub whose entire 14-day window was skip-excluded should still
+ * advance its horizon, since the calendar progressed).
+ *
+ * Returns newInsertedTaskIds[] (Phase 2 RETURNING id) for Phase 5
+ * to enqueue, addressResolutionFailedCount (Phase 2 quarantine
+ * counter) for Phase 6 logging, and advancedSubscriptionIds[] (Phase 3
+ * RETURNING) for Phase 6 logging + observability.
  */
-export async function materializeTenantPhase2(
+export async function materializeTenant(
   tx: DbTx,
   input: MaterializeTenantInput,
 ): Promise<MaterializeTenantResult> {
@@ -358,8 +386,55 @@ export async function materializeTenantPhase2(
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // PHASE 3 — UPDATE subscription_materialization horizon advance.
+  //
+  // Per plan §3.2 amendment 3: cap at LEAST(targetDate, end_date), with
+  // COALESCE on end_date to handle open-ended subscriptions (same fix as
+  // Phase 2's CTE — without COALESCE, LEAST(target, NULL) = NULL collapses
+  // and the WHERE predicate becomes `materialized_through_date < NULL`
+  // which is always UNKNOWN, so no rows update for open-ended subs).
+  //
+  // Implementation choice (c) per Phase 3 review: advance horizon for
+  // ALL qualifying subs (status='active' AND below the cap), regardless
+  // of whether Phase 2 produced INSERTs for them. A subscription whose
+  // entire 14-day window was skip-excluded still advances horizon — the
+  // calendar progressed even if no tasks were generated.
+  //
+  // Edge case: if subscription.end_date was reduced AFTER Phase 2 already
+  // materialized future tasks, materialized_through_date can exceed the new
+  // LEAST(target, end_date) cap. The WHERE clause filters this row out
+  // (no UPDATE), leaving materialized_through_date at its earlier higher
+  // value. The already-materialized future tasks are NOT auto-removed —
+  // shrinking end_date is an explicit operator action that requires its
+  // own cancellation flow (Phase 2 part-2 service surface, not this cron).
+  // Documenting so future contributors don't read this as a bug.
+  // ---------------------------------------------------------------------------
+  type AdvancedRow = { subscription_id: Uuid };
+  const advancedRows = await tx.execute<AdvancedRow>(sqlTag`
+    UPDATE subscription_materialization sm
+    SET
+      materialized_through_date =
+        LEAST(${targetDate}::date, COALESCE(s.end_date, ${targetDate}::date)),
+      last_materialized_at = now()
+    FROM subscriptions s
+    WHERE sm.subscription_id = s.id
+      AND sm.tenant_id = ${tenantId}
+      -- s.tenant_id filter is defense-in-depth — the JOIN via sm already
+      -- enforces tenant scope via FK chain, but explicit predicate makes
+      -- the intent legible without requiring readers to trace FK semantics.
+      AND s.tenant_id = ${tenantId}
+      AND s.status = 'active'
+      AND sm.materialized_through_date <
+          LEAST(${targetDate}::date, COALESCE(s.end_date, ${targetDate}::date))
+    RETURNING sm.subscription_id
+  `);
+
+  const advancedSubscriptionIds = advancedRows.map((row) => row.subscription_id);
+
   return {
     newInsertedTaskIds,
     addressResolutionFailedCount: quarantinedRows.length,
+    advancedSubscriptionIds,
   };
 }

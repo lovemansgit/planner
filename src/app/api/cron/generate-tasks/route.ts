@@ -24,7 +24,7 @@ import type { Uuid } from "@/shared/types";
 
 import { listReconciliationCandidatesByTenant } from "@/modules/tasks/repository";
 import { computeTargetDateInDubai } from "@/modules/task-materialization/dubai-date";
-import { materializeTenantPhase2 } from "@/modules/task-materialization/service";
+import { materializeTenant } from "@/modules/task-materialization/service";
 import { listCronEligibleTenantIds } from "./list-cron-eligible-tenants";
 
 export const dynamic = "force-dynamic";
@@ -155,41 +155,48 @@ export async function GET(req: Request): Promise<Response> {
       "phase 1 reconciliation scan complete",
     );
 
-    // ----- PHASE 2 — bulk INSERT…SELECT into tasks (per §2.1, §2.3) ----------
-    // Single per-tenant bulk INSERT with 4-layer COALESCE address resolution
-    // (override_one_off → override_forward → rotation → primary) + skip-the-
-    // date EXISTS guards (skip + pause_window) + refuse-to-materialize guard
-    // (§2.2 — COALESCE IS NOT NULL) + RETURNING id for Phase 5 enqueue.
+    // ----- PHASES 2-3 — bulk INSERT…SELECT + horizon advance ----------------
+    // Phase 2: bulk INSERT into tasks with 4-layer COALESCE address
+    // resolution (override_one_off → override_forward → rotation → primary)
+    // + skip-the-date EXISTS guards (skip + pause_window) + refuse-to-
+    // materialize guard (§2.2 — COALESCE IS NOT NULL) + RETURNING id for
+    // Phase 5 enqueue. The §2.2 quarantine counter emission runs in a
+    // second statement INSIDE the same tx (option-b two-pass per §2.2
+    // amendment direction).
     //
-    // The §2.2 quarantine counter emission runs in a second statement
-    // INSIDE the same withServiceRole tx (option-b two-pass per §2.2
-    // amendment direction). Cardinality is small; same-tx semantics
-    // eliminate the inconsistency window with concurrent paths.
+    // Phase 3: UPDATE subscription_materialization to advance
+    // materialized_through_date for every active subscription whose
+    // current horizon is below the per-subscription cap of
+    // LEAST(targetDate, COALESCE(end_date, targetDate)). Advances for ALL
+    // qualifying subs regardless of whether Phase 2 produced INSERTs for
+    // them (implementation choice (c) per Phase 3 review).
     //
-    // Phase 2 currently runs in its own short-lived withServiceRole block;
-    // subsequent surfaces (Phase 3-4) extend the same tx to cover horizon
-    // advance + run-row write before commit. Re-INSERT idempotency holds
-    // via the partial UNIQUE on (subscription_id, delivery_date) per
-    // 0012:230-232 — re-runs of the same target_date for the same
-    // subscription collapse to ON CONFLICT DO NOTHING.
+    // Both phases run inside a single withServiceRole tx; Phase 4 (run-row
+    // write with §4.4 stale-running CAS branching) extends the same tx in
+    // the next surface before commit. Re-INSERT idempotency for Phase 2
+    // holds via the partial UNIQUE per 0012:230-232; re-UPDATE idempotency
+    // for Phase 3 is natural — re-running with same materialized_through_date
+    // is filtered out by the WHERE predicate.
     let newInsertedTaskIds: readonly Uuid[];
     let addressResolutionFailedCount: number;
+    let advancedSubscriptionIds: readonly Uuid[];
     try {
-      const phase2Result = await withServiceRole(
-        `cron:phase2_materialize for tenant ${tenantId}`,
+      const phaseResult = await withServiceRole(
+        `cron:materialize for tenant ${tenantId}`,
         async (tx) =>
-          materializeTenantPhase2(tx, { tenantId, targetDate, requestId }),
+          materializeTenant(tx, { tenantId, targetDate, requestId }),
       );
-      newInsertedTaskIds = phase2Result.newInsertedTaskIds;
-      addressResolutionFailedCount = phase2Result.addressResolutionFailedCount;
+      newInsertedTaskIds = phaseResult.newInsertedTaskIds;
+      addressResolutionFailedCount = phaseResult.addressResolutionFailedCount;
+      advancedSubscriptionIds = phaseResult.advancedSubscriptionIds;
     } catch (err) {
       tenantLog.error(
         { error: err instanceof Error ? err.message : String(err) },
-        "phase 2 materialization threw",
+        "phases 2-3 materialization threw",
       );
       captureException(err, {
         component: "cron_generate_tasks",
-        operation: "phase2_materialize",
+        operation: "materialize",
         tenant_id: tenantId,
         request_id: requestId,
       });
@@ -202,18 +209,23 @@ export async function GET(req: Request): Promise<Response> {
       {
         new_inserted_count: newInsertedTaskIds.length,
         address_resolution_failed_count: addressResolutionFailedCount,
+        advanced_subscription_count: advancedSubscriptionIds.length,
       },
-      "phase 2 materialization complete",
+      "phases 2-3 materialization complete",
     );
 
     // ----- PHASE 3 — UPDATE subscription_materialization (per §3.2) ----------
-    // TODO: SET materialized_through_date = LEAST(today + 14, S.end_date)
-    //       FILTER status = 'ACTIVE'
+    // Folded into the materializeTenant call above (Phases 2-3 single tx).
+    // See src/modules/task-materialization/service.ts for the UPDATE.
 
     // ----- PHASE 4 — INSERT task_generation_runs row (per §4.4) --------------
-    // TODO: status='completed', target_date, started_at, completed_at,
-    //       counters; on 23505 conflict, branch per §4.4 status table
-    //       including stale-running CAS recovery (§4.4 amendment 2)
+    // TODO next surface: status='completed', target_date, started_at,
+    //       completed_at, counters; on 23505 conflict, branch per §4.4
+    //       status table including stale-running CAS recovery
+    //       (§4.4 amendment 2: WHERE id = $stale_id AND
+    //       started_at = $original_stale_started_at RETURNING id).
+    //       Phase 4 will fold into the same materializeTenant call,
+    //       extending its tx to cover all of Phases 2-3-4 before commit.
 
     // ----- (commit boundary — Phases 2-4 single tx) --------------------------
 
