@@ -993,20 +993,64 @@ Risk register grows from 7 to ~16 rows post-§0-§8 amendments, tiered into thre
 
 ## §10 Cross-references
 
-- [memory/followups/cron_materialization_push_coupling.md](../followups/cron_materialization_push_coupling.md) — root-cause memo + decoupling recommendation
-- [PLANNER_PRODUCT_BRIEF.md §3.1.1, §3.1.5, §3.3.6, §7](../PLANNER_PRODUCT_BRIEF.md) — push_acknowledged contract surface, 14-day horizon, integration-honesty UI indicator, tier discipline
-- [memory/plans/day-13-exception-model-part-1.md §2](../plans/day-13-exception-model-part-1.md) — generator code changes deferred from part-1 land here in §2 of this plan
-- [memory/decision_brief_v1_2_amendments_d13_part1.md](../decision_brief_v1_2_amendments_d13_part1.md) — `tasks.pushed_to_external_at` brief amendment that locks the contract surface name
-- PR #138 (Day-13 plan, merged `8772aae`) — sequencing predecessor
-- PR #139 (Day-13 part-1 code, merged `875bfc4`) — `subscription_materialization` table + `tasks.address_id` + `subscription_address_rotations` + audit/permission surfaces consumed by this Day-14 work
-- PR #141 (brief v1.2 amendment, merged `ea377d1`) — locks the `tasks.pushed_to_external_at` column reference
-- [memory/project_brief_audit_event_count_correction.md](../../../.claude/projects/-Users-lovemans-Code-planner/memory/project_brief_audit_event_count_correction.md) — locks the brief's audit-event vocabulary at 9 events; consumed by §2.2 / §2.4 amendments to prevent materialization-time audit emissions
-- [vercel.json](../../vercel.json) — current cron schedule
-- [src/app/api/cron/generate-tasks/route.ts](../../src/app/api/cron/generate-tasks/route.ts) — current handler being rewritten
-- [src/modules/task-push/service.ts](../../src/modules/task-push/service.ts) — current per-task push code being repurposed for the QStash handler
-- [src/modules/tasks/repository.ts:531-549](../../src/modules/tasks/repository.ts#L531-L549) — `markTaskPushed` UPDATE (unchanged contract surface; declaration L531, UPDATE statement L538-544)
-- [package.json L30](../../package.json#L30) — QStash dep already present
-- [.env.example](../../.env.example) — QSTASH_URL + QSTASH_TOKEN env documentation
+Grouped into five subsections for navigation. Each entry annotates which plan section consumes it so reviewers can trace amendments back to their evidence.
+
+### §10.a Brief + canonical product memory
+
+- [PLANNER_PRODUCT_BRIEF.md §3.1.1, §3.1.5, §3.3.6, §7](../PLANNER_PRODUCT_BRIEF.md) — `tasks.pushed_to_external_at` contract surface, 14-day rolling horizon, integration-honesty UI indicator, tier discipline. Consumed by §0.1, §1.3, §3.1, §3.2.
+- [memory/decision_brief_v1_2_amendments_d13_part1.md](../decision_brief_v1_2_amendments_d13_part1.md) — `tasks.pushed_to_external_at` brief amendment that locks the contract surface name. Consumed by §1.3, §3.3 casing-convention cross-ref.
+- [memory/project_brief_audit_event_count_correction.md](../../../.claude/projects/-Users-lovemans-Code-planner/memory/project_brief_audit_event_count_correction.md) — locks the brief's audit-event vocabulary at 9 events. Consumed by §2.2 / §2.4 amendments to prevent materialization-time audit emissions; §8.3 / §9 B3 Phase-2 brief-amendment-escalation path.
+- [memory/decision_mvp_shared_suitefleet_credentials.md](../decision_mvp_shared_suitefleet_credentials.md) — MVP shared SF sandbox credential decision. Consumed by §6.3 amendment 3 flow-control key naming convention (`'sf-push-global-mvp'`).
+- [memory/followups/cron_materialization_push_coupling.md](../followups/cron_materialization_push_coupling.md) — root-cause memo + decoupling recommendation. Consumed by §0.2 runtime-math anchor and §1.1/§1.2 mechanism-choice framing.
+- [memory/followup_secrets_manager_swap_critical_path.md](../followup_secrets_manager_swap_critical_path.md) — AWS Secrets Manager swap critical-path. Consumed by §6.3 amendment 3 flow-control key migration to `'sf-push:{tenant_id}'`; §8.3 Phase-2-deferral interaction table; §9 B5 migration-coupled risk.
+
+### §10.b Predecessor + adjacent PRs
+
+- **PR #138** (Day-13 backend exception model schema part-1 plan, merged `8772aae`) — sequencing predecessor; this plan PR drafts after #138 lands per the hard-stop-twice protocol.
+- **PR #139** (Day-13 part-1 code, merged `875bfc4`) — ships `subscription_materialization` table + `tasks.address_id` + `subscription_address_rotations` + audit/permission surfaces consumed by this Day-14 work. **NOTE:** migrations 0014-0019 are in the PR's git tree but NOT yet applied to production DB — see §3.1 callout + §9 A1 hard-stop.
+- **PR #141** (brief v1.2 amendment, merged `ea377d1`) — locks the `tasks.pushed_to_external_at` column reference.
+- **PR #142** (Posture B retirement runbook, merged `634ea6d`) — adjacent operational work landed Day-13 EOD; runbook §1 pre-flight check P5 query was amended in PR #144 during this plan-PR review window.
+- **PR #143** (Day 13 EOD handoff, merged `4731553`) — context-setting predecessor; documents the migration-deploy gap (§3.1 callout) and the cron-decoupling driver memo.
+- **PR #144** (Posture B retirement runbook §1 P5 query fix, merged Day-14 morning) — review-window companion; runbook bug surfaced by Day-14 morning's P5 probe execution; same operational work-stream as this plan PR.
+- [memory/plans/day-13-exception-model-part-1.md §2](../plans/day-13-exception-model-part-1.md) — Day-13 plan from which §2 generator code changes were deferred to this Day-14 plan (resolved in this plan's §2.2 + §2.3).
+
+### §10.c Source code anchors
+
+- [vercel.json](../../vercel.json) — current cron schedule (`0 12 * * *` UTC); unchanged by this plan.
+- [src/app/api/cron/generate-tasks/route.ts](../../src/app/api/cron/generate-tasks/route.ts) — current single-handler cron being rewritten as the materialization-only handler per §2.1.
+- [src/app/api/cron/generate-tasks/list-cron-eligible-tenants.ts:74-86](../../src/app/api/cron/generate-tasks/list-cron-eligible-tenants.ts#L74-L86) — eligibility filter (`suitefleet_customer_code IS NOT NULL AND <> ''`); unchanged.
+- [src/modules/task-generation/service.ts:120-358](../../src/modules/task-generation/service.ts#L120-L358) — current generation phase (Phase 2 in §2.1 6-phase model).
+- [src/modules/task-generation/service.ts:223](../../src/modules/task-generation/service.ts#L223) + [:262](../../src/modules/task-generation/service.ts#L262) — current `task_generation_runs` row writes at `status='completed'` and `status='failed'`; consumed by §4.2 amendment 4 coupled-deploy callout.
+- [src/modules/task-generation/repository.ts:118-163](../../src/modules/task-generation/repository.ts#L118-L163) — existing run-row UNIQUE conflict path on `(tenant_id, window_start, window_end)`; consumed by §4.4 amendment 3 status-enum gap fix.
+- **§1.3 retirement table — `task-push/service.ts` (NOT whole file):**
+  - [src/modules/task-push/service.ts:327](../../src/modules/task-push/service.ts#L327) — `pushTasksForTenant` (cron-loop variant) — **RETIRES.**
+  - [src/modules/task-push/service.ts:586](../../src/modules/task-push/service.ts#L586) — reconcile branch inside `pushTasksForTenant` — **RETIRES with parent.**
+  - [src/modules/task-push/service.ts:727](../../src/modules/task-push/service.ts#L727) — `markTaskPushed` call inside `pushTasksForTenant` — **RETIRES with parent.**
+  - [src/modules/task-push/service.ts:827](../../src/modules/task-push/service.ts#L827) — `pushSingleTask` (single-task variant) — **SURVIVES; gains second caller (the new `/api/queue/push-task` queue handler).**
+  - [src/modules/task-push/service.ts:1002](../../src/modules/task-push/service.ts#L1002) — reconcile branch inside `pushSingleTask` — **SURVIVES.**
+  - [src/modules/task-push/service.ts:1104](../../src/modules/task-push/service.ts#L1104) — `markTaskPushed` call inside `pushSingleTask` — **SURVIVES; only post-cutover caller of `markTaskPushed`.**
+- [src/modules/tasks/repository.ts:531-549](../../src/modules/tasks/repository.ts#L531-L549) — `markTaskPushed` UPDATE (unchanged contract surface; declaration L531, UPDATE statement L538-544).
+- [src/modules/integration/providers/suitefleet/last-mile-adapter-factory.ts](../../src/modules/integration/providers/suitefleet/last-mile-adapter-factory.ts) — `LastMileAdapter` interface + factory; unchanged by this plan per §6.1.
+- [src/modules/integration/providers/suitefleet/token-cache.ts](../../src/modules/integration/providers/suitefleet/token-cache.ts) — in-memory per-Vercel-function-instance JWT cache; consumed by §6.2 cold-start latency disclosure.
+- [src/modules/credentials/suitefleet-resolver.ts](../../src/modules/credentials/suitefleet-resolver.ts) — per-tenant SF credential resolution; consumed by §5.1 Step 3.
+- [supabase/migrations/0012_task_generation_runs.sql:179-186](../../supabase/migrations/0012_task_generation_runs.sql#L179-L186) — existing 5-value status enum (`running`, `completed`, `capped`, `skipped_already_run`, `failed`) + UNIQUE on `(tenant_id, window_start, window_end)`. Consumed by §4.2 amendment D4-4 (UNIQUE retention) and §4.4 amendment 3 (status enum gap fix).
+- [supabase/migrations/0014_addresses_and_subscription_address_rotations.sql](../../supabase/migrations/0014_addresses_and_subscription_address_rotations.sql) — `addresses` (with `is_primary` partial UNIQUE per consignee), `subscription_address_rotations`, `tasks.address_id` nullable column. Consumed by §2.3 4-layer COALESCE chain (specifically Layer 4's primary-uniqueness guarantee).
+- [supabase/migrations/0015_subscription_exceptions_and_materialization.sql](../../supabase/migrations/0015_subscription_exceptions_and_materialization.sql) — `subscription_exceptions` (5-type discriminator) + `subscription_materialization` table. **Migration in PR #139 git tree; NOT yet applied to production DB at Day-14 plan time** — §3.1 callout + §9 A1 hard-stop.
+- [package.json L30](../../package.json#L30) — `@upstash/qstash` dep already present (`^2.10.1`); never imported in `src/` pre-Day-14.
+- [.env.example](../../.env.example) — `QSTASH_URL`, `QSTASH_TOKEN`, `QSTASH_FLOW_CONTROL_KEY` (NEW per §6.3 amendment 3) env documentation.
+
+### §10.d External SDK references
+
+- [@upstash/qstash type defs](../../node_modules/@upstash/qstash/client-CsM1dTnz.d.ts) — verifies API surface of consumed primitives. Consumed by §1.1 + §6.3:
+  - **`FlowControl` type** at lines 142-180 — defines `{ key, parallelism, rate, period }` shape for the §6.3 flow-control mechanism. Verified to NOT support topic-level rate limits (D6-2 fix).
+  - **`batchJSON` method** at line 2476 — canonical batch primitive for §1.1 Phase 5 enqueue. Verified vs the older `publishJSON` mechanism that would've created N sequential HTTP calls.
+- QStash REST API per-call batch size limit — public docs (verify current cap before code PR opens per §0.6 Love verification step). §1.1 chunk size of 100 messages is conservative under the documented limit.
+
+### §10.e Auto-memory governance (load-bearing for review process; lives outside repo `memory/` dir)
+
+- `feedback_t3_plan_prs_need_realtime_review.md` — gates hard-stop-twice protocol for T3 plan PRs. Consumed by this plan PR's review process (you must be awake for real-time counter-review per the auto-memory standing rule); auto-mode is T1-only.
+- `feedback_claude_code_executes_default.md` — assigns Love as Vercel UI executor for §3.1 PR #139 migration apply step. Consumed by §3.1 callout + §3.3 backfill run procedure + §9 A1 mitigation.
+- `feedback_vercel_env_scope_convention.md` — Production+Preview only, never Development. Consumed by §0.4 Q1 env-scope check + §6.3 amendment 3 `QSTASH_FLOW_CONTROL_KEY` per-environment posture + §9 A6 flow-control-key drift mitigation.
 
 ---
 
