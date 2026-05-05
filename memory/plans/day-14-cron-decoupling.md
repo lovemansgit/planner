@@ -655,48 +655,107 @@ Same general shape as the existing `(tenant_id, window_start, window_end)` confl
 ```typescript
 // Sketch
 import { verifySignatureAppRouter } from "@upstash/qstash/dist/nextjs";
+
+// Amendment 3 (RUNTIME BUG, load-bearing): Vercel non-cron API routes default
+// to 60s on Pro; the existing /api/cron/* routes get 300s by virtue of being
+// cron-routes, but /api/queue/* are regular API routes and must opt in.
+// Without this declaration, the §1.1 "per-message timeout envelope" claim is
+// FALSE — the handler dies at 60s mid-SF-call on slow responses. Code-PR
+// pre-merge gate: confirm this line is present.
+export const maxDuration = 300;
+
 export const POST = verifySignatureAppRouter(async (req: Request) => {
-  const { tenant_id, task_id } = await req.json();
+  const payload = await req.json();
+  const { tenant_id, task_id } = payload;
+
   // 1. Read task by id (system actor — withServiceRole)
-  // 2. Skip if pushed_to_external_at IS NOT NULL (idempotent — covers QStash redelivery)
-  // 3. Resolve SF credentials per tenant (existing src/modules/credentials/suitefleet-resolver.ts)
-  // 4. Call SF createTask via existing adapter (src/modules/integration/providers/suitefleet/...)
-  // 5. On 2xx: markTaskPushed (existing tasks/repository.ts:531-549)
-  // 6. On AwbExists 4xx: reconcile via existing D8-4b path (task-push/service.ts handlers)
-  // 7. On other failure: throw — QStash retries per §5.2
+  // 1.4 (amendment 1, tenant scoping defense-in-depth):
+  //   Assert task.tenant_id === payload.tenant_id; reject with 400 if mismatch.
+  //   QStash signature gate prevents external spoofing; this prevents internal
+  //   payload-construction bugs in our own materialization handler. Costs
+  //   nothing; surfaces the bug class loudly.
+  // 1.5 (amendment 2, address_id null guard):
+  //   If task.address_id IS NULL, reject with 400 + Sentry-capture
+  //   push.address_id_null + log warning. Do NOT crash; QStash retry won't
+  //   help (the row's null state is durable); let it land in DLQ via
+  //   failureCallback for ops triage. Defense-in-depth against the §2.2
+  //   refuse-to-materialize policy lapsing in future hardening.
+  // 2. Skip if pushed_to_external_at IS NOT NULL (idempotent — covers QStash
+  //    redelivery; complements Layer 1 deduplicationId per §5.3).
+  // 3. Resolve SF credentials per tenant (existing
+  //    src/modules/credentials/suitefleet-resolver.ts).
+  // 4. Call pushSingleTask(tenant_id, task_id) — NOT the SF adapter directly
+  //    (amendment 6). pushSingleTask (task-push/service.ts:827) wraps the
+  //    adapter call with the existing D8-4b reconcile branch (line 1002)
+  //    AND the markTaskPushed call (line 1104). Calling the adapter directly
+  //    would lose the reconcile semantic and break the §1.3 retirement
+  //    table's claim that pushSingleTask becomes the only post-cutover caller
+  //    of markTaskPushed. Code-PR pre-merge gate: confirm queue handler
+  //    invokes pushSingleTask, not the adapter.
+  // 5. On 2xx: markTaskPushed already called by pushSingleTask (existing
+  //    tasks/repository.ts:531-549; reached via pushSingleTask:1104 path).
+  // 6. On AwbExists 4xx: reconcile branch already runs inside pushSingleTask
+  //    (line 1002 path).
+  // 7. On other failure: throw — QStash retries per §5.2; final-retry-
+  //    exhausted lands in failed_pushes via failureCallback.
 });
 ```
 
 `verifySignatureAppRouter` is the QStash SDK's signature-verification wrapper — gates the endpoint to QStash-signed deliveries only. Same posture as the existing `/api/cron/generate-tasks` CRON_SECRET check.
 
-### §5.2 Retry posture — QStash native + DLQ
+### §5.2 Retry posture — QStash native + DLQ via failureCallback
 
-QStash retries per its built-in policy (configurable per-message; 3 retries with exponential backoff is the default). After the final retry exhausts:
+**Pinned QStash retry config (amendment 4):** the materialization handler's `batchJSON` call passes the following parameters on every message (set per-call, not per-account):
 
-- QStash optionally enqueues to a DLQ topic (configurable)
-- We mirror to our existing `failed_pushes` table (the existing DLQ surface from D8-5 / D8-4) so operators see the failure in the existing `/admin/failed-pushes` UI without learning a new surface
+| Parameter | Value | Reason |
+|---|---|---|
+| `retries` | `3` | Three retries before final exhaustion. Matches QStash's default but pinned explicitly so the deploy doesn't silently inherit a different default if Upstash changes it. |
+| Backoff | Exponential (QStash default — base 5s, max 60s) | QStash applies exponential backoff with jitter natively; no client-side backoff config needed. |
+| Per-call timeout | 30s | Each individual SF call should complete in <1s (typical 660ms per the §0.2 cron memo); 30s gives 30× headroom for SF latency spikes without holding the QStash worker indefinitely. Vercel `maxDuration = 300` (per §5.1 amendment 3) is the hard ceiling above this. |
 
-Existing `failed_pushes` row shape unchanged. New emission path: from the push handler's catch-all on QStash-final-retry-exhausted (signaled via QStash's failure callback or via our explicit `markFailedPush` after handler-side retry ceiling).
+**Final-retry-exhausted → `failed_pushes` (amendment 5 — failureCallback only, drop the markFailedPush alternative):**
+
+QStash supports a `failureCallback` URL on every published message — when retries exhaust, QStash POSTs to the failureCallback with the failure metadata (message body, error, retry count). The decoupled handler uses this as the canonical signal source:
+
+| Field | Value |
+|---|---|
+| failureCallback URL | `${PUBLIC_BASE_URL}/api/queue/push-task-failed` |
+| Verification | Signature-verified via the same `verifySignatureAppRouter` wrapper as §5.1 |
+| Behavior | Reads the original `{ tenant_id, task_id }` payload + the QStash failure metadata, INSERTs a row into `failed_pushes` with reason derived from QStash's error field, surfaces in the existing `/admin/failed-pushes` UI without any operator-side change |
+| Schema | Existing `failed_pushes` row shape unchanged from D8-5 / D8-4 |
+
+**Why failureCallback instead of client-side retry counting:** the prior draft offered "QStash failure callback OR explicit `markFailedPush` after handler-side retry ceiling" as alternatives. Client-side retry counting is the wrong posture — same failure class as the §4.4 stale-`running` issue. Tracking retry state in our application means: (a) we have to durably store the count somewhere (which becomes its own consistency problem under handler crashes), (b) we duplicate logic QStash already implements correctly, (c) under crash conditions we have orphaned retry counters with no recovery path. **QStash owns the retry state.** failureCallback is the canonical pattern for "queue-driven retry-exhaustion signal" — pick it, drop the alternative.
 
 ### §5.3 Idempotency
 
-Three layers:
+Three layers, each with a specific failure mode it absorbs:
 
-1. **QStash message id** — QStash deduplicates messages by id at the broker layer (avoids the same message being enqueued twice from the materialization cron)
-2. **Handler-level skip** — the handler's step 2 (`Skip if pushed_to_external_at IS NOT NULL`) catches QStash redelivery of an already-pushed task
-3. **SF AwbExists 4xx reconcile** — existing D8-4b path catches the case where SF accepted the task on a prior attempt that we lost track of
+1. **QStash deduplication via `deduplicationId: task_id`** (amendment D5-3) — every `batchJSON` message from §1.1 Phase 5 sets `deduplicationId: task_id`. Same task_id seen twice within QStash's deduplication window collapses to one delivery at the broker layer. This is the load-bearing primitive for §1.1's at-least-once-but-idempotent guarantee: when Phase 1 reconciliation re-discovers a task that was already enqueued on a previous tick (because the previous tick's commit succeeded but the enqueue failed mid-call, or the row was already enqueued and the worker hasn't picked it up yet), QStash sees the duplicate `deduplicationId` and silently absorbs the second enqueue. **Without this, every tick would enqueue duplicates of every still-unpushed task.**
+2. **Handler-level skip** — the handler's step 2 (`Skip if pushed_to_external_at IS NOT NULL`) catches QStash redelivery of an already-pushed task. This handles the case where Layer 1's dedup window expires (QStash's window is finite) and a stale message lands after the original was processed. Cheap (single DB read), correct (the column is the source of truth on push state).
+3. **SF AwbExists 4xx reconcile** — existing D8-4b path inside `pushSingleTask:1002` catches the case where SF accepted the task on a prior attempt that we lost track of (e.g., we crashed after SF 2xx but before `markTaskPushed` returned). Recovers `external_id` from SF and calls `markTaskPushed` to converge state. This is the asymmetric-failure-recovery layer — covers the gap between "we sent it" and "we knew we sent it."
 
-### §5.4 Backlog drainage
+The three layers compose: Layer 1 absorbs duplicate enqueues from our handler; Layer 2 absorbs duplicate deliveries from the queue; Layer 3 absorbs duplicate sends to SF that we lost track of. Each fires on a distinct failure mode; each is independently necessary.
 
-On Day-14 deploy, the new push handler inherits the unpushed-task backlog from PR #139 and prior days. One-time backfill enqueues every existing `pushed_to_external_at IS NULL` task as a QStash message:
+### §5.4 Backlog drainage (no separate script — see §1.1 Phase 1)
 
-```typescript
-// One-time script: scripts/backfill-push-queue.mjs (sketch)
-// SELECT id, tenant_id FROM tasks WHERE pushed_to_external_at IS NULL
-// for each: enqueue QStash message { tenant_id, task_id }
-```
+**Reframe (amendment D5-2):** the prior draft proposed a separate `scripts/backfill-push-queue.mjs` to enqueue the cutover backlog. Post-§1.1 amendment, this is unnecessary — Phase 1 reconciliation inside the materialization handler scans `tasks WHERE pushed_to_external_at IS NULL` on every tick and includes them in the post-commit `batchJSON` enqueue. The cutover backlog is therefore picked up automatically by the first post-deploy materialization tick. **No separate script — one less code path to maintain.**
 
-§0.4 Q3 sizes this backlog. At demo data volumes, expected to be <1000 messages — drains in minutes through the QStash queue.
+**Sizing per §0.4 Q3:** 114 fresh-butchers tasks unpushed; 0 on the other two demo merchants. Total cutover backlog is well under the 1,000 messages/day worst case (§0.6) and drains via QStash within minutes of the first tick.
+
+### §5.5 Observability (NEW per amendment 7)
+
+Per-handler-invocation log (one log line per push attempt, structured): `{ tenant_id, task_id, sf_latency_ms, outcome }` where `outcome ∈ {success, awb_exists_reconciled, retry_throw, address_id_null_rejected, tenant_mismatch_rejected}`. Aggregates derive from this log line.
+
+| Surface | Source | Use |
+|---|---|---|
+| Per-handler-invocation log | Structured log emitted at handler exit | Sentry / log aggregation; per-task triage |
+| QStash queue depth | `client.messages.list({ queue })` from `@upstash/qstash` (read-only API) | Operational dashboard; "is the queue backing up?" gauge |
+| `failed_pushes` row count | DB query against existing table | DLQ size; surfaces in `/admin/failed-pushes` already |
+| Push success rate | Aggregate over the per-handler log over a rolling window | Health metric — "what fraction of pushes succeeded in last 24h?" |
+| `cron.stale_running_detected` counter | Per §4.4 stale-`running` recovery branch | Surfaces handler-level crashes that the new UNIQUE+recovery flow caught |
+| `materialization.address_resolution_failed` counter | Per §2.2 refuse-to-materialize policy | Surfaces consignee-data-gap quarantine events |
+
+This subsection establishes that the surface exists — Phase 2 builds dashboards on top. For Day-14 MVP, structured logs + the existing `/admin/failed-pushes` UI are enough; operational counters land in the same handler that emits them and surface via log aggregation queries (no separate metrics service in the pilot scope).
 
 ---
 
