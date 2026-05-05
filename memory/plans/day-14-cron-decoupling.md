@@ -890,28 +890,64 @@ These tests require fuller fixtures and longer runtime; isolated from §7.4's "e
 
 ## §8 Out of scope (explicit boundaries)
 
-### Day-14 part-2 service-surface plan PR (separate)
+### §8.1 Day-14 part-2 service-surface plan PR (separate, sequenced after this)
 
 This Day-14 cron decoupling plan PR does NOT cover the service-layer surface for the exception model:
 - `addSubscriptionException` / `pauseSubscription` / `resumeSubscription` / `changeConsigneeCrmState` / `createMerchant` / `appendWithoutSkip`
 - API routes
 - UI surfaces
 
-That work is a separate Day-14 part-2 plan PR (per Day-13 plan §6) sequenced after this decoupling lands.
+That work is a separate Day-14 part-2 plan PR (per Day-13 plan §6) sequenced AFTER this decoupling lands.
 
-### Phase 2 deferrals carried forward
+**Sequencing rationale (amendment 8 — three concrete reasons):**
+- **(a) Data-flow dependency.** Part-2's `addSubscriptionException` service writes the `subscription_exceptions` rows that Phase 1 reconciliation (§1.1) consumes (specifically: skip exceptions reduce materialization, address overrides redirect address resolution, append_without_skip extends end_date for tail-end materialization). The queue infrastructure must be stable first; otherwise a part-2 service write hits a half-built materialization path.
+- **(b) Behavioral dependency.** Part-2's `pauseSubscription` flips `subscriptions.status` to `'PAUSED'`. The §3.2 amendment 4 PAUSED filter behavior must be verified end-to-end before the service that triggers the transition exists; otherwise a regression in the filter wouldn't be caught until a real merchant pauses a subscription in production.
+- **(c) Same-day T3 PR contention.** Two T3 plan PRs landing the same day would compete for review attention and risk schema-migration sequencing collisions (e.g., this plan's `0020_*` lands first, part-2's any-new-migration lands after; reversing that order means part-2 has a target_date null on its INSERTs). Sequential prevents the contention.
 
-Per [PLANNER_PRODUCT_BRIEF.md §4](../PLANNER_PRODUCT_BRIEF.md), unchanged by this plan:
-- Configurable cutoff time per merchant
-- Configurable max_skips_per_subscription per merchant
-- Per-merchant blackout date editor
-- Per-tenant SuiteFleet credential isolation (first post-pilot item)
-- Reconciliation job between Planner and SF
-- Audit log viewer UI
+### §8.2 Alternatives REJECTED after consideration (NOT deferred to Phase 2)
 
-### `'suspended'` tenant status service surface (per Day-13 plan §6)
+These are "considered, decided no" — distinct from "deferred to Phase 2." A future contributor proposing them must surface a new argument that wasn't in the original consideration; restating the original case is not enough.
 
-Decision deferred: whether `'suspended'` becomes an additional service action surface (e.g., `merchant:suspend` permission + `suspendMerchant` service + `merchant.suspended` audit event) OR stays operationally-set-only. Default if undecided: stays reserved, no part-2 service work, revisit Phase 2.
+| Alternative | Source | Rejection rationale |
+|---|---|---|
+| **In-handler 5-concurrent parallelization** | §1.2 Option B | Fits Vercel 300s envelope (~112s for 845 tasks at 5 concurrent × 660ms) but **doesn't isolate**. Rejected on four dimensions: per-handler retry vs per-message retry, materialization-coupled failures, shared-fraction timeout envelope, no operational visibility. Detailed rejection at §1.2 amendment table. |
+| **Per-tenant long-running workers** | §1.2 Option C | Requires hosting outside Vercel — out of architectural scope for MVP. Phase 2 may revisit IF cron-tier hosting becomes a strategic choice (e.g., the platform pivots away from serverless), but rejection stands today. **Not** a deferral; a directional decision. |
+| **Per-handler in-memory delay** (`await sleep(200ms)`) | §6.3 Option B | Doesn't scale across concurrent Vercel-instance invocations — each instance sleeps independently, so 5 instances ÷ 1 SF rate budget = 25 effective req/sec, blowing the budget by 5×. Detailed rejection at §6.3 amendment table. |
+| **SF-side 429 throttling** | §6.3 Option C | Deliberately overshoots the rate budget and burns QStash retries on 429s. Wasteful and noisy. Detailed rejection at §6.3 amendment table. |
+| **Client-side retry counting (`markFailedPush` after handler-side ceiling)** | §5.2 alternative | Tracks retry state in our application — same failure class as §4.4 stale-`running`: client-side state under crash conditions has its own consistency problem and duplicates QStash logic. QStash owns retry state via `failureCallback`. Detailed rejection at §5.2 amendment 5. |
+| **Separate `scripts/backfill-push-queue.mjs` cutover script** | §5.4 alternative | Phase 1 reconciliation per §1.1 absorbs cutover-backlog drainage automatically. **No future contributor should propose building this** — the architectural decision is the queue-handler-as-self-healing pattern, not a one-shot script. The right pattern is "every materialization tick is the cutover script for whatever's still null." |
+
+### §8.3 Phase 2 deferrals (full list lives in the brief)
+
+See [PLANNER_PRODUCT_BRIEF.md §4](../PLANNER_PRODUCT_BRIEF.md) for the canonical Phase 2 deferrals list — ~30 items, last sync'd at v1.2.
+
+**Items in brief §4 that interact with this plan's surface area** (referenced inline above so the boundary is explicit):
+
+| Item | Where this plan references it |
+|---|---|
+| Per-tenant SuiteFleet credential isolation (first post-pilot item) | §6.3 amendment 3 — flow-control key swap rides with this work |
+| AWS Secrets Manager swap | §6.3 amendment 3 — gates the per-tenant flow-control key migration |
+| Reconciliation job between Planner and SF | Adjacent to §1.1 reconciliation but distinct: Planner↔SF reconciliation is a Phase 2 cross-system reconciliation; §1.1 reconciliation is intra-Planner self-healing |
+| Audit log viewer UI | Renders the `cron.stale_running_detected` + `materialization.address_resolution_failed` operational counters once they exist as observable surfaces |
+
+**Inline Phase 2 hardening items introduced by this plan's amendments** (not in brief §4 today; would need brief amendment to land formally):
+
+| Item | Driver | Path to landing |
+|---|---|---|
+| Shared Upstash Redis cache for SF auth tokens (`sf-token:{tenant_id}` keyed) | §6.2 amendment — amortizes cold-start auth across Vercel instances | If observability shows cold-start auth as a real-world bottleneck. Brief amendment if escalated. |
+| Flow-control key migration `'sf-push-global-mvp'` → `'sf-push:{tenant_id}'` | §6.3 amendment 3 — coupled to per-tenant credential isolation | Lands together with the Secrets Manager swap; not a separate Day-N task |
+| `materialization.address_resolution_failed` as 10th audit event | §2.2 amendment audit-event-vs-counter decision (option b) | MVP ships as operational counter only (Sentry-captured + log warning per §2.2). Phase 2 brief amendment to v1.3 with this as the 10th audit event IF observability surfaces it as ops-actionable (e.g., recurring data-gap pattern that needs an audit trail rather than just a counter). **Default for MVP: counter only; option (a).** |
+| `'SKIPPED'` task internal_status CHECK admission removal | PR #139's 0019 migration added `'SKIPPED'` to `tasks.internal_status` CHECK. The new materialization handler does NOT write this value — skip exceptions = no INSERT per §2.4. `'SKIPPED'` becomes vestigial in the new path | Removal of CHECK admission is Phase 2 cleanup IF no consumer surfaces; admitted for MVP as defense-in-depth against legacy ad-hoc paths writing the value. |
+
+Partial lists drift from the brief's full list and create confusion about which is canonical; this plan refers to the brief by reference for the full list and itemizes only the interactions specific to this plan PR.
+
+### §8.4 `'suspended'` tenant status service surface (tangential — included only because raised in Day-13 plan §6)
+
+Decision deferred: whether `'suspended'` becomes an additional service action surface (e.g., `merchant:suspend` permission + `suspendMerchant` service + `merchant.suspended` audit event) OR stays operationally-set-only.
+
+**Default:** stays reserved; no part-2 service work; revisit Phase 2 if a Transcorp-staff workflow demands the suspend transition.
+
+**Note (amendment 7):** this is **tangential to the cron-decoupling plan** — included here only because it was raised in Day-13 plan §6 deferrals and a fresh reader of this plan might wonder why `'suspended'` shows up nowhere else in the §3.2 PAUSED filter discussion. It's a `tenants.status` lifecycle question, not a `subscriptions.status` question; the materialization filter doesn't read `tenants.status` (cron-eligibility filter at `list-cron-eligible-tenants.ts:74-86` reads `suitefleet_customer_code` only).
 
 ---
 
