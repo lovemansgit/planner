@@ -513,6 +513,47 @@ export async function listUnpushedTasksByTenant(
 }
 
 /**
+ * Day 14 — reconciliation-scan query for the materialization cron's
+ * Phase 1 per §1.1 of the Day-14 cron decoupling plan
+ * (memory/plans/day-14-cron-decoupling.md). Returns task IDs that are:
+ *
+ *   1. unpushed (`pushed_to_external_at IS NULL`)        — Phase 5 needs to enqueue them
+ *   2. have a resolved address (`address_id IS NOT NULL`) — §2.2 quarantine guard
+ *
+ * The address-id filter is load-bearing: rows quarantined by §2.2's
+ * refuse-to-materialize policy stay pinned at NULL and are NOT eligible
+ * for re-enqueue. Re-enqueueing them would re-trigger the §5.1 Step 1.5
+ * null-address guard at the queue handler, which DLQs them via
+ * failureCallback. The handler-side guard exists for defense-in-depth
+ * (per §5.1 amendment 2); the cron-side filter here is the primary gate
+ * that keeps quarantined rows out of the queue in steady state.
+ *
+ * Distinct from `listUnpushedTasksByTenant` (which returns full Task
+ * objects with packages, used by the legacy `pushTasksForTenant` path
+ * retiring per §1.3) — the reconciliation scan only needs IDs because
+ * the queue handler re-reads the full task by id at delivery time.
+ *
+ * Caller wraps in `withServiceRole` (system actor — cron); RLS not
+ * enforced at this layer. Returns IDs in `created_at` ascending order
+ * to drain oldest-first.
+ */
+export async function listReconciliationCandidatesByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+): Promise<readonly Uuid[]> {
+  type IdRow = { id: Uuid };
+  const rows = await tx.execute<IdRow>(sqlTag`
+    SELECT id
+    FROM tasks
+    WHERE tenant_id = ${tenantId}
+      AND pushed_to_external_at IS NULL
+      AND address_id IS NOT NULL
+    ORDER BY created_at ASC
+  `);
+  return rows.map((row) => row.id);
+}
+
+/**
  * Day 8 / D8-4a — mark a task as pushed to the external system.
  * Sets `external_id`, `external_tracking_number`, and
  * `pushed_to_external_at = now()` atomically. Defence-in-depth
