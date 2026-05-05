@@ -149,98 +149,73 @@ describe("§7.3 — migration 0020 verification", () => {
   // per-test fixture data isolated from the original migration replay.
   // ---------------------------------------------------------------------------
   describe("row 3: winning-row dedup policy", () => {
-    const TARGET = "2026-04-01";
-
-    async function seed5DupesWith(rows: Array<{
-      completedAt: string | null;
-      startedAt: string;
+    // Migration 0020 ADDS the (tenant_id, target_date) UNIQUE — meaning we
+    // can no longer INSERT duplicate (tenant, target_date) rows on the
+    // post-migration table to test the dedup. The migration's dedup
+    // logic ran ONCE at scripts/setup-test-db.sh and can't be replayed.
+    //
+    // To prove the ORDER BY semantic: replay the ROW_NUMBER() ranking
+    // verbatim against an in-query VALUES list shaped exactly like the
+    // migration's input. Pure-SELECT — no DML on task_generation_runs.
+    // The query mirrors the migration's:
+    //   ORDER BY
+    //     (completed_at IS NULL),
+    //     completed_at DESC NULLS LAST,
+    //     started_at DESC
+    // which is the exact load-bearing logic to pin.
+    type RankedRow = {
       label: string;
-    }>): Promise<Map<string, string>> {
-      // Returns label → id map for assertion.
-      const idByLabel = new Map<string, string>();
-      for (const row of rows) {
-        const r = await sql<{ id: string }[]>`
-          INSERT INTO task_generation_runs (
-            tenant_id, window_start, window_end, target_date,
-            status, cap_threshold, started_at, completed_at
-          ) VALUES (
-            ${TENANT_ID}, ${row.startedAt}::timestamptz,
-            ${row.startedAt}::timestamptz + INTERVAL '1 hour', ${TARGET}::date,
-            ${row.completedAt ? "completed" : "running"}, 7000,
-            ${row.startedAt}::timestamptz,
-            ${row.completedAt ? sql`${row.completedAt}::timestamptz` : null}
-          ) RETURNING id
-        `;
-        idByLabel.set(row.label, r[0].id);
-      }
-      return idByLabel;
-    }
+      completed_at: string | null;
+      started_at: string;
+    };
 
-    async function runDedupAndSurvivor(): Promise<string> {
-      // Replays the migration's dedup pattern verbatim, scoped to TENANT_ID.
-      await sql`
-        DELETE FROM task_generation_runs
-         WHERE id IN (
-           SELECT id FROM (
-             SELECT id,
-               ROW_NUMBER() OVER (
-                 PARTITION BY tenant_id, target_date
-                 ORDER BY
-                   (completed_at IS NULL),
-                   completed_at DESC NULLS LAST,
-                   started_at DESC
-               ) AS rn
-             FROM task_generation_runs
-             WHERE tenant_id = ${TENANT_ID} AND target_date = ${TARGET}::date
-           ) ranked
-           WHERE ranked.rn > 1
-         )
+    async function pickWinningLabel(rows: RankedRow[]): Promise<string> {
+      // VALUES literal preserves NULL completed_at semantics; the postgres
+      // driver's array splat (per §7.1 fix) doesn't apply here because we
+      // pass a single JSON parameter that the lateral function unpacks.
+      const r = await sql<{ label: string }[]>`
+        WITH input(label, completed_at, started_at) AS (
+          SELECT (x->>'label')::text,
+                 NULLIF(x->>'completed_at','')::timestamptz,
+                 (x->>'started_at')::timestamptz
+            FROM jsonb_array_elements(${JSON.stringify(rows)}::jsonb) AS x
+        ),
+        ranked AS (
+          SELECT label,
+                 ROW_NUMBER() OVER (
+                   ORDER BY
+                     (completed_at IS NULL),
+                     completed_at DESC NULLS LAST,
+                     started_at DESC
+                 ) AS rn
+            FROM input
+        )
+        SELECT label FROM ranked WHERE rn = 1
       `;
-      const survivors = await sql<{ id: string }[]>`
-        SELECT id FROM task_generation_runs
-        WHERE tenant_id = ${TENANT_ID} AND target_date = ${TARGET}::date
-      `;
-      expect(survivors).toHaveLength(1);
-      return survivors[0].id;
+      expect(r).toHaveLength(1);
+      return r[0].label;
     }
-
-    afterAll(async () => {
-      try {
-        await sql`DELETE FROM task_generation_runs WHERE tenant_id = ${TENANT_ID}`;
-      } catch {
-        /* ignore */
-      }
-    });
 
     it("MAX(completed_at) wins among completed rows", async () => {
-      const labels = await seed5DupesWith([
-        { startedAt: "2026-04-01T08:00:00Z", completedAt: "2026-04-01T09:00:00Z", label: "earlier-completed" },
-        { startedAt: "2026-04-01T10:00:00Z", completedAt: "2026-04-01T11:00:00Z", label: "later-completed" },
-        { startedAt: "2026-04-01T12:00:00Z", completedAt: null, label: "running-A" },
-        { startedAt: "2026-04-01T13:00:00Z", completedAt: null, label: "running-B" },
-        { startedAt: "2026-04-01T14:00:00Z", completedAt: null, label: "running-C" },
+      const winner = await pickWinningLabel([
+        { label: "earlier-completed", completed_at: "2026-04-01T09:00:00Z", started_at: "2026-04-01T08:00:00Z" },
+        { label: "later-completed",   completed_at: "2026-04-01T11:00:00Z", started_at: "2026-04-01T10:00:00Z" },
+        { label: "running-A",         completed_at: null,                   started_at: "2026-04-01T12:00:00Z" },
+        { label: "running-B",         completed_at: null,                   started_at: "2026-04-01T13:00:00Z" },
+        { label: "running-C",         completed_at: null,                   started_at: "2026-04-01T14:00:00Z" },
       ]);
-
-      const survivor = await runDedupAndSurvivor();
-      expect(survivor).toBe(labels.get("later-completed"));
-
-      // Cleanup before next sub-test.
-      await sql`DELETE FROM task_generation_runs WHERE tenant_id = ${TENANT_ID} AND target_date = ${TARGET}::date`;
+      expect(winner).toBe("later-completed");
     });
 
     it("MAX(started_at) wins when no row has completed_at", async () => {
-      const labels = await seed5DupesWith([
-        { startedAt: "2026-04-01T10:00:00Z", completedAt: null, label: "earlier-running" },
-        { startedAt: "2026-04-01T11:00:00Z", completedAt: null, label: "middle-running" },
-        { startedAt: "2026-04-01T14:00:00Z", completedAt: null, label: "later-running" },
-        { startedAt: "2026-04-01T12:00:00Z", completedAt: null, label: "another-running" },
-        { startedAt: "2026-04-01T13:00:00Z", completedAt: null, label: "yet-another" },
+      const winner = await pickWinningLabel([
+        { label: "earlier-running",  completed_at: null, started_at: "2026-04-01T10:00:00Z" },
+        { label: "middle-running",   completed_at: null, started_at: "2026-04-01T11:00:00Z" },
+        { label: "later-running",    completed_at: null, started_at: "2026-04-01T14:00:00Z" },
+        { label: "another-running",  completed_at: null, started_at: "2026-04-01T12:00:00Z" },
+        { label: "yet-another",      completed_at: null, started_at: "2026-04-01T13:00:00Z" },
       ]);
-
-      const survivor = await runDedupAndSurvivor();
-      expect(survivor).toBe(labels.get("later-running"));
-
-      await sql`DELETE FROM task_generation_runs WHERE tenant_id = ${TENANT_ID} AND target_date = ${TARGET}::date`;
+      expect(winner).toBe("later-running");
     });
   });
 

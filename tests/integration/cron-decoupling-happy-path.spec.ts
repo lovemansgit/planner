@@ -237,17 +237,21 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
 
       // Step 2: 1 cutover-backlog task — pushed_to_external_at IS NULL,
       // address_id IS NOT NULL — the exact shape Phase 1 reconciliation
-      // selects. subscription_id NULL so it doesn't collide with the
-      // partial UNIQUE on (subscription_id, delivery_date).
+      // selects. subscription_id NULL with created_via='manual_admin'
+      // satisfies the tasks_creation_source_invariant CHECK; the partial
+      // UNIQUE on (subscription_id, delivery_date) doesn't apply for
+      // subscription_id IS NULL.
       const backlogDate = isoDubaiDatePlus(NOW_AT_SETUP, -30);
       const t = await tx.execute<{ id: Uuid }>(sqlTag`
         INSERT INTO tasks (
           tenant_id, consignee_id, subscription_id, customer_order_number,
+          created_via,
           delivery_date, delivery_start_time, delivery_end_time,
           address_id
         ) VALUES (
           ${TENANT_ID}, ${consigneeId}, NULL,
           ${`E2E-BACKLOG-${RUN_ID}`},
+          'manual_admin',
           ${backlogDate}::date, '09:00', '11:00',
           ${primaryAddressId}
         ) RETURNING id
