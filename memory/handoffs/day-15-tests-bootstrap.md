@@ -4,6 +4,65 @@ description: Bootstrap doc for the Day-15 fresh Claude Code session. Covers Post
 type: project
 ---
 
+# Day 15 fresh Claude Code session bootstrap — 6 May 2026
+
+**For:** Fresh Claude Code session opening Day 15
+**Repo:** `lovemansgit/planner`
+**Read this entire document before responding to Love's first instruction.**
+
+---
+
+## §0 Required reading order before any action
+
+1. `memory/PLANNER_PRODUCT_BRIEF.md` — v1.2 source of truth for Planner scope, architecture, demo posture (May 12, 2026). Acknowledge per §10 protocol.
+2. `memory/MEMORY.md` — index of memos and handoffs (Day 14 evening sub-section is new state — read in full).
+3. `memory/handoffs/day-14-eod.md` — Day-14 EOD with §10 post-EOD addendum (4 items landed late evening: PR #149 convention correction, PR #150 CLI bug memo, §0.6 + §11.2 row 6 ops work, §7.2 tests on commit 71acf07).
+4. `memory/feedback_claude_code_executes_default.md` (auto-memory; corrected execution convention restated below in §1 since auto-memory may not survive cross-machine bootstrap).
+5. `memory/plans/day-14-cron-decoupling.md` — merged plan PR #145; §7.1, §7.3, §7.4 spec for today's test work; §11.2 9-gate code-PR pre-merge checklist.
+
+---
+
+## §1 Corrected execution convention (load-bearing — read before any tool routing)
+
+PR #149 (merged f7ba2ad Day-14 evening) retired the Vercel-UI-only carve-out from the original 3 May framing of `feedback_claude_code_executes_default.md`. The corrected convention:
+
+**You execute whatever has a CLI/API/script path:**
+- SQL execution against production DB (per-statement approval for destructive)
+- Migration application (`supabase db push` against linked project, or `psql $PROD_URL -f migrations/NNNN_*.sql`)
+- Vercel env-var management (`vercel env add NAME production`, `vercel env ls`, `vercel env rm`)
+- Vercel deployments (`vercel deploy`, `vercel promote <url> --prod`)
+- GitHub PR operations (`gh pr create`, `gh pr merge` once Love instructs merge, `gh pr view`)
+- Upstash QStash inspection (CLI or REST against API key)
+- Seed scripts, backfill scripts, npm scripts
+- Anything with a CLI, API, or programmatic surface
+
+**Love does (you structurally cannot):**
+- Approval-before-execution decisions (the safety gate; this is the role, not execution)
+- Architectural calls and product judgment
+- External-human comms (SF / Aqib emails, brand-team interactions)
+- True UI-only actions where no CLI/API path exists at all (rare; most "UI actions" have a CLI equivalent)
+
+**Token / credential gaps are NOT a Love-action carve-out.** If you lack an API token, ask Love to provision it; do not make the action Love's job.
+
+**T3 hard-stop discipline applies as approval, not execution.** You wait for explicit Love instruction to merge. Love's instruction is the gate; the `gh pr merge` command itself runs in your session.
+
+**Known exception:** Vercel CLI 53.1.1 has a bug rejecting `vercel env add NAME preview` with `git_branch_required` even with `--yes`. See `memory/followup_vercel_cli_env_add_preview_bug.md` (filed via PR #150) — fall back to dashboard for Preview-scope env-var adds until upstream fix.
+
+---
+
+## §2 Repo state at Day-15 bootstrap
+
+```
+main HEAD:                        59548c0  chore(memory): T1 — Day-14 EOD post-EOD addendum (#151)
+day14/t3-cron-decoupling-code:    71acf07  test(queue): §7.2 push-handler tests
+(11 commits ahead of main)
+unit baseline (main):             808
+unit baseline (day14 branch):     819 (+27 from §7.2 tests; +0 from -3 deleted cron-loop tests already accounted)
+integration:                      ~159 (unchanged; §7.4 lands today)
+typecheck + lint:                 clean on both branches
+production lag:                   17 commits behind (PR #149, #150, #151 added to ledger)
+```
+
 **Outstanding branches:**
 - `day14/t3-cron-decoupling-code` (commit `71acf07`, 11 commits ahead of main) — code feature-complete + §7.2 tests landed; awaits §7.1 + §7.3 + §7.4 tests, then PR open
 - No other open branches
