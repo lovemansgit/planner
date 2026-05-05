@@ -133,6 +133,16 @@ export interface Task {
   readonly deliverToCustomerOnly: boolean;
   /** ISO 8601 with timezone; null until the Day-7 cron pushes the task. */
   readonly pushedToExternalAt: IsoTimestamp | null;
+  /**
+   * FK to addresses(id) per migration 0014. Nullable per Day-13 part-1
+   * plan §1.3.1 Condition 3 — existing pre-Day-13 task rows have NULL
+   * (no backfill); the Day-14 materialization-cron path always populates
+   * via the §2.3 4-layer COALESCE chain (refuse-to-materialize on NULL
+   * per §2.2). Future operator-create paths may opt into NULL until
+   * address resolution surfaces; the queue handler at /api/queue/push-task
+   * defends against NULL via §5.1 amendment 2 (DLQ via failureCallback).
+   */
+  readonly addressId: Uuid | null;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
   /** Zero or more packages, ordered by `position` ascending. */

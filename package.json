@@ -19,7 +19,8 @@
     "test:e2e": "playwright test",
     "onboard-merchant": "node scripts/onboard-merchant.mjs",
     "teardown-merchant": "node scripts/teardown-merchant.mjs",
-    "seed-subscriptions": "node scripts/seed-subscriptions.mjs"
+    "seed-subscriptions": "node scripts/seed-subscriptions.mjs",
+    "backfill-subscription-materialization": "node scripts/backfill-subscription-materialization.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1037.0",
