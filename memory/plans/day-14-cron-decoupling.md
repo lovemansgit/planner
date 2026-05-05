@@ -181,62 +181,231 @@ The decoupled push handler uses the existing column unchanged. Materialization l
 
 ## §2 Materialization cron implementation outline
 
-### §2.1 Handler shape
+### §2.1 Handler shape (matches §1.1 6-phase model)
 
-`src/app/api/cron/generate-tasks/route.ts` rewrites materially:
+`src/app/api/cron/generate-tasks/route.ts` rewrites materially. The sketch below is the canonical implementation outline; if §1.1 and §2.1 disagree, §1.1 wins and §2.1 must be re-amended:
 
 ```typescript
-// Sketch
+// Sketch — 6-phase per-tenant invocation matching §1.1
 export async function GET(req: Request): Promise<Response> {
-  // 1. CRON_SECRET check (unchanged)
-  // 2. Compute today + 14 days target horizon
-  // 3. Enumerate cron-eligible tenants (unchanged β filter from list-cron-eligible-tenants.ts)
-  // 4. Per tenant:
-  //    a. Read subscription_materialization.materialized_through_date for each active sub
-  //    b. For subs whose horizon is behind today+14, INSERT…SELECT into tasks
-  //    c. RETURNING id, tenant_id from the INSERT
-  //    d. UPDATE subscription_materialization.materialized_through_date = today + 14
-  //    e. Enqueue one QStash message per inserted task: { tenant_id, task_id }
-  //    f. Insert task_generation_runs row with status='completed' + target_date = today + 14
-  // 5. Return summary
+  // (Handler-entry, NOT per-tenant)
+  // 0a. CRON_SECRET check (unchanged)
+  // 0b. Compute target_date = today + 14 days
+  // 0c. Enumerate cron-eligible tenants (unchanged β filter from list-cron-eligible-tenants.ts)
+
+  for (const tenant of eligibleTenants) {
+    // PHASE 1 — Reconciliation scan (NEW per §1.1).
+    //   Read tasks.id WHERE tenant_id = tenant.id AND pushed_to_external_at IS NULL.
+    //   These are: (a) rows that crashed between Phase 4 commit and Phase 5 enqueue
+    //   on a previous tick, (b) the cutover backlog (Q3 probe: 114 fresh-butchers
+    //   tasks). Self-healing on every tick. Result: reconciliationTuples[].
+    //   IMPORTANT: filter address_id IS NOT NULL on this scan too — null-address rows
+    //   (per §2.2 refuse-to-materialize policy below) should NOT be re-enqueued; they
+    //   stay quarantined until the operator-actionable counter (§2.2) is resolved.
+
+    // PHASE 2-4 — single per-tenant transaction (the materialization tx)
+    await withServiceRole(async (tx) => {
+      // PHASE 2: bulk INSERT…SELECT into tasks. Per-row address_id resolved per §2.3
+      //   four-layer COALESCE chain (override_one_off → override_forward → rotation
+      //   → primary). Subscriptions whose chain returns NULL are SKIPPED with the
+      //   §2.2 quarantine policy (no INSERT for that (sub, target_date), counter
+      //   bumped). RETURNING id for newInsertedIds[].
+      // PHASE 3: UPDATE subscription_materialization.materialized_through_date
+      //   = target_date for affected subs.
+      // PHASE 4: INSERT task_generation_runs row with status='completed',
+      //   target_date = target_date, started_at, completed_at, projected_count,
+      //   subscriptions_walked, tasks_created, tasks_skipped_existing.
+      // tx COMMIT here — this is the durability boundary for the materialization side.
+    });
+
+    // PHASE 5 — post-commit QStash batch enqueue.
+    //   Build the union: reconciliationTuples ∪ newInsertedIds.
+    //   Chunk to batches of 100; for each chunk:
+    //     await qstashClient.batchJSON(chunk.map(t => ({
+    //       url: `${PUBLIC_BASE_URL}/api/queue/push-task`,
+    //       body: { tenant_id, task_id: t },
+    //       deduplicationId: t,  // task_id — load-bearing for at-least-once safety
+    //     })));
+    //   Failures here are logged + Sentry-captured but do NOT roll back Phase 4 commit.
+    //   Next-tick reconciliation (Phase 1) re-discovers any missed rows.
+  }
+
+  // PHASE 6 — handler-exit.
+  // Log per-tenant + total wall-clock + tasks_created + tasks_enqueued + reconciliation_count.
+  // Return summary JSON.
 }
 ```
 
 Materialization phase still runs inside `withServiceRole` because cron is a system actor. Inserting tasks per the address-rotation lookup pattern (deferred to part 2 in PR #139) lands HERE in the rewrite — this is the part-2 deferral resolved.
 
-### §2.2 Address-rotation honoring (part-2 deferral resolved)
+**Sketch-vs-§1.1 reconciliation note:** earlier draft put enqueue inside the per-tenant tx (step "e"). That was wrong — it would couple QStash availability to materialization durability and re-introduce the cross-system race §1.1 explicitly designed against. The corrected sketch above lifts enqueue out of the tx into Phase 5.
 
-The deferred §2 generator code from Day-13 plan §2 lands in this Day-14 code PR. Per Day-13 plan §2.1 SQL sketch:
+### §2.2 Address-rotation honoring + null-address policy (part-2 deferral resolved)
+
+The deferred §2 generator code from Day-13 plan §2 lands in this Day-14 code PR.
+
+**Address resolution order — four layers, most-specific-first.** See §2.3 for the canonical SQL with all four layers. Summary order:
+1. Active `address_override_one_off` for `target_date` (most specific — single-day operator override).
+2. Active `address_override_forward` whose `start_date <= target_date`, taking the most recent (`MAX(start_date)`) when multiple are present (operator's running address change, until superseded by a newer forward override).
+3. `subscription_address_rotations` row for `EXTRACT(ISODOW FROM target_date)` (per-weekday rotation rule).
+4. Consignee primary address (`addresses.is_primary = true`, guaranteed-unique by 0014's partial UNIQUE — see §2.3).
+
+**Null-address policy: refuse to materialize (the row).** If all four layers return NULL for a `(subscription_id, target_date)` tuple, **skip the INSERT for that tuple**. The materialization SQL filters out those rows in the WHERE clause (or treats the COALESCE result as a guard predicate). The skipped tuple is logged as a warning + Sentry-captured + bumps an operational counter `materialization.address_resolution_failed` keyed on `{tenant_id, consignee_id, subscription_id, target_date}`.
+
+**Why refuse-to-materialize, not materialize-with-NULL:**
+- Failing at SF push masks the data gap: it would surface as a generic `failed_pushes` row with reason `bad_request`, indistinguishable from SF flakiness or genuine SF-side errors. Diagnosis at that point requires drilling into payload inspection.
+- Refuse-to-materialize fails upstream where the diagnosis is unambiguous: the consignee has neither a rotation rule for that weekday, nor a primary address, nor an active override. The fix lives in the consignee-onboarding UI, not in the integration layer.
+- DLQ stays clean: `failed_pushes` reflects real SF integration issues, not data-completeness gaps.
+- The operational counter surfaces this as merchant-visible telemetry on Day-18 polish (or Phase 2 if observability surface isn't built yet).
+
+**Audit-event-vs-counter decision (TBD — Love confirms before code PR):** the brief's locked 9-event audit vocabulary (per `memory/project_brief_audit_event_count_correction.md`) does NOT include a `materialization.address_resolution_failed` event. Two options:
+- **(a) Operational counter + Sentry only** (no audit event). Lighter-weight; doesn't require brief amendment; counter is queryable from app metrics. **Recommended for MVP** — preserves the locked 9-event vocabulary and the v1.2 amendment protocol.
+- **(b) Add `materialization.address_resolution_failed` as the 10th audit event.** Requires brief amendment + version bump to v1.3. Heavier, but gives the failure first-class audit-trail status.
+
+**MVP default:** option (a). Surface to Love at code-PR review time; if Love wants option (b), file the brief amendment first per the v1.0+ amendment protocol (`decision_*.md` + version bump).
+
+`tasks.address_id` is nullable per Day-13 plan §1.3.1 Condition 3 — but post-this-amendment, **no row is ever inserted with `address_id IS NULL` from the cron path**. The nullable column posture remains for future-proofing (e.g., manual operator-created tasks pre-rotation-setup); the cron-materialization path enforces NOT NULL by construction.
+
+### §2.3 Schema-aware exception application (part-2 deferral resolved)
+
+Exception types split into **two categories** with different effects on materialization:
+
+| Category | Exception types | Effect | Resolution location |
+|---|---|---|---|
+| **Skip-the-date** (no INSERT) | `skip`, `pause_window` | The materialization WHERE clause excludes the `(subscription_id, target_date)` tuple entirely. No task row created; no QStash message; calendar UI sources SKIPPED indication from the `subscription_exceptions` row. | WHERE clause |
+| **Override-the-address** (INSERT with override's address_id) | `address_override_one_off`, `address_override_forward` | The materialization INSERT proceeds, but the `address_id` column resolution prefers the override's `address_override_id` over the rotation/primary fallback. The row IS materialized — the override only redirects the address. | COALESCE chain in SELECT |
+| **Goodwill addition** (INSERT with rotation/primary; no override) | `append_without_skip` | Materializes a tail-end task per §3.1.6 BRD pattern. Address resolution falls through to rotation → primary (no override layer applies). The exception row exists for audit; it does not redirect anything during materialization. | (Treated as a normal materialization; the exception row's effect is on `subscription.end_date`, applied at exception-creation time, not at materialization time.) |
+
+**Canonical SQL pattern** — corrected COALESCE order per amendment 4 (override-aware, primary-UNIQUE-aware):
 
 ```sql
 INSERT INTO tasks (..., address_id, ...)
 SELECT
-  ...,
+  s.id AS subscription_id,
+  s.tenant_id,
+  s.consignee_id,
+  target_date,
+  -- Address resolution: 4-layer COALESCE, most-specific-first.
+  -- The four layers map exactly to §2.2's resolution order; row is
+  -- excluded from INSERT (see WHERE below) if all four return NULL,
+  -- per §2.2 refuse-to-materialize policy.
   COALESCE(
-    (SELECT r.address_id FROM subscription_address_rotations r
-     WHERE r.subscription_id = s.id AND r.weekday = EXTRACT(ISODOW FROM target_date)::int),
-    (SELECT a.id FROM addresses a
-     WHERE a.consignee_id = s.consignee_id AND a.is_primary = true LIMIT 1)
-  ) AS address_id
+    -- Layer 1: address_override_one_off for THIS date (most specific)
+    (SELECT e.address_override_id
+       FROM subscription_exceptions e
+      WHERE e.subscription_id = s.id
+        AND e.type = 'address_override_one_off'
+        AND e.start_date = target_date
+        AND e.address_override_id IS NOT NULL
+      LIMIT 1),
+    -- Layer 2: most-recent active address_override_forward
+    -- (operator's running address change, until superseded)
+    (SELECT e.address_override_id
+       FROM subscription_exceptions e
+      WHERE e.subscription_id = s.id
+        AND e.type = 'address_override_forward'
+        AND e.start_date <= target_date
+        AND e.address_override_id IS NOT NULL
+      ORDER BY e.start_date DESC
+      LIMIT 1),
+    -- Layer 3: per-weekday rotation rule
+    (SELECT r.address_id
+       FROM subscription_address_rotations r
+      WHERE r.subscription_id = s.id
+        AND r.weekday = EXTRACT(ISODOW FROM target_date)::int),
+    -- Layer 4: consignee's primary address
+    -- The is_primary partial UNIQUE in 0014 (PR #139) — `UNIQUE
+    -- (consignee_id) WHERE is_primary = true` — guarantees AT MOST
+    -- one primary per consignee, so LIMIT 1 here is a defense-in-depth
+    -- guard, not the load-bearing constraint. ORDER BY a.id added for
+    -- deterministic tie-break in the (constraint-violated) impossible
+    -- case where two primaries somehow coexist.
+    (SELECT a.id
+       FROM addresses a
+      WHERE a.consignee_id = s.consignee_id
+        AND a.is_primary = true
+      ORDER BY a.id
+      LIMIT 1)
+  ) AS address_id,
+  ...
 FROM subscriptions s
-WHERE ...
+WHERE
+  s.status = 'ACTIVE'
+  AND s.tenant_id = :tenant_id
+  AND target_date BETWEEN s.start_date AND s.end_date
+  AND EXTRACT(ISODOW FROM target_date)::int = ANY(s.days_of_week)
+  -- Skip-the-date exceptions: exclude the tuple
+  AND NOT EXISTS (
+    SELECT 1 FROM subscription_exceptions e
+     WHERE e.subscription_id = s.id
+       AND ((e.type = 'skip' AND e.start_date = target_date)
+         OR (e.type = 'pause_window'
+             AND target_date BETWEEN e.start_date AND e.end_date))
+  )
+  -- Refuse-to-materialize guard (§2.2): skip rows whose 4-layer
+  -- COALESCE returns NULL — the COALESCE result IS NULL only when
+  -- ALL four layers fail, so this guard fires the §2.2 quarantine.
+  -- Note: the same COALESCE chain is recomputed inline; in the actual
+  -- code PR this should be hoisted via LATERAL or a CTE so the chain
+  -- evaluates exactly once per row (perf + readability).
+  AND COALESCE(
+    (SELECT e.address_override_id FROM subscription_exceptions e
+       WHERE e.subscription_id = s.id AND e.type = 'address_override_one_off'
+         AND e.start_date = target_date AND e.address_override_id IS NOT NULL LIMIT 1),
+    (SELECT e.address_override_id FROM subscription_exceptions e
+       WHERE e.subscription_id = s.id AND e.type = 'address_override_forward'
+         AND e.start_date <= target_date AND e.address_override_id IS NOT NULL
+       ORDER BY e.start_date DESC LIMIT 1),
+    (SELECT r.address_id FROM subscription_address_rotations r
+       WHERE r.subscription_id = s.id
+         AND r.weekday = EXTRACT(ISODOW FROM target_date)::int),
+    (SELECT a.id FROM addresses a
+       WHERE a.consignee_id = s.consignee_id AND a.is_primary = true
+       ORDER BY a.id LIMIT 1)
+  ) IS NOT NULL;
 ```
 
-`tasks.address_id` is nullable (per Day-13 plan §1.3.1 Condition 3); if both the rotation lookup AND the primary fallback return NULL, the task lands with `address_id = NULL` and the push handler in §5 surfaces an actionable error (it can't push without an address).
+**Implementation note:** the duplicate COALESCE chain (one in SELECT, one in WHERE) is illustrative — the code PR should hoist it via a `LATERAL` join or a CTE so the chain evaluates exactly once per row. Side-by-side duplication would also let the SELECT and WHERE diverge silently, which is exactly the bug class §2 is designed against.
 
-### §2.3 Schema-aware exception application (part-2 deferral resolved)
+`countMatchingSubscriptions` (the cap-projection mirror used by Day-13's volumetric guard) mirrors the same WHERE so cap projection stays accurate post-amendment.
 
-Per Day-13 plan §2.2, the materialization WHERE clause excludes:
-- `subscription_exceptions.type='skip'` rows where `start_date = target_date` (skip exclusion)
-- `subscription_exceptions.type='pause_window'` rows where `target_date BETWEEN start_date AND end_date` (pause exclusion)
-- `subscription_exceptions.type='address_override_one_off'` rows where `start_date = target_date` (rotation override resolution)
-- `subscription_exceptions.type='address_override_forward'` rows where `start_date <= target_date` (forward rotation override resolution)
+### §2.4 Per-exception-type INSERT/no-INSERT decision
 
-`countMatchingSubscriptions` mirrors the same WHERE so cap projection stays accurate.
+Replaces the prior single-line decision with an explicit row-by-row policy that the §2.3 SQL implements verbatim:
 
-### §2.4 SKIPPED-vs-no-INSERT decision
+| `subscription_exceptions.type` | INSERT row? | `address_id` source if INSERT | Audit/UX surface |
+|---|---|---|---|
+| `skip` | **No** | n/a | `SKIPPED` indication on calendar comes from the `subscription_exceptions` row; `subscription.exception.created` audit event already emits at exception-creation time (per PR #139 §3.2 audit registrations). |
+| `pause_window` | **No** | n/a | Pause indication on calendar comes from the `subscription_exceptions` row's `[start_date, end_date]` span; `subscription.paused` audit event emits at pause-creation time (pre-existing event from `event-types.ts:320`). |
+| `address_override_one_off` | **Yes** | `subscription_exceptions.address_override_id` (Layer 1 of §2.3 COALESCE) | `subscription.address_override.applied` audit event emits at exception-creation time. Calendar shows the override-address in the popover for that single date. |
+| `address_override_forward` | **Yes** | `subscription_exceptions.address_override_id` (Layer 2 of §2.3 COALESCE) — the most-recent active forward override | `subscription.address_override.applied` audit event emits at exception-creation time. Every materialized task for `target_date >= override.start_date` (until superseded) carries the override's address_id. |
+| `append_without_skip` | **Yes** (one extra tail-end task per the BRD §3.1.6 pattern) | Rotation/primary fallback (§2.3 Layers 3-4); no override applies | `subscription.end_date.extended` audit event emits at exception-creation time with `triggered_by='append_without_skip'`; the materialized tail-end task is indistinguishable on the calendar from a regular materialized task except for the extended `end_date`. |
 
-Per Day-13 plan §2.2 recommendation (now locked at Day-14 plan stage): **no-INSERT** when an exception covers the target date. Audit trail of the skip lives in `subscription_exceptions` row + `subscription.exception.created` audit event; calendar UI sources `SKIPPED` indication from `subscription_exceptions`, not from `tasks.internal_status`.
+**Why this decomposition matters for §2.3 SQL:** the SQL's WHERE clause excludes only the *skip-the-date* category (`skip` + `pause_window`); the *override-the-address* category is handled in the COALESCE chain, not the WHERE; the *goodwill* category is handled implicitly by the subscription's already-extended `end_date` (the materialization horizon walk picks up the new tail-end date naturally — no special SQL needed). This is why §2.3's WHERE has 2 EXISTS predicates, not 4.
+
+**Audit trail invariant:** every exception type emits its own audit event at exception-CREATION time (not at materialization time). The materialization handler does NOT emit audit events. This keeps the audit vocabulary at the locked 9-event count and avoids the "every task generation emits an audit row" anti-pattern that would balloon `audit_events` at full demo volume.
+
+### §2.5 Materialization-phase throughput math (NEW per amendment 6)
+
+**Problem:** §1.1 amendment claims "total wall-clock seconds" for the materialization handler. The QStash batch enqueue cost was pinned (~1-2s for 10 chunks of 100 messages); the materialization SQL itself was not.
+
+**Estimate at full demo volume (845 active subs across 3 tenants × 14 horizon-days = up to 11,830 candidate `(subscription_id, target_date)` tuples):**
+
+| Operation | Estimated wall-clock | Reasoning |
+|---|---|---|
+| Phase 1 reconciliation scan | <100ms per tenant | Indexed scan on `tasks(tenant_id) WHERE pushed_to_external_at IS NULL`; cutover-day backlog is 114 rows total per Q3 probe, smaller thereafter |
+| Phase 2 INSERT…SELECT (per tenant) | **2-8s per tenant** | The 4-layer COALESCE chain has nested correlated subqueries; per-row cost grows with `subscription_exceptions` and `subscription_address_rotations` size. At 845/3 = ~280 subs/tenant × 14 days = 3,920 candidate rows per tenant, with ~5-10ms/row when subqueries hit indexed lookups, that's 20-40s — **but** most subs likely have already-materialized rows for most dates (only the new tail-end day each day is candidate), so steady-state is ~280 rows/tenant/day, ~1.4-2.8s/tenant. **Cutover day (initial materialization of all 14 horizon days) is the worst case.** |
+| Phase 3 materialization update | <100ms per tenant | Indexed UPDATE on `subscription_materialization` PK |
+| Phase 4 run-row insert | <100ms | Single INSERT |
+| Phase 5 batchJSON enqueue | 1-2s per tenant | Per §1.1, ~10 chunks × ~100ms each per tenant (one-third of total since 3 tenants) |
+
+**Steady-state estimate:** ~3-5s per tenant × 3 tenants = **9-15s total wall-clock per handler invocation.** Well within Vercel's 300s envelope.
+
+**Cutover-day estimate (one-time, when materialization horizon advances 14 days at once for all subs):** ~25-50s per tenant × 3 tenants = **75-150s.** Still within envelope, but not by the order-of-magnitude steady-state suggests.
+
+**§0 verification item to lock during code-PR prep (NEW):** run an `EXPLAIN ANALYZE` on the canonical §2.3 INSERT…SELECT against staging data sized to full demo volume. Pin the actual numbers in the code PR description. If cutover-day projects above ~200s, add a Phase 0 horizon-throttle (advance horizon 1-2 days/tick instead of 14-at-once on first run).
+
+Without this verification, the post-amendment "total wall-clock seconds" claim in §1.1 is supported only by hand math; the EXPLAIN ANALYZE is the load-bearing evidence.
 
 ---
 
