@@ -132,10 +132,18 @@ describe("Service A (subscription-exceptions) — integration", () => {
         WHERE r.tenant_id IS NULL AND r.slug = 'tenant-admin'
       `);
 
+      // address_line + emirate_or_region required per migration 0004
+      // (NOT NULL); district added per migration 0013. Pattern matches
+      // tests/integration/exception-model-rls-isolation.spec.ts:57-62.
       await tx.execute(sqlTag`
-        INSERT INTO consignees (id, tenant_id, name, email, phone) VALUES
-          (${CONSIGNEE_A}, ${TENANT_A}, 'Consignee A', 'cons-a@test', '+971500000001'),
-          (${CONSIGNEE_B}, ${TENANT_B}, 'Consignee B', 'cons-b@test', '+971500000002')
+        INSERT INTO consignees (
+          id, tenant_id, name, email, phone,
+          address_line, emirate_or_region, district
+        ) VALUES
+          (${CONSIGNEE_A}, ${TENANT_A}, 'Consignee A', 'cons-a@test', '+971500000001',
+           'Test Address Line A', 'Dubai', 'Test District A'),
+          (${CONSIGNEE_B}, ${TENANT_B}, 'Consignee B', 'cons-b@test', '+971500000002',
+           'Test Address Line B', 'Dubai', 'Test District B')
       `);
 
       await tx.execute(sqlTag`
@@ -159,10 +167,13 @@ describe("Service A (subscription-exceptions) — integration", () => {
         )
       `);
 
+      // label required per migration 0014 (NOT NULL with CHECK
+      // 'home'/'office'/'other'). Pattern matches
+      // tests/integration/exception-model-rls-isolation.spec.ts:103-109.
       await tx.execute(sqlTag`
-        INSERT INTO addresses (id, tenant_id, consignee_id, line, district, emirate, is_primary)
+        INSERT INTO addresses (id, tenant_id, consignee_id, label, is_primary, line, district, emirate)
         VALUES (${ADDRESS_A}, ${TENANT_A}, ${CONSIGNEE_A},
-                'Test Line', 'Test District', 'Dubai', false)
+                'home', false, 'Test Line', 'Test District', 'Dubai')
       `);
     });
   });

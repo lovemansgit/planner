@@ -113,9 +113,18 @@ describe("Service B (subscriptions pause/resume) — integration", () => {
         WHERE r.tenant_id IS NULL AND r.slug = 'tenant-admin'
       `);
 
+      // address_line + emirate_or_region required per migration 0004
+      // (NOT NULL); district added per migration 0013. Pattern matches
+      // tests/integration/exception-model-rls-isolation.spec.ts:57-62.
       await tx.execute(sqlTag`
-        INSERT INTO consignees (id, tenant_id, name, email, phone) VALUES
-          (${CONSIGNEE_ID}, ${TENANT_ID}, 'Consignee', 'c@svc-b-test.example', '+971500000099')
+        INSERT INTO consignees (
+          id, tenant_id, name, email, phone,
+          address_line, emirate_or_region, district
+        ) VALUES (
+          ${CONSIGNEE_ID}, ${TENANT_ID}, 'Consignee',
+          'c@svc-b-test.example', '+971500000099',
+          'Test Address Line', 'Dubai', 'Test District'
+        )
       `);
     });
   });
@@ -175,16 +184,21 @@ describe("Service B (subscriptions pause/resume) — integration", () => {
     for (let i = 0; i < 5; i++) {
       inWindowDates.push(isoDate(addDays(pauseStartDt, i)));
     }
+    // delivery_start_time + delivery_end_time required per migration
+    // 0006 (NOT NULL). Values match this spec's subscriptions seed
+    // delivery_window_start/end at line 168.
     await withTenant(TENANT_ID, async (tx) => {
       for (const d of inWindowDates) {
         await tx.execute(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, subscription_id,
             customer_order_number, internal_status, delivery_date,
+            delivery_start_time, delivery_end_time,
             delivery_type, task_kind
           ) VALUES (
             ${TENANT_ID}, ${CONSIGNEE_ID}, ${subscriptionId},
             ${"CO-" + RUN_ID + "-" + d}, 'CREATED', ${d},
+            '09:00', '18:00',
             'STANDARD', 'DELIVERY'
           )
         `);
@@ -295,8 +309,12 @@ describe("Service B (subscriptions pause/resume) — integration", () => {
       { now },
     );
 
-    // Resume AFTER pause_end (simulate cron-tick "now" past pause_end).
-    const resumeNow = new Date(`${seed.pauseEnd}T23:59:00.000Z`);
+    // Resume on pause_end Dubai-side (18:00 UTC = 22:00 Dubai, still
+    // pauseEnd day in Dubai). The service computes
+    // actual_resume_date = computeTodayInDubai(now); using 23:59 UTC
+    // would push Dubai today to pauseEnd + 1, breaking the assertion
+    // at line below. 18:00 UTC keeps Dubai today = pauseEnd.
+    const resumeNow = new Date(`${seed.pauseEnd}T18:00:00.000Z`);
     addDays(new Date(seed.pauseEnd), 1); // sanity ref
     const resumeResult = await resumeSubscription(
       userCtx(),
