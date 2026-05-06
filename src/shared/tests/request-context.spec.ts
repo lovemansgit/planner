@@ -6,6 +6,10 @@
 //   - session present, user has no public.users mirror → throws Unauthorized
 //   - session present, user.disabled_at set → throws Unauthorized
 //   - session present, user has no role_assignments → throws Unauthorized
+//   - session present, user's tenant has status != 'active' → throws
+//     Unauthorized (Day-16 §10.5; the JOIN tenants + status='active'
+//     filter is pinned at the SQL layer via the queryChunks regression
+//     test below — full 4-state matrix lives in the integration test)
 //   - session absent → throws Unauthorized (fail-closed; Posture B
 //     hard cutover landed Day 15 — no ALLOW_DEMO_AUTH fallback exists)
 //
@@ -75,11 +79,40 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * Flatten drizzle's queryChunks into a single string. queryChunks is an
+ * array of StringChunk objects (with `.value: string[]` holding static
+ * SQL fragments) and parameter placeholders. For SQL inspection we only
+ * care about the static fragments — they carry the JOINs, WHEREs, and
+ * keyword clauses that pin query shape. Same pattern as the cron-list
+ * tenant-filter regression test.
+ */
+function flattenSql(sql: unknown): string {
+  type Chunk = { value?: readonly string[] };
+  const chunks = (sql as { queryChunks?: readonly Chunk[] })?.queryChunks ?? [];
+  return chunks
+    .flatMap((c) => (Array.isArray(c.value) ? c.value : []))
+    .join("");
+}
+
 describe("resolveUserContext", () => {
-  it("returns null when no rows match (no mirror or no role_assignments)", async () => {
+  it("returns null when no rows match (no mirror, no role_assignments, disabled_at set, or non-active tenant)", async () => {
     mockExecute.mockResolvedValueOnce([]);
     const result = await resolveUserContext("user-1");
     expect(result).toBeNull();
+  });
+
+  it("queries with JOIN tenants + t.status = 'active' filter (§10.5 regression pin)", async () => {
+    // Day-16 §10.5: users on provisioning / suspended / inactive tenants
+    // must NOT resolve. The SQL layer is the load-bearing filter — pin
+    // its shape at the chunks level so a future refactor can't silently
+    // strip the JOIN or the status='active' clause. Real-DB matrix
+    // verification lives in tests/integration/auth-end-to-end.spec.ts.
+    mockExecute.mockResolvedValueOnce([]);
+    await resolveUserContext("user-1");
+    const sql = flattenSql(mockExecute.mock.calls[0][0]);
+    expect(sql).toMatch(/JOIN\s+tenants\s+t\s+ON\s+t\.id\s*=\s*u\.tenant_id/);
+    expect(sql).toMatch(/t\.status\s*=\s*'active'/);
   });
 
   it("returns tenantId + permissions for a single-role user", async () => {
