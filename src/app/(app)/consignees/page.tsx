@@ -1,15 +1,12 @@
-// /consignees — read-only list view, Day-3 demo artifact.
+// /consignees — read-only list view.
 //
 // Server component. Fetches via the C-3 service path through
-// buildRequestContext (Day-10 P2 auth migration; previously the
-// Day-3 demo-context helper). Full chain exercised end-to-end:
+// buildRequestContext. Full chain exercised end-to-end:
 //
 //   migration (0004) → repository (C-2) → service + audit (C-3)
 //   → buildRequestContext (Day 10) → server-rendered HTML (this file)
 //
-// Auth (Day 10): UnauthorizedError redirects to /login; Posture A
-// graceful migration keeps the demo-context fallthrough behind
-// ALLOW_DEMO_AUTH=true (Preview-only) until the Posture B follow-up.
+// Auth: UnauthorizedError redirects to /login.
 //
 // Transcorp design language:
 //   - Background: warm off-white #FAF7F2
