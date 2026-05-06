@@ -48,6 +48,12 @@ import type { Uuid } from "@/shared/types";
 import { emit } from "@/modules/audit";
 import { requirePermission } from "@/modules/identity";
 import type { PermissionId } from "@/modules/identity/permissions";
+// Day 16 / Block 4-E §B B1 — shared cross-consignee address
+// ownership helper. Used inside the address_override branches of
+// addSubscriptionException to reject malformed operator inputs
+// (passing consignee A's address as override for consignee B's
+// subscription within same tenant; RLS does NOT catch this).
+import { findAddressForConsignee } from "@/modules/subscription-addresses";
 
 import {
   computeCompensatingDate as pureComputeCompensatingDate,
@@ -161,6 +167,7 @@ function resolveRequiredPermission(input: AddSubscriptionExceptionInput): Permis
 interface SubscriptionForExceptionFlow {
   readonly id: Uuid;
   readonly tenantId: Uuid;
+  readonly consigneeId: Uuid;
   readonly status: "active" | "paused" | "ended";
   readonly startDate: IsoDate;
   readonly endDate: IsoDate | null;
@@ -170,6 +177,7 @@ interface SubscriptionForExceptionFlow {
 type SubscriptionRow = {
   readonly id: string;
   readonly tenant_id: string;
+  readonly consignee_id: string;
   readonly status: string;
   readonly start_date: string;
   readonly end_date: string | null;
@@ -183,13 +191,21 @@ type SubscriptionRow = {
  * blocks on the FOR UPDATE until the first commits, then sees the
  * already-extended end_date and walks forward from there per brief
  * §3.1.6 edge B (multiple skips stacking).
+ *
+ * Day-16 Block 4-E: `consignee_id` added to the SELECT projection +
+ * the SubscriptionForExceptionFlow shape. Required by the
+ * cross-consignee address ownership check on the address_override
+ * branches (per Block 4-E §B B1 ruling — the rotation flow's
+ * findAddressForConsignee helper takes consigneeId; Service A
+ * needs the value too). FOR UPDATE lock unchanged — same row,
+ * one extra column projected.
  */
 async function getSubscriptionForUpdate(
   tx: Parameters<Parameters<typeof withTenant>[1]>[0],
   subscriptionId: Uuid,
 ): Promise<SubscriptionForExceptionFlow | null> {
   const rows = await tx.execute<SubscriptionRow>(sqlTag`
-    SELECT id, tenant_id, status, start_date, end_date, days_of_week
+    SELECT id, tenant_id, consignee_id, status, start_date, end_date, days_of_week
     FROM subscriptions
     WHERE id = ${subscriptionId}
     FOR UPDATE
@@ -202,6 +218,7 @@ async function getSubscriptionForUpdate(
   return {
     id: row.id as Uuid,
     tenantId: row.tenant_id as Uuid,
+    consigneeId: row.consignee_id as Uuid,
     status: row.status,
     startDate: row.start_date,
     endDate: row.end_date,
@@ -397,6 +414,39 @@ export async function addSubscriptionException(
       throw new ConflictError(
         `subscription must be active to accept exception; current status is '${subscription.status}'`,
       );
+    }
+
+    // 5b. Day-16 Block 4-E §B B1 — cross-consignee address ownership
+    // gate for address_override_one_off / _forward. RLS scopes by
+    // tenant_id only; cross-consignee within same tenant is NOT
+    // caught by RLS or FK. The shared findAddressForConsignee helper
+    // (subscription-addresses module) returns null on "address
+    // doesn't exist OR doesn't belong to this consignee OR not in
+    // this tenant" — service throws ValidationError on null.
+    //
+    // Placement: earliest possible inside-tx position where
+    // consigneeId is available (immediately after subscription FOR
+    // UPDATE + status check; before days-of-week eligibility +
+    // before idempotency lookup + before address override branch).
+    // Cut-off check at step 4 above remains pre-tx (timestamp-only,
+    // no DB visit needed).
+    if (
+      input.type === "address_override_one_off" ||
+      input.type === "address_override_forward"
+    ) {
+      // The presence check at line 360 above already rejected
+      // undefined; non-null assertion for the helper input.
+      const owned = await findAddressForConsignee(
+        tx,
+        tenantId,
+        subscription.consigneeId,
+        input.addressOverrideId as Uuid,
+      );
+      if (owned === null) {
+        throw new ValidationError(
+          `address_not_found_for_consignee: address ${input.addressOverrideId} does not belong to consignee ${subscription.consigneeId}`,
+        );
+      }
     }
 
     // 6. Days-of-week eligibility. Skip + one-off require the date

@@ -59,6 +59,12 @@ const SUBSCRIPTION_ID = "00000000-0000-0000-0000-000000000bbb" as Uuid;
 const USER_ID = "00000000-0000-0000-0000-000000000ccc" as Uuid;
 const ADDRESS_ID = "00000000-0000-0000-0000-000000000ddd" as Uuid;
 const IDEMPOTENCY_KEY = "00000000-0000-0000-0000-000000000eee" as Uuid;
+// Day 16 / Block 4-E §B B1 — consignee_id added to the
+// getSubscriptionForUpdate SELECT projection; the
+// findAddressForConsignee helper takes consigneeId as input. New
+// fixture constants to support cross-consignee ownership tests.
+const CONSIGNEE_ID = "00000000-0000-0000-0000-000000000c0c" as Uuid;
+const OTHER_CONSIGNEE_ID = "00000000-0000-0000-0000-000000000c1c" as Uuid;
 
 /**
  * "Now" used across tests — Tuesday 2026-05-05 09:00 UTC = Tuesday
@@ -99,6 +105,7 @@ function subscriptionRow(
     startDate: string;
     endDate: string | null;
     daysOfWeek: number[];
+    consigneeId: string;
   }> = {},
 ) {
   // Use `in` discrimination so a deliberate null doesn't collapse to
@@ -108,10 +115,28 @@ function subscriptionRow(
   return {
     id: SUBSCRIPTION_ID,
     tenant_id: TENANT_ID,
+    consignee_id: overrides.consigneeId ?? CONSIGNEE_ID,
     status: overrides.status ?? "active",
     start_date: overrides.startDate ?? "2026-05-01",
     end_date: endDate,
     days_of_week: overrides.daysOfWeek ?? [1, 2, 3, 4, 5], // Mon-Fri
+  };
+}
+
+/**
+ * Day 16 / Block 4-E — fixture for the findAddressForConsignee SELECT
+ * issued inside the address_override_one_off / _forward branches of
+ * addSubscriptionException. Returns one row when the address belongs
+ * to the consignee. Tests that exercise the cross-consignee
+ * rejection mock empty `[]` instead.
+ */
+function ownedAddressRow(addressId: string = ADDRESS_ID, consigneeId: string = CONSIGNEE_ID) {
+  return {
+    id: addressId,
+    consignee_id: consigneeId,
+    tenant_id: TENANT_ID,
+    label: "home",
+    is_primary: true,
   };
 }
 
@@ -307,6 +332,7 @@ describe("addSubscriptionException — permission matrix", () => {
     };
     mockExecute.mockReset();
     mockExecute.mockResolvedValueOnce([subscriptionRow()]); // 1. sub
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]); // 1b. cross-consignee ownership (Block 4-E §B)
     mockExecute.mockResolvedValueOnce([]); // 2. replay
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({
@@ -346,6 +372,7 @@ describe("addSubscriptionException — permission matrix", () => {
     };
     mockExecute.mockReset();
     mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]); // Block 4-E §B ownership check
     mockExecute.mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({
@@ -541,6 +568,11 @@ describe("addSubscriptionException — days-of-week eligibility", () => {
   it("rejects address_override_one_off on a non-eligible weekday", async () => {
     mockExecute.mockReset();
     mockExecute.mockResolvedValueOnce([subscriptionRow({ daysOfWeek: [1, 2, 3, 4, 5] })]);
+    // Block 4-E §B: cross-consignee ownership check fires BEFORE
+    // days-of-week eligibility per the placement rule. The address
+    // is owned (so the test still reaches the weekday rejection it
+    // was designed to assert).
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]);
 
     const ctx = ctxWith(["subscription:change_address_one_off"]);
     await expect(
@@ -561,6 +593,7 @@ describe("addSubscriptionException — days-of-week eligibility", () => {
   it("accepts address_override_forward on a non-eligible weekday (forward exempts)", async () => {
     mockExecute.mockReset();
     mockExecute.mockResolvedValueOnce([subscriptionRow({ daysOfWeek: [1, 2, 3, 4, 5] })]);
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]); // Block 4-E §B ownership check
     mockExecute.mockResolvedValueOnce([]); // replay
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({
@@ -697,6 +730,7 @@ describe("addSubscriptionException — audit emission per type", () => {
   it("'address_override_one_off' emits exception.created + address_override.applied (no end_date)", async () => {
     mockExecute.mockReset();
     mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]); // Block 4-E §B ownership check
     mockExecute.mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({
@@ -728,6 +762,7 @@ describe("addSubscriptionException — audit emission per type", () => {
   it("'address_override_forward' emits exception.created + address_override.applied with scope='forward'", async () => {
     mockExecute.mockReset();
     mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]); // Block 4-E §B ownership check
     mockExecute.mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({
@@ -770,6 +805,73 @@ describe("addSubscriptionException — audit emission per type", () => {
         { now: NOW },
       ),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  // -------------------------------------------------------------------------
+  // Block 4-E §B B1 — cross-consignee address ownership rejection
+  // -------------------------------------------------------------------------
+  // The shared findAddressForConsignee helper returns null when the
+  // address row exists but belongs to another consignee in the same
+  // tenant. Service A's address_override branches throw
+  // ValidationError 'address_not_found_for_consignee' on null. RLS
+  // does NOT catch cross-consignee within the same tenant; this is
+  // the only defence.
+
+  it("'address_override_one_off' rejects when addressOverrideId belongs to another consignee in the same tenant (§B B1)", async () => {
+    mockExecute.mockReset();
+    // Subscription belongs to CONSIGNEE_ID (default fixture).
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    // findAddressForConsignee returns [] — the address exists but
+    // belongs to OTHER_CONSIGNEE_ID, so the SQL's
+    // `consignee_id = $2` predicate filters it out.
+    mockExecute.mockResolvedValueOnce([]);
+
+    const ctx = ctxWith(["subscription:change_address_one_off"]);
+    await expect(
+      addSubscriptionException(
+        ctx,
+        SUBSCRIPTION_ID,
+        {
+          type: "address_override_one_off",
+          date: FUTURE_SKIP_DATE,
+          idempotencyKey: IDEMPOTENCY_KEY,
+          addressOverrideId: ADDRESS_ID,
+        },
+        { now: NOW },
+      ),
+    ).rejects.toThrow(/address_not_found_for_consignee/);
+    // No idempotency-replay query, no INSERT, no audit. Service
+    // aborted at step 5b before reaching downstream steps.
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("'address_override_forward' rejects when addressOverrideId belongs to another consignee (§B B1)", async () => {
+    mockExecute.mockReset();
+    // Subscription owned by OTHER_CONSIGNEE_ID this time — ensures
+    // the helper input uses the SUBSCRIPTION's consignee_id, not any
+    // operator-supplied value (cross-spoof defence).
+    mockExecute.mockResolvedValueOnce([
+      subscriptionRow({ consigneeId: OTHER_CONSIGNEE_ID }),
+    ]);
+    // findAddressForConsignee returns [] — address belongs to a
+    // third party (CONSIGNEE_ID, not OTHER_CONSIGNEE_ID).
+    mockExecute.mockResolvedValueOnce([]);
+
+    const ctx = ctxWith(["subscription:change_address_forward"]);
+    await expect(
+      addSubscriptionException(
+        ctx,
+        SUBSCRIPTION_ID,
+        {
+          type: "address_override_forward",
+          date: FUTURE_SKIP_DATE,
+          idempotencyKey: IDEMPOTENCY_KEY,
+          addressOverrideId: ADDRESS_ID,
+        },
+        { now: NOW },
+      ),
+    ).rejects.toThrow(/address_not_found_for_consignee/);
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });
 
