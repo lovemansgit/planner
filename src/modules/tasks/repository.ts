@@ -700,3 +700,176 @@ export async function deleteTask(tx: DbTx, tenantId: Uuid, id: Uuid): Promise<bo
         : 0;
   return count > 0;
 }
+
+// -----------------------------------------------------------------------------
+// Day-16 / Block 4-B Service A — subscription-exception-driven UPDATEs
+// -----------------------------------------------------------------------------
+
+/**
+ * Day-16 §3.2 step 13 — find a task by its (subscription_id,
+ * delivery_date) tuple. Used by `addSubscriptionException` (skip flow)
+ * and the target_date_override collision check per plan §3.2 step 13b.
+ *
+ * Returns null when no task matches — sub-cases 13a (original date's
+ * task hasn't materialized yet, beyond the 14-day horizon) and 13c
+ * (target_date_override beyond the 14-day horizon) both surface as
+ * a null return; the service treats both as no-op success.
+ *
+ * Tenant-id predicate alongside RLS for defence in depth, mirroring
+ * the rest of this module's read shape.
+ */
+export async function findTaskBySubscriptionAndDate(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  deliveryDate: string,
+): Promise<Task | null> {
+  const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
+    SELECT
+      t.*,
+      COALESCE(
+        (
+          SELECT json_agg(tp.* ORDER BY tp.position ASC)
+          FROM task_packages tp
+          WHERE tp.task_id = t.id
+        ),
+        '[]'::json
+      ) AS packages
+    FROM tasks t
+    WHERE t.tenant_id = ${tenantId}
+      AND t.subscription_id = ${subscriptionId}
+      AND t.delivery_date = ${deliveryDate}
+    LIMIT 1
+  `);
+  return rows[0] ? mapTaskWithPackages(rows[0]) : null;
+}
+
+/**
+ * Day-16 §3.2 step 13 — flip a task's internal_status to 'SKIPPED'
+ * when an operator records a skip exception on its (subscription_id,
+ * target_date) tuple. Returns the number of rows affected so the
+ * service layer can distinguish:
+ *
+ *   - rowsAffected === 1: task existed and is now SKIPPED (happy path)
+ *   - rowsAffected === 0: the date's task hasn't materialized yet
+ *     (sub-case 13a per merged plan §3.2 step 13). The
+ *     subscription_exceptions row IS the durable record; the cron's
+ *     §2.4 row 1 skip-the-date EXISTS guard reads it on the next
+ *     materialization tick when the horizon eventually reaches that
+ *     date. No service-side error.
+ *
+ * Tenant-id predicate alongside RLS. The `internal_status` value
+ * 'SKIPPED' is included in the `tasks_internal_status_check` CHECK
+ * constraint per migration 0019 (Day-13 part 1).
+ *
+ * Note: this method does NOT carry the exception_id back onto the
+ * task row — there's no FK column for that on `tasks`. The link is
+ * resolved by `(subscription_id, delivery_date)` against
+ * `subscription_exceptions` at read time, which is the pattern the
+ * §2.4 cron's skip-the-date EXISTS guard already uses.
+ */
+export async function markTaskSkipped(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  deliveryDate: string,
+): Promise<number> {
+  const result = await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'SKIPPED'
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date = ${deliveryDate}
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+  `);
+  return typeof (result as { count?: number }).count === "number"
+    ? (result as { count: number }).count
+    : Array.isArray(result)
+      ? result.length
+      : 0;
+}
+
+/**
+ * Day-16 / Block 4-C Service B — bulk-flip tasks in a pause window
+ * to internal_status='CANCELED'. Used by `pauseSubscription` step 9
+ * per merged plan §4.1 + brief §3.1.7.
+ *
+ * Filter `NOT IN ('DELIVERED', 'FAILED', 'CANCELED')` excludes
+ * already-terminal tasks so an in-flight delivery completing
+ * mid-pause-creation is not retroactively canceled (per merged plan
+ * §8.1 row 2 — "whichever wins owns the final state"). Webhook-race
+ * handling stays at the SF-webhook receiver layer.
+ *
+ * Returns rows affected for the audit-event metadata. The cancel
+ * `reason='subscription_paused'` is captured on the linked
+ * `subscription_exceptions.reason` row + on the
+ * `subscription.paused` audit event (per Conflict 4 routing B1-α —
+ * no cancellation_reason column on tasks).
+ *
+ * Tenant-id predicate alongside RLS for defence in depth.
+ */
+export async function markTasksCanceledInWindow(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  pauseStart: string,
+  pauseEnd: string,
+): Promise<number> {
+  const result = await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'CANCELED'
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date BETWEEN ${pauseStart} AND ${pauseEnd}
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+  `);
+  return typeof (result as { count?: number }).count === "number"
+    ? (result as { count: number }).count
+    : Array.isArray(result)
+      ? result.length
+      : 0;
+}
+
+/**
+ * Day-16 / Block 4-C Service B — restore CANCELED tasks back to
+ * 'CREATED' on early manual resume. Used by `resumeSubscription`
+ * when an operator resumes BEFORE `pause_end` per merged plan §4.2
+ * + brief §3.1.7.
+ *
+ * Filter:
+ *   - delivery_date >= restoreFromDate (today; tasks already-passed
+ *     during the pause stay CANCELED forever)
+ *   - delivery_date <= restoreToDate (the original pause_end)
+ *   - internal_status = 'CANCELED' (only restore the pause-canceled
+ *     tasks; tasks canceled for other reasons should not be
+ *     restored)
+ *
+ * MVP simplification: there's no exception_id link on tasks (per
+ * Conflict 4 B1-α), so this restores ALL CANCELED tasks in the
+ * `[restoreFromDate, restoreToDate]` window for the subscription.
+ * In demo flow this is safe because only the active pause causes
+ * cancellations during a paused subscription's lifetime.
+ *
+ * Returns rows affected.
+ */
+export async function markTasksRestoredInWindow(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  restoreFromDate: string,
+  restoreToDate: string,
+): Promise<number> {
+  const result = await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'CREATED'
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date BETWEEN ${restoreFromDate} AND ${restoreToDate}
+      AND internal_status = 'CANCELED'
+  `);
+  return typeof (result as { count?: number }).count === "number"
+    ? (result as { count: number }).count
+    : Array.isArray(result)
+      ? result.length
+      : 0;
+}

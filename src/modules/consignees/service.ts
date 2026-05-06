@@ -26,7 +26,7 @@
 
 import { emit } from "../audit";
 import { withTenant } from "../../shared/db";
-import { NotFoundError, ValidationError } from "../../shared/errors";
+import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
@@ -36,11 +36,21 @@ import { normaliseToE164 } from "./phone";
 import {
   deleteConsignee as deleteConsigneeRow,
   findConsigneeById,
+  findConsigneeForCrmUpdate,
   insertConsignee,
+  insertConsigneeCrmEvent,
   listConsigneesByTenant,
   updateConsignee as updateConsigneeRow,
+  updateConsigneeCrmState,
 } from "./repository";
-import type { Consignee, CreateConsigneeInput, UpdateConsigneePatch } from "./types";
+import { canTransition } from "./transitions";
+import type {
+  ChangeConsigneeCrmStateInput,
+  ChangeConsigneeCrmStateResult,
+  Consignee,
+  CreateConsigneeInput,
+  UpdateConsigneePatch,
+} from "./types";
 
 /**
  * Same actor → audit-id mapping as identity/service.ts. Local copy
@@ -350,4 +360,147 @@ export async function deleteConsignee(ctx: RequestContext, id: Uuid): Promise<vo
     metadata: { consignee_id: id },
     requestId: ctx.requestId,
   });
+}
+
+// -----------------------------------------------------------------------------
+// changeConsigneeCrmState (Day 16 / Block 4-D — Service C)
+// -----------------------------------------------------------------------------
+//
+// Transitions a consignee between the six CRM states per brief §3.1.1
+// + merged plan PR #155 §10.4 matrix lock. Single-event audit (no
+// correlation pair); the consignee_crm_events table carries the same
+// fact in append-only structured form for direct query, and the
+// audit_events stream mirrors it for cross-resource forensic queries.
+//
+// Behavior in single transaction:
+//   1. Permission gate (consignee:change_crm_state).
+//   2. Tenant-context check (consignee:change_crm_state requires a
+//      tenant; system actor with tenantId=null is rejected — same
+//      posture as the existing 5 CRUD fns).
+//   3. Reason normalization — trim; reject empty.
+//   4. SELECT consignee FOR UPDATE; reject NotFound if missing /
+//      RLS-hidden / cross-tenant.
+//   5. Same-state short-circuit — fromState === toState returns no_op
+//      with status='no_op'; no DB write, no audit emit. The 200
+//      response surfaces the desired state was already in place.
+//   6. canTransition matrix gate — invalid_transition → ConflictError
+//      422-equivalent; reactivation_keyword_required → ConflictError
+//      with the keyword-guard message.
+//   7. UPDATE consignees.crm_state.
+//   8. INSERT consignee_crm_events (carries from_state, to_state,
+//      reason, actor — NOT NULL on those four; also occurred_at is
+//      DB-defaulted).
+//   9. Post-commit: emit consignee.crm_state.changed audit event with
+//      metadata { consignee_id, from_state, to_state, reason } per
+//      registered metadataNotes at audit/event-types.ts:683-684.
+//
+// Errors:
+//   - ForbiddenError    actor lacks consignee:change_crm_state.
+//   - ValidationError   no tenant context, empty/whitespace reason.
+//   - NotFoundError     consignee not found in this tenant.
+//   - ConflictError     transition not allowed by §10.4 matrix, or
+//                       CHURNED → ACTIVE without 'reactivation' keyword.
+//
+// Audit timing: emit fires AFTER the withTenant block returns
+// post-commit, mirroring the existing createConsignee / updateConsignee
+// / deleteConsignee pattern. A failed tx never produces a ghost event.
+
+export async function changeConsigneeCrmState(
+  ctx: RequestContext,
+  id: Uuid,
+  input: ChangeConsigneeCrmStateInput,
+): Promise<ChangeConsigneeCrmStateResult> {
+  requirePermission(ctx, "consignee:change_crm_state");
+  assertTenantScoped(ctx, "consignee:change_crm_state");
+
+  const reason = requireNonEmpty(input.reason, "reason");
+  const toState = input.toState;
+
+  const tenantId = ctx.tenantId;
+  const result = await withTenant(tenantId, async (tx) => {
+    const before = await findConsigneeForCrmUpdate(tx, tenantId, id);
+    if (!before) {
+      throw new NotFoundError(`consignee not found: ${id}`);
+    }
+
+    // Same-state short-circuit. The matrix does NOT include same-state
+    // in any from-state's allowed set, so the canTransition helper
+    // would (correctly per its contract) return invalid_transition for
+    // a same-state pair. The "operator wanted state X, state X is
+    // already set" case maps to no_op success at the API surface.
+    if (before.crmState === toState) {
+      return { kind: "no_op" as const, fromState: before.crmState };
+    }
+
+    const check = canTransition(before.crmState, toState, reason);
+    if (!check.ok) {
+      if (check.errorCode === "reactivation_keyword_required") {
+        throw new ConflictError(
+          `CHURNED → ACTIVE requires 'reactivation' keyword in reason`,
+        );
+      }
+      // invalid_transition
+      throw new ConflictError(
+        `CRM state transition not allowed: ${before.crmState} → ${toState}`,
+      );
+    }
+
+    const updated = await updateConsigneeCrmState(tx, tenantId, id, toState);
+    if (!updated) {
+      // Row vanished between the FOR UPDATE lock and the UPDATE — a
+      // concurrent DELETE would have to bypass the row lock to do this,
+      // which RLS + the ON DELETE CASCADE pattern shouldn't allow. If
+      // it happens anyway, surface as NotFound for consistent caller
+      // semantics with the rest of this module.
+      throw new NotFoundError(`consignee not found: ${id}`);
+    }
+
+    const event = await insertConsigneeCrmEvent(tx, {
+      consigneeId: id,
+      tenantId,
+      fromState: before.crmState,
+      toState,
+      reason,
+      actor: actorIdFor(ctx.actor) as Uuid,
+    });
+
+    return {
+      kind: "updated" as const,
+      fromState: before.crmState,
+      eventId: event.id,
+    };
+  });
+
+  if (result.kind === "no_op") {
+    return {
+      status: "no_op",
+      consigneeId: id,
+      fromState: result.fromState,
+      toState,
+    };
+  }
+
+  await emit({
+    eventType: "consignee.crm_state.changed",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "consignee",
+    resourceId: id,
+    metadata: {
+      consignee_id: id,
+      from_state: result.fromState,
+      to_state: toState,
+      reason,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return {
+    status: "updated",
+    consigneeId: id,
+    fromState: result.fromState,
+    toState,
+    eventId: result.eventId,
+  };
 }

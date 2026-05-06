@@ -39,7 +39,13 @@ import { sql as sqlTag, type SQL } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
-import type { Consignee, CreateConsigneeInput, UpdateConsigneePatch } from "./types";
+import type {
+  Consignee,
+  ConsigneeCrmEvent,
+  ConsigneeCrmState,
+  CreateConsigneeInput,
+  UpdateConsigneePatch,
+} from "./types";
 
 // -----------------------------------------------------------------------------
 // Row shape and mapper
@@ -68,6 +74,12 @@ type ConsigneeRow = {
   delivery_notes: string | null;
   external_ref: string | null;
   notes_internal: string | null;
+  /**
+   * Day 16 / Block 4-D — column added by migration 0016 (NOT NULL
+   * DEFAULT 'ACTIVE'); always present on read. Mapped to camelCase
+   * `crmState` on the Consignee shape.
+   */
+  crm_state: string;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -89,6 +101,7 @@ function mapRow(row: ConsigneeRow): Consignee {
     deliveryNotes: row.delivery_notes,
     externalRef: row.external_ref,
     notesInternal: row.notes_internal,
+    crmState: row.crm_state as ConsigneeCrmState,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -258,4 +271,131 @@ export async function deleteConsignee(tx: DbTx, tenantId: Uuid, id: Uuid): Promi
         ? result.length
         : 0;
   return count > 0;
+}
+
+// -----------------------------------------------------------------------------
+// CRM state operations (Day 16 / Block 4-D — Service C)
+// -----------------------------------------------------------------------------
+
+/**
+ * SELECT one consignee FOR UPDATE within the current tx — row-locks the
+ * consignee for the duration of the transaction. Used by
+ * `changeConsigneeCrmState` to read the current crm_state, run the
+ * matrix gate against it, and then UPDATE it atomically without a
+ * read-after-write race against a concurrent caller.
+ *
+ * Defence-in-depth tenant_id predicate alongside RLS, same as
+ * updateConsignee / deleteConsignee.
+ *
+ * Returns null when the row is missing, RLS-hidden, or tenant_id
+ * mismatch — same observable null-on-deny posture as findConsigneeById.
+ */
+export async function findConsigneeForCrmUpdate(
+  tx: DbTx,
+  tenantId: Uuid,
+  id: Uuid,
+): Promise<Consignee | null> {
+  const rows = await tx.execute<ConsigneeRow>(sqlTag`
+    SELECT * FROM consignees
+    WHERE id = ${id} AND tenant_id = ${tenantId}
+    FOR UPDATE
+  `);
+  return rows[0] ? mapRow(rows[0]) : null;
+}
+
+/**
+ * UPDATE consignees.crm_state for one row, scoped to tenantId. Returns
+ * `true` on a successful single-row update, `false` if no row matched
+ * (vanished mid-tx — the caller's findConsigneeForCrmUpdate should
+ * have row-locked, so a `false` here is a programming error or the
+ * lock was lost; either way the caller maps to NotFoundError).
+ *
+ * No `updated_at` touch — the column has its own DB-level trigger
+ * established in 0004 (`set_updated_at` BEFORE-UPDATE). Don't
+ * double-write here.
+ */
+export async function updateConsigneeCrmState(
+  tx: DbTx,
+  tenantId: Uuid,
+  id: Uuid,
+  toState: ConsigneeCrmState,
+): Promise<boolean> {
+  const rows = await tx.execute<{ id: string } & Record<string, unknown>>(sqlTag`
+    UPDATE consignees
+    SET crm_state = ${toState}
+    WHERE id = ${id} AND tenant_id = ${tenantId}
+    RETURNING id
+  `);
+  return rows.length > 0;
+}
+
+/**
+ * INSERT one consignee_crm_events row. Returns the inserted row mapped
+ * to camelCase. RLS WITH CHECK requires tenant_id to match the
+ * `app.current_tenant_id` session value; the explicit `${tenantId}`
+ * value below must equal the session value or the WITH CHECK clause
+ * raises.
+ *
+ * `from_state` is the prior state; nullable per migration 0016 to
+ * accommodate initial-create rows from a future onboarding-emit path.
+ * The Service C call site always passes a non-null fromState because
+ * the consignee row already exists when a transition fires.
+ */
+export async function insertConsigneeCrmEvent(
+  tx: DbTx,
+  input: {
+    consigneeId: Uuid;
+    tenantId: Uuid;
+    fromState: ConsigneeCrmState | null;
+    toState: ConsigneeCrmState;
+    reason: string | null;
+    actor: Uuid;
+  },
+): Promise<ConsigneeCrmEvent> {
+  type Row = {
+    id: string;
+    consignee_id: string;
+    tenant_id: string;
+    from_state: string | null;
+    to_state: string;
+    reason: string | null;
+    actor: string;
+    occurred_at: Date | string;
+  } & Record<string, unknown>;
+
+  const rows = await tx.execute<Row>(sqlTag`
+    INSERT INTO consignee_crm_events (
+      consignee_id,
+      tenant_id,
+      from_state,
+      to_state,
+      reason,
+      actor
+    ) VALUES (
+      ${input.consigneeId},
+      ${input.tenantId},
+      ${input.fromState},
+      ${input.toState},
+      ${input.reason},
+      ${input.actor}
+    )
+    RETURNING *
+  `);
+
+  if (rows.length === 0) {
+    throw new Error(
+      "insertConsigneeCrmEvent: INSERT … RETURNING produced zero rows",
+    );
+  }
+  const row = rows[0];
+  return {
+    id: row.id,
+    consigneeId: row.consignee_id,
+    tenantId: row.tenant_id,
+    fromState: row.from_state as ConsigneeCrmState | null,
+    toState: row.to_state as ConsigneeCrmState,
+    reason: row.reason,
+    actor: row.actor,
+    occurredAt: toIso(row.occurred_at),
+  };
 }

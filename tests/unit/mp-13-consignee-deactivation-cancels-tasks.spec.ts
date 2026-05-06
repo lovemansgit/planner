@@ -136,6 +136,7 @@ function consigneeFixture() {
     deliveryNotes: null,
     externalRef: null,
     notesInternal: null,
+    crmState: "ACTIVE" as const,
     createdAt: "2026-04-01T00:00:00.000Z",
     updatedAt: "2026-04-01T00:00:00.000Z",
   };

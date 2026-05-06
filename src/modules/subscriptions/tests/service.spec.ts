@@ -22,8 +22,6 @@ vi.mock("../repository", () => ({
   listSubscriptionsByTenant: vi.fn(),
   listSweepCandidates: vi.fn(),
   updateSubscription: vi.fn(),
-  pauseSubscription: vi.fn(),
-  resumeSubscription: vi.fn(),
   endSubscription: vi.fn(),
 }));
 
@@ -45,8 +43,6 @@ import {
   insertSubscription,
   listSubscriptionsByTenant,
   listSweepCandidates,
-  pauseSubscription as pauseSubscriptionRow,
-  resumeSubscription as resumeSubscriptionRow,
   updateSubscription as updateSubscriptionRow,
 } from "../repository";
 import {
@@ -54,8 +50,6 @@ import {
   endSubscription,
   getSubscription,
   listSubscriptions,
-  pauseSubscription,
-  resumeSubscription,
   sweepEndedSubscriptions,
   updateSubscription,
 } from "../service";
@@ -69,8 +63,6 @@ const mockFindById = vi.mocked(findSubscriptionById);
 const mockListByTenant = vi.mocked(listSubscriptionsByTenant);
 const mockListSweepCandidates = vi.mocked(listSweepCandidates);
 const mockUpdate = vi.mocked(updateSubscriptionRow);
-const mockPause = vi.mocked(pauseSubscriptionRow);
-const mockResume = vi.mocked(resumeSubscriptionRow);
 const mockEnd = vi.mocked(endSubscriptionRow);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
@@ -128,8 +120,6 @@ beforeEach(() => {
   mockFindById.mockReset();
   mockListByTenant.mockReset();
   mockUpdate.mockReset();
-  mockPause.mockReset();
-  mockResume.mockReset();
   mockEnd.mockReset();
   // Default: withTenant runs its callback against an opaque tx stub.
   // Tests that need specific repo behaviour set it via the repo mocks.
@@ -404,109 +394,10 @@ describe("updateSubscription", () => {
   });
 });
 
-// -----------------------------------------------------------------------------
-// pauseSubscription
-// -----------------------------------------------------------------------------
-
-describe("pauseSubscription", () => {
-  it("throws ForbiddenError when actor lacks subscription:pause", async () => {
-    await expect(pauseSubscription(ctx([]), SUB_ID)).rejects.toBeInstanceOf(ForbiddenError);
-  });
-
-  it("throws ValidationError when ctx.tenantId is null", async () => {
-    await expect(
-      pauseSubscription(ctx(["subscription:pause"], null), SUB_ID)
-    ).rejects.toBeInstanceOf(ValidationError);
-  });
-
-  it("throws NotFoundError when the row is missing (and does NOT audit)", async () => {
-    mockPause.mockResolvedValue(null);
-    await expect(pauseSubscription(ctx(["subscription:pause"]), SUB_ID)).rejects.toBeInstanceOf(
-      NotFoundError
-    );
-    expect(mockEmit).not.toHaveBeenCalled();
-  });
-
-  it("propagates ConflictError from the repo when status is not 'active' (no audit)", async () => {
-    mockPause.mockRejectedValue(new ConflictError("not active"));
-    await expect(pauseSubscription(ctx(["subscription:pause"]), SUB_ID)).rejects.toBeInstanceOf(
-      ConflictError
-    );
-    expect(mockEmit).not.toHaveBeenCalled();
-  });
-
-  it("emits subscription.paused with previous_status, new_status, paused_at", async () => {
-    const before = subFixture({ status: "active", pausedAt: null });
-    const after = subFixture({ status: "paused", pausedAt: FIXED_NOW });
-    mockPause.mockResolvedValue(makeUpdate(before, after));
-
-    const result = await pauseSubscription(ctx(["subscription:pause"]), SUB_ID);
-
-    expect(result).toEqual(after);
-    expect(mockEmit).toHaveBeenCalledOnce();
-    const emitArg = mockEmit.mock.calls[0][0];
-    expect(emitArg.eventType).toBe("subscription.paused");
-    expect(emitArg.resourceId).toBe(SUB_ID);
-    expect(emitArg.metadata).toEqual({
-      subscription_id: SUB_ID,
-      previous_status: "active",
-      new_status: "paused",
-      paused_at: FIXED_NOW,
-    });
-  });
-});
-
-// -----------------------------------------------------------------------------
-// resumeSubscription
-// -----------------------------------------------------------------------------
-
-describe("resumeSubscription", () => {
-  it("throws ForbiddenError when actor lacks subscription:resume", async () => {
-    await expect(resumeSubscription(ctx([]), SUB_ID)).rejects.toBeInstanceOf(ForbiddenError);
-  });
-
-  it("throws ValidationError when ctx.tenantId is null", async () => {
-    await expect(
-      resumeSubscription(ctx(["subscription:resume"], null), SUB_ID)
-    ).rejects.toBeInstanceOf(ValidationError);
-  });
-
-  it("throws NotFoundError when the row is missing (and does NOT audit)", async () => {
-    mockResume.mockResolvedValue(null);
-    await expect(resumeSubscription(ctx(["subscription:resume"]), SUB_ID)).rejects.toBeInstanceOf(
-      NotFoundError
-    );
-    expect(mockEmit).not.toHaveBeenCalled();
-  });
-
-  it("propagates ConflictError from the repo when status is not 'paused'", async () => {
-    mockResume.mockRejectedValue(new ConflictError("not paused"));
-    await expect(resumeSubscription(ctx(["subscription:resume"]), SUB_ID)).rejects.toBeInstanceOf(
-      ConflictError
-    );
-    expect(mockEmit).not.toHaveBeenCalled();
-  });
-
-  it("emits subscription.resumed and captures the now-cleared pausedAt as paused_at_was", async () => {
-    const pausedAt = "2026-04-30T08:00:00.000Z";
-    const before = subFixture({ status: "paused", pausedAt });
-    const after = subFixture({ status: "active", pausedAt: null });
-    mockResume.mockResolvedValue(makeUpdate(before, after));
-
-    const result = await resumeSubscription(ctx(["subscription:resume"]), SUB_ID);
-
-    expect(result).toEqual(after);
-    expect(mockEmit).toHaveBeenCalledOnce();
-    const emitArg = mockEmit.mock.calls[0][0];
-    expect(emitArg.eventType).toBe("subscription.resumed");
-    expect(emitArg.metadata).toEqual({
-      subscription_id: SUB_ID,
-      previous_status: "paused",
-      new_status: "active",
-      paused_at_was: pausedAt,
-    });
-  });
-});
+// pauseSubscription + resumeSubscription tests live at
+// `src/modules/subscriptions/tests/service-lifecycle.spec.ts` (Day-16
+// Block 4-C). The pre-Day-16 placeholder describe blocks here were
+// deleted when Service B's bounded-pause + auto-resume rewrite landed.
 
 // -----------------------------------------------------------------------------
 // endSubscription

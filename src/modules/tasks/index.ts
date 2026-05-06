@@ -47,3 +47,26 @@ export {
   type ListTasksOpts,
   type PrintLabelsForTasksResult,
 } from "./service";
+
+// Day-16 — repository-layer helpers exposed for cross-module callers
+// that need to UPDATE tasks transactionally inside a multi-table
+// service-layer tx. These bypass the tasks module's service-layer
+// audit/permission gates because they're called BY an already-
+// permissioned + already-audited service in another module — the
+// calling service owns the audit-emit posture for the cross-module
+// operation.
+//
+// Current callers:
+//   - subscriptions/service.ts:pauseSubscription (step 9 CANCELED
+//     bulk-flip per merged plan §4.1; step 12 restore-tasks on
+//     early-manual-resume per §4.2). subscription-exceptions module
+//     also imports findTaskBySubscriptionAndDate + markTaskSkipped
+//     directly from ./repository — that module is not in MODULES
+//     for the lint zone (no boundary enforced today; revisit if
+//     subscription-exceptions joins MODULES).
+export {
+  findTaskBySubscriptionAndDate,
+  markTaskSkipped,
+  markTasksCanceledInWindow,
+  markTasksRestoredInWindow,
+} from "./repository";

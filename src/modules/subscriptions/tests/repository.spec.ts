@@ -23,8 +23,6 @@ import {
   findSubscriptionById,
   insertSubscription,
   listSubscriptionsByTenant,
-  pauseSubscription,
-  resumeSubscription,
   updateSubscription,
 } from "../repository";
 import type { CreateSubscriptionInput, UpdateSubscriptionPatch } from "../types";
@@ -380,77 +378,11 @@ describe("updateSubscription", () => {
 // pauseSubscription / resumeSubscription / endSubscription
 // ---------------------------------------------------------------------------
 
-describe("pauseSubscription", () => {
-  it("transitions active → paused, sets paused_at, returns before+after", async () => {
-    const before = subRowFixture({ status: "active", paused_at: null });
-    const after = subRowFixture({ status: "paused", paused_at: FIXED_NOW });
-    const tx = makeStubTx([[before], [after]]);
-
-    const result = await pauseSubscription(tx, TENANT_ID, SUB_ID);
-
-    expect(tx.execute).toHaveBeenCalledTimes(2);
-    const update = compile(tx.execute.mock.calls[1][0]);
-    expect(update.sql).toMatch(/UPDATE subscriptions/);
-    expect(update.sql).toMatch(/status = 'paused'/);
-    expect(update.sql).toMatch(/paused_at = now\(\)/);
-
-    expect(result?.before.status).toBe("active");
-    expect(result?.before.pausedAt).toBeNull();
-    expect(result?.after.status).toBe("paused");
-    expect(result?.after.pausedAt).toBe(FIXED_ISO);
-  });
-
-  it("throws ConflictError when row is already paused (illegal transition)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "paused" })]]);
-    await expect(pauseSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("throws ConflictError when row is ended (terminal, illegal)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "ended", ended_at: FIXED_NOW })]]);
-    await expect(pauseSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("returns null when row does not exist (RLS-hidden or non-existent)", async () => {
-    const tx = makeStubTx([[]]);
-    const result = await pauseSubscription(tx, TENANT_ID, SUB_ID);
-    expect(result).toBeNull();
-  });
-});
-
-describe("resumeSubscription", () => {
-  it("transitions paused → active, clears paused_at to NULL, returns before+after", async () => {
-    const before = subRowFixture({ status: "paused", paused_at: FIXED_NOW });
-    const after = subRowFixture({ status: "active", paused_at: null });
-    const tx = makeStubTx([[before], [after]]);
-
-    const result = await resumeSubscription(tx, TENANT_ID, SUB_ID);
-
-    const update = compile(tx.execute.mock.calls[1][0]);
-    expect(update.sql).toMatch(/status = 'active'/);
-    expect(update.sql).toMatch(/paused_at = NULL/);
-
-    expect(result?.before.status).toBe("paused");
-    expect(result?.before.pausedAt).toBe(FIXED_ISO);
-    expect(result?.after.status).toBe("active");
-    expect(result?.after.pausedAt).toBeNull();
-  });
-
-  it("throws ConflictError when row is active (illegal transition)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "active" })]]);
-    await expect(resumeSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("throws ConflictError when row is ended (terminal, illegal)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "ended", ended_at: FIXED_NOW })]]);
-    await expect(resumeSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("returns null when row does not exist", async () => {
-    const tx = makeStubTx([[]]);
-    const result = await resumeSubscription(tx, TENANT_ID, SUB_ID);
-    expect(result).toBeNull();
-  });
-});
+// pauseSubscription + resumeSubscription repository helpers DELETED at
+// Day-16 Block 4-C — the new bounded-pause service in service.ts does
+// the multi-table tx inline. These describe blocks were deleted with
+// the helpers; service-layer tests for pause/resume now live at
+// `service-lifecycle.spec.ts`.
 
 describe("endSubscription", () => {
   it("transitions active → ended, sets ended_at, clears paused_at, returns before+after", async () => {

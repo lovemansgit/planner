@@ -96,13 +96,18 @@ export interface ResolvedUserContext {
 /**
  * Resolve a Supabase auth user's id to the tenant + permission set carried
  * on `RequestContext.actor`. Single withServiceRole transaction joining
- * users + role_assignments + roles; permission set is unioned across the
- * user's role memberships using the frozen ROLES catalogue.
+ * users + role_assignments + roles + tenants; permission set is unioned
+ * across the user's role memberships using the frozen ROLES catalogue.
  *
  * Returns null when:
  *   - no public.users mirror row exists for the auth.users id, OR
  *   - the user has no role_assignments, OR
- *   - the user's disabled_at is set.
+ *   - the user's disabled_at is set, OR
+ *   - the user's tenant has status != 'active' (Day-16 §10.5: blocks
+ *     login for users on provisioning / suspended / inactive tenants;
+ *     `deactivateMerchant` flipping a tenant to 'inactive' is the
+ *     load-bearing case — that operator's session is invalidated on
+ *     the next request without a separate session-revocation surface).
  *
  * Built-in roles are matched by slug against ROLES; unknown slugs (custom
  * roles, post-pilot per plan §13.1) are skipped — their permission set
@@ -124,8 +129,10 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
       FROM users u
       JOIN role_assignments ra ON ra.user_id = u.id AND ra.tenant_id = u.tenant_id
       JOIN roles r ON r.id = ra.role_id
+      JOIN tenants t ON t.id = u.tenant_id
       WHERE u.id = ${userId}
         AND u.disabled_at IS NULL
+        AND t.status = 'active'
     `);
 
     if (rows.length === 0) return null;

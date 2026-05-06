@@ -176,3 +176,62 @@ export interface SubscriptionUpdate {
   readonly before: Subscription;
   readonly after: Subscription;
 }
+
+// -----------------------------------------------------------------------------
+// Day-16 / Block 4-C — bounded pause + auto-resume
+// -----------------------------------------------------------------------------
+
+/**
+ * Service input for `pauseSubscription` per brief §3.1.7. All fields
+ * required at the API boundary; reason is optional.
+ */
+export interface PauseSubscriptionInput {
+  /** ISO YYYY-MM-DD; must be after the cut-off (18:00 Dubai day-before per §3.1.8). */
+  readonly pause_start: string;
+  /** ISO YYYY-MM-DD; must be strictly after pause_start. */
+  readonly pause_end: string;
+  /** Operator note. */
+  readonly reason?: string;
+  /** Client-supplied uuid; UNIQUE per subscription via the schema constraint. */
+  readonly idempotency_key: string;
+}
+
+/**
+ * Service result for `pauseSubscription`.
+ */
+export interface PauseSubscriptionResult {
+  readonly exception_id: string;
+  readonly correlation_id: string;
+  /** Resolved end_date after extension (eligible-day walk per §3.1.7). */
+  readonly new_end_date: string;
+  /** Tasks in window flipped to CANCELED. Forensic field. */
+  readonly canceled_task_count: number;
+  readonly status: "inserted" | "idempotent_replay";
+  readonly http_status: 201 | 409;
+}
+
+/**
+ * Service input for `resumeSubscription`. Manual resume from API
+ * route OR auto-resume from cron handler — the latter passes
+ * `is_auto_resume: true` via the options bag (NOT via the body).
+ */
+export interface ResumeSubscriptionInput {
+  readonly idempotency_key: string;
+}
+
+/**
+ * Service result for `resumeSubscription`. The `'already_active'`
+ * status occurs on a paused→active idempotent replay (subscription
+ * was already resumed before this call).
+ */
+export interface ResumeSubscriptionResult {
+  readonly correlation_id: string | null;
+  /** today's date in tenant tz (manual) OR pause_end (auto). null on already_active. */
+  readonly actual_resume_date: string | null;
+  /** Recomputed end_date if early manual resume shrinks the pause; null on already_active. */
+  readonly new_end_date: string | null;
+  /** Tasks restored to 'CREATED' (early manual resume only; 0 on auto). */
+  readonly restored_task_count: number;
+  readonly status: "resumed" | "already_active";
+  readonly http_status: 200;
+}

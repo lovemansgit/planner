@@ -21,15 +21,20 @@ import { describe, expect, it, vi } from "vitest";
 import {
   deleteConsignee,
   findConsigneeById,
+  findConsigneeForCrmUpdate,
   insertConsignee,
+  insertConsigneeCrmEvent,
   listConsigneesByTenant,
   updateConsignee,
+  updateConsigneeCrmState,
 } from "../repository";
 import type { CreateConsigneeInput, UpdateConsigneePatch } from "../types";
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const OTHER_TENANT_ID = "00000000-0000-0000-0000-00000000000b";
 const CONSIGNEE_ID = "11111111-1111-1111-1111-111111111111";
+const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
+const CRM_EVENT_ID = "22222222-2222-2222-2222-222222222222";
 
 const FIXED_NOW = new Date("2026-04-28T10:00:00.000Z");
 
@@ -54,6 +59,7 @@ function rowFixture(overrides: Partial<Record<string, unknown>> = {}) {
     delivery_notes: null,
     external_ref: null,
     notes_internal: null,
+    crm_state: "ACTIVE",
     created_at: FIXED_NOW,
     updated_at: FIXED_NOW,
     ...overrides,
@@ -98,6 +104,9 @@ describe("insertConsignee", () => {
       deliveryNotes: null,
       externalRef: null,
       notesInternal: null,
+      // Block 4-D — crm_state column-add (migration 0016) surfaces via
+      // mapRow; default 'ACTIVE' on insert per the column's DB default.
+      crmState: "ACTIVE",
       createdAt: FIXED_NOW.toISOString(),
       updatedAt: FIXED_NOW.toISOString(),
     });
@@ -293,5 +302,137 @@ describe("compile() helper sanity", () => {
     const { sql, params } = compile(q);
     expect(sql).toMatch(/id\s*=\s*\$1\s+AND\s+tenant_id\s*=\s*\$2/i);
     expect(params).toEqual([CONSIGNEE_ID, TENANT_ID]);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// CRM state operations (Day 16 / Block 4-D)
+// -----------------------------------------------------------------------------
+
+describe("findConsigneeForCrmUpdate", () => {
+  it("issues SELECT … FOR UPDATE with the defence-in-depth tenant_id predicate", async () => {
+    const tx = makeStubTx([[rowFixture({ crm_state: "ACTIVE" })]]);
+
+    const result = await findConsigneeForCrmUpdate(tx, TENANT_ID, CONSIGNEE_ID);
+
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT \* FROM consignees/i);
+    expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/FOR UPDATE/i);
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.params).toContain(CONSIGNEE_ID);
+    expect(result?.crmState).toBe("ACTIVE");
+  });
+
+  it("returns null when the row is missing or RLS-hidden", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await findConsigneeForCrmUpdate(tx, OTHER_TENANT_ID, CONSIGNEE_ID);
+    expect(result).toBeNull();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.params).toContain(OTHER_TENANT_ID);
+  });
+});
+
+describe("updateConsigneeCrmState", () => {
+  it("issues UPDATE … crm_state = $ … WHERE id AND tenant_id; returns true on a single row update", async () => {
+    const tx = makeStubTx([[{ id: CONSIGNEE_ID }]]);
+
+    const ok = await updateConsigneeCrmState(tx, TENANT_ID, CONSIGNEE_ID, "HIGH_RISK");
+
+    expect(ok).toBe(true);
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/UPDATE consignees/i);
+    expect(captured.sql).toMatch(/SET crm_state\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
+    expect(captured.params).toContain("HIGH_RISK");
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.params).toContain(CONSIGNEE_ID);
+  });
+
+  it("returns false when no row matched (vanished mid-tx)", async () => {
+    const tx = makeStubTx([[]]);
+    const ok = await updateConsigneeCrmState(tx, TENANT_ID, CONSIGNEE_ID, "INACTIVE");
+    expect(ok).toBe(false);
+  });
+});
+
+describe("insertConsigneeCrmEvent", () => {
+  function eventRowFixture(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: CRM_EVENT_ID,
+      consignee_id: CONSIGNEE_ID,
+      tenant_id: TENANT_ID,
+      from_state: "ACTIVE",
+      to_state: "ON_HOLD",
+      reason: "operator note",
+      actor: ACTOR_USER_ID,
+      occurred_at: FIXED_NOW,
+      ...overrides,
+    };
+  }
+
+  it("inserts and returns the camelCase mapped row", async () => {
+    const tx = makeStubTx([[eventRowFixture()]]);
+
+    const result = await insertConsigneeCrmEvent(tx, {
+      consigneeId: CONSIGNEE_ID,
+      tenantId: TENANT_ID,
+      fromState: "ACTIVE",
+      toState: "ON_HOLD",
+      reason: "operator note",
+      actor: ACTOR_USER_ID,
+    });
+
+    expect(tx.execute).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      id: CRM_EVENT_ID,
+      consigneeId: CONSIGNEE_ID,
+      tenantId: TENANT_ID,
+      fromState: "ACTIVE",
+      toState: "ON_HOLD",
+      reason: "operator note",
+      actor: ACTOR_USER_ID,
+      occurredAt: FIXED_NOW.toISOString(),
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/INSERT INTO consignee_crm_events/i);
+    expect(captured.params).toContain(CONSIGNEE_ID);
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.params).toContain("ACTIVE");
+    expect(captured.params).toContain("ON_HOLD");
+    expect(captured.params).toContain("operator note");
+    expect(captured.params).toContain(ACTOR_USER_ID);
+  });
+
+  it("accepts null fromState (initial-create path) and null reason", async () => {
+    const tx = makeStubTx([
+      [eventRowFixture({ from_state: null, reason: null, to_state: "ACTIVE" })],
+    ]);
+    const result = await insertConsigneeCrmEvent(tx, {
+      consigneeId: CONSIGNEE_ID,
+      tenantId: TENANT_ID,
+      fromState: null,
+      toState: "ACTIVE",
+      reason: null,
+      actor: ACTOR_USER_ID,
+    });
+    expect(result.fromState).toBeNull();
+    expect(result.reason).toBeNull();
+  });
+
+  it("throws when INSERT … RETURNING produces zero rows (anomaly)", async () => {
+    const tx = makeStubTx([[]]);
+    await expect(
+      insertConsigneeCrmEvent(tx, {
+        consigneeId: CONSIGNEE_ID,
+        tenantId: TENANT_ID,
+        fromState: "ACTIVE",
+        toState: "ON_HOLD",
+        reason: "x",
+        actor: ACTOR_USER_ID,
+      }),
+    ).rejects.toThrow(/zero rows/);
   });
 });
