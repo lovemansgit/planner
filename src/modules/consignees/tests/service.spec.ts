@@ -18,13 +18,17 @@ vi.mock("../../audit", () => ({
 vi.mock("../repository", () => ({
   insertConsignee: vi.fn(),
   findConsigneeById: vi.fn(),
+  findConsigneeForCrmUpdate: vi.fn(),
+  insertConsigneeCrmEvent: vi.fn(),
   listConsigneesByTenant: vi.fn(),
   updateConsignee: vi.fn(),
+  updateConsigneeCrmState: vi.fn(),
   deleteConsignee: vi.fn(),
 }));
 
 import { withTenant } from "../../../shared/db";
 import {
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   ValidationError,
@@ -37,30 +41,38 @@ import { emit } from "../../audit";
 import {
   deleteConsignee as deleteConsigneeRow,
   findConsigneeById,
+  findConsigneeForCrmUpdate,
   insertConsignee,
+  insertConsigneeCrmEvent,
   listConsigneesByTenant,
   updateConsignee as updateConsigneeRow,
+  updateConsigneeCrmState,
 } from "../repository";
 import {
+  changeConsigneeCrmState,
   createConsignee,
   deleteConsignee,
   getConsignee,
   listConsignees,
   updateConsignee,
 } from "../service";
-import type { Consignee } from "../types";
+import type { Consignee, ConsigneeCrmEvent } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
 const mockEmit = vi.mocked(emit);
 const mockInsert = vi.mocked(insertConsignee);
 const mockFindById = vi.mocked(findConsigneeById);
+const mockFindForCrmUpdate = vi.mocked(findConsigneeForCrmUpdate);
+const mockInsertCrmEvent = vi.mocked(insertConsigneeCrmEvent);
 const mockListByTenant = vi.mocked(listConsigneesByTenant);
 const mockUpdate = vi.mocked(updateConsigneeRow);
+const mockUpdateCrmState = vi.mocked(updateConsigneeCrmState);
 const mockDelete = vi.mocked(deleteConsigneeRow);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
 const CONSIGNEE_ID = "11111111-1111-1111-1111-111111111111";
+const CRM_EVENT_ID = "22222222-2222-2222-2222-222222222222";
 const FIXED_NOW = "2026-04-28T10:00:00.000Z";
 
 function ctx(perms: readonly Permission[], tenantId: string | null = TENANT_ID): RequestContext {
@@ -90,8 +102,23 @@ function consigneeFixture(overrides: Partial<Consignee> = {}): Consignee {
     deliveryNotes: null,
     externalRef: null,
     notesInternal: null,
+    crmState: "ACTIVE",
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
+    ...overrides,
+  };
+}
+
+function crmEventFixture(overrides: Partial<ConsigneeCrmEvent> = {}): ConsigneeCrmEvent {
+  return {
+    id: CRM_EVENT_ID,
+    consigneeId: CONSIGNEE_ID,
+    tenantId: TENANT_ID,
+    fromState: "ACTIVE",
+    toState: "ON_HOLD",
+    reason: "operator note",
+    actor: ACTOR_USER_ID,
+    occurredAt: FIXED_NOW,
     ...overrides,
   };
 }
@@ -102,8 +129,11 @@ beforeEach(() => {
   mockEmit.mockResolvedValue(undefined);
   mockInsert.mockReset();
   mockFindById.mockReset();
+  mockFindForCrmUpdate.mockReset();
+  mockInsertCrmEvent.mockReset();
   mockListByTenant.mockReset();
   mockUpdate.mockReset();
+  mockUpdateCrmState.mockReset();
   mockDelete.mockReset();
   // Default: withTenant runs its callback against an opaque tx stub.
   // Each test that needs specific repo behaviour sets it via the
@@ -239,6 +269,9 @@ describe("getConsignee", () => {
     mockFindById.mockResolvedValue(fixture);
     const result = await getConsignee(ctx(["consignee:read"]), CONSIGNEE_ID);
     expect(result).toEqual(fixture);
+    // Block 4-D surface check: crmState is read-side-visible per
+    // reviewer add-on. Repository mapRow surfaces crm_state → crmState.
+    expect(result?.crmState).toBe("ACTIVE");
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
@@ -261,10 +294,15 @@ describe("listConsignees", () => {
   });
 
   it("returns rows from the repository, no audit", async () => {
-    const rows = [consigneeFixture({ id: "row-1" }), consigneeFixture({ id: "row-2" })];
+    const rows = [
+      consigneeFixture({ id: "row-1", crmState: "ACTIVE" }),
+      consigneeFixture({ id: "row-2", crmState: "HIGH_RISK" }),
+    ];
     mockListByTenant.mockResolvedValue(rows);
     const result = await listConsignees(ctx(["consignee:read"]));
     expect(result).toEqual(rows);
+    // Block 4-D surface check: crmState present on every list row.
+    expect(result.map((r) => r.crmState)).toEqual(["ACTIVE", "HIGH_RISK"]);
     expect(mockEmit).not.toHaveBeenCalled();
   });
 });
@@ -436,5 +474,234 @@ describe("deleteConsignee", () => {
       NotFoundError
     );
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// changeConsigneeCrmState (Day 16 / Block 4-D — Service C)
+// -----------------------------------------------------------------------------
+//
+// Service-layer behavioral coverage. Matrix correctness (every cell) is
+// in transitions.spec.ts; this block covers the I/O + audit surface.
+
+describe("changeConsigneeCrmState", () => {
+  const PERM = "consignee:change_crm_state" as const;
+
+  it("throws ForbiddenError when actor lacks consignee:change_crm_state", async () => {
+    await expect(
+      changeConsigneeCrmState(ctx([]), CONSIGNEE_ID, {
+        toState: "ON_HOLD",
+        reason: "operator note",
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockWithTenant).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when ctx.tenantId is null", async () => {
+    await expect(
+      changeConsigneeCrmState(ctx([PERM], null), CONSIGNEE_ID, {
+        toState: "ON_HOLD",
+        reason: "operator note",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockWithTenant).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when reason is empty / whitespace-only", async () => {
+    await expect(
+      changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+        toState: "ON_HOLD",
+        reason: "  \t  ",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockFindForCrmUpdate).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when the consignee is missing or RLS-hidden", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(null);
+    await expect(
+      changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+        toState: "ON_HOLD",
+        reason: "operator note",
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockUpdateCrmState).not.toHaveBeenCalled();
+    expect(mockInsertCrmEvent).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("returns no_op without DB write or audit when from === to", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ACTIVE" }));
+
+    const result = await changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+      toState: "ACTIVE",
+      reason: "operator note",
+    });
+
+    expect(result).toEqual({
+      status: "no_op",
+      consigneeId: CONSIGNEE_ID,
+      fromState: "ACTIVE",
+      toState: "ACTIVE",
+    });
+    expect(mockUpdateCrmState).not.toHaveBeenCalled();
+    expect(mockInsertCrmEvent).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid transition with ConflictError (no DB write, no audit)", async () => {
+    // SUBSCRIPTION_ENDED is terminal — no transitions allowed.
+    mockFindForCrmUpdate.mockResolvedValue(
+      consigneeFixture({ crmState: "SUBSCRIPTION_ENDED" }),
+    );
+
+    await expect(
+      changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+        toState: "ACTIVE",
+        reason: "trying to revive",
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(mockUpdateCrmState).not.toHaveBeenCalled();
+    expect(mockInsertCrmEvent).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects CHURNED → ACTIVE without 'reactivation' keyword with ConflictError", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "CHURNED" }));
+
+    await expect(
+      changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+        toState: "ACTIVE",
+        reason: "won them back",
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(mockUpdateCrmState).not.toHaveBeenCalled();
+    expect(mockInsertCrmEvent).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("accepts CHURNED → ACTIVE when reason contains 'reactivation' (case-insensitive)", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "CHURNED" }));
+    mockUpdateCrmState.mockResolvedValue(true);
+    mockInsertCrmEvent.mockResolvedValue(
+      crmEventFixture({ fromState: "CHURNED", toState: "ACTIVE", reason: "Reactivation by ops" }),
+    );
+
+    const result = await changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+      toState: "ACTIVE",
+      reason: "Reactivation by ops",
+    });
+
+    expect(result).toEqual({
+      status: "updated",
+      consigneeId: CONSIGNEE_ID,
+      fromState: "CHURNED",
+      toState: "ACTIVE",
+      eventId: CRM_EVENT_ID,
+    });
+    expect(mockUpdateCrmState).toHaveBeenCalledOnce();
+    expect(mockInsertCrmEvent).toHaveBeenCalledOnce();
+    expect(mockEmit).toHaveBeenCalledOnce();
+  });
+
+  it("commits the transition + writes consignee_crm_events + emits the audit event", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ACTIVE" }));
+    mockUpdateCrmState.mockResolvedValue(true);
+    mockInsertCrmEvent.mockResolvedValue(crmEventFixture({ fromState: "ACTIVE", toState: "HIGH_RISK" }));
+
+    const result = await changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+      toState: "HIGH_RISK",
+      reason: "repeated failed deliveries",
+    });
+
+    expect(result.status).toBe("updated");
+    expect(mockUpdateCrmState).toHaveBeenCalledOnce();
+    expect(mockUpdateCrmState).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      CONSIGNEE_ID,
+      "HIGH_RISK",
+    );
+
+    expect(mockInsertCrmEvent).toHaveBeenCalledOnce();
+    const insertArg = mockInsertCrmEvent.mock.calls[0][1];
+    expect(insertArg).toEqual({
+      consigneeId: CONSIGNEE_ID,
+      tenantId: TENANT_ID,
+      fromState: "ACTIVE",
+      toState: "HIGH_RISK",
+      reason: "repeated failed deliveries",
+      actor: ACTOR_USER_ID,
+    });
+
+    expect(mockEmit).toHaveBeenCalledOnce();
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("consignee.crm_state.changed");
+    expect(emitArg.tenantId).toBe(TENANT_ID);
+    expect(emitArg.resourceId).toBe(CONSIGNEE_ID);
+    expect(emitArg.metadata).toEqual({
+      consignee_id: CONSIGNEE_ID,
+      from_state: "ACTIVE",
+      to_state: "HIGH_RISK",
+      reason: "repeated failed deliveries",
+    });
+  });
+
+  it("trims reason whitespace before audit metadata + crm_event row", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ACTIVE" }));
+    mockUpdateCrmState.mockResolvedValue(true);
+    mockInsertCrmEvent.mockResolvedValue(crmEventFixture({ fromState: "ACTIVE", toState: "ON_HOLD" }));
+
+    await changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+      toState: "ON_HOLD",
+      reason: "  awaiting confirmation  ",
+    });
+
+    expect(mockInsertCrmEvent.mock.calls[0][1].reason).toBe("awaiting confirmation");
+    expect(mockEmit.mock.calls[0][0].metadata).toMatchObject({
+      reason: "awaiting confirmation",
+    });
+  });
+
+  it("throws NotFoundError if the consignee row vanishes between the FOR-UPDATE lock and the UPDATE (race)", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ACTIVE" }));
+    mockUpdateCrmState.mockResolvedValue(false);
+
+    await expect(
+      changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+        toState: "ON_HOLD",
+        reason: "race scenario",
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockInsertCrmEvent).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("does NOT emit the audit event if the no_op short-circuit fires (no ghost event)", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ON_HOLD" }));
+
+    const result = await changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+      toState: "ON_HOLD",
+      reason: "redundant call",
+    });
+
+    expect(result.status).toBe("no_op");
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("uses ctx.actor.userId as the actor field on the consignee_crm_events row", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ACTIVE" }));
+    mockUpdateCrmState.mockResolvedValue(true);
+    mockInsertCrmEvent.mockResolvedValue(crmEventFixture({ fromState: "ACTIVE", toState: "INACTIVE" }));
+
+    await changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+      toState: "INACTIVE",
+      reason: "operator offboard",
+    });
+
+    expect(mockInsertCrmEvent.mock.calls[0][1].actor).toBe(ACTOR_USER_ID);
   });
 });
