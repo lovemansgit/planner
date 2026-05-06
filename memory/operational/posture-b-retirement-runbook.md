@@ -24,8 +24,8 @@ Before removing the env var, verify the soak window has produced clean signals:
 |---|---|---|---|
 | P1 | Day-10 P2 auth wiring landed in Production | git log on main | PR #104 merged commit visible (`e6b91f3` per `memory/handoffs/day-10-eod.md`) |
 | P2 | 48h soak elapsed since Day-10 production deploy | Vercel Deployments → Production | Deploy timestamp ≥ 48h before now |
-| P3 | Operator-side login flow exercised on Production at least once during soak | Vercel logs filter `path:/login` OR `audit_events.event_type='user.login_succeeded'` query | ≥1 successful login from a real operator session |
-| P4 | Zero `audit_events.event_type='user.login_failed'` rows that map to known operators in the soak window | `SELECT COUNT(*) FROM audit_events WHERE event_type='user.login_failed' AND created_at > now() - interval '48 hours'` | Zero, OR all counts trace to expected dev/test attempts |
+| P3 | Operator-side login flow exercised on Production at least once during soak | `SELECT COUNT(*) FROM audit_events WHERE event_type='user.login_succeeded' AND occurred_at > now() - interval '48 hours'` | ≥1 successful login from a real operator session |
+| P4 | Zero `audit_events.event_type='user.login_failed'` rows that map to known operators in the soak window | `SELECT COUNT(*) FROM audit_events WHERE event_type='user.login_failed' AND occurred_at > now() - interval '48 hours'` | Zero, OR all counts trace to expected dev/test attempts |
 | P5 | Three demo merchants (MPL → `meal-plan-scheduler`, DNR → `dr-nutrition`, FBU → `fresh-butchers`) each have ≥1 `tenant-admin` role-assignment | `SELECT t.slug, COUNT(*) FROM role_assignments ra JOIN roles r ON r.id = ra.role_id JOIN tenants t ON t.id = ra.tenant_id WHERE r.slug = 'tenant-admin' AND t.slug IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers') GROUP BY t.slug ORDER BY t.slug` | Each of the three slugs returns ≥1 |
 | P6 | No production code path that depends on the demo fallback (no NODE_ENV-bypass code is live) | grep main HEAD: `process.env.ALLOW_DEMO_AUTH` | Should appear only at `src/shared/request-context.ts:264` + `src/shared/demo-context.ts` (the gate it guards) |
 
