@@ -700,3 +700,91 @@ export async function deleteTask(tx: DbTx, tenantId: Uuid, id: Uuid): Promise<bo
         : 0;
   return count > 0;
 }
+
+// -----------------------------------------------------------------------------
+// Day-16 / Block 4-B Service A — subscription-exception-driven UPDATEs
+// -----------------------------------------------------------------------------
+
+/**
+ * Day-16 §3.2 step 13 — find a task by its (subscription_id,
+ * delivery_date) tuple. Used by `addSubscriptionException` (skip flow)
+ * and the target_date_override collision check per plan §3.2 step 13b.
+ *
+ * Returns null when no task matches — sub-cases 13a (original date's
+ * task hasn't materialized yet, beyond the 14-day horizon) and 13c
+ * (target_date_override beyond the 14-day horizon) both surface as
+ * a null return; the service treats both as no-op success.
+ *
+ * Tenant-id predicate alongside RLS for defence in depth, mirroring
+ * the rest of this module's read shape.
+ */
+export async function findTaskBySubscriptionAndDate(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  deliveryDate: string,
+): Promise<Task | null> {
+  const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
+    SELECT
+      t.*,
+      COALESCE(
+        (
+          SELECT json_agg(tp.* ORDER BY tp.position ASC)
+          FROM task_packages tp
+          WHERE tp.task_id = t.id
+        ),
+        '[]'::json
+      ) AS packages
+    FROM tasks t
+    WHERE t.tenant_id = ${tenantId}
+      AND t.subscription_id = ${subscriptionId}
+      AND t.delivery_date = ${deliveryDate}
+    LIMIT 1
+  `);
+  return rows[0] ? mapTaskWithPackages(rows[0]) : null;
+}
+
+/**
+ * Day-16 §3.2 step 13 — flip a task's internal_status to 'SKIPPED'
+ * when an operator records a skip exception on its (subscription_id,
+ * target_date) tuple. Returns the number of rows affected so the
+ * service layer can distinguish:
+ *
+ *   - rowsAffected === 1: task existed and is now SKIPPED (happy path)
+ *   - rowsAffected === 0: the date's task hasn't materialized yet
+ *     (sub-case 13a per merged plan §3.2 step 13). The
+ *     subscription_exceptions row IS the durable record; the cron's
+ *     §2.4 row 1 skip-the-date EXISTS guard reads it on the next
+ *     materialization tick when the horizon eventually reaches that
+ *     date. No service-side error.
+ *
+ * Tenant-id predicate alongside RLS. The `internal_status` value
+ * 'SKIPPED' is included in the `tasks_internal_status_check` CHECK
+ * constraint per migration 0019 (Day-13 part 1).
+ *
+ * Note: this method does NOT carry the exception_id back onto the
+ * task row — there's no FK column for that on `tasks`. The link is
+ * resolved by `(subscription_id, delivery_date)` against
+ * `subscription_exceptions` at read time, which is the pattern the
+ * §2.4 cron's skip-the-date EXISTS guard already uses.
+ */
+export async function markTaskSkipped(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  deliveryDate: string,
+): Promise<number> {
+  const result = await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'SKIPPED'
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date = ${deliveryDate}
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+  `);
+  return typeof (result as { count?: number }).count === "number"
+    ? (result as { count: number }).count
+    : Array.isArray(result)
+      ? result.length
+      : 0;
+}

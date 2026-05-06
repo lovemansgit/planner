@@ -39,3 +39,54 @@ export function computeTargetDateInDubai(now: Date): string {
   );
   return horizon.toISOString().slice(0, 10);
 }
+
+/**
+ * Compute today's calendar date in Asia/Dubai for the cut-off check.
+ * Mirror of `computeTargetDateInDubai` without the +14 horizon offset.
+ */
+export function computeTodayInDubai(now: Date): string {
+  const dubaiNow = new Date(now.getTime() + DUBAI_OFFSET_MS);
+  return dubaiNow.toISOString().slice(0, 10);
+}
+
+/**
+ * Day-16 / brief §3.1.8 — cut-off check for skip / pause / append-without-skip
+ * services. Returns true iff `now` is past the 18:00 Dubai cut-off the
+ * day BEFORE `targetDate`.
+ *
+ * MVP is hardcoded to 18:00 Dubai per brief §3.1.8 + plan §7.2. Phase 2
+ * lands per-merchant configurable cut-off via `tenants.cut_off_offset_minutes`
+ * (column-add migration) and replaces the hardcoded constant here with
+ * a tenant-config read.
+ *
+ * Mechanics:
+ *   - The cut-off instant for `targetDate` is `(targetDate - 1 day) at 18:00 Dubai`.
+ *   - 18:00 Dubai = 14:00 UTC (Dubai is UTC+4, no DST).
+ *   - Returns true iff `now` is at or past that UTC instant.
+ *
+ * Same UTC-only date arithmetic posture as the rest of this module —
+ * all calendar-date math sidesteps local-tz drift by working in UTC
+ * with the +4h offset applied explicitly.
+ */
+const CUT_OFF_HOUR_DUBAI = 18;
+
+export function isCutOffElapsedForDate(now: Date, targetDate: string): boolean {
+  // Parse targetDate as midnight UTC, then walk back one calendar day.
+  const target = new Date(`${targetDate}T00:00:00.000Z`);
+  if (Number.isNaN(target.getTime())) {
+    throw new Error(`isCutOffElapsedForDate: invalid targetDate '${targetDate}'`);
+  }
+  // (targetDate - 1 day) at 18:00 Dubai = (targetDate - 1 day) at (18 - 4) UTC = (targetDate - 1 day) at 14:00 UTC.
+  const cutOffUtc = new Date(
+    Date.UTC(
+      target.getUTCFullYear(),
+      target.getUTCMonth(),
+      target.getUTCDate() - 1,
+      CUT_OFF_HOUR_DUBAI - 4,
+      0,
+      0,
+      0,
+    ),
+  );
+  return now.getTime() >= cutOffUtc.getTime();
+}
