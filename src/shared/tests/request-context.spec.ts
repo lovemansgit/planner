@@ -6,8 +6,8 @@
 //   - session present, user has no public.users mirror → throws Unauthorized
 //   - session present, user.disabled_at set → throws Unauthorized
 //   - session present, user has no role_assignments → throws Unauthorized
-//   - session absent + ALLOW_DEMO_AUTH=true → falls through to demo
-//   - session absent + no ALLOW_DEMO_AUTH → throws Unauthorized
+//   - session absent → throws Unauthorized (fail-closed; Posture B
+//     hard cutover landed Day 15 — no ALLOW_DEMO_AUTH fallback exists)
 //
 // Cookie contract (watch-list addition #1) — the cookies.setAll function
 // MUST swallow throws so RSC contexts (read-only cookieStore) don't
@@ -44,23 +44,8 @@ vi.mock("../db", () => ({
   }),
 }));
 
-vi.mock("../demo-context", () => ({
-  buildDemoContext: vi.fn(async (path: string, requestId: string) => ({
-    actor: {
-      kind: "user",
-      userId: "demo-user",
-      tenantId: "demo-tenant",
-      permissions: new Set<string>(),
-    },
-    tenantId: "demo-tenant",
-    requestId,
-    path,
-  })),
-}));
-
 const cookieAdapterRef: { value: { setAll: (xs: unknown[]) => void } | null } = { value: null };
 
-import { buildDemoContext } from "../demo-context";
 import { UnauthorizedError } from "../errors";
 import {
   __resetSessionCacheForTests,
@@ -75,7 +60,6 @@ const ORIG_ENV = { ...process.env };
 beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-test-key";
-  delete process.env.ALLOW_DEMO_AUTH;
   mockGetUser.mockReset();
   mockExecute.mockReset();
   cookieAdapterRef.value = null;
@@ -194,36 +178,18 @@ describe("buildRequestContext", () => {
     );
   });
 
-  it("falls through to demo context when no session AND ALLOW_DEMO_AUTH=true", async () => {
+  it("throws UnauthorizedError when no session is present (Posture B fail-closed)", async () => {
+    // Post-Stage-2 cutover: no ALLOW_DEMO_AUTH gate exists. No session
+    // → UnauthorizedError → 401 / login-redirect. There is no demo
+    // fallthrough path remaining. Pinned even with ALLOW_DEMO_AUTH set
+    // in the environment (defence against stale Vercel env caches or
+    // local-dev legacy configs) — the runtime gate has been retired.
     process.env.ALLOW_DEMO_AUTH = "true";
     mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
 
-    const ctx = await buildRequestContext("/admin/webhook-config", "req-3");
-    expect(ctx.tenantId).toBe("demo-tenant");
-    expect(buildDemoContext).toHaveBeenCalledWith("/admin/webhook-config", "req-3");
-  });
-
-  it("throws UnauthorizedError when no session AND no ALLOW_DEMO_AUTH opt-in", async () => {
-    mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
-
-    await expect(buildRequestContext("/api/tasks", "req-4")).rejects.toBeInstanceOf(
+    await expect(buildRequestContext("/api/tasks", "req-no-session")).rejects.toBeInstanceOf(
       UnauthorizedError,
     );
-    expect(buildDemoContext).not.toHaveBeenCalled();
-  });
-
-  it("does NOT fall through to demo when session is present and user is unprovisioned (defence-in-depth)", async () => {
-    process.env.ALLOW_DEMO_AUTH = "true";
-    mockGetUser.mockResolvedValueOnce({ data: { user: { id: "user-1" } }, error: null });
-    mockExecute.mockResolvedValueOnce([]);
-
-    // Posture A only allows demo as fallback when there's NO session.
-    // A session-bearing-but-unprovisioned user must surface the
-    // UnauthorizedError, not silently demote to demo.
-    await expect(buildRequestContext("/api/tasks", "req-5")).rejects.toBeInstanceOf(
-      UnauthorizedError,
-    );
-    expect(buildDemoContext).not.toHaveBeenCalled();
   });
 });
 

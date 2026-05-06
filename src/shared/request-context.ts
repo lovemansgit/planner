@@ -1,17 +1,7 @@
-// Day 10. Replacement for src/shared/demo-context.ts as the canonical
-// RequestContext builder for server-side code (pages, route handlers,
-// server actions).
-//
-// Posture A graceful migration (per memory/plans/auth_implementation_plan.md
-// §2): real auth via Supabase SSR is the primary path. If no session is
-// present AND `ALLOW_DEMO_AUTH=true` is explicitly set in the environment
-// (Preview-scope only by convention), we fall through to the legacy demo
-// context — Preview keeps working through the cutover. If no session AND
-// no demo opt-in, we throw `UnauthorizedError`; route handlers map that
-// to 401 via errorResponse, pages catch it and redirect to /login.
-//
-// Posture B (hard cutover) is a T1 follow-up after ~48h soak. It drops
-// the ALLOW_DEMO_AUTH fallback and removes the `buildDemoContext` import.
+// Day 10 / Day 15. Canonical RequestContext builder for server-side code
+// (pages, route handlers, server actions). Real auth via Supabase SSR is
+// the only path; no session means UnauthorizedError, route handlers map
+// that to 401 via errorResponse, pages catch it and redirect to /login.
 //
 // Cookie-handling contract across the three Next.js 16 contexts:
 //   - Server Component (RSC): `cookies()` is read-only. The Supabase
@@ -48,7 +38,6 @@ import {
   ROLES,
 } from "@/modules/identity";
 
-import { buildDemoContext } from "./demo-context";
 import { withServiceRole } from "./db";
 import { UnauthorizedError } from "./errors";
 import type { RequestContext } from "./tenant-context";
@@ -226,14 +215,11 @@ export function __resetSessionCacheForTests(): void {
 }
 
 /**
- * Build a RequestContext for the current server-side request. Replacement
- * for buildDemoContext from Day 3. Posture A graceful migration: real
- * auth via Supabase SSR primary, demo fallback opt-in via
- * `ALLOW_DEMO_AUTH=true` (Preview-only by convention).
+ * Build a RequestContext for the current server-side request.
  *
- * Throws UnauthorizedError when no Supabase session is present AND demo
- * fallback is not opted in. Route handlers map the throw to 401 via
- * errorResponse; pages catch it and call redirect("/login?...").
+ * Throws UnauthorizedError when no Supabase session is present. Route
+ * handlers map the throw to 401 via errorResponse; pages catch it and
+ * call redirect("/login?...").
  */
 export async function buildRequestContext(
   path: string,
@@ -255,14 +241,6 @@ export async function buildRequestContext(
       requestId,
       path,
     };
-  }
-
-  // Posture A fallthrough — Preview opt-in only. Demo path is unmemoized
-  // because it runs only on Preview (no real session) and its own
-  // first-tenant lookup is cheap; doubling it under (app)/ layout +
-  // page on Preview is acceptable.
-  if (process.env.ALLOW_DEMO_AUTH === "true") {
-    return await buildDemoContext(path, requestId);
   }
 
   throw new UnauthorizedError("login required");
