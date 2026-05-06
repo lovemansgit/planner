@@ -99,7 +99,38 @@ But [src/modules/subscriptions/service.ts:27-28](../src/modules/subscriptions/se
 - §4.2 amends similarly for resumeSubscription.
 - §4.1 line 358 path correction: `src/modules/subscriptions/lifecycle/service.ts` → `src/modules/subscriptions/service.ts` (existing module; Service B extends/rewrites in place rather than introducing a new lifecycle/ subdir).
 
-## §4 Cross-references
+## §4 System actor type-catalogue drift (Conflict 4)
+
+Merged plan PR #155 §1 line 103 references `'auto-resume-scheduler'` as the system actor for the `/api/cron/auto-resume` handler. The string literal was used in the plan but never traced to the type catalogue at [`src/shared/tenant-context.ts:25-48`](../src/shared/tenant-context.ts#L25-L48) (the `SystemActor` frozen literal union) or to the permission-registration convention.
+
+The existing union has 8 entries (`cron:generate_tasks`, `cron:reconciliation`, `cron:end_expired`, `cron:scan_webhook_dlq`, `cron:webhook_worker`, `webhook:suitefleet`, `system:dlq_retry`, `queue:push_task`). All cron actors use the snake_case `cron:*` convention.
+
+**Resolution:** register `cron:auto_resume` in the `SystemActor` union (matching the convention) + construct the `kind: 'system'` actor inline at the cron-handler entry with a narrow permission set (`'subscription:resume'` only — single-responsibility per the cron's purpose). Plan-text amendment for §1 line 103 in next plan-sync bundle.
+
+**Plan-text amendment (next plan-sync bundle):**
+
+- §1 line 103 amends from *"Auto-resume runs as `system: 'auto-resume-scheduler'` actor; permission check skipped per `assertSystemActor` pattern."* to *"Auto-resume runs as `cron:auto_resume` system actor (registered in `src/shared/tenant-context.ts:SystemActor` union per Day-13 system-actor convention); permission check skipped per `assertSystemActor` pattern."*
+
+## §5 End-date extension arithmetic drift (Conflict 5)
+
+Merged plan §4.1 step 8 specifies the pause-extension arithmetic as:
+
+> *"`extension_days = count of dates D in [pause_start, pause_end] (inclusive) where ISODOW(D) ∈ subscription.days_of_week`. ... UPDATE `subscriptions.end_date = current_end_date + extension_days`."*
+
+**This is wrong.** Adding `extension_days` CALENDAR days to `current_end_date` may land on a non-eligible delivery weekday. Worked example (per Block 4-C ambiguity B3):
+
+- Subscription Mon-Fri, end_date Fri Jan 30
+- Pause covers entire week Mon-Fri (5 eligible delivery days)
+- Plan's arithmetic: `end_date + 5 calendar days = Wed Feb 4` (NOT a Mon-Fri delivery day)
+- Correct math: walk forward 5 eligible weekdays from `current_end_date + 1 = Fri Feb 6`
+
+**Resolution:** new pure helper `computePauseExtensionDate(input): IsoDate` at [`src/modules/subscription-exceptions/skip-algorithm.ts`](../src/modules/subscription-exceptions/skip-algorithm.ts) (sibling to existing pure `computeCompensatingDate`). Service wraps for I/O per Service A's wrapper-around-pure-helper pattern (Conflict 2 resolution).
+
+**Plan-text amendment (next plan-sync bundle):**
+
+- §4.1 step 8 amends to: *"`extension_days = count of dates D in [pause_start, pause_end] (inclusive) where ISODOW(D) ∈ subscription.days_of_week`. Service-layer wrapper around the new pure helper `subscription-exceptions/skip-algorithm.ts:computePauseExtensionDate(subscription, currentEndDate, extensionDays, pauseWindows)` walks forward `extension_days` eligible weekdays from `current_end_date + 1`, skipping any active pause windows that overlap the walk. UPDATE `subscriptions.end_date = result`. Calendar-arithmetic add was incorrect — would land on non-eligible weekdays."*
+
+## §6 Cross-references
 
 - **PR #139** (`875bfc4`) — schema-landing PR; established sibling-module convention (`src/modules/subscription-exceptions/`); canonical for this surface.
 - **PR #155** (`0d1ce21`) — plan PR with drifts §1-§3 above.

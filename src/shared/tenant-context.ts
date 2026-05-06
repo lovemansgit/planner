@@ -45,7 +45,15 @@ export type SystemActor =
   // §5.1). QStash POSTs to the route per `batchJSON` message; the route
   // builds this system actor for `pushSingleTask` invocation, which
   // requires assertSystemActor.
-  | "queue:push_task";
+  | "queue:push_task"
+  // Day 16 / Block 4-C — auto-resume scheduler at /api/cron/auto-resume
+  // (merged plan PR #155 §10.3 Option A locked spec). Polls
+  // subscription_exceptions for type='pause_window' rows whose end_date
+  // has elapsed and no resume audit event exists for the same
+  // correlation_id. Per row, calls resumeSubscription with
+  // is_auto_resume=true so the service-layer assertSystemActor branch
+  // skips the user-permission check.
+  | "cron:auto_resume";
 
 /** Two-kind actor: human user (JWT) or system (cron / webhook / queue). */
 export type Actor =

@@ -275,11 +275,33 @@ export async function updateSubscription(
   return { before, after: mapSubscription(afterRows[0]) };
 }
 
+// Day-16 / Block 4-C — `resumeSubscription` repository helper DELETED.
+// The new service-layer `resumeSubscription` in service.ts performs
+// the multi-table tx inline (find pause_window exception → restore
+// tasks → flip subscription → recompute end_date for early-manual)
+// per merged plan §4 + brief §3.1.7.
+//
+// `pauseSubscription` repository helper KEPT below — it remains the
+// single-table status-flip primitive used by the system-actor
+// `autoPauseSubscriptionForRepeatedFailure` flow (Day-7 / MP-14)
+// where bounded-pause semantics don't apply (auto-pause is an
+// emergency halt on N consecutive push failures, not an
+// operator-chosen window). The new operator-driven pauseSubscription
+// in service.ts does the multi-table tx itself; it does NOT call this
+// helper.
+
 /**
  * Transition a subscription from 'active' to 'paused'. Sets
  * `paused_at = now()`. Returns `{ before, after }` on success, null if
  * the row does not exist / is RLS-hidden. Throws `ConflictError` if
  * the row exists but is not in 'active' state.
+ *
+ * **Scope-limited as of Day-16 Block 4-C.** Used ONLY by
+ * `autoPauseSubscriptionForRepeatedFailure` for the system-actor
+ * emergency-halt path. The operator-driven bounded-pause flow
+ * (`pauseSubscription` in service.ts) does NOT use this helper —
+ * it does its own multi-table tx (subscription_exceptions INSERT +
+ * tasks bulk UPDATE + subscriptions flip with end_date extension).
  */
 export async function pauseSubscription(
   tx: DbTx,
@@ -303,41 +325,6 @@ export async function pauseSubscription(
   const afterRows = await tx.execute<SubscriptionRow>(sqlTag`
     UPDATE subscriptions
     SET status = 'paused', paused_at = now()
-    WHERE id = ${id} AND tenant_id = ${tenantId}
-    RETURNING *
-  `);
-  return { before, after: mapSubscription(afterRows[0]) };
-}
-
-/**
- * Transition a subscription from 'paused' to 'active'. Clears
- * `paused_at` to NULL (status is the canonical truth; paused_at is
- * the annotation). Returns `{ before, after }` on success, null if
- * the row does not exist. Throws `ConflictError` on illegal
- * transition.
- */
-export async function resumeSubscription(
-  tx: DbTx,
-  tenantId: Uuid,
-  id: Uuid
-): Promise<SubscriptionUpdate | null> {
-  const beforeRows = await tx.execute<SubscriptionRow>(sqlTag`
-    SELECT * FROM subscriptions
-    WHERE id = ${id} AND tenant_id = ${tenantId}
-    FOR UPDATE
-  `);
-  if (beforeRows.length === 0) return null;
-  const before = mapSubscription(beforeRows[0]);
-
-  if (before.status !== "paused") {
-    throw new ConflictError(
-      `Cannot resume subscription ${id}: status is '${before.status}', expected 'paused'`
-    );
-  }
-
-  const afterRows = await tx.execute<SubscriptionRow>(sqlTag`
-    UPDATE subscriptions
-    SET status = 'active', paused_at = NULL
     WHERE id = ${id} AND tenant_id = ${tenantId}
     RETURNING *
   `);

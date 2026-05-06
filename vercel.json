@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/generate-tasks",
       "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/auto-resume",
+      "schedule": "*/15 * * * *"
     }
   ],
   "ignoreCommand": "bash -c 'git fetch origin main --depth=50 2>/dev/null; base=$(git merge-base origin/main HEAD); changed=$(git diff --name-only \"$base\" HEAD); printf \"%s\\n\" \"$changed\" | grep -qvE \"^(memory/|docs/|.*\\.md$)\" && exit 1 || exit 0'"

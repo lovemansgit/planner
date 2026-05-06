@@ -19,8 +19,13 @@ export type {
 // layer's I/O wrapper.
 export {
   computeCompensatingDate,
+  computePauseExtensionDate,
+  countEligibleDeliveryDays,
+  walkBackwardEligibleDays,
   type ComputeCompensatingDateInput,
   type ComputeCompensatingDateResult,
+  type ComputePauseExtensionDateInput,
+  type ComputePauseExtensionDateResult,
   type IsoDate,
   type IsoWeekday,
   type PauseWindow,

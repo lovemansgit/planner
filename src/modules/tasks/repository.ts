@@ -788,3 +788,88 @@ export async function markTaskSkipped(
       ? result.length
       : 0;
 }
+
+/**
+ * Day-16 / Block 4-C Service B — bulk-flip tasks in a pause window
+ * to internal_status='CANCELED'. Used by `pauseSubscription` step 9
+ * per merged plan §4.1 + brief §3.1.7.
+ *
+ * Filter `NOT IN ('DELIVERED', 'FAILED', 'CANCELED')` excludes
+ * already-terminal tasks so an in-flight delivery completing
+ * mid-pause-creation is not retroactively canceled (per merged plan
+ * §8.1 row 2 — "whichever wins owns the final state"). Webhook-race
+ * handling stays at the SF-webhook receiver layer.
+ *
+ * Returns rows affected for the audit-event metadata. The cancel
+ * `reason='subscription_paused'` is captured on the linked
+ * `subscription_exceptions.reason` row + on the
+ * `subscription.paused` audit event (per Conflict 4 routing B1-α —
+ * no cancellation_reason column on tasks).
+ *
+ * Tenant-id predicate alongside RLS for defence in depth.
+ */
+export async function markTasksCanceledInWindow(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  pauseStart: string,
+  pauseEnd: string,
+): Promise<number> {
+  const result = await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'CANCELED'
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date BETWEEN ${pauseStart} AND ${pauseEnd}
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+  `);
+  return typeof (result as { count?: number }).count === "number"
+    ? (result as { count: number }).count
+    : Array.isArray(result)
+      ? result.length
+      : 0;
+}
+
+/**
+ * Day-16 / Block 4-C Service B — restore CANCELED tasks back to
+ * 'CREATED' on early manual resume. Used by `resumeSubscription`
+ * when an operator resumes BEFORE `pause_end` per merged plan §4.2
+ * + brief §3.1.7.
+ *
+ * Filter:
+ *   - delivery_date >= restoreFromDate (today; tasks already-passed
+ *     during the pause stay CANCELED forever)
+ *   - delivery_date <= restoreToDate (the original pause_end)
+ *   - internal_status = 'CANCELED' (only restore the pause-canceled
+ *     tasks; tasks canceled for other reasons should not be
+ *     restored)
+ *
+ * MVP simplification: there's no exception_id link on tasks (per
+ * Conflict 4 B1-α), so this restores ALL CANCELED tasks in the
+ * `[restoreFromDate, restoreToDate]` window for the subscription.
+ * In demo flow this is safe because only the active pause causes
+ * cancellations during a paused subscription's lifetime.
+ *
+ * Returns rows affected.
+ */
+export async function markTasksRestoredInWindow(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  restoreFromDate: string,
+  restoreToDate: string,
+): Promise<number> {
+  const result = await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'CREATED'
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date BETWEEN ${restoreFromDate} AND ${restoreToDate}
+      AND internal_status = 'CANCELED'
+  `);
+  return typeof (result as { count?: number }).count === "number"
+    ? (result as { count: number }).count
+    : Array.isArray(result)
+      ? result.length
+      : 0;
+}

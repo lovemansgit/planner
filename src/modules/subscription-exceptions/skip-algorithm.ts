@@ -260,3 +260,204 @@ export function computeCompensatingDate(
 
   return { kind: "rejected", reason: "no_compensating_date_found" };
 }
+
+// =============================================================================
+// computePauseExtensionDate — Day-16 Block 4-C Service B pure helper
+// =============================================================================
+
+/**
+ * Inputs for the pause-extension walk. The service layer pre-fetches
+ * the subscription state + active pause-window exception rows + the
+ * extension-days count (computed from pause_start/pause_end via the
+ * same eligibility test as the cron's materialization handler) and
+ * passes them through to this pure helper.
+ */
+export interface ComputePauseExtensionDateInput {
+  readonly subscription: SubscriptionForSkip;
+  /** Current `subscriptions.end_date`. The walk starts at `currentEndDate + 1`. */
+  readonly currentEndDate: IsoDate;
+  /**
+   * Number of eligible-delivery-days to walk past `currentEndDate`.
+   * Caller computes this as `count(D in [pause_start, pause_end] where
+   * ISODOW(D) ∈ subscription.days_of_week)` — the same eligibility
+   * test as the materialization cron's §2.3 INSERT…SELECT predicate.
+   * Zero is allowed (extension_days=0 returns currentEndDate
+   * unchanged — happens when a pause covers only non-eligible
+   * weekdays).
+   */
+  readonly extensionDays: number;
+  /**
+   * Pause windows to skip during the walk. The new pause being
+   * created is typically NOT in this list because it ends at
+   * pause_end (which is before the walk starts at currentEndDate+1
+   * in the common case where the operator pauses upcoming
+   * deliveries). However, OTHER existing pause windows scheduled in
+   * the future could overlap the walk; passing them through is
+   * defensive.
+   */
+  readonly pauseWindows: readonly PauseWindow[];
+}
+
+export type ComputePauseExtensionDateResult =
+  | { readonly kind: "ok"; readonly newEndDate: IsoDate }
+  | {
+      readonly kind: "rejected";
+      readonly reason: "no_extension_date_found";
+    };
+
+/**
+ * Compute the new `subscriptions.end_date` after extending past a
+ * pause-window cancellation, per brief §3.1.7 ("end_date extends by
+ * pause duration counted in eligible-delivery-days").
+ *
+ * Algorithm: walk forward `extensionDays` eligible weekdays starting
+ * from `currentEndDate + 1`, skipping any pause-window-overlapping
+ * dates. Returns the date of the `extensionDays`-th eligible weekday
+ * found.
+ *
+ * `extensionDays = 0` → returns `currentEndDate` unchanged (no
+ * extension; happens when the pause window contains zero
+ * eligible-delivery-days for this subscription).
+ *
+ * Safety stop after `MAX_FORWARD_DAYS` (365) returns
+ * `'no_extension_date_found'` (operator scenario: pause covers a
+ * very long range AND many overlapping pause windows fill the
+ * post-walk space; extremely rare but bounded).
+ *
+ * Pure: no DB calls, no I/O. Mirrors the
+ * `computeCompensatingDate` pattern.
+ */
+export function computePauseExtensionDate(
+  input: ComputePauseExtensionDateInput,
+): ComputePauseExtensionDateResult {
+  const { subscription, currentEndDate, extensionDays, pauseWindows } = input;
+
+  if (extensionDays < 0) {
+    throw new Error(`computePauseExtensionDate: extensionDays must be >= 0; got ${extensionDays}`);
+  }
+
+  if (extensionDays === 0) {
+    return { kind: "ok", newEndDate: currentEndDate };
+  }
+
+  if (subscription.daysOfWeek.length === 0) {
+    return { kind: "rejected", reason: "no_extension_date_found" };
+  }
+
+  const startUtc = parseIsoDate(currentEndDate);
+  let candidate = addDaysUtc(startUtc, 1);
+  let eligibleFound = 0;
+
+  for (let walked = 1; walked <= MAX_FORWARD_DAYS; walked++) {
+    const candidateIso = formatIsoDate(candidate);
+    const wd = isoWeekday(candidate);
+    if (
+      subscription.daysOfWeek.includes(wd) &&
+      !isInPauseWindow(candidateIso, pauseWindows)
+    ) {
+      eligibleFound += 1;
+      if (eligibleFound === extensionDays) {
+        return { kind: "ok", newEndDate: candidateIso };
+      }
+    }
+    candidate = addDaysUtc(candidate, 1);
+  }
+
+  return { kind: "rejected", reason: "no_extension_date_found" };
+}
+
+/**
+ * Walk backward `daysToWalk` eligible weekdays from `fromDate`,
+ * skipping pause-window overlaps. Returns the date of the
+ * `daysToWalk`-th eligible weekday found.
+ *
+ * Used by `resumeSubscription` early-manual-resume recompute path
+ * per merged plan §4.2 step 6 (corrected for eligible-day arithmetic
+ * per Conflict 4 B3-α). When an operator resumes a subscription
+ * BEFORE `pause_end`, the effective pause extension shrinks; the
+ * subscription's `end_date` shrinks by `(originalExtensionDays -
+ * effectiveExtensionDays)` eligible days, which this helper
+ * computes.
+ *
+ * `daysToWalk = 0` returns `fromDate` unchanged.
+ *
+ * Safety stop after `MAX_FORWARD_DAYS` (365) returns
+ * `'no_extension_date_found'`.
+ */
+export function walkBackwardEligibleDays(
+  input: {
+    readonly fromDate: IsoDate;
+    readonly daysToWalk: number;
+    readonly daysOfWeek: readonly IsoWeekday[];
+    readonly pauseWindows: readonly PauseWindow[];
+  },
+): ComputePauseExtensionDateResult {
+  const { fromDate, daysToWalk, daysOfWeek, pauseWindows } = input;
+
+  if (daysToWalk < 0) {
+    throw new Error(
+      `walkBackwardEligibleDays: daysToWalk must be >= 0; got ${daysToWalk}`,
+    );
+  }
+
+  if (daysToWalk === 0) {
+    return { kind: "ok", newEndDate: fromDate };
+  }
+
+  if (daysOfWeek.length === 0) {
+    return { kind: "rejected", reason: "no_extension_date_found" };
+  }
+
+  const startUtc = parseIsoDate(fromDate);
+  let candidate = addDaysUtc(startUtc, -1);
+  let eligibleFound = 0;
+
+  for (let walked = 1; walked <= MAX_FORWARD_DAYS; walked++) {
+    const candidateIso = formatIsoDate(candidate);
+    const wd = isoWeekday(candidate);
+    if (
+      daysOfWeek.includes(wd) &&
+      !isInPauseWindow(candidateIso, pauseWindows)
+    ) {
+      eligibleFound += 1;
+      if (eligibleFound === daysToWalk) {
+        return { kind: "ok", newEndDate: candidateIso };
+      }
+    }
+    candidate = addDaysUtc(candidate, -1);
+  }
+
+  return { kind: "rejected", reason: "no_extension_date_found" };
+}
+
+/**
+ * Count eligible-delivery-days in [pauseStart, pauseEnd] (inclusive)
+ * for a subscription. Mirrors the cron's §2.3 eligibility test —
+ * same predicate as the materialization handler. The service layer
+ * uses this at pause-creation time to compute the extensionDays
+ * input to `computePauseExtensionDate`.
+ *
+ * Pure helper alongside the algorithm; lives here so the same shape
+ * is reusable by tests + by the cron's §2.3 if ever inlined.
+ */
+export function countEligibleDeliveryDays(
+  subscription: SubscriptionForSkip,
+  pauseStart: IsoDate,
+  pauseEnd: IsoDate,
+): number {
+  if (subscription.daysOfWeek.length === 0) return 0;
+  const startUtc = parseIsoDate(pauseStart);
+  const endUtc = parseIsoDate(pauseEnd);
+  if (endUtc.getTime() < startUtc.getTime()) {
+    return 0;
+  }
+  let count = 0;
+  let cursor = startUtc;
+  for (let walked = 0; walked <= MAX_FORWARD_DAYS; walked++) {
+    if (cursor.getTime() > endUtc.getTime()) break;
+    const wd = isoWeekday(cursor);
+    if (subscription.daysOfWeek.includes(wd)) count += 1;
+    cursor = addDaysUtc(cursor, 1);
+  }
+  return count;
+}

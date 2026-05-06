@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeCompensatingDate,
+  computePauseExtensionDate,
+  countEligibleDeliveryDays,
   type ComputeCompensatingDateInput,
   type IsoWeekday,
   type SubscriptionForSkip,
@@ -290,5 +292,176 @@ describe("computeCompensatingDate — §5.2 edge cases (brief §3.1.6 A–I)", (
       kind: "rejected",
       reason: "no_compensating_date_found",
     });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// §5.3 computePauseExtensionDate — Day-16 Block 4-C Service B helper
+// -----------------------------------------------------------------------------
+
+describe("computePauseExtensionDate — brief §3.1.7 worked examples", () => {
+  it("Mon-Fri sub, end_date Fri 2026-05-15, extension 5 days → next Fri 2026-05-22", () => {
+    // Brief §3.1.7 worked example: pause covers entire week Mon-Fri (5
+    // eligible days). Walk forward 5 eligible weekdays from Sat
+    // 2026-05-16 (currentEndDate + 1) → Mon, Tue, Wed, Thu, Fri = Fri
+    // 2026-05-22.
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 5,
+      pauseWindows: [],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-22" });
+  });
+
+  it("Mon/Wed/Fri sub, end_date Fri 2026-05-15, extension 3 days → Fri 2026-05-22", () => {
+    // 3 eligible weekdays in pause week Mon-Fri (Mon, Wed, Fri). Walk
+    // 3 eligible from 2026-05-16: Mon 2026-05-18, Wed 2026-05-20, Fri
+    // 2026-05-22.
+    const sub = activeSub("2026-05-15", [1, 3, 5]);
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 3,
+      pauseWindows: [],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-22" });
+  });
+
+  it("Tue/Fri sub, end_date Fri 2026-05-15, extension 2 days → Fri 2026-05-22", () => {
+    const sub = activeSub("2026-05-15", [2, 5]);
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 2,
+      pauseWindows: [],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-22" });
+  });
+
+  it("extension_days=0 returns currentEndDate unchanged", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 0,
+      pauseWindows: [],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-15" });
+  });
+
+  it("extension_days=1 returns the next eligible weekday", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]); // ends Fri
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 1,
+      pauseWindows: [],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-18" }); // Mon
+  });
+
+  it("multi-week extension: Mon-Fri sub, extension 10 days → 10th eligible weekday past end", () => {
+    // Mon-Fri = 5 eligible per week. 10 days = 2 weeks. End Fri
+    // 2026-05-15 + 10 eligible Mon-Fri = Fri 2026-05-29.
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 10,
+      pauseWindows: [],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-29" });
+  });
+
+  it("pause window overlapping the walk: skips overlap, lands past it", () => {
+    // Sub Mon-Fri ends Fri 2026-05-15. Extension 3 days. Existing
+    // future pause window covers Mon-Fri 2026-05-18..2026-05-22 (the
+    // first eligible week post-end). Walk should skip those 5 days
+    // and land in the following week.
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 3,
+      pauseWindows: [{ start: "2026-05-18", end: "2026-05-22" }],
+    });
+    // First eligible weekday post-pause-window is Mon 2026-05-25.
+    // Walk: Mon 2026-05-25 (1), Tue 2026-05-26 (2), Wed 2026-05-27 (3).
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-27" });
+  });
+
+  it("rejects when daysOfWeek is empty", () => {
+    const sub: SubscriptionForSkip = {
+      endDate: "2026-05-15",
+      daysOfWeek: [],
+      status: "active",
+    };
+    const result = computePauseExtensionDate({
+      subscription: sub,
+      currentEndDate: "2026-05-15",
+      extensionDays: 3,
+      pauseWindows: [],
+    });
+    expect(result).toEqual({ kind: "rejected", reason: "no_extension_date_found" });
+  });
+
+  it("throws on negative extensionDays (programming error)", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    expect(() =>
+      computePauseExtensionDate({
+        subscription: sub,
+        currentEndDate: "2026-05-15",
+        extensionDays: -1,
+        pauseWindows: [],
+      }),
+    ).toThrow(/extensionDays must be >= 0/);
+  });
+});
+
+describe("countEligibleDeliveryDays", () => {
+  it("Mon-Fri sub, pause Mon-Fri week → 5", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    expect(countEligibleDeliveryDays(sub, "2026-05-04", "2026-05-08")).toBe(5);
+  });
+
+  it("Mon-Fri sub, pause Sat-Sun (no eligible days) → 0", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    expect(countEligibleDeliveryDays(sub, "2026-05-09", "2026-05-10")).toBe(0);
+  });
+
+  it("Mon/Wed/Fri sub, pause Mon-Fri week → 3", () => {
+    const sub = activeSub("2026-05-15", [1, 3, 5]);
+    expect(countEligibleDeliveryDays(sub, "2026-05-04", "2026-05-08")).toBe(3);
+  });
+
+  it("single-day pause on eligible weekday → 1", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    expect(countEligibleDeliveryDays(sub, "2026-05-06", "2026-05-06")).toBe(1);
+  });
+
+  it("single-day pause on non-eligible weekday → 0", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]); // Mon-Fri
+    expect(countEligibleDeliveryDays(sub, "2026-05-09", "2026-05-09")).toBe(0); // Sat
+  });
+
+  it("two-week pause Mon-Fri sub → 10", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    expect(countEligibleDeliveryDays(sub, "2026-05-04", "2026-05-15")).toBe(10);
+  });
+
+  it("inverted range (end before start) → 0", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    expect(countEligibleDeliveryDays(sub, "2026-05-08", "2026-05-04")).toBe(0);
+  });
+
+  it("empty daysOfWeek → 0", () => {
+    const sub: SubscriptionForSkip = {
+      endDate: "2026-05-15",
+      daysOfWeek: [],
+      status: "active",
+    };
+    expect(countEligibleDeliveryDays(sub, "2026-05-04", "2026-05-08")).toBe(0);
   });
 });

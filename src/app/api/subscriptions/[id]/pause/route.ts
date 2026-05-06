@@ -1,16 +1,22 @@
 // POST /api/subscriptions/:id/pause   subscription:pause → subscription.paused
 //
-// Lifecycle transition: 'active' → 'paused'. Takes NO request body —
-// the id is path-only, the transition is the verb. An incoming body
-// is allowed to be empty (`{}`) or absent; ANY key is rejected to
-// stop a caller from stuffing a `status` field into a /pause request
-// and having it silently dropped at parse time.
+// Day-16 Block 4-C — bounded pause per brief §3.1.7. Body shape:
+//   { pause_start, pause_end, reason?, idempotency_key }
 //
-// Success: 200 with the updated Subscription as JSON.
-// Returns 404 when the row is missing or RLS-hidden.
-// Returns 409 (ConflictError → CONFLICT, mapped at error-response.ts:51)
-// when the row exists but is not in 'active' state — propagated from
-// the repository's state-validity guard (S-3).
+// Replaces the pre-Day-16 placeholder route which took no body. The
+// rewrite lands alongside the service-layer rewrite at
+// `src/modules/subscriptions/service.ts:pauseSubscription`.
+//
+// Success:
+//   - 201 with PauseSubscriptionResult JSON (status='inserted')
+//   - 200 with PauseSubscriptionResult JSON (status='idempotent_replay'
+//     — but the service maps to http_status: 409; surfacing here as 409)
+//
+// Errors:
+//   - 400 ValidationError (input shape, cut-off elapsed)
+//   - 403 ForbiddenError (lacks subscription:pause)
+//   - 404 NotFoundError (subscription not in tenant)
+//   - 409 ConflictError (subscription not active, OR idempotent replay)
 
 import "server-only";
 
@@ -20,7 +26,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { pauseSubscription } from "@/modules/subscriptions";
-import { LifecycleNoBodySchema } from "@/modules/subscriptions/schemas";
+import { PauseSubscriptionBodySchema } from "@/modules/subscriptions/schemas";
 import { buildRequestContext } from "@/shared/request-context";
 import { ValidationError } from "@/shared/errors";
 
@@ -38,11 +44,11 @@ export async function POST(req: Request, { params }: RouteContext): Promise<Next
   try {
     const { id: rawId } = await params;
     const id = parseId(rawId);
-    rejectAnyBody(await req.json().catch(() => undefined));
+    const body = parseBody(await req.json().catch(() => undefined));
 
     const ctx = await buildRequestContext(`/api/subscriptions/${id}/pause`, requestId);
-    const updated = await pauseSubscription(ctx, id);
-    return NextResponse.json(updated);
+    const result = await pauseSubscription(ctx, id, body);
+    return NextResponse.json(result, { status: result.http_status });
   } catch (e) {
     return errorResponse(e);
   }
@@ -56,19 +62,20 @@ function parseId(raw: string): string {
   return result.data;
 }
 
-/**
- * Lifecycle endpoints take no input. Allow an absent body or `{}`;
- * reject anything else (including a non-object payload). Wrap the
- * .strict() empty-object schema so a typo'd field name surfaces at
- * the boundary as a 400 ValidationError instead of being silently
- * ignored.
- */
-function rejectAnyBody(body: unknown): void {
-  if (body === undefined) return;
-  const parsed = LifecycleNoBodySchema.safeParse(body);
-  if (!parsed.success) {
+function parseBody(body: unknown): {
+  pause_start: string;
+  pause_end: string;
+  reason?: string;
+  idempotency_key: string;
+} {
+  if (body === undefined || body === null) {
     throw new ValidationError(
-      `lifecycle endpoint takes no body: ${parsed.error.message}`
+      "pause endpoint requires a body: { pause_start, pause_end, reason?, idempotency_key }",
     );
   }
+  const parsed = PauseSubscriptionBodySchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(`pause body invalid: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
