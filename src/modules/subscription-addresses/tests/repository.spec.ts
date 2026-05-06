@@ -27,8 +27,6 @@ const ADDRESS_ID = "22222222-2222-2222-2222-222222222222";
 const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
 const ROTATION_ROW_ID = "44444444-4444-4444-4444-444444444444";
 
-const FIXED_NOW = new Date("2026-05-06T10:00:00.000Z");
-
 const dialect = new PgDialect();
 
 function compile(query: unknown): { sql: string; params: unknown[] } {
@@ -186,9 +184,9 @@ describe("selectCurrentRotation", () => {
   it("returns mapped rows ordered by weekday ASC", async () => {
     const tx = makeStubTx([
       [
-        { id: "row-1", weekday: 1, address_id: "addr-mon", created_at: FIXED_NOW },
-        { id: "row-2", weekday: 3, address_id: "addr-wed", created_at: FIXED_NOW },
-        { id: "row-3", weekday: 5, address_id: "addr-fri", created_at: FIXED_NOW },
+        { weekday: 1, address_id: "addr-mon" },
+        { weekday: 3, address_id: "addr-wed" },
+        { weekday: 5, address_id: "addr-fri" },
       ],
     ]);
 
@@ -196,14 +194,13 @@ describe("selectCurrentRotation", () => {
 
     expect(tx.execute).toHaveBeenCalledOnce();
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/SELECT id, weekday, address_id, created_at\s+FROM subscription_address_rotations/i);
+    expect(captured.sql).toMatch(/SELECT weekday, address_id\s+FROM subscription_address_rotations/i);
     expect(captured.sql).toMatch(/where\s+subscription_id\s*=\s*\$\d+\s+and\s+tenant_id\s*=\s*\$\d+/i);
     expect(captured.sql).toMatch(/order by\s+weekday\s+asc/i);
 
     expect(result).toHaveLength(3);
     expect(result.map((r) => r.weekday)).toEqual([1, 3, 5]);
     expect(result[0].addressId).toBe("addr-mon");
-    expect(result[0].createdAt).toBe(FIXED_NOW.toISOString());
   });
 
   it("returns an empty array when the subscription has no rotation rows", async () => {

@@ -21,7 +21,7 @@
 //   - `addSubscriptionException`'s address_override branches (Service
 //     A; cross-module import per Block 4-E §B B1 ruling)
 
-import type { IsoTimestamp, Uuid } from "@/shared/types";
+import type { Uuid } from "@/shared/types";
 
 /**
  * ISO weekday — Monday=1, Sunday=7. Mirrors the
@@ -108,14 +108,16 @@ export interface SubscriptionForRotation {
 
 /**
  * Row shape returned by `selectCurrentRotation` — passes through to
- * the no_op detection logic in `changeAddressRotation`. Includes the
- * row id so a Phase-2 selective-UPDATE flow could target rows
- * individually if needed; current MVP service uses (weekday,
- * addressId) only and ignores `id`.
+ * the no_op detection logic in `changeAddressRotation`. Per migration
+ * 0014, the `subscription_address_rotations` table has only four
+ * columns (subscription_id, tenant_id, weekday, address_id) — no `id`
+ * or `created_at`. The service-layer no_op-detection only reads
+ * (weekday, addressId). See
+ * memory/followup_service_e_rotation_repository_drift.md for the
+ * Block 4-G integration-test surfacing the original over-declared
+ * shape.
  */
 export interface CurrentRotationRow {
-  readonly id: Uuid;
   readonly weekday: IsoWeekday;
   readonly addressId: Uuid;
-  readonly createdAt: IsoTimestamp;
 }

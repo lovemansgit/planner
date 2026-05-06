@@ -167,14 +167,12 @@ export async function selectCurrentRotation(
   subscriptionId: Uuid,
 ): Promise<readonly CurrentRotationRow[]> {
   type Row = {
-    id: string;
     weekday: number;
     address_id: string;
-    created_at: Date | string;
   } & Record<string, unknown>;
 
   const rows = await tx.execute<Row>(sqlTag`
-    SELECT id, weekday, address_id, created_at
+    SELECT weekday, address_id
     FROM subscription_address_rotations
     WHERE subscription_id = ${subscriptionId}
       AND tenant_id = ${tenantId}
@@ -182,13 +180,8 @@ export async function selectCurrentRotation(
   `);
 
   return rows.map((row) => ({
-    id: row.id as Uuid,
     weekday: row.weekday as IsoWeekday,
     addressId: row.address_id as Uuid,
-    createdAt:
-      row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : new Date(row.created_at).toISOString(),
   }));
 }
 

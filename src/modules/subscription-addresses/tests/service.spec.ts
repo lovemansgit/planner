@@ -67,7 +67,6 @@ const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
 const ADDR_HOME = "aaaaaaaa-0000-0000-0000-000000000001";
 const ADDR_OFFICE = "aaaaaaaa-0000-0000-0000-000000000002";
 const ADDR_OTHER = "aaaaaaaa-0000-0000-0000-000000000003";
-const FIXED_NOW = "2026-05-06T10:00:00.000Z";
 
 function ctx(perms: readonly Permission[], tenantId: string | null = TENANT_ID): RequestContext {
   return {
@@ -106,10 +105,8 @@ function ownedAddress(overrides: Partial<AddressOwnershipRow> = {}): AddressOwne
 
 function rotationRow(weekday: 1|2|3|4|5|6|7, addressId: string): CurrentRotationRow {
   return {
-    id: `row-${weekday}-${addressId}`,
     weekday,
     addressId,
-    createdAt: FIXED_NOW,
   };
 }
 
