@@ -51,10 +51,10 @@ export function TopNav({ permissions, userIdentity }: TopNavProps) {
           <Image
             src="/brand/transcorp-logo.png"
             alt="Transcorp"
-            width={40}
-            height={40}
+            width={64}
+            height={64}
             priority
-            className="h-10 w-10"
+            className="h-16 w-16"
           />
           <span className="font-display text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription planner
@@ -70,7 +70,7 @@ export function TopNav({ permissions, userIdentity }: TopNavProps) {
                   aria-current={active ? "page" : undefined}
                   className={
                     active
-                      ? "border-b border-navy pb-1 text-sm font-medium text-navy"
+                      ? "border-b-2 border-green pb-1 text-sm font-medium text-navy"
                       : "text-sm text-[color:var(--color-text-secondary)] hover:text-navy"
                   }
                 >

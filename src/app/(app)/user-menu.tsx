@@ -100,7 +100,7 @@ export function UserMenu({ identity }: UserMenuProps) {
         onClick={() => setOpen((prev) => !prev)}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-sm font-medium text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+        className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-sm font-medium text-navy transition-colors duration-[120ms] ease-out hover:border-b hover:border-[color:var(--color-border-default)] hover:bg-ivory hover:pb-0.5"
       >
         <span>{displayName}</span>
         <svg
