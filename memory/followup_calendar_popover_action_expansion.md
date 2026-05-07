@@ -106,3 +106,19 @@ Each follow-up PR composes against:
 - PR #170 + PR #172 — drizzle/SF hotfix lessons; integration-test discipline rule applies to any new repository fn
 - This PR's calendar Week view foundation — `DayActionPopover` is the extension point for the 6 deferred actions
 - `memory/followup_day_17_frontend_gap_audit.md` §1 — calendar view expansion plans (Month/Year deferred to Day 18)
+
+## §6 Popover detail card enrichment (Love production smoke refinement)
+
+Current PR #177 popover detail surface (per `src/app/(app)/consignees/[id]/_components/DayActionPopover.tsx`) shows:
+- Date, status pill, time window, task ID anchor (first 8 chars)
+
+**Refinement scope (Day-18 morning):**
+- Replace "Task ID" with **AWB number** (SuiteFleet `external_id`)
+- Add **delivery address** (full address with label e.g. "Home" / "Office")
+- Add **driver name** when assigned
+- Add **POD photo thumbnail** (custom cooler-bag icon click → modal) when task is DELIVERED + has cached POD URL
+- Make detail card layout comprehensive — not just a 3-line summary
+
+**References:** Love's pre-sprint prototype `subplanner.vercel.app/consignee/c_001` detail card + Image 3 (Delivered task with POD photo + driver + rating) attached to Day-17 production smoke.
+
+**Effort:** ~30 min above existing popover action expansion estimates. Couples with webhook handler fix for POD data flow.

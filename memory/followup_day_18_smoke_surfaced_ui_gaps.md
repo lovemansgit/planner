@@ -73,6 +73,16 @@ The POD icon is a custom SVG cooler-bag glyph using ONLY brand-canon colors (NOT
 
 **Effort revision:** ~30 min above existing §4 1.5 hr estimate. New §4 budget: ~2 hr.
 
+### Tasks page delivery address column (Love production smoke refinement)
+
+§4 column spec did not include a delivery address column. Adding now:
+
+**Updated column order:** Merchant Name, Consignee Name, AWB, Order #, **Delivery Address**, Time Slot, Delivery Date, Status, POD icon
+
+**Delivery address column shows:** address line truncated to ~40 chars + label badge (Home/Office/Other) + tooltip with full address on hover.
+
+**Effort:** ~15 min added to §4 budget. New §4 estimate: ~2.25 hr.
+
 ## §5 Sequencing for Day-18 morning
 
 Dependency: §4 (POD column) coupled with webhook handler fix. Other items independent.
@@ -85,7 +95,7 @@ Recommended order:
 5. §3 AWB + order search (independent, medium)
 6. §4 column reorder + POD icon + modal (couples with webhook fix)
 
-All five together: ~4 hr UI work (revised from ~3.5 hr per §4 POD icon refinement) + webhook fix budget per Layer-1 outcome. Conditional on Layer-1 verdict.
+All five together: ~4.25 hr UI work (revised from ~4 hr per §4 delivery address column refinement; from ~3.5 hr per §4 POD icon refinement) + webhook fix budget per Layer-1 outcome. Conditional on Layer-1 verdict.
 
 ## §6 Cross-references
 
