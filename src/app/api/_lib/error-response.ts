@@ -65,6 +65,12 @@ export function errorResponse(err: unknown): NextResponse {
       // 401 + JSON envelope; page-level callers catch UnauthorizedError
       // upstream and redirect to /login instead of bubbling here.
       return envelope(err, 401);
+    case "NO_LABELABLE_PUSHED_TASKS":
+      // Day 17 — label-print can only render for tasks that SF knows
+      // about (external_id NOT NULL + pushed_to_external_at NOT NULL).
+      // 422 (Unprocessable Content) — request well-formed, rows exist,
+      // semantic eligibility filter dropped everything.
+      return envelope(err, 422);
     default: {
       // Exhaustiveness guard. If `err` here is anything other than
       // `never`, it's because a new variant was added to KnownAppError

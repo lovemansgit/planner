@@ -405,6 +405,47 @@ export async function listVisibleTaskIds(
 }
 
 /**
+ * Variant of listVisibleTaskIds that returns the (id, external_id,
+ * pushed_to_external_at) triple per visible row. Powers
+ * printLabelsForTasks's Day-17 Planner-UUID → SF-external-id translation
+ * (`memory/followup_planner_uuid_to_sf_external_id_translation.md`).
+ *
+ * SF's `/generate-label` endpoint requires SF's own task UUID
+ * (`tasks.external_id`); Planner UUIDs trigger 502 from SF's gateway.
+ * The service layer fetches both columns, partitions the result into
+ * eligible (both columns non-null) vs skipped (either null), and only
+ * passes external_ids of eligible rows to the SF adapter.
+ *
+ * Same Pattern E array-binding convention as listVisibleTaskIds; same
+ * RLS + explicit-tenant defence-in-depth.
+ *
+ * Empty input returns []; the caller should bail before calling SF.
+ */
+export async function listVisibleTaskExternalIds(
+  tx: DbTx,
+  tenantId: Uuid,
+  ids: readonly Uuid[],
+): Promise<readonly { id: string; externalId: string | null; pushedToExternalAt: string | null }[]> {
+  if (ids.length === 0) return [];
+  type Row = {
+    id: string;
+    external_id: string | null;
+    pushed_to_external_at: Date | string | null;
+  } & Record<string, unknown>;
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id, external_id, pushed_to_external_at
+    FROM tasks
+    WHERE id = ANY(${'{' + ids.join(',') + '}'}::uuid[])
+      AND tenant_id = ${tenantId}
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    externalId: r.external_id,
+    pushedToExternalAt: toIsoOrNull(r.pushed_to_external_at),
+  }));
+}
+
+/**
  * SELECT tasks for `tenantId`, newest first, each with its packages
  * joined. The tenant filter is explicit alongside RLS — same value,
  * same result, but the WHERE clause makes the query self-describing

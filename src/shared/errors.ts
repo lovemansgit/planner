@@ -29,7 +29,8 @@ export type AppErrorCode =
   | "CONFLICT"
   | "CREDENTIAL"
   | "NO_TENANT_CONFIGURED"
-  | "UNAUTHORIZED";
+  | "UNAUTHORIZED"
+  | "NO_LABELABLE_PUSHED_TASKS";
 
 export abstract class AppError extends Error {
   abstract readonly code: AppErrorCode;
@@ -123,6 +124,29 @@ export class UnauthorizedError extends AppError {
 }
 
 /**
+ * Day 17. The label-print service tried to render labels for the
+ * operator's selection but every selected task had `external_id IS NULL`
+ * (not yet pushed to SuiteFleet). Distinct from ValidationError
+ * (input-shape failure) and NotFoundError (no rows match) — the input
+ * was well-formed and the rows exist; they're just not eligible for
+ * label rendering yet because SF doesn't know about them.
+ *
+ * Maps to HTTP 422 (Unprocessable Content) at the API boundary.
+ *
+ * Thrown by printLabelsForTasks (src/modules/tasks/service.ts) when
+ * the tenant-visible filter returns rows but ALL of them have
+ * external_id IS NULL.
+ */
+export class NoLabelablePushedTasksError extends AppError {
+  readonly code = "NO_LABELABLE_PUSHED_TASKS";
+  constructor(
+    message: string = "None of the selected tasks have been dispatched to SuiteFleet yet — labels can only be printed for dispatched tasks.",
+  ) {
+    super(message);
+  }
+}
+
+/**
  * Closed union of every concrete typed error. Use as the parameter
  * type when you want exhaustiveness via `switch (err.code)` with a
  * `const _exhaustive: never = err` default branch.
@@ -134,7 +158,8 @@ export type KnownAppError =
   | ConflictError
   | CredentialError
   | NoTenantConfiguredError
-  | UnauthorizedError;
+  | UnauthorizedError
+  | NoLabelablePushedTasksError;
 
 /** Type guard: narrows `unknown` to `KnownAppError`. */
 export function isKnownAppError(err: unknown): err is KnownAppError {

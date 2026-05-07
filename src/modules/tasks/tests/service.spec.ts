@@ -30,6 +30,8 @@ vi.mock("../repository", () => ({
   findTaskById: vi.fn(),
   listTasksByTenant: vi.fn(),
   updateTask: vi.fn(),
+  listVisibleTaskIds: vi.fn(),
+  listVisibleTaskExternalIds: vi.fn(),
 }));
 
 vi.mock("../../../shared/logger", () => {
@@ -55,7 +57,12 @@ vi.mock("../../../shared/sentry-capture", () => ({
 }));
 
 import { withServiceRole, withTenant } from "../../../shared/db";
-import { ForbiddenError, NotFoundError, ValidationError } from "../../../shared/errors";
+import {
+  ForbiddenError,
+  NoLabelablePushedTasksError,
+  NotFoundError,
+  ValidationError,
+} from "../../../shared/errors";
 import type { Actor, RequestContext } from "../../../shared/tenant-context";
 import type { Permission } from "../../../shared/types";
 
@@ -67,6 +74,7 @@ import {
   findTaskById,
   insertTaskWithPackages,
   listTasksByTenant,
+  listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
 } from "../repository";
 import {
@@ -75,6 +83,7 @@ import {
   createTask,
   getTask,
   listTasks,
+  printLabelsForTasks,
   updateTask,
 } from "../service";
 import type { CreateTaskInput, Task } from "../types";
@@ -86,6 +95,7 @@ const mockInsert = vi.mocked(insertTaskWithPackages);
 const mockFindById = vi.mocked(findTaskById);
 const mockListByTenant = vi.mocked(listTasksByTenant);
 const mockUpdate = vi.mocked(updateTaskRow);
+const mockListVisibleTaskExternalIds = vi.mocked(listVisibleTaskExternalIds);
 const mockLoggerError = vi.mocked(logger.error);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
@@ -542,5 +552,173 @@ describe("updateTask", () => {
     await expect(
       updateTask(userCtx(["task:update"]), TASK_ID, { customerOrderNumber: "  " })
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+// =============================================================================
+// printLabelsForTasks — Day 17 Planner-UUID → SF-external-id translation
+// =============================================================================
+describe("printLabelsForTasks — Day-17 external_id translation", () => {
+  const TASK_ID_1 = "11111111-1111-1111-1111-111111111111";
+  const TASK_ID_2 = "22222222-2222-2222-2222-222222222222";
+  const TASK_ID_3 = "33333333-3333-3333-3333-333333333333";
+
+  beforeEach(() => {
+    mockWithTenant.mockImplementation(async (_tenantId, fn) => fn({} as never));
+  });
+
+  function makeAdapter(printSpy: ReturnType<typeof vi.fn>): {
+    authenticate: ReturnType<typeof vi.fn>;
+    printLabels: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      authenticate: vi.fn().mockResolvedValue({ token: "tok", tenantId: TENANT_ID }),
+      printLabels: printSpy,
+    };
+  }
+
+  it("passes SF external_ids (NOT Planner UUIDs) to the adapter", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: "2026-05-05T07:55:19.321Z" },
+      { id: TASK_ID_2, externalId: "60548", pushedToExternalAt: "2026-05-05T07:56:19.321Z" },
+    ]);
+    const printSpy = vi.fn().mockResolvedValue(Buffer.from("PDF"));
+    const adapter = makeAdapter(printSpy);
+
+    const result = await printLabelsForTasks(
+      userCtx(["task:print_labels"]),
+      [TASK_ID_1 as never, TASK_ID_2 as never],
+      adapter as never,
+    );
+
+    expect(printSpy).toHaveBeenCalledTimes(1);
+    const passedToAdapter = printSpy.mock.calls[0][1];
+    expect(passedToAdapter).toEqual(["60547", "60548"]);
+    // The Planner UUIDs MUST NOT have been passed — regression pin
+    // for the Day-17 502 root-cause.
+    expect(passedToAdapter).not.toContain(TASK_ID_1);
+    expect(passedToAdapter).not.toContain(TASK_ID_2);
+
+    expect(result.printedCount).toBe(2);
+    expect(result.printedTaskIds).toEqual([TASK_ID_1, TASK_ID_2]);
+    expect(result.skippedCount).toBe(0);
+    expect(result.skippedTaskIds).toEqual([]);
+  });
+
+  it("filters out tasks with external_id IS NULL (pre-push) and surfaces them as skippedCount", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: "2026-05-05T07:55:19.321Z" },
+      { id: TASK_ID_2, externalId: null, pushedToExternalAt: null }, // pre-push
+      { id: TASK_ID_3, externalId: "60549", pushedToExternalAt: "2026-05-05T07:57:19.321Z" },
+    ]);
+    const printSpy = vi.fn().mockResolvedValue(Buffer.from("PDF"));
+
+    const result = await printLabelsForTasks(
+      userCtx(["task:print_labels"]),
+      [TASK_ID_1 as never, TASK_ID_2 as never, TASK_ID_3 as never],
+      makeAdapter(printSpy) as never,
+    );
+
+    expect(printSpy.mock.calls[0][1]).toEqual(["60547", "60549"]);
+    expect(result.printedCount).toBe(2);
+    expect(result.skippedCount).toBe(1);
+    expect(result.skippedTaskIds).toEqual([TASK_ID_2]);
+  });
+
+  it("filters out tasks with pushed_to_external_at IS NULL even if external_id is set (defence in depth)", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: null }, // partial-write edge
+    ]);
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [TASK_ID_1 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(NoLabelablePushedTasksError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws NoLabelablePushedTasksError when ALL visible tasks are pre-push", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: null, pushedToExternalAt: null },
+      { id: TASK_ID_2, externalId: null, pushedToExternalAt: null },
+    ]);
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [TASK_ID_1 as never, TASK_ID_2 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(NoLabelablePushedTasksError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when no submitted IDs are visible in the tenant (existing behavior preserved)", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([]);
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [TASK_ID_1 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty taskIds with ValidationError (existing behavior preserved)", async () => {
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects actor without task:print_labels permission with ForbiddenError", async () => {
+    const printSpy = vi.fn();
+    await expect(
+      printLabelsForTasks(
+        userCtx([]), // no permissions
+        [TASK_ID_1 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("emits task.labels_printed audit with skipped_count + skipped_task_ids in metadata", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: "2026-05-05T07:55:19.321Z" },
+      { id: TASK_ID_2, externalId: null, pushedToExternalAt: null },
+    ]);
+    const printSpy = vi.fn().mockResolvedValue(Buffer.from("PDF"));
+
+    await printLabelsForTasks(
+      userCtx(["task:print_labels"]),
+      [TASK_ID_1 as never, TASK_ID_2 as never],
+      makeAdapter(printSpy) as never,
+    );
+
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("task.labels_printed");
+    expect(emitArg.metadata?.requested_count).toBe(2);
+    expect(emitArg.metadata?.printed_count).toBe(1);
+    expect(emitArg.metadata?.skipped_count).toBe(1);
+    expect(emitArg.metadata?.skipped_task_ids).toEqual([TASK_ID_2]);
   });
 });
