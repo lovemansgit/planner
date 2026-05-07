@@ -36,6 +36,7 @@ export {
   bulkCreateTasks,
   countTasks,
   createTask,
+  getConsigneeTasksForDateRange,
   getTask,
   listAllTaskIds,
   listTasks,
