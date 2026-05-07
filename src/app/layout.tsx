@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Mulish, Sanchez } from "next/font/google";
+import { Manrope, Mulish, Sanchez } from "next/font/google";
 
 import { registerAuditObserver } from "../modules/audit";
 
@@ -16,7 +16,7 @@ registerAuditObserver();
 
 const mulish = Mulish({
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
+  weight: ["300", "400", "500", "600", "700", "800"],
   variable: "--font-mulish",
   display: "swap",
 });
@@ -24,7 +24,15 @@ const mulish = Mulish({
 const sanchez = Sanchez({
   subsets: ["latin"],
   weight: ["400"],
+  style: ["normal", "italic"],
   variable: "--font-sanchez",
+  display: "swap",
+});
+
+const manrope = Manrope({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-manrope",
   display: "swap",
 });
 
@@ -39,7 +47,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${mulish.variable} ${sanchez.variable}`}>
+    <html lang="en" className={`${manrope.variable} ${mulish.variable} ${sanchez.variable}`}>
       <body className="antialiased font-sans">{children}</body>
     </html>
   );
