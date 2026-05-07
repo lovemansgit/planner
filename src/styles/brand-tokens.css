@@ -1,16 +1,17 @@
 /*
- * Transcorp brand tokens — working values per
- * memory/decision_brand_guidelines_v2.md.
+ * Transcorp brand tokens — implementation source of truth.
  *
- * NOT source-of-truth. Brand book v2 (March 2026) has printed-hex errors on
- * pages 27–28; values below match the rendered colour blocks. Pre-Day-14
- * action: brand-team confirmation against Figma/Adobe source.
+ * Aligned with brief v1.4 §3.3.11 (the design-intent source of truth).
+ * Both must match; drift between them is a v1.x bug.
+ *
+ * Provenance: corporate brand spec (April 2026) confirmed via Day-17 reviewer
+ * brand audit. Earlier "pre-Day-14 action: brand-team confirmation" comment
+ * (decision_brand_guidelines_v2.md, Day 6) is now closed by brief v1.4
+ * amendment.
  *
  * Typography lines reference next/font/google CSS variables registered in
- * src/app/layout.tsx. The brief specified bare `'Mulish'` / `'Sanchez Slab'`;
- * those would not match next/font's hashed font-family names, so the literals
- * are replaced with `var(--font-mulish)` / `var(--font-sanchez)`. Sanchez is
- * the slab serif on Google Fonts; "Sanchez Slab" is a colloquialism.
+ * src/app/layout.tsx. Three faces per corporate spec: Manrope (display) +
+ * Mulish (body, also used as caps for mono discipline) + Sanchez (editorial).
  */
 :root {
   /* Primary palette — Transcorp brand guidelines v2 (working tokens) */
@@ -35,4 +36,38 @@
   --font-sans:
     var(--font-mulish), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-serif: var(--font-sanchez), Georgia, serif;
+
+  /* Signal Amber 5-step ladder (brief v1.4 §3.3.11) */
+  --color-amber-100: #FBE4BD;  /* Background tint */
+  --color-amber-300: #F1BF6B;  /* Soft hi-vis surface */
+  --color-amber-600: #C98726;  /* Hover / accent on light */
+  --color-amber-deep: #8E5A14; /* Amber-on-light text */
+
+  /* Neutral palette (brief v1.4 §3.3.11) */
+  --color-paper: #FAF8F4;       /* Default page (alias of surface-primary) */
+  --color-ivory: #F2EEE6;       /* Surface / cards */
+  --color-stone-200: #D3CEC2;   /* Dividers, hairline borders */
+  --color-stone-600: #4E4A42;   /* Secondary text, muted state styling */
+  --color-ink: #141414;         /* Body copy */
+
+  /* Display font — net-new variable (Manrope) per brief v1.4 §3.3.11 type system */
+  --font-display: var(--font-manrope), var(--font-mulish), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  /* Type scale tokens (brief v1.4 §3.3.11). Values are size / line-height pairs in rem; weight + tracking declared in component CSS or Tailwind utility classes. */
+  --text-display-xl-size: 6rem;     /* 96px (lower bound; mobile/tablet — desktop scales up to 128px via fluid utility) */
+  --text-display-xl-line: 0.95;
+  --text-display-l-size: 3.5rem;    /* 56px lower bound; up to 72px desktop */
+  --text-display-l-line: 1.0;
+  --text-display-m-size: 2.25rem;   /* 36px lower bound; up to 44px */
+  --text-display-m-line: 1.05;
+  --text-display-s-size: 1.5rem;    /* 24px lower bound; up to 28px */
+  --text-display-s-line: 1.15;
+  --text-body-l-size: 1.125rem;     /* 18px */
+  --text-body-l-line: 1.6;
+  --text-body-m-size: 0.9375rem;    /* 15px lower bound; up to 16px */
+  --text-body-m-line: 1.65;
+  --text-caption-size: 0.75rem;     /* 12px lower bound; up to 13px */
+  --text-caption-line: 1.5;
+  --text-eyebrow-size: 0.625rem;    /* 10px lower bound; up to 11px */
+  --text-eyebrow-line: 1.2;
 }
