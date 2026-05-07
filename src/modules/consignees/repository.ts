@@ -399,3 +399,58 @@ export async function insertConsigneeCrmEvent(
     occurredAt: toIso(row.occurred_at),
   };
 }
+
+/**
+ * Day 17 — SELECT consignee_crm_events history for a single consignee,
+ * newest-first. Powers the History tab on `/consignees/[id]` per CRM
+ * state UI plan §3.3 + §5. Tenant-scoped via RLS + explicit tenant_id
+ * predicate (defence-in-depth — same posture as listConsigneesByTenant).
+ *
+ * `limit` defaults to 50 and is clamped at 200 to prevent unbounded
+ * fetches. `before` is an optional ISO timestamp cursor used for
+ * pagination; rows older than `before` are returned newest-first.
+ *
+ * Returns rows mapped to ConsigneeCrmEvent. Empty input results return
+ * [].
+ */
+export async function selectCrmHistoryForConsignee(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly ConsigneeCrmEvent[]> {
+  const limit = Math.min(options?.limit ?? 50, 200);
+  const before = options?.before ?? null;
+
+  type Row = {
+    id: string;
+    consignee_id: string;
+    tenant_id: string;
+    from_state: string | null;
+    to_state: string;
+    reason: string | null;
+    actor: string;
+    occurred_at: Date | string;
+  } & Record<string, unknown>;
+
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id, consignee_id, tenant_id, from_state, to_state, reason, actor, occurred_at
+    FROM consignee_crm_events
+    WHERE consignee_id = ${consigneeId}
+      AND tenant_id = ${tenantId}
+      ${before ? sqlTag`AND occurred_at < ${before}::timestamptz` : sqlTag``}
+    ORDER BY occurred_at DESC
+    LIMIT ${limit}
+  `);
+
+  return rows.map((row) => ({
+    id: row.id,
+    consigneeId: row.consignee_id,
+    tenantId: row.tenant_id,
+    fromState: row.from_state as ConsigneeCrmState | null,
+    toState: row.to_state as ConsigneeCrmState,
+    reason: row.reason,
+    actor: row.actor,
+    occurredAt: toIso(row.occurred_at),
+  }));
+}

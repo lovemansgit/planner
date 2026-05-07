@@ -21,11 +21,14 @@
 
 import { randomUUID } from "node:crypto";
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { listConsignees, type Consignee } from "@/modules/consignees";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
+
+import { CrmStateBadge } from "./[id]/_components/CrmStateBadge";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -85,15 +88,23 @@ function ConsigneesTable({ rows }: { rows: readonly Consignee[] }) {
           <Th>Name</Th>
           <Th>Phone</Th>
           <Th>Emirate</Th>
+          <Th>CRM state</Th>
           <Th>Address</Th>
         </tr>
       </thead>
       <tbody>
         {rows.map((c) => (
-          <tr key={c.id} className="border-b border-[#0B1F3A]/10 last:border-b-0">
-            <Td>{c.name}</Td>
+          <tr key={c.id} className="border-b border-[#0B1F3A]/10 last:border-b-0 transition-colors hover:bg-ivory">
+            <Td>
+              <Link href={`/consignees/${c.id}`} className="text-navy hover:underline">
+                {c.name}
+              </Link>
+            </Td>
             <Td className="tabular-nums">{c.phone}</Td>
             <Td>{c.emirateOrRegion}</Td>
+            <Td>
+              <CrmStateBadge state={c.crmState} />
+            </Td>
             <Td className="max-w-xs truncate" title={c.addressLine}>
               {c.addressLine}
             </Td>

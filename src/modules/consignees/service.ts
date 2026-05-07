@@ -40,6 +40,7 @@ import {
   insertConsignee,
   insertConsigneeCrmEvent,
   listConsigneesByTenant,
+  selectCrmHistoryForConsignee,
   updateConsignee as updateConsigneeRow,
   updateConsigneeCrmState,
 } from "./repository";
@@ -48,6 +49,7 @@ import type {
   ChangeConsigneeCrmStateInput,
   ChangeConsigneeCrmStateResult,
   Consignee,
+  ConsigneeCrmEvent,
   CreateConsigneeInput,
   UpdateConsigneePatch,
 } from "./types";
@@ -503,4 +505,39 @@ export async function changeConsigneeCrmState(
     toState,
     eventId: result.eventId,
   };
+}
+
+
+// -----------------------------------------------------------------------------
+// getConsigneeCrmHistory (Day 17 — CRM state UI History tab)
+// -----------------------------------------------------------------------------
+//
+// Read-side companion to changeConsigneeCrmState. Powers the History
+// tab on /consignees/[id] per CRM state UI plan §3.3 + §5. Returns
+// chronological transition entries newest-first; pagination via the
+// optional `before` ISO-timestamp cursor on `occurred_at`.
+//
+// Permission: consignee:read (held by tenant_admin / operations_manager
+// / customer_service_agent — same set that can view the consignee at
+// all). NOT a separate consignee:read_crm_history permission; the
+// existing read perm covers history because the events are
+// consignee-scoped facts, not a separate resource.
+//
+// No audit emit — read-only fetch. RLS + explicit tenant_id predicate
+// at the repository layer is the security envelope.
+
+export async function getConsigneeCrmHistory(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly ConsigneeCrmEvent[]> {
+  requirePermission(ctx, "consignee:read");
+  if (ctx.tenantId === null) {
+    throw new ValidationError("getConsigneeCrmHistory requires a tenant context");
+  }
+  const tenantId = ctx.tenantId;
+
+  return await withTenant(tenantId, async (tx) => {
+    return await selectCrmHistoryForConsignee(tx, tenantId, consigneeId, options);
+  });
 }

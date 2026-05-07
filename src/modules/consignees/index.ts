@@ -19,7 +19,10 @@ export {
   changeConsigneeCrmState,
   createConsignee,
   getConsignee,
+  getConsigneeCrmHistory,
   listConsignees,
   updateConsignee,
   deleteConsignee,
 } from "./service";
+
+export { ALLOWED_TRANSITIONS, canTransition } from "./transitions";
