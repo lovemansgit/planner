@@ -177,16 +177,16 @@ type ChangeConsigneeCrmStateResult =
 
 **Column placement:** between **Emirate** (current column 3) and **Address** (current column 4) per the research finding. New order: Name → Phone → Emirate → **CRM State** → Address.
 
-**Six visual treatments** (defer pixel-level tokens to implementation; frontend-design skill activates):
+**Six visual treatments** per brief v1.4 §3.3.11 state-semantic color section. Tokens reference `src/styles/brand-tokens.css` (the implementation source of truth aligned with the brief). Pixel-level treatment (badge geometry, row-tint opacity, hover states) defers to implementation; frontend-design skill activates.
 
-| State | Treatment direction (per brief §8.5 + §3.3.2) |
+| State | Treatment per brief v1.4 §3.3.11 |
 |---|---|
-| `ACTIVE` | Default styling; no row tint; default badge color |
-| `ON_HOLD` | Row greyed out per brief §8.5; muted badge |
-| `HIGH_RISK` | Row tinted red per brief §8.5; warning badge |
-| `INACTIVE` | Muted grey row; muted badge |
-| `CHURNED` | Muted with strikethrough or "Churned" label badge |
-| `SUBSCRIPTION_ENDED` | Muted with "Ended" label badge |
+| `ACTIVE` | Grass Green (`var(--color-green)` = `#2E8B4A`) — go-signal semantics. Badge: green text on Snow White. Row: default styling. |
+| `ON_HOLD` | Stone 600 (`var(--color-stone-600)` = `#4E4A42`) on Ivory (`var(--color-ivory)` = `#F2EEE6`). Badge: muted stone. Row: subtle ivory tint. |
+| `HIGH_RISK` | Bright Red (`var(--color-red)` = `#D93A2B`). Badge: red text on Snow White. Row: subtle red tint at low opacity (~5%). |
+| `INACTIVE` | Stone 600 muted. Badge + row: muted text, no row tint. |
+| `CHURNED` | Stone 600 with strikethrough. Badge label: "Churned". Row: muted text, no row tint. |
+| `SUBSCRIPTION_ENDED` | Stone 600 with "Ended" label. Badge: stone with terminal-state framing. Row: muted text, no row tint. |
 
 **Row interaction:** clicking a row navigates to `/consignees/[id]`. Replaces current read-only-list-only behavior (per the comment removal in §3.0).
 
@@ -497,10 +497,19 @@ Both questions below are **locked per Day-17 morning reviewer ruling on drift su
 
 ---
 
+## §11 Amendment log
+
+| Version | Date | Changes |
+|---|---|---|
+| v1.0 | 7 May 2026 (Day 17 morning) | Initial filing per PR #163 (`ed61f35`). |
+| v1.1 | 7 May 2026 (Day 17 morning, post brief v1.4 + brand tokens) | §3.1 visual treatment table replaced with explicit v1.4 §3.3.11 state-semantic color references (per `decision_day_17_crm_plan_visual_amendment.md`). §3.2 modal badge + §3.3 history transition badges now reference §3.1's tokens. No structural changes; visual-only amendment closing the brief-stale gap. |
+
+---
+
 **End of plan.**
 
 Cross-references:
-- [PLANNER_PRODUCT_BRIEF.md](../PLANNER_PRODUCT_BRIEF.md) — v1.3 source of truth
+- [PLANNER_PRODUCT_BRIEF.md](../PLANNER_PRODUCT_BRIEF.md) — v1.4 source of truth
 - [memory/plans/day-14-part2-service-layer.md](day-14-part2-service-layer.md) — merged plan PR #155 (`0d1ce21`); §10.4 transitions matrix lock
 - [memory/handoffs/day-16-eod.md](../handoffs/day-16-eod.md) — Day-17 plan slot per §5; §A discipline rules per §9
 - `src/modules/consignees/service.ts:408-505` — `changeConsigneeCrmState` (PR #160 commit `ffc9943`)
