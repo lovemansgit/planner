@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.3
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge
+**Version:** v1.4
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning.
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -590,13 +590,109 @@ Three rules per Day-1 reviewer + BRD §12.2.10:
 
 #### 3.3.11 Brand pass
 
-Apply Transcorp design tokens across all new UI:
-- Deep ink navy primary (#0B1B2B), warm off-white background (#F5F4F0), pure white surface raised
-- Hairline borders 0.5px (#D4D1C8), no shadows
-- Sentence case, generous whitespace, 24px gutter, content max-width 1200px
-- Mulish + Sanchez typography (Mulish for body/UI, Sanchez or Inter for hero numerals)
-- Status colors restrained: Delivered #3F6B3F, In transit #3A5F8F, Failed #A14040, Scheduled #8B8780, Skipped #5F6A7A
-- Reference: `transcorp-lofi-v2.vercel.app`
+The Planner uses Transcorp's corporate-locked brand system. Codebase tokens at `src/styles/brand-tokens.css` are the implementation source of truth; this section is the design-intent source of truth. Both must match; drift between them is a v1.x bug.
+
+**Palette — primary (locked by corporate, do not substitute):**
+
+| Name | Hex | Use |
+|---|---|---|
+| Night Sky Navy | `#0F2A5C` | Wordmark, headings, anchor surfaces |
+| Grass Green | `#2E8B4A` | Movement, go-signals, highlights, ACTIVE-state semantics |
+| Snow White | `#FAF8F4` | Default page surface (warm, not stark) |
+
+**Palette — accent (sparingly):**
+
+| Name | Hex | Use |
+|---|---|---|
+| Signal Amber | `#E8A33C` | Lead accent — alerts, stickers, CTAs, hi-vis trim |
+| Bright Red | `#D93A2B` | Errors, hazardous, stop, HIGH_RISK-state semantics |
+| Ocean Blue | `#1F6FA8` | Information, links, infographics |
+
+**Signal Amber ladder (5-step):**
+
+| Step | Hex | Use |
+|---|---|---|
+| Amber 100 | `#FBE4BD` | Background tint |
+| Amber 300 | `#F1BF6B` | Soft hi-vis surface |
+| Signal Amber | `#E8A33C` | Core amber |
+| Amber 600 | `#C98726` | Hover / accent on light |
+| Amber Deep | `#8E5A14` | Amber-on-light text |
+
+**Neutrals:**
+
+| Name | Hex | Use |
+|---|---|---|
+| Paper | `#FAF8F4` | Default page (same as Snow White) |
+| Ivory | `#F2EEE6` | Surface / cards |
+| Stone 200 | `#D3CEC2` | Dividers, hairline borders |
+| Stone 600 | `#4E4A42` | Secondary text, ON_HOLD/INACTIVE/CHURNED-state styling |
+| Ink | `#141414` | Body copy |
+
+**Composition ratio (typical Transcorp surface):**
+
+Snow White 58% · Navy 22% · Green 12% · Amber 8%.
+
+Tints (10–100% in 10% steps) of Navy, Green, and Amber are available for backgrounds and infographics — never as substitutes for the core hex when the brand colour itself is required.
+
+**Typography — three faces (locked by corporate):**
+
+| Role | Typeface | Weights | Use |
+|---|---|---|---|
+| Display | Manrope | 400 / 500 / 600 / 700 / 800 | Slogan, cover statements, headlines, chapter opens |
+| Primary (body) | Mulish | 300 / 400 / 500 / 600 / 700 / 800 | All running copy, captions, UI, sub-heads |
+| Editorial serif | Sanchez (Slab) | 400 (Italic available) | Pull-quotes, editorial accents |
+
+Mono / labels: Mulish caps with letter-spacing 0.10–0.14em (no separate mono face — discipline).
+
+Arabic pair (Phase 2 i18n per §4): IBM Plex Sans Arabic (pairs with Manrope/Mulish) + Amiri (pairs with Sanchez).
+
+**Type scale (Latin):**
+
+| Token | Size / Line | Weight | Tracking |
+|---|---|---|---|
+| Display XL (cover) | 96–128 / 0.95 | 700 | −0.04em |
+| Display L (h1) | 56–72 / 1.0 | 700 | −0.03em |
+| Display M (h2) | 36–44 / 1.05 | 600 | −0.025em |
+| Display S (h3) | 24–28 / 1.15 | 500–600 | −0.01em |
+| Body L | 18 / 1.6 | 400 | 0 |
+| Body M | 15–16 / 1.65 | 400 | 0 |
+| Caption | 12–13 / 1.5 | 500 | 0 |
+| Eyebrow / label | 10–11 / 1.2 | 500 caps | +0.10–0.14em |
+
+**Typesetting rules:**
+
+- Manrope minimum 18px. Below that, switch to Mulish.
+- Body line-length: 60–75 characters (≈70ch max).
+- Line-height: 1.55–1.65 for body; 0.95–1.15 for display.
+- Tracking: tighten display (−0.025em to −0.04em); leave body at 0; open eyebrows/labels (+0.10–0.14em).
+- Numerals: tabular for tables and specs; proportional for prose.
+- Italics: reserve Sanchez italic for editorial pull-quotes; never italicise Manrope or Mulish for emphasis (use weight instead).
+- Never substitute fonts. Never stretch, skew, or outline.
+
+**Web font fallback stack:**
+
+```css
+font-family: "Manrope", "Mulish", ui-sans-serif, system-ui, sans-serif;  /* display */
+font-family: "Mulish", ui-sans-serif, system-ui, sans-serif;             /* body */
+font-family: "Sanchez", Georgia, serif;                                  /* editorial */
+font-family: "IBM Plex Sans Arabic", system-ui, sans-serif;              /* Arabic body/display, Phase 2 */
+font-family: "Amiri", Georgia, serif;                                    /* Arabic editorial, Phase 2 */
+```
+
+**Logo asset:**
+
+Primary lockup: navy wordmark (`#0F2A5C`) + green forward-arrow + navy curved swoop. Files at `public/brand/`. Lockup placement at app-shell top-left; per-page chrome should NOT repeat the logo. Minimum clear space around the lockup: equal to the wordmark cap height. Do not recolor, stretch, skew, or outline. Variants beyond the primary lockup (white-on-navy reverse, mark-only, monochrome) — Phase 2 if needed.
+
+**Reference for visual treatment:** `transcorp-lofi-v2.vercel.app` for spacing, hairline-border discipline, and editorial cadence. Hairline borders 0.5px in Stone 200 (`#D3CEC2`); never use shadows. Sentence case throughout; never title case except eyebrow labels (which use Mulish caps with letter-spacing per typography).
+
+**State-semantic color usage (CRM states — referenced from §3.3.2):**
+
+- ACTIVE → Grass Green (`#2E8B4A`) — go-signal semantics per corporate spec
+- HIGH_RISK → Bright Red (`#D93A2B`) — error/hazard semantics
+- ON_HOLD → Stone 600 (`#4E4A42`) on Ivory (`#F2EEE6`) — muted hold
+- INACTIVE → Stone 600 muted
+- CHURNED → Stone 600 with strikethrough; "Churned" label
+- SUBSCRIPTION_ENDED → Stone 600 with "Ended" label
 
 ### 3.4 RBAC enforcement — three layers
 
@@ -866,6 +962,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.1 | 5 May 2026 (evening) | Demo slipped to May 12. Comprehensive amendments per full Day-1 source review (BRD + Build Plan v1.0 + v1.1 delta + Claude Code prototype brief). Added: address rotation (per-weekday primary/alternative), four-step onboarding wizard, consolidated merchant calendar (`/calendar`), three-role permission catalogue, skip overrides (move-to-date, skip-without-append, append-without-skip via Phase 2), address change workflows (one-off + forward), consignee CRM states with transitions and timeline view, BRD-aligned bounded pause (replaces artificial split). Dropped: max_consecutive_skips. Phase 2: notes/loyalty/merchant-internal-ID. |
 | v1.2 | 5 May 2026 (post-Day-13 part-1 merge) | Two-amendment sync from Day-13 plan-PR conditional approval and prod schema verification. Filed at `memory/decision_brief_v1_2_amendments_d13_part1.md`. **§3.1.1 `tasks.suitefleet_push_acknowledged_at` → `tasks.pushed_to_external_at`** (§0.3 Option A) — existing column at `0006_task.sql:156` has identical semantic; rename rejected as cross-cutting churn for stylistic gain. **§3.1.1 `tenants.status` → 4-state lowercase canon** (`provisioning`/`active`/`suspended`/`inactive`, default `provisioning`) — adopted from prod (already shipped); 2-step `provisioning → active` lifecycle is a better fit for separate `merchant.created` vs `merchant.activated` audit events than the originally proposed 2-state uppercase. PR #139 (T3 part-1 code, merged 875bfc4) is the canonical schema landing; this brief amendment realigns the brief text post-hoc. |
 | v1.3 | 6 May 2026 (Day 16 morning) | One-amendment sync from Day-16 Block 1 schema-probe finding. **§3.1.1 `tenants.pickup_district` → `tenants.pickup_address_district`, `tenants.pickup_emirate` → `tenants.pickup_address_emirate`** — adopted from prod (already shipped via PR #139 migration 0017 `875bfc4`); brief text was outlier vs migration-canonical `pickup_address_*` prefix family. Service-layer DTO shape preserved (`{ line, district, emirate }`); persistence-layer mapping handles the column-name expansion. Filed at `memory/decision_brief_v1_3_amendment_pickup_address_canon.md`. |
+| v1.4 | 7 May 2026 (Day 17 morning) | §3.3.11 rewritten in full to corporate-locked brand spec — palette (3 primary + 3 accent + 5-step amber ladder + 5 neutrals), composition ratio (58/22/12/8), three-face type system (Manrope display + Mulish body + Sanchez editorial + Mulish-caps mono discipline), 8-token type scale, typesetting rules, web fallback stack, logo asset reference, state-semantic color usage. Codebase brand-tokens.css already aligned with corporate spec; this amendment brings brief into alignment. Filed at `memory/decision_brief_v1_4_amendment_brand_tokens.md`. |
 
 ---
 
@@ -881,4 +978,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.3.**
+**End of v1.4.**
