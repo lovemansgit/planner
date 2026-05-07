@@ -153,7 +153,7 @@ function FilterPill({
   const base =
     "inline-flex items-center px-4 py-2 text-xs uppercase tracking-[0.15em] transition-opacity";
   const variant = active
-    ? "border border-navy text-navy"
+    ? "border-2 border-green text-navy"
     : "border border-[color:var(--color-border-default)] text-[color:var(--color-text-secondary)] hover:border-[color:var(--color-border-strong)] hover:text-navy";
   return (
     <Link href={href} className={`${base} ${variant}`} aria-current={active ? "true" : undefined}>
