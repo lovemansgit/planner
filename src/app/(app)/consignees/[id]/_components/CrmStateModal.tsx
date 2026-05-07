@@ -28,10 +28,16 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 
-import {
-  ALLOWED_TRANSITIONS,
-  type ConsigneeCrmState,
-} from "@/modules/consignees";
+// Direct imports from transitions.ts + types.ts — NOT the
+// `@/modules/consignees` barrel. The barrel re-exports the service
+// layer (which transitively imports postgres-js via @/shared/db);
+// pulling that into a "use client" component bundles the entire
+// db driver into the client build, which Turbopack rejects with
+// "Module not found: Can't resolve 'fs'". Direct imports keep the
+// client bundle pure (this module is type-only + a frozen object
+// constant, no server-side surfaces).
+import { ALLOWED_TRANSITIONS } from "@/modules/consignees/transitions";
+import type { ConsigneeCrmState } from "@/modules/consignees/types";
 
 import {
   changeCrmStateAction,

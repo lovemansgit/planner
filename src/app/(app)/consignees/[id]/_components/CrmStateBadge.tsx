@@ -17,7 +17,13 @@
 // - Sized for inline use: `inline-flex` + small padding; works in
 //   both table cells and prose contexts.
 
-import type { ConsigneeCrmState } from "@/modules/consignees";
+// Direct import from types.ts — NOT the `@/modules/consignees`
+// barrel. CrmStateBadge is rendered from server components AND
+// reached transitively from the client CrmStateModal (which imports
+// CRM_STATE_LABELS). The barrel re-exports the service layer;
+// pulling that into the client bundle drags postgres-js via
+// @/shared/db, which Turbopack rejects.
+import type { ConsigneeCrmState } from "@/modules/consignees/types";
 
 interface CrmStateBadgeProps {
   readonly state: ConsigneeCrmState;
