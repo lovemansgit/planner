@@ -465,6 +465,48 @@ export interface ListTasksOpts {
   readonly status?: TaskInternalStatus;
 }
 
+/**
+ * Day 17 / Session A — list tasks for a single consignee within a date
+ * range, ordered by deliveryDate ASC then deliveryStartTime ASC.
+ * Powers the consignee detail-page Calendar tab (Week view) per brief
+ * §3.3.3.
+ *
+ * Date params are inclusive ISO dates (YYYY-MM-DD), Asia/Dubai per the
+ * task table's deliveryDate convention. Tenant filter is explicit
+ * alongside RLS — same value, same result, but query is self-describing
+ * in pg_stat.
+ *
+ * Empty result returns []; the caller (Calendar view) renders empty days
+ * naturally without a separate guard.
+ */
+export async function listTasksByConsigneeAndDateRange(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  startDate: string,
+  endDate: string,
+): Promise<readonly Task[]> {
+  const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
+    SELECT
+      t.*,
+      COALESCE(
+        (
+          SELECT json_agg(tp.* ORDER BY tp.position ASC)
+          FROM task_packages tp
+          WHERE tp.task_id = t.id
+        ),
+        '[]'::json
+      ) AS packages
+    FROM tasks t
+    WHERE t.tenant_id = ${tenantId}
+      AND t.consignee_id = ${consigneeId}
+      AND t.delivery_date >= ${startDate}::date
+      AND t.delivery_date <= ${endDate}::date
+    ORDER BY t.delivery_date ASC, t.delivery_start_time ASC
+  `);
+  return rows.map(mapTaskWithPackages);
+}
+
 export async function listTasksByTenant(
   tx: DbTx,
   tenantId: Uuid,

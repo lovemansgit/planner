@@ -75,6 +75,7 @@ import {
   insertTaskWithPackages,
   listAllTaskIdsByTenant,
   type ListTasksOpts,
+  listTasksByConsigneeAndDateRange,
   listTasksByTenant,
   listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
@@ -493,6 +494,34 @@ export async function listTasks(
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listTasksByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day 17 / Session A — list tasks for a single consignee within a
+ * date range. Powers the consignee detail-page Calendar tab (Week
+ * view) per brief §3.3.3. Read-only; no audit emit (R-4).
+ *
+ * Date params: inclusive ISO dates (YYYY-MM-DD), Asia/Dubai. Caller
+ * (calendar component) computes the week's Monday + Sunday before
+ * invoking; service does not anchor weeks itself.
+ */
+export async function getConsigneeTasksForDateRange(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  startDate: string,
+  endDate: string,
+): Promise<readonly Task[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "task:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listTasksByConsigneeAndDateRange(
+      tx,
+      ctx.tenantId!,
+      consigneeId,
+      startDate,
+      endDate,
+    );
   });
 }
 
