@@ -128,3 +128,60 @@ Files expected to be created/modified in this PR:
 - Tests for week-anchoring math + permission filtering
 
 The reviewer-spec listed 7 actions; pragmatic scope is to ship 1 (skip default) with extensibility for the other 6. Follow-up PRs handle the additional actions individually.
+
+---
+
+## §7 Day-17 EOD pickup brief (Session A final action)
+
+**Filed:** Day 17 (7 May 2026), evening, Session A stand-down at ~5-7% context.
+
+### §7.1 PR #177 shipped + smoke verdict
+
+PR #177 (Calendar Week view + popover scaffolding + skip-default action) merged to main. Love walked smoke on `https://planner-git-main-lovemansgits-projects.vercel.app` and surfaced 6 items total — 4 UI + 2 webhook.
+
+### §7.2 Webhook investigation verdict — 3-layer compounding gap
+
+Per Session A's investigation (post-smoke):
+
+- **Layer 1:** Production `webhook_events` table is empty (0 rows of any code). SF either isn't firing webhooks for sandbox-588 OR the receiver at `/api/webhooks/suitefleet/[tenantId]/route.ts` is rejecting silently. `memory/followup_webhook_auth_architecture.md` (Day 7) flagged auth-model resolution as outstanding.
+- **Layer 2:** Zero `UPDATE tasks SET internal_status` in `src/modules/`. Even if events landed, no service fn applies status to the tasks row.
+- **Layer 3:** No POD URL extraction, no `tasks.photos` write path, no UI surface read; TASK_HAS_BEEN_UPDATED edit fields (`delivery_date` / `address_id` / `delivery_*_time`) have no mapping.
+
+**Verdict:** ~8 hr fix; deferred to Day-18 morning. NOT a regression from today's PRs — pre-existing latent gap from Day-7+.
+
+**Demo workaround:** manually seed `webhook_events` + `tasks.photos` + `tasks.internal_status='DELIVERED'` for cherry-picked Fatima / Sarah demo tasks (already on Day-18 demo data prep checklist).
+
+### §7.3 4 UI items deferred to Day-18 morning
+
+(Surfaced by Love during smoke; details pending in followup memo to be filed by fresh session.)
+
+1. Sign-in page logo (login screen lacks the Transcorp lockup; only the post-auth nav has it from PR #168)
+2. Tasks page consignee column (currently shows order number; operator wants consignee name visible in the list)
+3. AWB + order-number search on /tasks (currently no search; operators have ~400 tasks/page and need fast lookup)
+4. Tasks page column reorder + POD icon (status / order / date / window / AWB columns; add a small POD-photo-available icon when `tasks.photos` is populated post-fix)
+
+### §7.4 Tonight's pickup work for fresh session
+
+a. **File `memory/followup_day_18_smoke_surfaced_ui_gaps.md`** — 4 UI items above with surface-level + estimated builder time per item
+b. **File `memory/followup_webhook_handler_status_pod_date_sync_bug.md`** — 3-layer gap with full diagnostic context from §7.2 + Layer 1 diagnosis questions for Day-18 SF discussion
+c. **Bundle both memos as single T1 PR** auto-mergeable under branch-protection path-exemption (memory/ + *.md only)
+d. **Write Day-17 EOD doc** at `memory/handoffs/day-17-eod.md` covering today's full PR ledger (now 17 + #126 closed), production-lag state, demo-readiness gaps, and Day-18 morning queue
+e. **Batched promotion** of 16-17 commits (depending on whether followup memo PR merges before promote) from main → production via `npx vercel promote` against the post-merge build
+f. **Smoke retest on production alias** `planner-olive-sigma.vercel.app` after promote completes — login + calendar view + skip-default action + no regressions
+g. **Verify production HEAD = main HEAD** (commit-id parity post-promote; the `data-dpl-id` attribute in production HTML or `npx vercel inspect`)
+
+### §7.5 Tonight's main HEAD
+
+`58ca4f2` (post-PR-#177 squash-merge, pre-followup-memos). Final commit ID after EOD-doc + followup-memo PR will be different; promotion lag count will adjust.
+
+### §7.6 Day-18 morning queue (tight)
+
+- Webhook 3-layer fix per §7.2 (~8 hr; reviewer may deprioritize Layer 1 SF investigation if demo-workaround seeding covers Section 4-5 needs)
+- 4 UI items per §7.3 (~3.5 hr)
+- Original Day-18 scope (per brief §6): brand pass on per-page surfaces + demo data prep + `demo-preflight.sh` (~6 hr)
+
+**Total Day-18 estimate: ~17.5 hr** vs ~10-hr working day. Reviewer triages tomorrow morning. The 4 UI items + Layer 2-3 of webhooks are the demo-load-bearing additions; Layer 1 (events landing) is independent of demo-day if seeding covers Section 4-5 visually.
+
+---
+
+**End of Session A bootstrap. Stand-down.**
