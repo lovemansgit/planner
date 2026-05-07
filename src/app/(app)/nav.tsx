@@ -49,12 +49,13 @@ export function TopNav({ permissions, userIdentity }: TopNavProps) {
           aria-label="Subscription Planner — Transcorp home"
         >
           <Image
-            src="/brand/transcorp-logo.png"
+            src="/brand/transcorp-logo.svg"
             alt="Transcorp"
-            width={64}
+            width={186}
             height={64}
             priority
-            className="h-16 w-16"
+            unoptimized
+            className="h-14 w-auto"
           />
           <span className="font-display text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription planner
