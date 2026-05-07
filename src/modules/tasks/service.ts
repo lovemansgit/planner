@@ -54,7 +54,12 @@
 
 import { emit, type EmitInput } from "../audit";
 import { withServiceRole, withTenant } from "../../shared/db";
-import { ForbiddenError, NotFoundError, ValidationError } from "../../shared/errors";
+import {
+  ForbiddenError,
+  NoLabelablePushedTasksError,
+  NotFoundError,
+  ValidationError,
+} from "../../shared/errors";
 import { logger } from "../../shared/logger";
 import { captureException } from "../../shared/sentry-capture";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
@@ -70,7 +75,7 @@ import {
   insertTaskWithPackages,
   type ListTasksOpts,
   listTasksByTenant,
-  listVisibleTaskIds,
+  listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
 } from "./repository";
 import type {
@@ -750,29 +755,60 @@ export interface PrintLabelsForTasksResult {
   /** task_ids.length — what the operator submitted. */
   readonly requestedCount: number;
   /**
-   * Count after the visibility filter. May differ from
+   * Count after the visibility + eligibility filters. May differ from
    * requestedCount when some submitted IDs aren't in the requesting
-   * tenant. Operationally meaningful — surfaces in the audit metadata.
+   * tenant OR aren't yet pushed to SF (skipped — see skippedCount).
+   * Operationally meaningful — surfaces in the audit metadata.
    */
   readonly printedCount: number;
   /**
-   * The actual IDs that survived the visibility filter — passed to
-   * the SF adapter and rendered into the PDF. Order is NOT
-   * input-preserved (Postgres `= ANY($1)` doesn't guarantee).
+   * The Planner UUIDs that survived BOTH the visibility filter AND
+   * the eligibility filter (external_id + pushed_to_external_at both
+   * non-null). The SF external_ids are sent to the adapter; this is
+   * the Planner-side mirror used for audit metadata + UI mapping.
    */
   readonly printedTaskIds: readonly Uuid[];
+  /**
+   * Day 17 — count of tenant-visible tasks that were NOT eligible
+   * for label rendering because they haven't been pushed to SF yet
+   * (external_id IS NULL OR pushed_to_external_at IS NULL).
+   * Surfaced via X-Skipped-Count response header so the UI can
+   * render a partial-success banner.
+   */
+  readonly skippedCount: number;
+  /**
+   * Day 17 — Planner UUIDs of skipped tasks (companion to skippedCount).
+   * Surfaced in audit metadata for forensic review; not exposed via
+   * response header (header carries the count only).
+   */
+  readonly skippedTaskIds: readonly Uuid[];
 }
 
 /**
  * Fetch SuiteFleet shipment-label PDFs for one or more tasks.
  *
+ * Day 17 — Planner UUID → SF external_id translation. SF's
+ * `/generate-label` endpoint requires `tasks.external_id` (SF's own
+ * task UUID); Planner UUIDs trigger 502 from SF's gateway. The service
+ * fetches both columns via listVisibleTaskExternalIds, partitions into
+ * eligible (external_id + pushed_to_external_at both non-null) vs
+ * skipped (either null), and only passes external_ids of eligible rows
+ * to the adapter. See
+ * memory/followup_planner_uuid_to_sf_external_id_translation.md.
+ *
  * Throws:
- *   - ForbiddenError    actor lacks `task:print_labels`.
- *   - ValidationError   no tenant context, empty input, or no tasks
- *                       survived the visibility filter (operator
- *                       submitted only cross-tenant or bogus IDs).
- *   - CredentialError   SF auth/connectivity failure (mapped to 502
- *                       at the route layer).
+ *   - ForbiddenError                 actor lacks `task:print_labels`.
+ *   - ValidationError                no tenant context, empty input,
+ *                                    or no tasks survived the
+ *                                    visibility filter (operator
+ *                                    submitted only cross-tenant or
+ *                                    bogus IDs).
+ *   - NoLabelablePushedTasksError    visible tasks exist but ALL of
+ *                                    them have external_id IS NULL
+ *                                    (none pushed to SF yet). Maps
+ *                                    to 422 at the route layer.
+ *   - CredentialError                SF auth/connectivity failure
+ *                                    (mapped to 502 at the route layer).
  */
 export async function printLabelsForTasks(
   ctx: RequestContext,
@@ -787,11 +823,14 @@ export async function printLabelsForTasks(
   const tenantId = ctx.tenantId;
 
   // Visibility filter via withTenant + RLS (defence-in-depth alongside
-  // the explicit tenant_id WHERE in listVisibleTaskIds).
-  const printedIds = await withTenant(tenantId, async (tx) =>
-    listVisibleTaskIds(tx, tenantId, taskIds),
+  // the explicit tenant_id WHERE in listVisibleTaskExternalIds).
+  // Returns the (id, externalId, pushedToExternalAt) triple per row
+  // so the partition below can route eligible rows to SF and surface
+  // skipped rows back to the operator.
+  const visibleRows = await withTenant(tenantId, async (tx) =>
+    listVisibleTaskExternalIds(tx, tenantId, taskIds),
   );
-  if (printedIds.length === 0) {
+  if (visibleRows.length === 0) {
     // Every submitted ID dropped by the filter. Distinct from "no
     // tasks selected" — this means the operator submitted IDs but
     // none belong to their tenant. Either a UI bug or a deliberate
@@ -802,15 +841,41 @@ export async function printLabelsForTasks(
     );
   }
 
+  // Partition into eligible (pushable to SF) vs skipped (pre-push).
+  // A task is eligible iff BOTH external_id and pushed_to_external_at
+  // are non-null — the two columns are populated in the same
+  // markTaskPushed UPDATE so they should always co-vary, but checking
+  // both is defence-in-depth against partial-write edge cases.
+  const eligible: { id: string; externalId: string }[] = [];
+  const skippedTaskIds: Uuid[] = [];
+  for (const row of visibleRows) {
+    if (row.externalId !== null && row.pushedToExternalAt !== null) {
+      eligible.push({ id: row.id, externalId: row.externalId });
+    } else {
+      skippedTaskIds.push(row.id as Uuid);
+    }
+  }
+
+  if (eligible.length === 0) {
+    // Visible rows exist but every one is pre-push. Surface as 422
+    // NoLabelablePushedTasksError so the operator UI can render the
+    // "wait until tasks dispatch" message.
+    throw new NoLabelablePushedTasksError();
+  }
+
+  const printedTaskIds = eligible.map((e) => e.id) as Uuid[];
+  const externalIdsForSf = eligible.map((e) => e.externalId);
+
   // Authenticate + render. The session token never leaves the
-  // adapter — see label-client.ts header.
+  // adapter — see label-client.ts header. SF receives external_ids
+  // (e.g. "60547"), NOT Planner UUIDs.
   const session = await adapter.authenticate(tenantId);
-  const pdfBuffer = await adapter.printLabels(session, printedIds);
+  const pdfBuffer = await adapter.printLabels(session, externalIdsForSf);
 
   // Audit emit — operator-attributed. task_ids carries the SUBMITTED
   // list (pre-filter) so the audit is a faithful record of what the
-  // operator clicked; the requested-vs-printed split is in the
-  // counters.
+  // operator clicked; the requested/printed/skipped split is in the
+  // counters + skipped_task_ids.
   await emit({
     eventType: "task.labels_printed",
     actorKind: ctx.actor.kind,
@@ -825,7 +890,9 @@ export async function printLabelsForTasks(
       task_ids: taskIds,
       format: PRINT_LABELS_FORMAT,
       requested_count: taskIds.length,
-      printed_count: printedIds.length,
+      printed_count: printedTaskIds.length,
+      skipped_count: skippedTaskIds.length,
+      skipped_task_ids: skippedTaskIds,
     },
     requestId: ctx.requestId,
   });
@@ -834,7 +901,9 @@ export async function printLabelsForTasks(
     pdfBuffer,
     format: PRINT_LABELS_FORMAT,
     requestedCount: taskIds.length,
-    printedCount: printedIds.length,
-    printedTaskIds: printedIds,
+    printedCount: printedTaskIds.length,
+    printedTaskIds,
+    skippedCount: skippedTaskIds.length,
+    skippedTaskIds,
   };
 }
