@@ -88,6 +88,8 @@ export async function getServerSupabase() {
 
 export interface ResolvedUserContext {
   readonly tenantId: string;
+  readonly tenantName: string;
+  readonly tenantSlug: string;
   readonly permissions: ReadonlySet<PermissionId>;
   readonly email: string;
   readonly displayName: string | null;
@@ -120,12 +122,15 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
   return await withServiceRole("auth: resolve user context", async (tx) => {
     type Row = {
       tenant_id: string;
+      tenant_name: string;
+      tenant_slug: string;
       role_slug: string;
       email: string;
       display_name: string | null;
     };
     const rows = await tx.execute<Row>(sqlTag`
-      SELECT u.tenant_id, r.slug AS role_slug, u.email, u.display_name
+      SELECT u.tenant_id, t.name AS tenant_name, t.slug AS tenant_slug,
+             r.slug AS role_slug, u.email, u.display_name
       FROM users u
       JOIN role_assignments ra ON ra.user_id = u.id AND ra.tenant_id = u.tenant_id
       JOIN roles r ON r.id = ra.role_id
@@ -138,6 +143,8 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
     if (rows.length === 0) return null;
 
     const tenantId = rows[0].tenant_id;
+    const tenantName = rows[0].tenant_name;
+    const tenantSlug = rows[0].tenant_slug;
     const email = rows[0].email;
     const displayName = rows[0].display_name;
     const permissions = new Set<PermissionId>();
@@ -148,7 +155,7 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
         permissions.add(p);
       }
     }
-    return { tenantId, permissions, email, displayName };
+    return { tenantId, tenantName, tenantSlug, permissions, email, displayName };
   });
 }
 
@@ -243,6 +250,8 @@ export async function buildRequestContext(
         permissions: session.resolved.permissions,
         email: session.resolved.email,
         displayName: session.resolved.displayName,
+        tenantName: session.resolved.tenantName,
+        tenantSlug: session.resolved.tenantSlug,
       },
       tenantId: session.resolved.tenantId,
       requestId,

@@ -63,12 +63,18 @@ export type Actor =
       tenantId: Uuid;
       permissions: ReadonlySet<Permission>;
       // Day 11 / P4 — operator UI surfaces email + displayName on the
-      // landing-page header. Additive widening: existing call sites that
-      // construct a user-actor without these fields still typecheck via
-      // optional-property semantics. Real auth populates both from the
-      // public.users mirror; the demo path leaves them undefined.
+      // landing-page header. Day 17 / T2 #1 — operator UI's user-menu
+      // surface adds tenantName + tenantSlug for the identity block
+      // (the tenant the operator is logged into). All four are
+      // additive widenings: existing call sites that construct a
+      // user-actor without these fields still typecheck via
+      // optional-property semantics. Real auth populates them from
+      // the public.users + tenants JOIN; the demo path leaves them
+      // undefined.
       email?: string;
       displayName?: string | null;
+      tenantName?: string;
+      tenantSlug?: string;
       ipAddress?: string;
       userAgent?: string;
     }

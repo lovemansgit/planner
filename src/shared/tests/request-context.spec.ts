@@ -115,10 +115,25 @@ describe("resolveUserContext", () => {
     expect(sql).toMatch(/t\.status\s*=\s*'active'/);
   });
 
-  it("returns tenantId + permissions for a single-role user", async () => {
+  it("SELECTs t.name AS tenant_name + t.slug AS tenant_slug (Day-17 T2 #1 user-menu identity)", async () => {
+    // The user-menu surface needs the operator's tenant name + slug
+    // alongside email + displayName. Pin both columns at the chunks
+    // level so a future refactor can't silently drop them and leave the
+    // user-menu rendering "—" for tenant identity. The two clauses share
+    // a single SELECT extension; pinning both guards the pair.
+    mockExecute.mockResolvedValueOnce([]);
+    await resolveUserContext("user-1");
+    const sql = flattenSql(mockExecute.mock.calls[0][0]);
+    expect(sql).toMatch(/t\.name\s+AS\s+tenant_name/);
+    expect(sql).toMatch(/t\.slug\s+AS\s+tenant_slug/);
+  });
+
+  it("returns tenantId + tenantName + tenantSlug + permissions for a single-role user", async () => {
     mockExecute.mockResolvedValueOnce([
       {
         tenant_id: "tenant-1",
+        tenant_name: "Demo Bistro",
+        tenant_slug: "demo-bistro",
         role_slug: "cs-agent",
         email: "agent@planner.test",
         display_name: "Aria Agent",
@@ -127,6 +142,8 @@ describe("resolveUserContext", () => {
     const result = await resolveUserContext("user-1");
     expect(result).not.toBeNull();
     expect(result?.tenantId).toBe("tenant-1");
+    expect(result?.tenantName).toBe("Demo Bistro");
+    expect(result?.tenantSlug).toBe("demo-bistro");
     expect(result?.permissions.has("consignee:read")).toBe(true);
     expect(result?.permissions.has("user:create")).toBe(false);
     expect(result?.email).toBe("agent@planner.test");
@@ -182,6 +199,8 @@ describe("buildRequestContext", () => {
     mockExecute.mockResolvedValueOnce([
       {
         tenant_id: "tenant-1",
+        tenant_name: "Tenant One Bistro",
+        tenant_slug: "tenant-one",
         role_slug: "tenant-admin",
         email: "tenant1@planner.test",
         display_name: "Tenant One",
@@ -196,6 +215,8 @@ describe("buildRequestContext", () => {
       expect(ctx.actor.tenantId).toBe("tenant-1");
       expect(ctx.actor.email).toBe("tenant1@planner.test");
       expect(ctx.actor.displayName).toBe("Tenant One");
+      expect(ctx.actor.tenantName).toBe("Tenant One Bistro");
+      expect(ctx.actor.tenantSlug).toBe("tenant-one");
     }
     expect(ctx.tenantId).toBe("tenant-1");
     expect(ctx.requestId).toBe("req-1");
