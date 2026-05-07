@@ -73,6 +73,7 @@ import {
   countTasksByTenant,
   findTaskById,
   insertTaskWithPackages,
+  listAllTaskIdsByTenant,
   type ListTasksOpts,
   listTasksByTenant,
   listVisibleTaskExternalIds,
@@ -511,6 +512,27 @@ export async function countTasks(
   });
 }
 
+/**
+ * Day 17 / Session B — list all visible task IDs for the tenant
+ * (optionally status-filtered). Powers the /tasks page's
+ * "Select all X tasks" across-pages action.
+ *
+ * Returns IDs only (Planner UUIDs) in the same order as listTasks
+ * (created_at DESC). Same `task:read` gate as listTasks; not audited
+ * per R-4. Caller (the across-pages selection action) submits the IDs
+ * to /api/tasks/labels which carries its own task:print_labels gate.
+ */
+export async function listAllTaskIds(
+  ctx: RequestContext,
+  opts: { readonly status?: TaskInternalStatus } = {},
+): Promise<readonly Uuid[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "task:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listAllTaskIdsByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
 // -----------------------------------------------------------------------------
 // updateTask (user-flow, task:update)
 // -----------------------------------------------------------------------------
@@ -733,16 +755,21 @@ export async function updateTask(
 //   through the credential resolver.
 
 /**
- * Pilot-scope upper bound on tasks per request. Bounds single-PDF
- * size and limits the comma-separated taskId query length. SF's
- * actual upper bound is undocumented; if production rejects long
- * lists, lower this empirically (open question in
- * followup_suitefleet_label_endpoint.md).
+ * Maximum number of tasks per /api/tasks/labels request.
+ *
+ * Day 17 / Session B — raised from 100 → 500 to match the maximum
+ * page size on /tasks. Empirically verified against the SF sandbox
+ * /generate-label endpoint with 500 SF external_ids in one
+ * comma-separated request (see scripts/probe-sf-label-cap.mjs):
+ *   - status 200, content-type application/pdf, ~2.2 MB body, 6.4 s
+ *   - URL byte size 4,640 — well under typical 8 KB origin limits
+ * Bounds single PDF size + URL length; revisit again if operator
+ * workflows outgrow 500-task batches.
  *
  * The Zod schema at the route layer enforces this — the service
  * trusts the input but documents the cap here for cross-reference.
  */
-export const PRINT_LABELS_MAX_TASKS_PER_REQUEST = 100;
+export const PRINT_LABELS_MAX_TASKS_PER_REQUEST = 500;
 
 /** Pilot scope: 4x6 indv-small label format only. */
 export const PRINT_LABELS_FORMAT = "indv-small" as const;

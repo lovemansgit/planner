@@ -498,6 +498,42 @@ export async function listTasksByTenant(
 }
 
 /**
+ * Day 17 / Session B — list IDs only for tasks visible to `tenantId`,
+ * optionally filtered by status. Lightweight companion to
+ * listTasksByTenant: powers the /tasks page's "Select all X tasks"
+ * action without dragging the full Task+packages payload over the
+ * wire (the SF label endpoint only needs the IDs).
+ *
+ * Same ordering as listTasksByTenant (created_at DESC) so the IDs the
+ * client receives match the order of rows on screen — a follow-up
+ * "select all then deselect a few" flow stays predictable.
+ *
+ * No limit/offset: the use case is "every visible task ID at once".
+ * The caller is the across-pages selection action; bounding it would
+ * defeat the point. Tenant cardinality is bounded by pilot scale
+ * (low thousands); RLS + the explicit tenant_id WHERE keep this
+ * scoped.
+ */
+export async function listAllTaskIdsByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: { readonly status?: TaskInternalStatus } = {},
+): Promise<readonly Uuid[]> {
+  const { status } = opts;
+  const statusFilter = status
+    ? sqlTag`AND internal_status = ${status}`
+    : sqlTag``;
+  type Row = { id: string };
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id FROM tasks
+    WHERE tenant_id = ${tenantId}
+      ${statusFilter}
+    ORDER BY created_at DESC
+  `);
+  return rows.map((r) => r.id as Uuid);
+}
+
+/**
  * Day 11 / P5 — count tasks for `tenantId` with the same optional
  * status filter as listTasksByTenant. Used by the operator UI to
  * render total counts + total page count without a second pass over

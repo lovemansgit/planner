@@ -37,6 +37,7 @@ export {
   countTasks,
   createTask,
   getTask,
+  listAllTaskIds,
   listTasks,
   printLabelsForTasks,
   updateTask,
