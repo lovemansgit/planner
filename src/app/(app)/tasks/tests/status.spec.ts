@@ -3,9 +3,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ALLOWED_PAGE_SIZES,
   PAGE_SIZE,
+  PAGE_SIZE_DEFAULT,
   TASK_STATUS_FILTERS,
   parsePageParam,
+  parsePerPageParam,
   parseStatusParam,
 } from "../status";
 
@@ -65,5 +68,44 @@ describe("PAGE_SIZE", () => {
   it("is a sensible page size for pilot scale", () => {
     expect(PAGE_SIZE).toBeGreaterThan(10);
     expect(PAGE_SIZE).toBeLessThanOrEqual(100);
+  });
+
+  it("is the same value as PAGE_SIZE_DEFAULT (back-compat alias)", () => {
+    expect(PAGE_SIZE).toBe(PAGE_SIZE_DEFAULT);
+  });
+});
+
+describe("ALLOWED_PAGE_SIZES catalogue", () => {
+  it("starts at the default and is sorted ascending", () => {
+    expect(ALLOWED_PAGE_SIZES[0]).toBe(PAGE_SIZE_DEFAULT);
+    const sorted = [...ALLOWED_PAGE_SIZES].sort((a, b) => a - b);
+    expect([...ALLOWED_PAGE_SIZES]).toEqual(sorted);
+  });
+
+  it("includes 500 (matches the SF label-cap empirical bound)", () => {
+    expect(ALLOWED_PAGE_SIZES).toContain(500);
+  });
+});
+
+describe("parsePerPageParam", () => {
+  it("returns the value verbatim when it's an allowed size", () => {
+    expect(parsePerPageParam("50")).toBe(50);
+    expect(parsePerPageParam("100")).toBe(100);
+    expect(parsePerPageParam("300")).toBe(300);
+    expect(parsePerPageParam("500")).toBe(500);
+  });
+
+  it("clamps to the default for unknown / invalid / malformed values", () => {
+    // Unknown numeric values fall back rather than 4xxing the operator.
+    expect(parsePerPageParam("75")).toBe(PAGE_SIZE_DEFAULT);
+    expect(parsePerPageParam("0")).toBe(PAGE_SIZE_DEFAULT);
+    expect(parsePerPageParam("-1")).toBe(PAGE_SIZE_DEFAULT);
+    expect(parsePerPageParam("abc")).toBe(PAGE_SIZE_DEFAULT);
+    expect(parsePerPageParam("")).toBe(PAGE_SIZE_DEFAULT);
+  });
+
+  it("clamps to the default for missing / array params", () => {
+    expect(parsePerPageParam(undefined)).toBe(PAGE_SIZE_DEFAULT);
+    expect(parsePerPageParam(["100"])).toBe(PAGE_SIZE_DEFAULT);
   });
 });

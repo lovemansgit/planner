@@ -33,15 +33,23 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { listUnresolvedFailedPushes } from "@/modules/failed-pushes";
-import { countTasks, listTasks, type Task } from "@/modules/tasks";
+import {
+  countTasks,
+  listTasks,
+  PRINT_LABELS_MAX_TASKS_PER_REQUEST,
+  type Task,
+} from "@/modules/tasks";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
+import { PageSizeDropdown } from "./page-size-dropdown";
 import { TasksClient } from "./client";
 import {
-  PAGE_SIZE,
+  ALLOWED_PAGE_SIZES,
+  PAGE_SIZE_DEFAULT,
   TASK_STATUS_FILTERS,
   parsePageParam,
+  parsePerPageParam,
   parseStatusParam,
 } from "./status";
 
@@ -52,6 +60,7 @@ interface TasksPageProps {
   readonly searchParams: Promise<{
     readonly status?: string;
     readonly page?: string;
+    readonly perPage?: string;
   }>;
 }
 
@@ -60,7 +69,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const params = await searchParams;
   const status = parseStatusParam(params.status);
   const page = parsePageParam(params.page);
-  const offset = (page - 1) * PAGE_SIZE;
+  const perPage = parsePerPageParam(params.perPage);
+  const offset = (page - 1) * perPage;
 
   let tasks: readonly Task[];
   let totalCount: number;
@@ -68,7 +78,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   try {
     const ctx = await buildRequestContext("/tasks", requestId);
     [tasks, totalCount, failedPushTaskIds] = await Promise.all([
-      listTasks(ctx, { limit: PAGE_SIZE, offset, status }),
+      listTasks(ctx, { limit: perPage, offset, status }),
       countTasks(ctx, { status }),
       listUnresolvedFailedPushes(ctx).then(
         (rows) => new Set(rows.map((r) => r.taskId)),
@@ -84,7 +94,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
     throw err;
   }
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(totalCount / perPage));
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
@@ -104,18 +114,31 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
 
         <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] py-6">
           <p className="font-serif text-5xl font-light tabular-nums leading-none">{totalCount}</p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {status ? `Showing ${status.toLowerCase().replace("_", " ")} only` : "Total tasks"}
-          </p>
+          <div className="flex items-center gap-6">
+            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+              {status ? `Showing ${status.toLowerCase().replace("_", " ")} only` : "Total tasks"}
+            </p>
+            <PageSizeDropdown
+              value={perPage}
+              options={ALLOWED_PAGE_SIZES}
+              status={status}
+            />
+          </div>
         </section>
 
         {tasks.length === 0 ? (
           <EmptyState filtered={status !== undefined} />
         ) : (
-          <TasksClient initialTasks={tasks} failedPushTaskIds={Array.from(failedPushTaskIds)} />
+          <TasksClient
+            initialTasks={tasks}
+            failedPushTaskIds={Array.from(failedPushTaskIds)}
+            totalCount={totalCount}
+            status={status}
+            printLabelsMaxPerRequest={PRINT_LABELS_MAX_TASKS_PER_REQUEST}
+          />
         )}
 
-        <Pagination page={page} totalPages={totalPages} status={status} />
+        <Pagination page={page} totalPages={totalPages} status={status} perPage={perPage} />
       </div>
     </main>
   );
@@ -166,15 +189,21 @@ function Pagination({
   page,
   totalPages,
   status,
+  perPage,
 }: {
   readonly page: number;
   readonly totalPages: number;
   readonly status: string | undefined;
+  readonly perPage: number;
 }) {
   if (totalPages <= 1) return null;
   const buildHref = (p: number) => {
     const params = new URLSearchParams();
     if (status) params.set("status", status);
+    // Persist non-default perPage so paging doesn't drop the operator
+    // back to 50 mid-batch. Default omitted from URL to keep the
+    // bookmark-friendly /tasks form clean.
+    if (perPage !== PAGE_SIZE_DEFAULT) params.set("perPage", String(perPage));
     if (p > 1) params.set("page", String(p));
     const qs = params.toString();
     return qs ? `/tasks?${qs}` : "/tasks";

@@ -29,6 +29,7 @@ vi.mock("../repository", () => ({
   insertTaskWithPackages: vi.fn(),
   findTaskById: vi.fn(),
   listTasksByTenant: vi.fn(),
+  listAllTaskIdsByTenant: vi.fn(),
   updateTask: vi.fn(),
   listVisibleTaskIds: vi.fn(),
   listVisibleTaskExternalIds: vi.fn(),
@@ -73,6 +74,7 @@ import { emit } from "../../audit";
 import {
   findTaskById,
   insertTaskWithPackages,
+  listAllTaskIdsByTenant,
   listTasksByTenant,
   listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
@@ -82,6 +84,7 @@ import {
   bulkCreateTasks,
   createTask,
   getTask,
+  listAllTaskIds,
   listTasks,
   printLabelsForTasks,
   updateTask,
@@ -94,6 +97,7 @@ const mockEmit = vi.mocked(emit);
 const mockInsert = vi.mocked(insertTaskWithPackages);
 const mockFindById = vi.mocked(findTaskById);
 const mockListByTenant = vi.mocked(listTasksByTenant);
+const mockListAllTaskIdsByTenant = vi.mocked(listAllTaskIdsByTenant);
 const mockUpdate = vi.mocked(updateTaskRow);
 const mockListVisibleTaskExternalIds = vi.mocked(listVisibleTaskExternalIds);
 const mockLoggerError = vi.mocked(logger.error);
@@ -191,6 +195,7 @@ beforeEach(() => {
   mockInsert.mockReset();
   mockFindById.mockReset();
   mockListByTenant.mockReset();
+  mockListAllTaskIdsByTenant.mockReset();
   mockUpdate.mockReset();
   mockLoggerError.mockReset();
 
@@ -458,6 +463,37 @@ describe("listTasks", () => {
     expect(result).toHaveLength(1);
     expect(mockWithTenant).toHaveBeenCalledOnce();
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// listAllTaskIds — Day 17 / Session B select-all-across-pages
+// -----------------------------------------------------------------------------
+
+describe("listAllTaskIds", () => {
+  it("rejects an actor without task:read with ForbiddenError", async () => {
+    await expect(listAllTaskIds(userCtx([]))).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("returns the IDs inside withTenant; not audited", async () => {
+    mockListAllTaskIdsByTenant.mockResolvedValue([
+      "11111111-1111-1111-1111-111111111111",
+      "22222222-2222-2222-2222-222222222222",
+    ] as never);
+    const result = await listAllTaskIds(userCtx(["task:read"]));
+    expect(result).toHaveLength(2);
+    expect(mockWithTenant).toHaveBeenCalledOnce();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("forwards the optional status filter to the repository", async () => {
+    mockListAllTaskIdsByTenant.mockResolvedValue([] as never);
+    await listAllTaskIds(userCtx(["task:read"]), { status: "DELIVERED" });
+    expect(mockListAllTaskIdsByTenant).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      { status: "DELIVERED" },
+    );
   });
 });
 

@@ -18,6 +18,7 @@ import {
   deleteTask,
   findTaskById,
   insertTaskWithPackages,
+  listAllTaskIdsByTenant,
   listTasksByTenant,
   updateTask,
 } from "../repository";
@@ -311,6 +312,60 @@ describe("listTasksByTenant", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/i);
     expect(captured.params).toContain(TENANT_ID);
+  });
+});
+
+describe("listAllTaskIdsByTenant", () => {
+  it("returns mapped IDs in input order", async () => {
+    const tx = makeStubTx([
+      [
+        { id: "11111111-1111-1111-1111-111111111111" },
+        { id: "22222222-2222-2222-2222-222222222222" },
+      ],
+    ]);
+    const result = await listAllTaskIdsByTenant(tx, TENANT_ID);
+    expect(result).toEqual([
+      "11111111-1111-1111-1111-111111111111",
+      "22222222-2222-2222-2222-222222222222",
+    ]);
+  });
+
+  it("returns an empty array when the tenant has no tasks", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listAllTaskIdsByTenant(tx, TENANT_ID);
+    expect(result).toEqual([]);
+  });
+
+  it("issues SELECT id FROM tasks with the defence-in-depth tenant_id predicate", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT\s+id\s+FROM\s+tasks/i);
+    expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/i);
+    expect(captured.params).toContain(TENANT_ID);
+  });
+
+  it("does not select task_packages or any heavy columns (lightweight by design)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).not.toMatch(/task_packages/i);
+    expect(captured.sql).not.toMatch(/json_agg/i);
+  });
+
+  it("appends the status filter when provided", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID, { status: "DELIVERED" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/internal_status\s*=\s*\$/i);
+    expect(captured.params).toContain("DELIVERED");
+  });
+
+  it("orders by created_at DESC to match listTasksByTenant", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/ORDER\s+BY\s+created_at\s+DESC/i);
   });
 });
 
