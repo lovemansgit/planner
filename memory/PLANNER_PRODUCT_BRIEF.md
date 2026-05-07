@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.5
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement.
+**Version:** v1.6
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai.
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -712,11 +712,9 @@ Per Day-1 v1.1 delta §12.2.4-5. Defense in depth:
 
 ### 3.5 L4 — Label generation
 
-Proxy SF's existing label endpoint with Transcorp logo swap.
+Labels are proxied AS-IS from SuiteFleet's `/generate-label` endpoint. Operator clicks Print labels on `/tasks` page (single or multi-select); service layer translates Planner UUIDs → SF external_ids; SF returns the indv-small format PDF; PDF streams back to operator unmodified. Single shared `customer.code = 588` sandbox credential per `memory/decision_mvp_shared_suitefleet_credentials.md`.
 
-- Surface: `/tasks` page multi-select Print Labels button (PR #122)
-- Phase 1: single-task and multi-select label download as PDF
-- Implementation: Day 16 L4 plan PR
+No PDF post-processing or logo swap. Decision locked at v1.6 per `memory/decision_brief_v1_6_amendment_no_logo_swap.md`.
 
 ### 3.6 SuiteFleet credential decision
 
@@ -964,6 +962,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.3 | 6 May 2026 (Day 16 morning) | One-amendment sync from Day-16 Block 1 schema-probe finding. **§3.1.1 `tenants.pickup_district` → `tenants.pickup_address_district`, `tenants.pickup_emirate` → `tenants.pickup_address_emirate`** — adopted from prod (already shipped via PR #139 migration 0017 `875bfc4`); brief text was outlier vs migration-canonical `pickup_address_*` prefix family. Service-layer DTO shape preserved (`{ line, district, emirate }`); persistence-layer mapping handles the column-name expansion. Filed at `memory/decision_brief_v1_3_amendment_pickup_address_canon.md`. |
 | v1.4 | 7 May 2026 (Day 17 morning) | §3.3.11 rewritten in full to corporate-locked brand spec — palette (3 primary + 3 accent + 5-step amber ladder + 5 neutrals), composition ratio (58/22/12/8), three-face type system (Manrope display + Mulish body + Sanchez editorial + Mulish-caps mono discipline), 8-token type scale, typesetting rules, web fallback stack, logo asset reference, state-semantic color usage. Codebase brand-tokens.css already aligned with corporate spec; this amendment brings brief into alignment. Filed at `memory/decision_brief_v1_4_amendment_brand_tokens.md`. |
 | v1.5 | 7 May 2026 (Day 17, post-PR-#168 visual refinement) | Color hex reconciliation to corporate SVG asset. Navy `#0F2A5C` → `#252d60`; Green `#2E8B4A` → `#3e7c4b`. SVG (transcorp-logo-color.svg, fill values from corporate vector source) is the canonical source of truth; brief and CSS variables (`src/styles/brand-tokens.css`) align to the asset. Composition ratio (58/22/12/8), type system, accent palette, 5-step amber ladder, neutrals all unchanged. Filed at `memory/decision_brief_v1_5_amendment_color_canon.md`. |
+| v1.6 | 7 May 2026 (Day 17, ~1:30 PM Dubai) | Locked decision: labels proxied as-is from SF; no logo swap in scope (Phase 1 or Phase 2). §3.5 amended to reflect MVP-final state — current `/api/tasks/labels` flow (PR #170 drizzle hotfix + PR #172 UUID translation) IS the final label rendering path. Demo framing: SF logo on label is by design; Transcorp's value-add is upstream operator workflow, not label rendering. Filed at `memory/decision_brief_v1_6_amendment_no_logo_swap.md`. |
 
 ---
 
@@ -979,4 +978,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.5.**
+**End of v1.6.**
