@@ -14,9 +14,12 @@
  * Mulish (body, also used as caps for mono discipline) + Sanchez (editorial).
  */
 :root {
-  /* Primary palette — Transcorp brand guidelines v2 (working tokens) */
-  --color-navy: #0f2a5c;
-  --color-green: #2e8b4a;
+  /* Primary palette — corporate-locked per brief v1.5 §3.3.11.
+   * Navy + green hex values match transcorp-logo-color.svg fill values
+   * (corporate vector source of truth); derived rgba tokens below
+   * use the navy hex as RGB constituents. */
+  --color-navy: #252d60;
+  --color-green: #3e7c4b;
   --color-surface-primary: #faf8f4;
   --color-surface-secondary: #f2eee6;
 
@@ -25,12 +28,13 @@
   --color-red: #d93a2b;
   --color-ocean-blue: #1f6fa8;
 
-  /* Derived — opacity-based tints on navy for borders + secondary text */
-  --color-border-default: rgba(15, 42, 92, 0.1);
-  --color-border-strong: rgba(15, 42, 92, 0.2);
-  --color-text-primary: #0f2a5c;
-  --color-text-secondary: rgba(15, 42, 92, 0.7);
-  --color-text-tertiary: rgba(15, 42, 92, 0.5);
+  /* Derived — opacity-based tints on navy for borders + secondary text.
+   * RGB constituents 37/45/96 = #252d60 navy per v1.5 reconciliation. */
+  --color-border-default: rgba(37, 45, 96, 0.1);
+  --color-border-strong: rgba(37, 45, 96, 0.2);
+  --color-text-primary: #252d60;
+  --color-text-secondary: rgba(37, 45, 96, 0.7);
+  --color-text-tertiary: rgba(37, 45, 96, 0.5);
 
   /* Typography — next/font/google variables registered in layout.tsx */
   --font-sans:
