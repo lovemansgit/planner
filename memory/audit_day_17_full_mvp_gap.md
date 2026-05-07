@@ -387,6 +387,63 @@ Path B amendments + ~5-8 hr daily overrun (12-13 hr days vs 10 hr) + Day 20 morn
 
 **Recommended:** Path C with Path B amendments scheduled Day-18 morning before any builder work begins.
 
+### §9.4 LOCKED PATH (Love decision, Day-17 EOD ~18:00 Dubai)
+
+**Demo internal target:** Friday May 15 (Day 25). All scope completed by EOD May 15.
+**Demo external commitment to panel:** Monday May 18 (Day 28) morning.
+
+**Strategic frame:** Plan and pace as if demoing on May 15. Hold May 18 as the public commitment. Buffer between internal completion and external delivery absorbs:
+- Audit's optimistic estimate slippage (+5-8 hr likely)
+- Unexpected architectural complexity (+3-5 hr likely)
+- Dry-run findings requiring real fix time (+2-4 hr likely)
+- Reviewer-fatigue corrections during 8-day sprint (+1-3 hr)
+
+Total likely buffer needed: 11-20 hr. Days 24-26 (May 16-18) absorb without compromising May 18 demo.
+
+**No scope reduction.** All §8 items (Architectural + Critical UI + Polish) ship at MVP quality. Path B/C deferral logic from §9.2-§9.3 is rejected — those interpretations softened brief scope and would risk panel-visible gaps.
+
+**Sustainable hours:** 8-10 hr/day, not 12-13. Reviewer attention preserved. Quality over velocity.
+
+### §9.5 Day-18 sequencing (locked Day-17 EOD)
+
+**AM Block 1 (~5-7 hr):** Architectural bundle PR
+- 15-min webhook Layer-1 scoping check (Vercel logs probe) — FIRST action
+- Bundled PR: A1 (`customer.code` wire-body threading) + A2 Layer 2 (UPDATE-tasks service fn from webhook events) + A2 Layer 3 (POD URL extraction + edit-event field mapping)
+- Unblocks: webhook data flow, billing correctness, POD photo display, demo Section 4 POD beat
+
+**AM Block 2 (~3.5-4 hr):** C1 merchant admin frontend
+- `/admin/merchants` list + `/admin/merchants/new` create form + `(admin)/` route group + middleware gate on `transcorp_staff`
+- Unblocks demo Section 2 fully
+
+**PM Block (~5-6 hr):** C2 consignee onboarding wizard
+- `/consignees/new` 4-step wizard (Identity → Addresses → Subscription → Schedule rules)
+- Per-weekday address rotation widget (Step 3)
+- Atomic POST to `/api/consignees`
+- Unblocks demo Section 3
+
+**Day-18 EOD target:** ~14-16 hr of work landed across 2-3 PRs. Batched promotion to production. Day-18 EOD doc with §X Brief implementation status burn-down (per §10 discipline rule).
+
+### §9.6 Day-19 through Day-25 sketch (subject to Day-18 actuals)
+
+| Day | Focus | Items | Estimated hrs |
+|---|---|---|---|
+| 19 (Sat May 9) | Calendar surfaces + popover expansion | C3 `/calendar` + C4 popover pause+skip-override + C5 Month view + rotation viz | 10-11 |
+| 20 (Sun May 10) | Subscription mgmt + timeline + POD | C6 `/subscriptions/[id]` + C7 consignee timeline + C8 POD display + C9 per-task drawer | 10-12 |
+| 21 (Mon May 11) | UI gaps + brand pass + Year view | P1 + P2 + P3 | 10-11 |
+| 22 (Tue May 12) | Polish + slide deck + demo data | P4 + P5 + P6 + P7 + P8 | 8-10 |
+| 23 (Wed May 13) | Buffer + dry-run #1 + fixes | overflow absorption | 10 |
+| 24 (Thu May 14) | Dry-run #2 + slide deck refinement | polish | 10 |
+| 25 (Fri May 15) | INTERNAL TARGET — all scope complete | final dry-run + sign-off | 8 |
+| 26 (Sat May 16) | Buffer | reserved | 0-4 |
+| 27 (Sun May 17) | Final preflight + backup recording | demo prep | 4-6 |
+| 28 (Mon May 18) | DEMO MORNING | go time | — |
+
+### §9.7 Panel communication
+
+Pre-message panel Day-18 morning before any builder work begins. Frame: demo moves to May 18; quality discipline reason; firm commitment.
+
+Sample message draft preserved in conversation context (Day-17 EOD reviewer session). Love sends after final read-through Day-18 morning.
+
 ---
 
 ## §10 Discipline rule for future EOD docs
