@@ -389,9 +389,16 @@ export async function listVisibleTaskIds(
 ): Promise<readonly Uuid[]> {
   if (ids.length === 0) return [];
   type Row = { id: string } & Record<string, unknown>;
+  // Pattern E per src/shared/sql-helpers.ts — manual array literal.
+  // drizzle-orm 0.45.2 + postgres-js splats `${jsArr}` into a record
+  // ($1, $2, ..., $n) which cannot be cast to uuid[]. Constructing the
+  // Postgres array literal `{a,b,c}` server-side as a single string
+  // parameter avoids the splat. Safe for uuid[] (alphanumeric +
+  // hyphens only — no escaping required); see sql-helpers.ts for the
+  // type-restriction contract.
   const rows = await tx.execute<Row>(sqlTag`
     SELECT id FROM tasks
-    WHERE id = ANY(${ids}::uuid[])
+    WHERE id = ANY(${'{' + ids.join(',') + '}'}::uuid[])
       AND tenant_id = ${tenantId}
   `);
   return rows.map((r) => r.id);

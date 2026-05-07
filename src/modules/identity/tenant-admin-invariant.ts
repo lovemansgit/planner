@@ -105,11 +105,15 @@ export async function assertCanRemoveAssignments(
   // No FOR UPDATE here: the rows we're about to count are a subset
   // of the rows the previous query already locked. Re-locking the
   // same set is redundant.
+  // Pattern E per src/shared/sql-helpers.ts — manual array literal.
+  // drizzle-orm 0.45.2 + postgres-js splats `${jsArr}` into a record
+  // which cannot be cast to uuid[]. Constructing `{a,b,c}` as a single
+  // string parameter avoids the splat. Safe for uuid[] only.
   const removingAdminRows = await tx.execute<CountRow>(sqlTag`
     SELECT count(*)::int AS n
     FROM role_assignments ra
     JOIN roles r ON r.id = ra.role_id
-    WHERE ra.id = ANY(${removingAssignmentIds as string[]}::uuid[])
+    WHERE ra.id = ANY(${'{' + (removingAssignmentIds as string[]).join(',') + '}'}::uuid[])
       AND ra.tenant_id = ${tenantId}
       AND r.slug = ${TENANT_ADMIN_ROLE_SLUG}
   `);
