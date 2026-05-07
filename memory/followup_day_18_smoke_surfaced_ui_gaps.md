@@ -50,6 +50,29 @@ POD column treatment: icon at end of row that opens POD photo as a popup (modal)
 
 **Effort:** ~1.5 hr Day-18 morning. Couples with webhook handler fix — POD column has no data to display until webhook handler fix lands.
 
+### POD icon visual treatment (Love refinement post-EOD smoke)
+
+The POD icon is a custom SVG cooler-bag glyph using ONLY brand-canon colors (NOT generic library icons, NOT off-brand colors).
+
+**Brand colors (mandatory, no deviation):**
+- Primary fill: Night Sky Navy `#252d60` (var: `--brand-navy` per `src/styles/brand-tokens.css`)
+- Accent / piping: Grass Green `#3e7c4b` (var: `--brand-green` per `src/styles/brand-tokens.css`)
+- Reference: Day-17 brief v1.5 token canon (PR #169); same colors as logo, app-shell, CRM badges
+- Visual reference photo from Love (uploaded mid-Day-17): navy cooler bag with green piping/zippers/accent stitching
+
+**Why brand-canon colors specifically:** The icon appears alongside other brand surfaces during demo. Off-brand colors (e.g., generic gray or different blue/green shades) read as visual inconsistency and undermine the brand pass discipline established by PR #168. Brand-token-only is the constraint.
+
+**Implementation:**
+- Custom inline SVG at `src/app/(app)/tasks/_components/PodIcon.tsx` (or shared icons location — verify before placing)
+- ~16x16 or 20x20 px sizing for table cell
+- Use CSS variables `var(--brand-navy)` and `var(--brand-green)` (do NOT hardcode hex values)
+- Hover state: subtle opacity transition matching existing chrome (120ms ease)
+- `aria-label="View proof of delivery photo"`
+- Click opens modal with POD photo (per existing §4 fix scope)
+- When task is DELIVERED but no POD cached yet (webhook handler bug pre-fix): fallback to a muted/disabled cooler-bag glyph with tooltip "POD not yet synced from SuiteFleet"
+
+**Effort revision:** ~30 min above existing §4 1.5 hr estimate. New §4 budget: ~2 hr.
+
 ## §5 Sequencing for Day-18 morning
 
 Dependency: §4 (POD column) coupled with webhook handler fix. Other items independent.
@@ -62,7 +85,7 @@ Recommended order:
 5. §3 AWB + order search (independent, medium)
 6. §4 column reorder + POD icon + modal (couples with webhook fix)
 
-All five together: ~3.5 hr UI work + webhook fix budget per Layer-1 outcome. Conditional on Layer-1 verdict.
+All five together: ~4 hr UI work (revised from ~3.5 hr per §4 POD icon refinement) + webhook fix budget per Layer-1 outcome. Conditional on Layer-1 verdict.
 
 ## §6 Cross-references
 
