@@ -30,11 +30,14 @@ import {
   getConsignee,
   getConsigneeCrmHistory,
 } from "@/modules/consignees";
+import { getConsigneeTasksForDateRange } from "@/modules/tasks";
+import type { Task } from "@/modules/tasks/types";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
 import type { Uuid } from "@/shared/types";
 
+import { CalendarWeekView, addDays, computeWeekStart } from "./_components/CalendarWeekView";
 import { CrmStateBadge, CRM_STATE_LABELS } from "./_components/CrmStateBadge";
 import { CrmStateModal } from "./_components/CrmStateModal";
 import { HistoryTab } from "./_components/HistoryTab";
@@ -47,29 +50,49 @@ const VALID_TABS: readonly TabName[] = ["overview", "subscription", "calendar", 
 
 interface PageProps {
   readonly params: Promise<{ readonly id: string }>;
-  readonly searchParams: Promise<{ readonly tab?: string }>;
+  readonly searchParams: Promise<{ readonly tab?: string; readonly week?: string }>;
+}
+
+/** Validate ISO date string YYYY-MM-DD. Returns the input or null. */
+function parseWeekParam(raw: string | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const d = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  return raw;
 }
 
 export default async function ConsigneeDetailPage({ params, searchParams }: PageProps) {
   const requestId = randomUUID();
   const { id } = await params;
-  const { tab: tabParam } = await searchParams;
+  const { tab: tabParam, week: weekParam } = await searchParams;
   const activeTab: TabName = (VALID_TABS as readonly string[]).includes(tabParam ?? "")
     ? (tabParam as TabName)
     : "overview";
 
+  // Calendar tab — derive the visible week's Monday. Default = current
+  // week's Monday in UTC (sufficient for pilot; brief §3.3.3 +
+  // memory/followup_label_tz_offset_per_tenant.md flag tenant-tz
+  // derivation as Phase 2).
+  const explicitWeek = parseWeekParam(weekParam);
+  const weekStart = explicitWeek
+    ? computeWeekStart(new Date(`${explicitWeek}T00:00:00Z`))
+    : computeWeekStart(new Date());
+
   let consignee: Consignee | null;
   let history: readonly ConsigneeCrmEvent[] = [];
+  let calendarTasks: readonly Task[] = [];
   let canChangeState = false;
+  let canSkip = false;
   try {
     const ctx = await buildRequestContext(`/consignees/${id}`, requestId);
     consignee = await getConsignee(ctx, id as Uuid);
     if (!consignee) notFound();
 
     if (ctx.actor.kind === "user") {
-      canChangeState = (ctx.actor.permissions as ReadonlySet<Permission>).has(
-        "consignee:change_crm_state",
-      );
+      const perms = ctx.actor.permissions as ReadonlySet<Permission>;
+      canChangeState = perms.has("consignee:change_crm_state");
+      canSkip = perms.has("subscription:skip");
     }
 
     // Only fetch history if the History tab is active — defers the
@@ -77,6 +100,16 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     // (consignee:read via the service fn) applies whichever tab.
     if (activeTab === "history") {
       history = await getConsigneeCrmHistory(ctx, id as Uuid);
+    }
+    // Only fetch calendar tasks when the Calendar tab is active.
+    if (activeTab === "calendar") {
+      const weekEnd = addDays(weekStart, 6);
+      calendarTasks = await getConsigneeTasksForDateRange(
+        ctx,
+        id as Uuid,
+        weekStart,
+        weekEnd,
+      );
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -137,7 +170,14 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
           {activeTab === "overview" ? <OverviewTab consignee={consignee} /> : null}
           {activeTab === "history" ? <HistoryTab events={history} /> : null}
           {activeTab === "subscription" ? <PlaceholderTab label="Subscription" /> : null}
-          {activeTab === "calendar" ? <PlaceholderTab label="Calendar" /> : null}
+          {activeTab === "calendar" ? (
+            <CalendarWeekView
+              consigneeId={consignee.id}
+              weekStart={weekStart}
+              tasks={calendarTasks}
+              canSkip={canSkip}
+            />
+          ) : null}
         </section>
       </div>
     </main>
