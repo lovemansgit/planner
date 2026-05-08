@@ -184,3 +184,8 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Service E rotation repository drift](followup_service_e_rotation_repository_drift.md) — committed via PR #161; indexed here
 - [run_row completed_at pre-started_at drift](followup_run_row_completed_at_pre_started_at_drift.md) — committed via PR #161; indexed here
 - [Day 16 EOD handoff](handoffs/day-16-eod.md) — committed via PR #161; indexed here
+
+## Day 18 (8 May 2026)
+
+- [Day-18 test-tenants cleanup plan](plans/day-18-test-tenants-cleanup.md) — PR #189 (`8347d00`); soft-archive 377 fixture-pollution rows via `'archived'` status enum + UI default-exclude. Atomic-bundle plan: TS exhaustive switch over `TenantStatus` makes split-PR uncompilable, so schema migration + types + helper + repo filter + cron β filter + Zod allowlist all land in one code-PR. Coordination flag with PR #187 (A1 resolver swap): cron β SELECT gains `AND status IN ('provisioning', 'active')` so post-archive `bg4g-*` alphanumeric customer_codes never reach A1's numeric-only resolver.
+- [Test-tenants cleanup pre-archive snapshot](decision_test_tenants_cleanup_snapshot.md) — committed via the test-tenants cleanup code-PR; forensic-recovery memo + 377-row CSV snapshot at [`memory/snapshots/test-tenants-archive-2026-05-08.csv`](snapshots/test-tenants-archive-2026-05-08.csv). Single-row + bulk restoration procedures documented for any row later identified as load-bearing. `sandbox-merchant-588` archived alongside the 376 prefix fixtures with explicit recovery template (interpretation (i) most likely; interpretation (ii) reversible via §4 procedure).

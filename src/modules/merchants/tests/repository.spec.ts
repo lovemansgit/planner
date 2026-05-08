@@ -211,7 +211,11 @@ describe("updateMerchantStatus", () => {
 });
 
 describe("listMerchants", () => {
-  it("issues SELECT * FROM tenants ORDER BY created_at DESC when no filter", async () => {
+  it("default (no filter) excludes archived rows via WHERE status != 'archived'", async () => {
+    // Day-18 cleanup default. The /admin/merchants list page calls
+    // listMerchants(ctx) with no filter and depends on archived rows
+    // being hidden by default (excludeArchived defaults true). Asserts
+    // the SQL surface that delivers that contract.
     const tx = makeStubTx([
       [
         rowFixture({ id: "t-1", slug: "first" }),
@@ -225,12 +229,18 @@ describe("listMerchants", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/SELECT \* FROM tenants/i);
     expect(captured.sql).toMatch(/order by\s+created_at\s+desc/i);
-    expect(captured.sql).not.toMatch(/where\s+status/i);
+    // Day-18 — must contain the "exclude archived" filter on the
+    // default code path. Use a precise inequality match so a future
+    // refactor that drops the filter trips the test.
+    expect(captured.sql).toMatch(/where\s+status\s*!=\s*'archived'/i);
+    // ...and must NOT have a status-equality filter (that's the
+    // explicit-status branch, which this case shouldn't hit).
+    expect(captured.sql).not.toMatch(/where\s+status\s*=\s*\$/i);
     expect(result).toHaveLength(2);
     expect(result[0].slug).toBe("first");
   });
 
-  it("adds WHERE status = $1 when filter supplied", async () => {
+  it("adds WHERE status = $1 when explicit status filter supplied", async () => {
     const tx = makeStubTx([[rowFixture({ status: "active" })]]);
     await listMerchants(tx, { status: "active" });
     const captured = compile(tx.execute.mock.calls[0][0]);
@@ -241,6 +251,59 @@ describe("listMerchants", () => {
   it("returns an empty array when no rows match", async () => {
     const tx = makeStubTx([[]]);
     expect(await listMerchants(tx)).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Day-18 plan §8.1 — excludeArchived precedence + forensic-archived path
+  // -------------------------------------------------------------------------
+
+  it("explicit status: 'archived' filter returns archived rows (forensic-review path)", async () => {
+    const tx = makeStubTx([[rowFixture({ status: "archived" })]]);
+    const result = await listMerchants(tx, { status: "archived" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    // Explicit status filter wins; the SQL is the equality form,
+    // NOT the inequality default-exclude form.
+    expect(captured.sql).toMatch(/where\s+status\s*=\s*\$\d+/i);
+    expect(captured.sql).not.toMatch(/!=\s*'archived'/i);
+    expect(captured.params).toContain("archived");
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe("archived");
+  });
+
+  it("excludeArchived: false bypasses the default-exclude (no WHERE clause)", async () => {
+    // Debug/forensic posture: caller wants every row including
+    // archived. Repository drops the WHERE clause entirely.
+    const tx = makeStubTx([
+      [
+        rowFixture({ id: "t-1", slug: "live", status: "active" }),
+        rowFixture({ id: "t-2", slug: "stale", status: "archived" }),
+      ],
+    ]);
+    const result = await listMerchants(tx, { excludeArchived: false });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT \* FROM tenants/i);
+    expect(captured.sql).not.toMatch(/where\s+status/i);
+    expect(result).toHaveLength(2);
+  });
+
+  it("explicit status: 'archived' overrides excludeArchived (precedence rule)", async () => {
+    // Per ListMerchantsFilters precedence: explicit status wins,
+    // excludeArchived is ignored regardless of value. Caller can
+    // still see archived rows via ?status=archived even if some
+    // upstream layer decided to set excludeArchived: true.
+    const tx = makeStubTx([[rowFixture({ status: "archived" })]]);
+    await listMerchants(tx, { status: "archived", excludeArchived: true });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/where\s+status\s*=\s*\$\d+/i);
+    expect(captured.sql).not.toMatch(/!=\s*'archived'/i);
+    expect(captured.params).toContain("archived");
+  });
+
+  it("excludeArchived: true (explicit) is equivalent to the default", async () => {
+    const tx = makeStubTx([[]]);
+    await listMerchants(tx, { excludeArchived: true });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/where\s+status\s*!=\s*'archived'/i);
   });
 });
 

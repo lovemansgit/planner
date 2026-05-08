@@ -94,6 +94,15 @@ describe("statusBadgeSurface", () => {
     expect(statusBadgeSurface("inactive").label).toBe("Inactive");
     expect(statusBadgeSurface("inactive").className).not.toContain("text-green");
   });
+
+  it("archived renders as muted neutral (Day-18 cleanup; reachable only via ?status=archived)", () => {
+    const surface = statusBadgeSurface("archived");
+    expect(surface.label).toBe("Archived");
+    // No go-signal — same neutral posture as inactive (row not in
+    // operator scope). Uses the muted-tertiary text-color token.
+    expect(surface.className).not.toContain("text-green");
+    expect(surface.className).toContain("color-text-tertiary");
+  });
 });
 
 describe("statusAction", () => {
@@ -110,6 +119,10 @@ describe("statusAction", () => {
     // memory/followup_merchant_lifecycle_transition_expansion.md.
     expect(statusAction("suspended")).toBeNull();
     expect(statusAction("inactive")).toBeNull();
+  });
+
+  it("archived offers no MVP action (Day-18 cleanup; archive is migration-only, no operator path)", () => {
+    expect(statusAction("archived")).toBeNull();
   });
 });
 

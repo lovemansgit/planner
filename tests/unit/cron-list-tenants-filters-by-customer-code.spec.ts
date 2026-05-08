@@ -94,6 +94,23 @@ describe("β — listCronEligibleTenantIds filters by suitefleet_customer_code",
     expect(sqlText).toMatch(/suitefleet_customer_code\s*<>\s*''/);
   });
 
+  it("includes the Day-18 status filter (only provisioning + active)", async () => {
+    await listCronEligibleTenantIds();
+    const sqlText = flattenSql(capturedSql);
+    // Day-18 / PR #189 plan §6 + code-PR Checkpoint-1 scope addition.
+    // The cron β SELECT must filter by status post-test-tenants-cleanup
+    // so archived rows (and any future inactive/suspended) are
+    // excluded from the cron walk regardless of customer_code state.
+    // Some bg4g-* archived rows carry alphanumeric customer_codes
+    // that A1's incoming numeric-only resolver would reject; the
+    // status filter is the gate that prevents the post-archive DLQ
+    // flood. See src/app/api/cron/generate-tasks/list-cron-eligible-tenants.ts
+    // header for the full reasoning.
+    expect(sqlText).toMatch(/status\s+IN\s*\(\s*'provisioning'\s*,\s*'active'\s*\)/i);
+    // Belt-and-braces: archived must NOT appear in the IN list.
+    expect(sqlText).not.toMatch(/status\s+IN\s*\([^)]*'archived'/i);
+  });
+
   it("preserves ORDER BY created_at ASC (D8-4a α-fix posture stays load-bearing)", async () => {
     await listCronEligibleTenantIds();
     const sqlText = flattenSql(capturedSql);

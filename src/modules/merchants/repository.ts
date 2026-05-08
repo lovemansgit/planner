@@ -219,22 +219,52 @@ export async function updateMerchantStatus(
 
 /**
  * SELECT every tenant matching the filter, newest first. Cross-tenant
- * scope — caller is in `withServiceRole`. `status?` filter is the
- * only MVP option per merged plan §5.2.4.
+ * scope — caller is in `withServiceRole`.
+ *
+ * Filter precedence (Day-18 §5 cleanup; ListMerchantsFilters
+ * documented in src/modules/merchants/types.ts):
+ *
+ *   - `status === 'archived'`       → returns archived rows only;
+ *                                     `excludeArchived` is ignored.
+ *                                     (Forensic-review path; the
+ *                                     /admin/merchants UI surfaces
+ *                                     this via `?status=archived`.)
+ *   - `status === <other>`          → returns rows in that status;
+ *                                     `excludeArchived` is ignored.
+ *   - `status === undefined`        → applies `excludeArchived`
+ *                                     (default `true`).
+ *     - `excludeArchived: true`     → `WHERE status != 'archived'`
+ *                                     (default; demo-hygiene).
+ *     - `excludeArchived: false`    → no filter; all rows including
+ *                                     archived (debug only).
  */
 export async function listMerchants(
   tx: DbTx,
   filters: ListMerchantsFilters = {},
 ): Promise<readonly Merchant[]> {
-  const rows = filters.status
-    ? await tx.execute<TenantRow>(sqlTag`
-        SELECT * FROM tenants
-        WHERE status = ${filters.status}
-        ORDER BY created_at DESC
-      `)
-    : await tx.execute<TenantRow>(sqlTag`
-        SELECT * FROM tenants
-        ORDER BY created_at DESC
-      `);
+  const excludeArchived = filters.excludeArchived ?? true;
+  let rows: readonly TenantRow[];
+  if (filters.status !== undefined) {
+    // Explicit status filter wins; excludeArchived ignored. The
+    // forensic `?status=archived` path lands here.
+    rows = await tx.execute<TenantRow>(sqlTag`
+      SELECT * FROM tenants
+      WHERE status = ${filters.status}
+      ORDER BY created_at DESC
+    `);
+  } else if (excludeArchived) {
+    // Default: hide archived rows from the admin list page.
+    rows = await tx.execute<TenantRow>(sqlTag`
+      SELECT * FROM tenants
+      WHERE status != 'archived'
+      ORDER BY created_at DESC
+    `);
+  } else {
+    // excludeArchived === false; return everything.
+    rows = await tx.execute<TenantRow>(sqlTag`
+      SELECT * FROM tenants
+      ORDER BY created_at DESC
+    `);
+  }
   return rows.map(mapRow);
 }
