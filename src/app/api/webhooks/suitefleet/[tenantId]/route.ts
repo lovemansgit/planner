@@ -63,7 +63,10 @@ import { z } from "zod";
 
 import { emit as auditEmit } from "@/modules/audit";
 import { tenantAcceptsWebhooks } from "@/modules/identity";
+import { applyWebhookEditEvent } from "@/modules/integration/providers/suitefleet/apply-webhook-edit-event";
+import { applyWebhookStatusEvent } from "@/modules/integration/providers/suitefleet/apply-webhook-status-event";
 import { getSuiteFleetAdapter } from "@/modules/integration/providers/suitefleet/get-adapter";
+import type { WebhookEvent } from "@/modules/integration/types";
 import { ValidationError } from "@/shared/errors";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
@@ -247,42 +250,74 @@ export async function POST(req: Request, { params }: RouteContext): Promise<Resp
     idempotency_keys: events.map((e) => e.idempotencyKey),
   });
 
-  // SQS / dedup-table wiring is a Day-9+ concern. Until then,
-  // observation-only: the events are parsed and idempotency keys
-  // logged, but no state mutation. Reviewer: this is the deliberate
-  // scope boundary documented in D8-8's plan §7.
-  void processWebhookAsync(events, requestId, tenantId).catch((err) => {
-    requestLog.error({
-      operation: "async_process",
-      tenant_id: tenantId,
-      error_code: "async_processing_failed",
-      message: err instanceof Error ? err.message : "unknown",
-    });
-    captureException(err, {
-      component: "suitefleet_webhook_receiver",
-      operation: "async_process",
-      tenant_id: tenantId,
-      request_id: requestId,
-    });
-  });
+  // Day 18 / A2 — process events synchronously within the request handler.
+  // Per plan §3.5, processWebhookAsync iterates events with per-event
+  // try/catch isolation: one failing event must not poison the loop for
+  // the rest of the batch. SF retries on non-2xx; we always return 200
+  // here when verification succeeded, so individual-event errors do
+  // NOT cause SF to retry the whole batch (they go to Sentry instead).
+  await processWebhookAsync(events, requestId, tenantId);
 
   return new Response("ok", { status: 200 });
 }
 
 async function processWebhookAsync(
-  events: readonly { readonly idempotencyKey: string }[],
+  events: readonly WebhookEvent[],
   requestId: string,
   tenantId: Uuid,
 ): Promise<void> {
-  // D8-8 deliberately ships verification gates without event
-  // processing. The events are visible in the request log
-  // (idempotency_keys field above) for empirical capture during
-  // first production traffic; the actual side-effect path lands as
-  // a separate commit once D8-8 has been observed in production.
-  log.debug({
-    request_id: requestId,
-    tenant_id: tenantId,
-    operation: "process_webhook_stub",
-    event_count: events.length,
-  });
+  for (const event of events) {
+    try {
+      const rawAction = isRecord(event.raw) ? event.raw.action : null;
+      if (typeof rawAction !== "string") {
+        // Parser already filtered missing/empty actions; defensive log.
+        log.warn({
+          request_id: requestId,
+          tenant_id: tenantId,
+          operation: "process_webhook_event",
+          error_code: "missing_action_in_raw",
+        });
+        continue;
+      }
+
+      // Layer 3 handles TASK_HAS_BEEN_UPDATED (non-lifecycle edit event);
+      // Layer 2 handles all 14 lifecycle codes + the unknown-action skip.
+      const result =
+        rawAction === "TASK_HAS_BEEN_UPDATED"
+          ? await applyWebhookEditEvent(tenantId, event, rawAction)
+          : await applyWebhookStatusEvent(tenantId, event, rawAction);
+
+      log.info({
+        request_id: requestId,
+        tenant_id: tenantId,
+        operation: "process_webhook_event",
+        idempotency_key: event.idempotencyKey,
+        sf_action: rawAction,
+        applied: result.applied,
+        reason: "reason" in result ? result.reason : null,
+      });
+    } catch (err) {
+      // Per-event error isolation — log + Sentry-capture the failure
+      // for THIS event, then continue with the rest of the batch.
+      log.error({
+        request_id: requestId,
+        tenant_id: tenantId,
+        operation: "process_webhook_event",
+        error_code: "event_dispatch_failed",
+        idempotency_key: event.idempotencyKey,
+        message: err instanceof Error ? err.message : "unknown",
+      });
+      captureException(err, {
+        component: "suitefleet_webhook_receiver",
+        operation: "process_webhook_event",
+        tenant_id: tenantId,
+        request_id: requestId,
+        idempotency_key: event.idempotencyKey,
+      });
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
