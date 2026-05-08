@@ -1,201 +1,267 @@
-// SuiteFleet credential resolver — Day 4 / S-3 unit tests.
+// SuiteFleet credential resolver — A1 swap unit tests.
 //
-// Covers env-var presence + parsing + the Day-5+ contract (signature is
-// async-ready, accepts and ignores tenantId, doesn't leak values).
+// Plan §3.1 — rewrite of pre-A1 env-injection-seam tests. Region creds
+// (username / password / clientId) stay env-backed and exercised via
+// process.env mutation. Per-merchant customerId reads from DB via
+// `withServiceRole`; mocked here per the suitefleet-webhook-resolver.spec.ts
+// pattern.
+//
+// Critical case flip from pre-A1: "returns identical credentials for
+// different tenant ids" (Day-4 single-secret behaviour) is INVERTED to
+// "returns DIFFERENT credentials for different tenant ids." This is the
+// load-bearing diagnostic that A1's swap landed correctly.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialError } from "../../../shared/errors";
 import type { Uuid } from "../../../shared/types";
 
+const mocks = vi.hoisted(() => ({
+  withServiceRole: vi.fn(),
+}));
+
+vi.mock("../../../shared/db", () => ({
+  withServiceRole: mocks.withServiceRole,
+}));
+
 import { resolveSuiteFleetCredentials } from "../suitefleet-resolver";
 
-// Sandbox tenant seeded by supabase/seed.sql — see W-1 PR for context.
-const SANDBOX_MERCHANT_588_TENANT_ID: Uuid = "8bfc84b0-c139-4f43-b966-5a12eaa7a302";
-const TENANT_B: Uuid = "00000000-0000-0000-0000-000000000002";
+const TENANT_MPL: Uuid = "8bfc84b0-c139-4f43-b966-5a12eaa7a302";
+const TENANT_DNR: Uuid = "00000000-0000-0000-0000-000000000002";
+const TENANT_FBU: Uuid = "00000000-0000-0000-0000-000000000003";
 
-const COMPLETE_ENV: Readonly<Record<string, string>> = {
+const REGION_ENV: Readonly<Record<string, string>> = {
   SUITEFLEET_SANDBOX_USERNAME: "planner@transcorp-intl.com",
   SUITEFLEET_SANDBOX_PASSWORD: "sandbox-secret-string",
   SUITEFLEET_SANDBOX_CLIENT_ID: "transcorpsb",
-  SUITEFLEET_SANDBOX_CUSTOMER_ID: "588",
 };
 
+function stubRow(customerCode: string | null) {
+  const fakeTx = {
+    execute: vi.fn(async () => [{ suitefleet_customer_code: customerCode }]),
+  };
+  mocks.withServiceRole.mockImplementation(async (_reason, fn) => fn(fakeTx));
+  return fakeTx;
+}
+
+function stubMissingRow() {
+  const fakeTx = { execute: vi.fn(async () => []) };
+  mocks.withServiceRole.mockImplementation(async (_reason, fn) => fn(fakeTx));
+  return fakeTx;
+}
+
+let savedEnv: Record<string, string | undefined>;
+
+beforeEach(() => {
+  savedEnv = {
+    SUITEFLEET_SANDBOX_USERNAME: process.env.SUITEFLEET_SANDBOX_USERNAME,
+    SUITEFLEET_SANDBOX_PASSWORD: process.env.SUITEFLEET_SANDBOX_PASSWORD,
+    SUITEFLEET_SANDBOX_CLIENT_ID: process.env.SUITEFLEET_SANDBOX_CLIENT_ID,
+  };
+  Object.assign(process.env, REGION_ENV);
+  mocks.withServiceRole.mockReset();
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  vi.restoreAllMocks();
+});
+
 describe("resolveSuiteFleetCredentials — happy path", () => {
-  let logSpy: ReturnType<typeof vi.spyOn>;
-  let errSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-  afterEach(() => {
-    logSpy.mockRestore();
-    errSpy.mockRestore();
-  });
-
   it("returns the four-field SuiteFleet credential shape", async () => {
-    const creds = await resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
-
-    expect(creds.username).toBe(COMPLETE_ENV.SUITEFLEET_SANDBOX_USERNAME);
-    expect(creds.password).toBe(COMPLETE_ENV.SUITEFLEET_SANDBOX_PASSWORD);
-    expect(creds.clientId).toBe(COMPLETE_ENV.SUITEFLEET_SANDBOX_CLIENT_ID);
+    stubRow("588");
+    const creds = await resolveSuiteFleetCredentials(TENANT_MPL);
+    expect(creds.username).toBe(REGION_ENV.SUITEFLEET_SANDBOX_USERNAME);
+    expect(creds.password).toBe(REGION_ENV.SUITEFLEET_SANDBOX_PASSWORD);
+    expect(creds.clientId).toBe(REGION_ENV.SUITEFLEET_SANDBOX_CLIENT_ID);
     expect(creds.customerId).toBe(588);
   });
 
   it("parses customerId as a number, not a string", async () => {
-    const creds = await resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
+    stubRow("588");
+    const creds = await resolveSuiteFleetCredentials(TENANT_MPL);
     expect(typeof creds.customerId).toBe("number");
   });
 
-  it("returns identical credentials for different tenant ids (Day-4 single-secret behaviour)", async () => {
-    const credsA = await resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
-    const credsB = await resolveSuiteFleetCredentials(TENANT_B, COMPLETE_ENV);
-    expect(credsA).toEqual(credsB);
+  it("returns DIFFERENT customerId values for different tenant ids (per-tenant routing)", async () => {
+    // INVERTED from Day-4 single-secret behaviour. Plan §3.1 critical
+    // case flip: the resolver MUST return a DISTINCT customerId per
+    // tenant — this is the load-bearing diagnostic that A1's swap
+    // landed correctly.
+    const codes = ["588", "586", "578"];
+    let callIndex = 0;
+    mocks.withServiceRole.mockImplementation(async (_reason, fn) => {
+      const code = codes[callIndex++];
+      const fakeTx = {
+        execute: vi.fn(async () => [{ suitefleet_customer_code: code }]),
+      };
+      return fn(fakeTx);
+    });
+    const credsMPL = await resolveSuiteFleetCredentials(TENANT_MPL);
+    const credsDNR = await resolveSuiteFleetCredentials(TENANT_DNR);
+    const credsFBU = await resolveSuiteFleetCredentials(TENANT_FBU);
+    expect(credsMPL.customerId).toBe(588);
+    expect(credsDNR.customerId).toBe(586);
+    expect(credsFBU.customerId).toBe(578);
+    // Region creds shared across tenants in the same region
+    expect(credsMPL.clientId).toBe(credsDNR.clientId);
+    expect(credsDNR.clientId).toBe(credsFBU.clientId);
+    expect(credsMPL.username).toBe(credsDNR.username);
   });
 
   it("never logs the password or username", async () => {
-    await resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
-    const all = [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => String(c[0])).join("\n");
-    expect(all).not.toContain(COMPLETE_ENV.SUITEFLEET_SANDBOX_PASSWORD);
-    expect(all).not.toContain(COMPLETE_ENV.SUITEFLEET_SANDBOX_USERNAME);
+    stubRow("588");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await resolveSuiteFleetCredentials(TENANT_MPL);
+    const all = [...logSpy.mock.calls, ...errSpy.mock.calls]
+      .map((c) => String(c[0]))
+      .join("\n");
+    expect(all).not.toContain(REGION_ENV.SUITEFLEET_SANDBOX_PASSWORD);
+    expect(all).not.toContain(REGION_ENV.SUITEFLEET_SANDBOX_USERNAME);
   });
 
   it("logs the tenant_id for forensic traceability", async () => {
-    await resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
-    const all = [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => String(c[0])).join("\n");
-    expect(all).toContain(SANDBOX_MERCHANT_588_TENANT_ID);
+    stubRow("588");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await resolveSuiteFleetCredentials(TENANT_MPL);
+    const all = [...logSpy.mock.calls, ...errSpy.mock.calls]
+      .map((c) => String(c[0]))
+      .join("\n");
+    expect(all).toContain(TENANT_MPL);
   });
 });
 
-describe("resolveSuiteFleetCredentials — missing env vars", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it("throws CredentialError when username is missing", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_USERNAME: "" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toMatchObject({
+describe("resolveSuiteFleetCredentials — missing region env vars", () => {
+  it("throws CredentialError when SUITEFLEET_SANDBOX_USERNAME is missing", async () => {
+    delete process.env.SUITEFLEET_SANDBOX_USERNAME;
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/SUITEFLEET_SANDBOX_USERNAME/),
     });
   });
 
-  it("throws CredentialError when password is missing", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_PASSWORD: "" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toMatchObject({
+  it("throws CredentialError when SUITEFLEET_SANDBOX_PASSWORD is missing", async () => {
+    delete process.env.SUITEFLEET_SANDBOX_PASSWORD;
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/SUITEFLEET_SANDBOX_PASSWORD/),
     });
   });
 
-  it("throws CredentialError when clientId is missing", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_CLIENT_ID: "" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toMatchObject({
+  it("throws CredentialError when SUITEFLEET_SANDBOX_CLIENT_ID is missing", async () => {
+    delete process.env.SUITEFLEET_SANDBOX_CLIENT_ID;
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/SUITEFLEET_SANDBOX_CLIENT_ID/),
     });
   });
 
-  it("throws CredentialError when customerId is missing", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_CUSTOMER_ID: "" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toMatchObject({
-      code: "CREDENTIAL",
-      message: expect.stringMatching(/SUITEFLEET_SANDBOX_CUSTOMER_ID/),
-    });
-  });
-
-  it("names every missing var when several are blank", async () => {
-    const env = { SUITEFLEET_SANDBOX_USERNAME: "x" };
+  it("names every missing region env var when several are blank", async () => {
+    delete process.env.SUITEFLEET_SANDBOX_USERNAME;
+    delete process.env.SUITEFLEET_SANDBOX_PASSWORD;
+    delete process.env.SUITEFLEET_SANDBOX_CLIENT_ID;
     let captured: unknown = null;
     try {
-      await resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env);
+      await resolveSuiteFleetCredentials(TENANT_MPL);
     } catch (err) {
       captured = err;
     }
     expect(captured).toBeInstanceOf(CredentialError);
     const msg = (captured as Error).message;
+    expect(msg).toContain("SUITEFLEET_SANDBOX_USERNAME");
     expect(msg).toContain("SUITEFLEET_SANDBOX_PASSWORD");
     expect(msg).toContain("SUITEFLEET_SANDBOX_CLIENT_ID");
-    expect(msg).toContain("SUITEFLEET_SANDBOX_CUSTOMER_ID");
-  });
-
-  it("never logs credential values when reporting missing vars", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_USERNAME: "" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toBeInstanceOf(CredentialError);
-    const all = [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => String(c[0])).join("\n");
-    expect(all).not.toContain(COMPLETE_ENV.SUITEFLEET_SANDBOX_PASSWORD);
-    expect(all).not.toContain(COMPLETE_ENV.SUITEFLEET_SANDBOX_CLIENT_ID);
   });
 });
 
-describe("resolveSuiteFleetCredentials — customerId parsing", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
+describe("resolveSuiteFleetCredentials — DB-backed customerId", () => {
+  it("throws CredentialError when tenant row not found", async () => {
+    stubMissingRow();
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
+      code: "CREDENTIAL",
+      message: expect.stringMatching(/tenant row not found/),
+    });
   });
-  afterEach(() => vi.restoreAllMocks());
 
-  it("rejects a non-numeric customerId", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_CUSTOMER_ID: "not-a-number" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toMatchObject({
+  it("throws CredentialError when suitefleet_customer_code is NULL", async () => {
+    stubRow(null);
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
+      code: "CREDENTIAL",
+      message: expect.stringMatching(/missing or empty/),
+    });
+  });
+
+  it("throws CredentialError when suitefleet_customer_code is empty string", async () => {
+    stubRow("");
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
+      code: "CREDENTIAL",
+      message: expect.stringMatching(/missing or empty/),
+    });
+  });
+
+  it("throws CredentialError when suitefleet_customer_code is whitespace-only", async () => {
+    stubRow("   ");
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
+      code: "CREDENTIAL",
+      message: expect.stringMatching(/missing or empty/),
+    });
+  });
+
+  it("throws CredentialError when suitefleet_customer_code is non-numeric", async () => {
+    stubRow("not-a-number");
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/positive integer/),
     });
   });
 
-  it("rejects a negative customerId", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_CUSTOMER_ID: "-5" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toMatchObject({
+  it("throws CredentialError when suitefleet_customer_code is alphanumeric (e.g. legacy E2E-RUN_ID format)", async () => {
+    stubRow("E2E-12345");
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/positive integer/),
     });
   });
 
-  it("rejects a zero customerId", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_CUSTOMER_ID: "0" };
-    await expect(
-      resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env)
-    ).rejects.toMatchObject({
+  it("throws CredentialError when suitefleet_customer_code is zero", async () => {
+    stubRow("0");
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
       code: "CREDENTIAL",
       message: expect.stringMatching(/positive integer/),
     });
   });
 
-  it("accepts a valid positive integer string", async () => {
-    const env = { ...COMPLETE_ENV, SUITEFLEET_SANDBOX_CUSTOMER_ID: "42" };
-    const creds = await resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, env);
-    expect(creds.customerId).toBe(42);
+  it("throws CredentialError when suitefleet_customer_code is negative", async () => {
+    stubRow("-5");
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
+      code: "CREDENTIAL",
+      message: expect.stringMatching(/positive integer/),
+    });
+  });
+
+  it("rejects suitefleet_customer_code with a leading zero (canonical form required)", async () => {
+    // Defense against silent zero-stripping: "0588" parses to 588 via
+    // parseInt but that's lossy. Reject so onboarding writes the
+    // canonical form.
+    stubRow("0588");
+    await expect(resolveSuiteFleetCredentials(TENANT_MPL)).rejects.toMatchObject({
+      code: "CREDENTIAL",
+      message: expect.stringMatching(/positive integer/),
+    });
   });
 });
 
 describe("resolveSuiteFleetCredentials — async signature contract", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it("returns a Promise even though Day-4 reads are synchronous", () => {
-    const result = resolveSuiteFleetCredentials(SANDBOX_MERCHANT_588_TENANT_ID, COMPLETE_ENV);
+  it("returns a Promise (matches Day-5+ AWS Secrets Manager swap signature)", () => {
+    stubRow("588");
+    const result = resolveSuiteFleetCredentials(TENANT_MPL);
     expect(result).toBeInstanceOf(Promise);
   });
 });

@@ -1,10 +1,43 @@
 ---
-name: Day-14 MVP demo — 3 P3 test merchants intentionally share sandbox SF account
-description: Path B accepted Day 10 (3 May 2026). The 3 P3 test merchants (MPL, DNR, FBU — meal-plan-scheduler, dr-nutrition, fresh-butchers) are seeded in Planner with distinct slugs/UUIDs/admin logins and distinct suitefleet_customer_code values, but all push tasks to SF merchant 588 in sandbox SF via the existing env-backed credential resolver. Planner-side per-tenant isolation is validated end-to-end (RLS, cron tenant filter, dashboard scoping, operator UI scoping); SF-side per-tenant isolation is NOT validated and gates on the Day-15+ Secrets Manager swap.
+name: Day-14 MVP demo — 3 P3 test merchants intentionally share sandbox SF account [SUPERSEDED Day 18 — see §0 amendment header]
+description: Path B accepted Day 10 (3 May 2026). The 3 P3 test merchants (MPL, DNR, FBU — meal-plan-scheduler, dr-nutrition, fresh-butchers) are seeded in Planner with distinct slugs/UUIDs/admin logins and distinct suitefleet_customer_code values, but all push tasks to SF merchant 588 in sandbox SF via the existing env-backed credential resolver. Planner-side per-tenant isolation is validated end-to-end (RLS, cron tenant filter, dashboard scoping, operator UI scoping); SF-side per-tenant isolation is NOT validated and gates on the Day-15+ Secrets Manager swap. SUPERSEDED Day 18 — Day-10 architectural framing was incorrect. Original text preserved below as historical context. See §0 amendment header.
 type: project
 ---
 
 # Decision · Day-14 MVP demo — 3 P3 test merchants share sandbox SF merchant 588
+
+## §0 Amendment — Day 18 (8 May 2026): Day-10 framing was wrong
+
+> **HISTORICAL CONTEXT NOTICE.** The decision text below (§1 onwards) was filed Day 10 (3 May 2026) and reflects the architectural model understood at that time. **The Day-10 framing was based on a misread of the SuiteFleet data model and is superseded by the Day-18 architectural correction.** Read this header first; the §1-§8 text below remains for historical/forensic context but should NOT be cited as current architecture.
+>
+> **What was wrong:**
+>
+> - Day-10 framed "shared customer 588" as a Path-B sandbox-share deferral, with "per-tenant credentials" as the first post-pilot hardening item. That framing was the misread.
+> - Reality (locked Day 18 by Love after SF onboarding context confirmation): SuiteFleet has three identifier layers, not two. Region `client_id` (env-backed; `transcorpsb` for sandbox) is shared across merchants in a region — that's the auth credential. Per-merchant `customerId` (numeric, 588/586/578 in sandbox) is the routing identifier — DB-backed via `tenants.suitefleet_customer_code` post-A1. AWB prefix `customer.code` (alphanumeric, MPL/DNR/FBU) is cosmetic with NO routing role.
+> - The "every merchant routes as 588" symptom from Day 10 was a real bug — the Day-4 resolver ignored `tenantId` and read a single env-backed `customerId` — not the architectural design.
+> - "Per-tenant credentials post-pilot" was the wrong framing of the real hardening item, which is regional credential expansion (UAE / Qatar onboarding when those regions deploy).
+>
+> **What changed Day 18:**
+>
+> - A1 code-PR (`day18/a1-customer-id-resolver-swap-code`) rewrote `src/modules/credentials/suitefleet-resolver.ts` to read per-merchant `customerId` from `tenants.suitefleet_customer_code` via `withServiceRole` + `sqlTag`. Region creds (`username`, `password`, `clientId`) stay env-backed.
+> - `tenants.suitefleet_customer_code` data values transitioned from alphanumeric placeholders (`'MPL'`, `'DNR'`) to canonical numeric values (`'588'`, `'586'`, `'578'`).
+> - Three demo tenants (MPL/DNR/FBU) now route to distinct SF merchants 588/586/578. SF console will show three distinct merchants with their respective task volumes — direct demo evidence of multi-tenancy.
+>
+> **Where to read the current architecture:**
+>
+> - `memory/PLANNER_PRODUCT_BRIEF.md` §3.6 (v1.7) — current decision
+> - `memory/decision_brief_v1_7_amendment_sf_identifier_model.md` — companion decision file
+> - `memory/followup_per_tenant_merchant_id_routing.md` — root-cause memo (Day 17 EOD post-smoke surface)
+> - `memory/followup_secrets_manager_swap_critical_path.md` — companion memo (also amended Day 18 to reframe swap as regional-credential-expansion not per-tenant-isolation)
+> - `memory/followup_a1_plan_section_2_5_premise_correction.md` — A1 code-PR Pattern B rationale
+> - `supabase/migrations/0013_sf_integration_required_fields.sql` Section 2 — header comment rewritten Day 18 to reflect per-merchant `customerId` role
+>
+> **What stays valid from §1-§8 below:** the Planner-side per-tenant isolation observations (RLS, cron tenant filter, dashboard scoping, operator UI scoping per §2 ✓). What's superseded: the §3 wire-body framing, §4 AWB-prefix narrative ("AWB prefix shows MPL during sandbox" was correct symptom but wrong cause), and §6 production-posture framing.
+
+---
+
+# (Original Day-10 decision text — preserved as historical context)
+
 
 **Status:** Decided. Path B accepted by Love after Path A (delete sandbox-merchant-588) rejected and after the static-code probe confirmed wire-body has no `customer.code` mismatch surface.
 **Decision date:** 3 May 2026 (Day 10, post-P2 cross-tenant probe completion)

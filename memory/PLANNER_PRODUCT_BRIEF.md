@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.6
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai.
+**Version:** v1.7
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap.
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -712,21 +712,29 @@ Per Day-1 v1.1 delta §12.2.4-5. Defense in depth:
 
 ### 3.5 L4 — Label generation
 
-Labels are proxied AS-IS from SuiteFleet's `/generate-label` endpoint. Operator clicks Print labels on `/tasks` page (single or multi-select); service layer translates Planner UUIDs → SF external_ids; SF returns the indv-small format PDF; PDF streams back to operator unmodified. Single shared `customer.code = 588` sandbox credential per `memory/decision_mvp_shared_suitefleet_credentials.md`.
+Labels are proxied AS-IS from SuiteFleet's `/generate-label` endpoint. Operator clicks Print labels on `/tasks` page (single or multi-select); service layer translates Planner UUIDs → SF external_ids; SF returns the indv-small format PDF; PDF streams back to operator unmodified. Auth uses the post-A1 per-tenant resolver — region credentials env-backed (`transcorpsb` sandbox), per-merchant `customerId` from `tenants.suitefleet_customer_code`. AWB prefix on each label (alphanumeric, e.g. `MPL-...`) is the SF-side `customer.code` cosmetic field; not the routing identifier. See §3.6 + `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`.
 
 No PDF post-processing or logo swap. Decision locked at v1.6 per `memory/decision_brief_v1_6_amendment_no_logo_swap.md`.
 
 ### 3.6 SuiteFleet credential decision
 
-**MVP:** Single shared SF sandbox credential across all tenants. Hardcoded customer.code = 588.
+**MVP:** SF credentials are region-scoped (`transcorpsb` for sandbox; `transcorpuae` and `transcorpqatar` for future regional deployments). All merchants within a region share that region's `username` / `password` / `clientId` env-backed credentials. Each tenant's `customerId` (numeric merchant identifier: 588 MPL / 586 DNR / 578 FBU in sandbox) is read from `tenants.suitefleet_customer_code` via the per-tenant resolver. Wire body carries `customerId` (numeric) only; `customer.code` (alphanumeric: MPL/FBU/DNR) is an AWB prefix and plays no role in routing.
 
-**Reasoning:** Per-tenant credential isolation requires AWS Secrets Manager swap (post-MVP per `memory/followup_secrets_manager_swap_critical_path.md`).
+**Architectural model (three identifier layers, locked Day 18):**
 
-**Phase 2:** Per-tenant SF credential isolation per v1.1 delta §6.2.1. First post-pilot hardening item.
+| Layer | Identifier | Example | Scope |
+|---|---|---|---|
+| Region | `client_id` (env-backed) | `transcorpsb` (sandbox), `transcorpuae` (UAE), `transcorpqatar` (Qatar) | Per region; shared across merchants in that region |
+| Merchant | `customerId` (numeric, DB-backed via `tenants.suitefleet_customer_code`) | 588 (MPL), 586 (DNR), 578 (FBU) | Per merchant within a region; routes tasks to correct SF merchant |
+| AWB prefix | `customer.code` (alphanumeric) | MPL, DNR, FBU | Cosmetic; AWB prefix only; NO routing role |
+
+**Resolver (post A1 Day 18):** `src/modules/credentials/suitefleet-resolver.ts` reads region creds from `process.env`, per-merchant `customerId` from DB via `withServiceRole` + `sqlTag`. Throws `CredentialError` on tenant-not-found, NULL/empty `customer_code`, or non-positive-integer values (see `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`).
+
+**Phase 2:** Regional credential expansion (UAE/Qatar onboarding) — adding `transcorpuae` / `transcorpqatar` env-or-Secrets-Manager entries when those regions onboard. Per-merchant `customerId` continues to read from DB via the per-tenant resolver. AWS Secrets Manager swap (`memory/followup_secrets_manager_swap_critical_path.md`) is for the regional credentials, not for per-tenant isolation.
 
 **Demo Q&A rehearsal:**
 
-> "Yes, the architecture is designed for per-tenant credentials per v1.1 delta §6.2.1; we shipped the demo with a shared dev credential to isolate the demo from the architecture work. Per-tenant credential isolation is the first item on the post-pilot hardening list."
+> "SF `client_id` is region-scoped — sandbox, UAE, Qatar each have their own. All merchants within a region share that credential and route tasks via `customerId` in the wire body. Three demo merchants share `transcorpsb` because they're all sandbox-region. The resolver threads each tenant's `customerId` (588/586/578) into every `createTask` call so SF invoices each merchant correctly."
 
 ---
 
@@ -743,8 +751,8 @@ Each item filed as deferral memo in `memory/` during Day-13 setup.
 | Skip notifications via SMS to consignee | BRD §14 Q5 | Post-pilot |
 | Reconciliation job between Planner and SF | BRD §10.2 | Post-pilot |
 | Failed-attempt manual retry workflow (delivery-level, not webhook-DLQ) | BRD §6.2.3 | Post-pilot |
-| Per-tenant SuiteFleet credential isolation | v1.1 delta §6.2.1 | First post-pilot item |
-| AWS Secrets Manager swap | `followup_secrets_manager_swap_critical_path.md` | Post-pilot |
+| Regional credential expansion (UAE/Qatar onboarding) | v1.7 amendment §3.6 | Post-pilot — when those regions onboard |
+| AWS Secrets Manager swap (regional credentials) | `followup_secrets_manager_swap_critical_path.md` | Post-pilot |
 | Webhook events admin UI | plan.docx §10 Day 12 | Post-pilot |
 | Credential rotation UX | plan.docx §10 Day 12 | Post-pilot |
 | Integrations page (SF credential entry/test in merchant portal) | plan.docx §10 Day 5 + v1.1 delta §6.2.1.9 | Post-pilot |
@@ -834,7 +842,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 
 **"How does Transcorp prevent merchant A's tasks appearing in merchant B's SuiteFleet account?"**
 
-> "The architecture is designed for per-tenant credentials per Build Plan v1.1 §6.2.1; we shipped the demo with a shared dev credential to isolate the demo from the architecture work. Per-tenant credential isolation is the first item on the post-pilot hardening list."
+> "SF `client_id` is region-scoped — sandbox, UAE, Qatar each have their own. All merchants within a region share that credential and route tasks via `customerId` in the wire body. Three demo merchants share `transcorpsb` because they're all sandbox-region. The resolver threads each tenant's `customerId` (588/586/578) into every `createTask` call so SF invoices each merchant correctly. SF console will show three distinct merchants with their respective task volumes — proof of multi-tenancy live."
 
 **"How does the Operations Manager see what's happening across all 845 consignees?"**
 
@@ -963,6 +971,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.4 | 7 May 2026 (Day 17 morning) | §3.3.11 rewritten in full to corporate-locked brand spec — palette (3 primary + 3 accent + 5-step amber ladder + 5 neutrals), composition ratio (58/22/12/8), three-face type system (Manrope display + Mulish body + Sanchez editorial + Mulish-caps mono discipline), 8-token type scale, typesetting rules, web fallback stack, logo asset reference, state-semantic color usage. Codebase brand-tokens.css already aligned with corporate spec; this amendment brings brief into alignment. Filed at `memory/decision_brief_v1_4_amendment_brand_tokens.md`. |
 | v1.5 | 7 May 2026 (Day 17, post-PR-#168 visual refinement) | Color hex reconciliation to corporate SVG asset. Navy `#0F2A5C` → `#252d60`; Green `#2E8B4A` → `#3e7c4b`. SVG (transcorp-logo-color.svg, fill values from corporate vector source) is the canonical source of truth; brief and CSS variables (`src/styles/brand-tokens.css`) align to the asset. Composition ratio (58/22/12/8), type system, accent palette, 5-step amber ladder, neutrals all unchanged. Filed at `memory/decision_brief_v1_5_amendment_color_canon.md`. |
 | v1.6 | 7 May 2026 (Day 17, ~1:30 PM Dubai) | Locked decision: labels proxied as-is from SF; no logo swap in scope (Phase 1 or Phase 2). §3.5 amended to reflect MVP-final state — current `/api/tasks/labels` flow (PR #170 drizzle hotfix + PR #172 UUID translation) IS the final label rendering path. Demo framing: SF logo on label is by design; Transcorp's value-add is upstream operator workflow, not label rendering. Filed at `memory/decision_brief_v1_6_amendment_no_logo_swap.md`. |
+| v1.7 | 8 May 2026 (Day 18) | §3.6 rewritten to reflect actual SF identifier model — three layers locked: region `client_id` env-backed (transcorpsb / transcorpuae / transcorpqatar), per-merchant `customerId` DB-backed via `tenants.suitefleet_customer_code` and resolved per-tenant by `src/modules/credentials/suitefleet-resolver.ts`, AWB prefix `customer.code` cosmetic only with no routing role. Phase 2 (§4) row updated: "per-tenant SuiteFleet credential isolation" replaced with "regional credential expansion." §3.5 label-generation language reframed for region+customerId model. §5.4 Q&A rehearsal updated. Filed at `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`; A1 code-PR landed the resolver swap + bundled scope (migration 0013 comment, two Day-10 memo amendments, this brief amendment, MEMORY.md index update, premise-correction memo at `memory/followup_a1_plan_section_2_5_premise_correction.md`). |
 
 ---
 
@@ -978,4 +987,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.6.**
+**End of v1.7.**

@@ -362,8 +362,18 @@ export async function pushSingleTask(
   });
 
   // ---------------------------------------------------------------------------
-  // Step 1: tenant config + customer_code guard
+  // Step 1: tenant config + customer_code race-condition belt
   // ---------------------------------------------------------------------------
+  // Race-condition belt between β cron enumeration
+  // (list-cron-eligible-tenants.ts:80-82) and per-task push invocation.
+  // β filter is upstream at enumeration time; this guard re-checks at
+  // push time to catch the window where suitefleet_customer_code was
+  // cleared between β enumeration and queue-worker pickup. Resolver runs
+  // downstream at adapter.authenticate (Step 4) and throws on missing
+  // customer_code post-A1 — third layer of defence-in-depth. A1 plan
+  // §2.5 originally framed this guard as removable; that framing was
+  // based on the empirically-incorrect "resolver upstream of guard"
+  // premise. See memory/followup_a1_plan_section_2_5_premise_correction.md.
   const config = await withServiceRole(
     `task-push:single load_config for tenant ${tenantId}`,
     async (tx) => {
