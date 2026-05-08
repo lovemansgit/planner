@@ -19,15 +19,23 @@ export function normaliseSlug(raw: string): string {
 }
 
 /**
- * Slug shape per merchants/service.ts requireValidSlug — exactly
- * three lowercase a-z letters. Aligned with the service-layer
- * validator so the client-side check rejects the same inputs the
- * service would; defense-in-depth at the presentation layer.
+ * Slug shape per merchants/service.ts requireValidSlug — lowercase
+ * letters, digits, hyphens; length 1–60. Mirrors the shipped
+ * service-layer regex (`SLUG_RE = /^[a-z0-9-]+$/` plus the 60-char
+ * length cap) so the client-side check rejects the same inputs the
+ * service would and accepts the same inputs the service accepts.
+ * Defense-in-depth at the presentation layer.
+ *
+ * §A registered-metadata-wins: the shipped service-layer regex is
+ * canonical. Day-18 fixup brought the client validator into line
+ * after a Day-18 reviewer audit caught the divergence (earlier
+ * draft was `/^[a-z]{3}$/`, which over-restricted valid slugs like
+ * `demo-bistro` or `xy`).
  *
  * Pure helper; exported for unit-test coverage.
  */
 export function validateSlug(slug: string): boolean {
-  return /^[a-z]{3}$/.test(slug);
+  return /^[a-z0-9-]+$/.test(slug) && slug.length <= 60;
 }
 
 /**
@@ -128,7 +136,8 @@ export function parseCreateMerchantForm(formData: FormData): ParseCreateMerchant
   if (slug.length === 0) {
     fieldErrors.slug = "Slug is required.";
   } else if (!validateSlug(slug)) {
-    fieldErrors.slug = "Slug must be 3 lowercase letters (a-z).";
+    fieldErrors.slug =
+      "Slug must be lowercase letters, numbers, and hyphens (1-60 characters).";
   }
 
   const line = trimmed("pickup_line");

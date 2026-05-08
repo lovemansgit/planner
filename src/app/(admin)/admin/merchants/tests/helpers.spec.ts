@@ -34,24 +34,48 @@ describe("normaliseSlug", () => {
 });
 
 describe("validateSlug", () => {
-  it("accepts exactly 3 lowercase a-z letters", () => {
-    expect(validateSlug("abc")).toBe(true);
+  // Mirrors the shipped service-layer SLUG_RE at
+  // src/modules/merchants/service.ts:103-110:
+  //   /^[a-z0-9-]+$/ with length cap 60.
+  // §A registered-metadata-wins.
+
+  it("accepts lowercase letters, digits, and hyphens", () => {
     expect(validateSlug("xyz")).toBe(true);
-    expect(validateSlug("dmb")).toBe(true);
+    expect(validateSlug("demo-bistro")).toBe(true);
+    expect(validateSlug("dmb01")).toBe(true);
+    expect(validateSlug("a1-b2-c3")).toBe(true);
   });
 
-  it("rejects wrong length", () => {
-    expect(validateSlug("ab")).toBe(false);
-    expect(validateSlug("abcd")).toBe(false);
+  it("accepts the 1-character lower-bound length", () => {
+    expect(validateSlug("a")).toBe(true);
+    expect(validateSlug("0")).toBe(true);
+  });
+
+  it("accepts the 60-character upper-bound length", () => {
+    expect(validateSlug("a".repeat(60))).toBe(true);
+  });
+
+  it("rejects empty string (regex `+` quantifier requires ≥1 char)", () => {
     expect(validateSlug("")).toBe(false);
   });
 
-  it("rejects non-lowercase or non-letter chars", () => {
+  it("rejects strings longer than 60 characters", () => {
+    expect(validateSlug("a".repeat(61))).toBe(false);
+    expect(validateSlug("a".repeat(100))).toBe(false);
+  });
+
+  it("rejects uppercase chars", () => {
     expect(validateSlug("ABC")).toBe(false);
+    expect(validateSlug("Demo-Bistro")).toBe(false);
     expect(validateSlug("abC")).toBe(false);
-    expect(validateSlug("a1c")).toBe(false);
-    expect(validateSlug("a-c")).toBe(false);
-    expect(validateSlug("ab ")).toBe(false);
+  });
+
+  it("rejects whitespace, underscores, and other punctuation", () => {
+    expect(validateSlug("demo bistro")).toBe(false);
+    expect(validateSlug("demo_bistro")).toBe(false);
+    expect(validateSlug("demo.bistro")).toBe(false);
+    expect(validateSlug("demo/bistro")).toBe(false);
+    expect(validateSlug("demo,bistro")).toBe(false);
   });
 });
 
@@ -136,11 +160,11 @@ describe("parseCreateMerchantForm", () => {
     }
   });
 
-  it("rejects non-conforming slugs even when length normalised", () => {
+  it("rejects slugs that fail the service-layer regex (e.g. underscores)", () => {
     const result = parseCreateMerchantForm(
       makeForm({
         name: "Demo Bistro",
-        slug: "abcd",
+        slug: "demo_bistro",
         pickup_line: "x",
         pickup_district: "x",
         pickup_emirate: "x",
@@ -148,7 +172,23 @@ describe("parseCreateMerchantForm", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.fieldErrors.slug).toMatch(/3 lowercase letters/);
+      expect(result.fieldErrors.slug).toMatch(/lowercase letters, numbers, and hyphens/);
+    }
+  });
+
+  it("rejects slugs longer than 60 characters", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "a".repeat(61),
+        pickup_line: "x",
+        pickup_district: "x",
+        pickup_emirate: "x",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.slug).toMatch(/1-60 characters/);
     }
   });
 
@@ -156,14 +196,14 @@ describe("parseCreateMerchantForm", () => {
     const result = parseCreateMerchantForm(
       makeForm({
         name: "Demo Bistro",
-        slug: "DMB",
+        slug: "DEMO-Bistro",
         pickup_line: "x",
         pickup_district: "x",
         pickup_emirate: "x",
       }),
     );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.slug).toBe("dmb");
+    if (result.ok) expect(result.value.slug).toBe("demo-bistro");
   });
 
   it("treats whitespace-only fields as missing", () => {
