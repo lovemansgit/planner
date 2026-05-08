@@ -18,6 +18,7 @@
     "test:sandbox": "vitest run --project sandbox",
     "test:e2e": "playwright test",
     "onboard-merchant": "node scripts/onboard-merchant.mjs",
+    "onboard-transcorp-sysadmin": "node scripts/onboard-transcorp-sysadmin.mjs",
     "teardown-merchant": "node scripts/teardown-merchant.mjs",
     "seed-subscriptions": "node scripts/seed-subscriptions.mjs",
     "backfill-subscription-materialization": "node scripts/backfill-subscription-materialization.mjs"
