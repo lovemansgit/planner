@@ -29,14 +29,28 @@
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
 /**
- * tenants.status — 4-state lowercase canon per migration 0001 CHECK +
- * brief v1.3 §3.1.1 + plan §1.7.1 prod canon. The state machine in
- * MVP exposes only `provisioning → active` (activateMerchant) and
- * `active → inactive` (deactivateMerchant); `'suspended'` is reserved
- * (part-2 service-surface decision deferred per brief §3.1.1 +
- * memory/followup_merchant_lifecycle_transition_expansion.md).
+ * tenants.status — 5-state lowercase canon. Migration 0001 shipped
+ * the original 4-state (`provisioning | active | suspended | inactive`);
+ * migration 0021 widened the CHECK constraint to include `'archived'`
+ * (Day-18 fixture cleanup).
+ *
+ * Operator-driven lifecycle in MVP exposes only:
+ *   `provisioning → active`  (activateMerchant)
+ *   `active → inactive`      (deactivateMerchant)
+ *
+ * `'suspended'` is reserved (part-2 service-surface decision deferred
+ * per brief §3.1.1 + memory/followup_merchant_lifecycle_transition_expansion.md).
+ *
+ * `'archived'` is set ONLY by the Day-18 fixture-cleanup migration
+ * (0021_tenants_status_archived.sql). No service fn flips a tenant
+ * to `'archived'` — operator-driven `archiveMerchant` is queued for
+ * Phase 2 lifecycle expansion (same followup memo). Archived rows
+ * are excluded from the admin list page by default (see
+ * ListMerchantsFilters.excludeArchived) and from the cron β tenant
+ * walk via the `AND status IN ('provisioning', 'active')` filter at
+ * src/app/api/cron/generate-tasks/list-cron-eligible-tenants.ts.
  */
-export type TenantStatus = "provisioning" | "active" | "suspended" | "inactive";
+export type TenantStatus = "provisioning" | "active" | "suspended" | "inactive" | "archived";
 
 /**
  * Pickup-address DTO — nested object shape per brief v1.3 §3.1.1
@@ -126,10 +140,26 @@ export interface DeactivateMerchantResult {
 }
 
 /**
- * listMerchants filter shape per merged plan §5.2.4. `status?` is
- * the only MVP filter; additional filters (slug pattern, created_at
- * range) are Phase 2.
+ * listMerchants filter shape per merged plan §5.2.4. Day-18 cleanup
+ * (PR #189 plan + this code-PR) added `excludeArchived?` so the admin
+ * list page renders demo merchants only by default while preserving
+ * a forensic-review path via the explicit `status: 'archived'` filter.
+ *
+ * Precedence rule (enforced in repository.ts:listMerchants):
+ *   - `status === 'archived'`  → returns archived rows; `excludeArchived` ignored.
+ *   - `status === <other>`     → returns rows in that status; `excludeArchived` ignored.
+ *   - `status === undefined`   → applies `excludeArchived` (default `true`).
+ *     - `excludeArchived: true`  → `WHERE status != 'archived'` (default).
+ *     - `excludeArchived: false` → all rows including archived (debug/forensic).
+ *
+ * Additional filters (slug pattern, created_at range) are Phase 2.
  */
 export interface ListMerchantsFilters {
   readonly status?: TenantStatus;
+  /**
+   * Default `true` (excludes archived rows). Ignored when an explicit
+   * `status` filter is provided. Set to `false` to surface archived
+   * rows in a no-status-filter call (rare; debugging only).
+   */
+  readonly excludeArchived?: boolean;
 }

@@ -74,11 +74,16 @@ export const revalidate = 0;
  * brief v1.3 §3.1.1. Mirrors `TenantStatus` from
  * `src/modules/merchants/types.ts:39`. Lowercase per the prod canon.
  */
+// Mirrors the TenantStatus union at src/modules/merchants/types.ts:39.
+// 5-state lowercase canon: original 4 from migration 0001 plus
+// 'archived' from migration 0021 (Day-18 fixture cleanup). Forensic
+// `?status=archived` filter routes here.
 const TenantStatusEnum = z.enum([
   "provisioning",
   "active",
   "suspended",
   "inactive",
+  "archived",
 ]);
 
 /**
@@ -177,7 +182,7 @@ function parseQueryFilters(req: Request): ListMerchantsFilters {
   const parsed = TenantStatusEnum.safeParse(rawStatus);
   if (!parsed.success) {
     throw new ValidationError(
-      `status query param invalid: must be one of provisioning | active | suspended | inactive; got '${rawStatus}'`,
+      `status query param invalid: must be one of provisioning | active | suspended | inactive | archived; got '${rawStatus}'`,
     );
   }
   return { status: parsed.data as TenantStatus };

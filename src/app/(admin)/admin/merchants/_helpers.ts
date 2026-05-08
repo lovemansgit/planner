@@ -45,11 +45,14 @@ export function validateSlug(slug: string): boolean {
  *
  * Color treatment:
  *   - active: Grass Green (positive, in-use)
- *   - provisioning, suspended, inactive: muted (no go-signal)
+ *   - provisioning, suspended, inactive, archived: muted (no go-signal)
  *
- * Note: only `provisioning`, `active`, `suspended`, `inactive` ship
- * in MVP per merchants/types.ts. The TenantStatus union is exhaustive;
- * the switch is total (TS enforces).
+ * The TenantStatus union is exhaustive over 5 values (Day-18 0021
+ * widening added `'archived'`); the switch is total (TS enforces).
+ * Archived rows reach this helper only via the explicit
+ * `?status=archived` forensic-review filter; the default
+ * `listMerchants` call excludes archived per
+ * `ListMerchantsFilters.excludeArchived`.
  */
 export interface StatusBadgeSurface {
   readonly label: string;
@@ -78,20 +81,32 @@ export function statusBadgeSurface(status: TenantStatus): StatusBadgeSurface {
         label: "Inactive",
         className: "bg-[color:var(--color-text-tertiary)]/15 text-[color:var(--color-text-tertiary)]",
       };
+    case "archived":
+      return {
+        label: "Archived",
+        className: "bg-[color:var(--color-text-tertiary)]/15 text-[color:var(--color-text-tertiary)]",
+      };
   }
 }
 
 /**
  * Whether the merchant offers a status-flip action and which one.
  * Mirrors the brief MVP state machine: provisioning → active and
- * active → inactive. Other states have no MVP action; row renders
- * "—" in the actions column.
+ * active → inactive. Other states (`suspended`, `inactive`,
+ * `archived`) have no MVP action; row renders "—" in the actions
+ * column.
+ *
+ * Implemented as early-return rather than an exhaustive switch
+ * because the "no MVP action" outcome is the catch-all for every
+ * non-{provisioning,active} state — adding the 5th value `'archived'`
+ * needs no code change here, only documentation.
  */
 export type MerchantAction = "activate" | "deactivate" | null;
 
 export function statusAction(status: TenantStatus): MerchantAction {
   if (status === "provisioning") return "activate";
   if (status === "active") return "deactivate";
+  // suspended | inactive | archived — no MVP action
   return null;
 }
 
