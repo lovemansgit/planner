@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.7
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap.
+**Version:** v1.8
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections.
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -381,7 +381,7 @@ Configurable cut-off time per merchant is **Phase 2** (rule enforced in MVP at h
 
 **Webhook auth:** Verify `X-Client-Id` and `X-Client-Secret` headers match values registered for tenant (per-tenant webhook credentials already exist per memory).
 
-**Webhook payload format:** `?sf-format=object` (single-event JSON, simpler handler logic).
+**Webhook payload format:** JSON array (batched per receipt; each entry is one event). The receiver iterates events; the dedup UNIQUE on `webhook_events` collapses retries. (v1.8 amendment — original `?sf-format=object` claim was empirically wrong; SF sends arrays. Receiver enforces `Array.isArray` and parser asserts the same.)
 
 **Webhook events parsed (canonical SF codes):**
 
@@ -829,7 +829,7 @@ Runs twice on Day 19 (start of dry-run, 30 min before live demo):
 2. ≥3 other seeded merchants (MPL, DNR, FBU)
 3. Total consignees ≥ 845
 4. Cron has run within last 24 hours
-5. ≥1 task with status=DELIVERED and non-null POD photo URL (sourced via real webhook)
+5. ≥1 task with status=DELIVERED and `tasks.pod_photos IS NOT NULL` (sourced via real webhook → Layer 2 status-fn write → Layer 3 POD-extraction populates the jsonb in the same UPDATE statement; v1.8 amendment binds the gate to the concrete column landed by the A2 plan-PR)
 6. ≥1 subscription with applied skip + populated compensating_date
 7. Fatima Al Mansouri has address rotation configured
 8. Sarah Khouri has CRM state=HIGH_RISK with ≥2 failed deliveries in history
@@ -972,6 +972,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.5 | 7 May 2026 (Day 17, post-PR-#168 visual refinement) | Color hex reconciliation to corporate SVG asset. Navy `#0F2A5C` → `#252d60`; Green `#2E8B4A` → `#3e7c4b`. SVG (transcorp-logo-color.svg, fill values from corporate vector source) is the canonical source of truth; brief and CSS variables (`src/styles/brand-tokens.css`) align to the asset. Composition ratio (58/22/12/8), type system, accent palette, 5-step amber ladder, neutrals all unchanged. Filed at `memory/decision_brief_v1_5_amendment_color_canon.md`. |
 | v1.6 | 7 May 2026 (Day 17, ~1:30 PM Dubai) | Locked decision: labels proxied as-is from SF; no logo swap in scope (Phase 1 or Phase 2). §3.5 amended to reflect MVP-final state — current `/api/tasks/labels` flow (PR #170 drizzle hotfix + PR #172 UUID translation) IS the final label rendering path. Demo framing: SF logo on label is by design; Transcorp's value-add is upstream operator workflow, not label rendering. Filed at `memory/decision_brief_v1_6_amendment_no_logo_swap.md`. |
 | v1.7 | 8 May 2026 (Day 18) | §3.6 rewritten to reflect actual SF identifier model — three layers locked: region `client_id` env-backed (transcorpsb / transcorpuae / transcorpqatar), per-merchant `customerId` DB-backed via `tenants.suitefleet_customer_code` and resolved per-tenant by `src/modules/credentials/suitefleet-resolver.ts`, AWB prefix `customer.code` cosmetic only with no routing role. Phase 2 (§4) row updated: "per-tenant SuiteFleet credential isolation" replaced with "regional credential expansion." §3.5 label-generation language reframed for region+customerId model. §5.4 Q&A rehearsal updated. Filed at `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`; A1 code-PR landed the resolver swap + bundled scope (migration 0013 comment, two Day-10 memo amendments, this brief amendment, MEMORY.md index update, premise-correction memo at `memory/followup_a1_plan_section_2_5_premise_correction.md`). |
+| v1.8 | 8 May 2026 (Day 18, post-A2-plan-PR) | Two amendments folded with the A2 webhook-handler 3-layer plan-PR. **§3.1.10 webhook payload format corrected** — original `?sf-format=object` (single-event JSON) was empirically wrong; SF sends JSON arrays per Day-7 capture and receiver/parser enforce array shape ([route.ts:146](../../src/app/api/webhooks/suitefleet/%5BtenantId%5D/route.ts#L146); [webhook-parser.ts:149](../../src/modules/integration/providers/suitefleet/webhook-parser.ts#L149)). New text describes batched array shape + dedup UNIQUE collapsing retries. **§5.3 Gate 5 reworded** to bind to the concrete column landed by the A2 plan-PR: `tasks.pod_photos IS NOT NULL` rather than free-text "POD photo URL." §3.3.8 cache-from-webhook commitment unchanged — POD remains the canonical example. Filed in `memory/plans/day-18-a2-webhook-handler-3-layer.md` §7. |
 
 ---
 
@@ -987,4 +988,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.7.**
+**End of v1.8.**
