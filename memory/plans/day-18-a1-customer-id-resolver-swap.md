@@ -343,10 +343,14 @@ capturing the architectural correction:
 
 ### §5.5 Index update
 
-`memory/MEMORY-index.md` Day-18 entry: list this plan-PR + bundled
-amendments + new decision file. Single bullet point:
+Add a Day-18 entry to `memory/MEMORY-index.md` under the existing Day-18 section. The bullet text below uses a path-relative link because `MEMORY-index.md` lives at `memory/MEMORY-index.md` — `plans/day-18-...` resolves correctly from that file.
 
-- [Day-18 A1 — customer_id resolver swap](plans/day-18-a1-customer-id-resolver-swap.md) — committed via this plan-PR alongside §5.1-§5.4 bundled amendments
+Bullet to add:
+
+Day-18 A1 — customer_id resolver swap — committed via this plan-PR alongside §5.1-§5.4 bundled amendments
+
+
+NOTE: this bullet text goes into `memory/MEMORY-index.md` only. Do NOT use this exact relative path in any PR description or other location — it only resolves when sibling to `plans/`.
 
 ## §6 Pre-merge verification gates (T3 hard-stop checklist)
 
@@ -372,7 +376,8 @@ only after every gate below clears.
 | 14 | Test fixtures populate customer_code for three demo tenants | code review | §3.5 |
 | 15 | `SUITEFLEET_SANDBOX_CUSTOMER_ID` env var still present in Vercel (deprecation deferred) | manual verify | §4 |
 | 16 | typecheck + lint clean | CI | standard |
-| 17 | Production smoke post-deploy: trigger createTask on each of three demo tenants; verify each lands in correct SF merchant per SF console | manual smoke | post-deploy |
+| 17 | `vercel promote` to Production executed; production HEAD updated to A1 code-PR merge SHA | manual deploy | post-merge |
+| 18 | Production smoke post-Production-promote: trigger createTask on each of three demo tenants; verify each lands in correct SF merchant per SF console | manual smoke | post-deploy |
 
 ## §7 Risks + rollback
 
