@@ -33,7 +33,7 @@ listed in §2 below. Then the A1 code-PR prompt the reviewer will paste next.
 3. **`memory/followup_per_tenant_merchant_id_routing.md`** — root-cause memo
    that led to A1. The architectural correction (regional `client_id`,
    per-merchant `customerId`, AWB-prefix `customer.code`) is canonical.
-4. **`memory/MEMORY-index.md`** — Day-17 entries through Day-18 entries.
+4. **`memory/MEMORY.md`** — Day-17 entries through Day-18 entries.
    Provides cross-references for the four memo amendments bundled in A1.
 
 Optional (read on-demand if implementation surfaces a question):
@@ -136,7 +136,7 @@ The code-PR will touch these files (verified via Day-18 surveys):
   scope per plan §5.3.
 - `memory/decision_brief_v1_7_amendment_sf_identifier_model.md` — NEW FILE
   per plan §5.4.
-- `memory/MEMORY-index.md` — ADD Day-18 A1 entry per plan §5.5.
+- `memory/MEMORY.md` — ADD Day-18 A1 entry per plan §5.5.
 
 **Test fixtures:**
 - Wherever test fixtures populate the `tenants` table — verify
