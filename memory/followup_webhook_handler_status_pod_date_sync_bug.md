@@ -6,6 +6,8 @@ type: project
 
 # Webhook handler 3-layer compounding gap
 
+> **Amended Day-18 PM.** Original references to `event-mapping.ts` and `tasks.photos` were factual errors surfaced by Day-18 Phase-1 survey. Corrected paths and column name reflect actual repo state.
+
 ## §1 Surfaced
 
 Day-17 EOD smoke. Love changed task date + status on SF side; Planner reflected neither. Investigation surfaced production `webhook_events` table at 0 rows — no events of any code received from SF for the sandbox-588 tenant. NOT a regression from any Day-17 PR; pre-existing latent gap from Day-7+ when the receiver was originally scaffolded but never end-to-end verified post-credentials-decision.
@@ -65,13 +67,13 @@ applyWebhookStatusEvent(taskId, newStatus, eventTimestamp, payload)
 
 ### §3.3 Status mapping table
 
-15 SF event codes per brief §3.1.10 → 11 internal_status canon values per Day-15 cron-decoupling §5.5 plan-sync. Pre-existing partial mapping in `src/modules/integration/webhooks/suitefleet/event-mapping.ts`; verify completeness and extend any missing codes.
+15 SF event codes per brief §3.1.10 → 11 internal_status canon values per Day-15 cron-decoupling §5.5 plan-sync. Pre-existing mappings live in `src/modules/integration/providers/suitefleet/status-mapper.ts` (14 SF actions → 7-value internal status; `TASK_HAS_BEEN_UPDATED` → null) and `src/modules/integration/providers/suitefleet/webhook-parser.ts` (15 actions → `WebhookEventKind` enum classification); verify completeness and extend any missing codes.
 
 ## §4 Layer 3 — POD + edit-event handling
 
 ### §4.1 POD URL extraction
 
-`TASK_STATUS_UPDATED_TO_DELIVERED` payload contains POD photo URL (verify SF payload shape in `webhook_events.raw_payload` once Layer 1 unblocked). Write to `tasks.photos` jsonb column.
+`TASK_STATUS_UPDATED_TO_DELIVERED` payload contains POD photo URL (verify SF payload shape in `webhook_events.raw_payload` once Layer 1 unblocked). Write to `tasks.pod_photos` jsonb column (new migration in A2 plan-PR).
 
 ### §4.2 Edit-event handling
 
@@ -83,7 +85,7 @@ applyWebhookStatusEvent(taskId, newStatus, eventTimestamp, payload)
 
 ### §4.3 UI surface
 
-POD link/photo in DayActionPopover detail (already scaffolded in PR #177; populate when `tasks.photos` non-empty). Tasks page POD column per sibling memo §4 also depends on this.
+POD link/photo in DayActionPopover detail (already scaffolded in PR #177; populate when `tasks.pod_photos` non-empty). Tasks page POD column per sibling memo §4 also depends on this.
 
 ### §4.4 Effort
 
@@ -93,7 +95,7 @@ POD link/photo in DayActionPopover detail (already scaffolded in PR #177; popula
 
 Day-18 PM demo data prep manually seeds:
 - `webhook_events` rows (synthetic, mimicking SF payload shape)
-- `tasks.photos` jsonb (cached POD URL strings, e.g. via SF live-fetch one-time then write)
+- `tasks.pod_photos` jsonb (cached POD URL strings, e.g. via SF live-fetch one-time then write)
 - `tasks.internal_status='DELIVERED'`
 
 For ~5 cherry-picked Fatima Al Mansouri / Sarah Khouri demo tasks. Calendar surfaces realistic delivered states + POD photos for demo Section 4 / Section 5 even if live webhook flow remains broken. This matches existing brief §6 Day-18 demo data prep item.
@@ -114,5 +116,6 @@ For ~5 cherry-picked Fatima Al Mansouri / Sarah Khouri demo tasks. Calendar surf
 - `memory/followup_webhook_auth_architecture.md` (Day-7 unresolved auth model)
 - `memory/followup_day_18_smoke_surfaced_ui_gaps.md` (sibling memo, §4 POD column)
 - `src/app/api/webhooks/suitefleet/[tenantId]/route.ts` (receiver entry point)
-- `src/modules/integration/webhooks/suitefleet/event-mapping.ts` (15 event code mapping)
+- `src/modules/integration/providers/suitefleet/status-mapper.ts` (14 SF actions → 7-value internal status)
+- `src/modules/integration/providers/suitefleet/webhook-parser.ts` (15 actions → WebhookEventKind enum classification)
 - `src/modules/integration/providers/suitefleet/*` (adapter; payload schemas)
