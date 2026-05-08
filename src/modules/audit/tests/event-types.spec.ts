@@ -114,3 +114,29 @@ describe("db.service_role.use event (R-3 + R-4 contract)", () => {
     expect(EVENT_TYPES["db.service_role.use"].metadataNotes).toContain("reason");
   });
 });
+
+describe("Day-18 / A2 webhook-driven task events (Layer 2 + 3)", () => {
+  const newEventIds: readonly EventTypeId[] = [
+    "task.status_changed_via_webhook",
+    "task.edit_applied_via_webhook",
+    "task.pod_received_via_webhook",
+  ];
+
+  it("registers all three new event types in the catalogue", () => {
+    for (const id of newEventIds) {
+      expect(EVENT_TYPES[id]).toBeDefined();
+    }
+  });
+
+  it("flags all three as systemOnly (no user actor triggers them)", () => {
+    for (const id of newEventIds) {
+      expect(EVENT_TYPES[id].systemOnly).toBe(true);
+    }
+  });
+
+  it("documents webhook_events_id metadata field on each (forensic linkage to raw payload)", () => {
+    for (const id of newEventIds) {
+      expect(EVENT_TYPES[id].metadataNotes).toContain("webhook_events_id");
+    }
+  });
+});

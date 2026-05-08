@@ -593,6 +593,46 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: true,
   },
 
+  // ---- task — webhook-driven mutations (Day 18 / A2 Layer 2 + 3) ---------
+  // Three events for the A2 webhook handler 3-layer code-PR. Distinct
+  // from operator-driven task.* events (which carry user actors) — the
+  // _via_webhook suffix marks the system-actor path. Each carries
+  // webhook_events.id in metadata for forensic linkage to the raw
+  // payload.
+
+  "task.status_changed_via_webhook": {
+    id: "task.status_changed_via_webhook",
+    resource: "task",
+    action: "status_changed_via_webhook",
+    description:
+      "Day 18 / A2 Layer 2. A task's internal_status was UPDATEd as a consequence of a SuiteFleet webhook event landing. Distinct from operator-driven status changes — the via_webhook suffix marks the system-actor path. Carries webhook_events.id for forensic linkage to the raw payload.",
+    metadataNotes:
+      "task_id (uuid), suitefleet_task_id (string — AWB), previous_status (InternalTaskStatus), new_status (InternalTaskStatus), sf_action (string — SF action vocabulary), webhook_events_id (uuid), event_timestamp (iso8601).",
+    systemOnly: true,
+  },
+
+  "task.edit_applied_via_webhook": {
+    id: "task.edit_applied_via_webhook",
+    resource: "task",
+    action: "edit_applied_via_webhook",
+    description:
+      "Day 18 / A2 Layer 3. A task row was UPDATEd from a TASK_HAS_BEEN_UPDATED webhook payload. Captures the field-by-field delta in metadata; covers delivery_date, delivery_start_time, delivery_end_time, and the deliveryInformation.* extracted fields. Address-payload-received cases (consignee.location.* changes per plan §4.3) are captured in metadata as changed_fields entries with previous=null but do NOT mutate tasks.address_id in MVP.",
+    metadataNotes:
+      "task_id (uuid), suitefleet_task_id (string — AWB), webhook_events_id (uuid), changed_fields (array of {field: string, previous: unknown, new: unknown}).",
+    systemOnly: true,
+  },
+
+  "task.pod_received_via_webhook": {
+    id: "task.pod_received_via_webhook",
+    resource: "task",
+    action: "pod_received_via_webhook",
+    description:
+      "Day 18 / A2 Layer 3. POD photos landed for a task on TASK_STATUS_UPDATED_TO_DELIVERED. tasks.pod_photos transitioned from NULL to a populated jsonb. Co-emits with task.status_changed_via_webhook (DELIVERED transition) but the POD event is the load-bearing signal for the demo §5.3 Gate-5 preflight.",
+    metadataNotes:
+      "task_id (uuid), suitefleet_task_id (string — AWB), photo_count (number), webhook_events_id (uuid).",
+    systemOnly: true,
+  },
+
   // ---- db (system-internal) ----------------------------------------------
   "db.service_role.use": {
     id: "db.service_role.use",

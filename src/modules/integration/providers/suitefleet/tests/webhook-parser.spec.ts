@@ -3,6 +3,12 @@
 // Pure function; no mocks needed. Covers: array validation, field
 // extraction, action classification, idempotency-key determinism +
 // uniqueness, malformed-entry resilience, raw-payload preservation.
+//
+// Day 18 / A2 Layer 1.5 — task-id extraction is AWB-only per
+// memory/decision_layer_1_5_awb_only_extraction.md. VALID_ENTRY
+// carries `awb` not `taskId`; the missing-task-id branch tests the
+// missing-awb path; the numeric-coercion test is dropped (AWBs are
+// always strings).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,7 +28,7 @@ function withConsoleSilenced<T>(fn: () => T): T {
 
 const VALID_ENTRY = {
   action: "TASK_HAS_BEEN_DELIVERED",
-  taskId: "sf-task-12345",
+  awb: "MPL-TEST-12345",
   occurredAt: "2026-04-29T10:30:00.000Z",
 };
 
@@ -66,7 +72,7 @@ describe("parseSuiteFleetWebhookEvents — happy path", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       kind: "TASK_STATUS_CHANGED",
-      externalTaskId: "sf-task-12345",
+      externalTaskId: "MPL-TEST-12345",
       occurredAt: "2026-04-29T10:30:00.000Z",
     });
     expect(result[0].idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
@@ -75,11 +81,15 @@ describe("parseSuiteFleetWebhookEvents — happy path", () => {
 
   it("parses a batched array of entries, preserving order", () => {
     const result = parseSuiteFleetWebhookEvents([
-      { ...VALID_ENTRY, taskId: "task-a" },
-      { ...VALID_ENTRY, taskId: "task-b" },
-      { ...VALID_ENTRY, taskId: "task-c" },
+      { ...VALID_ENTRY, awb: "MPL-A-001" },
+      { ...VALID_ENTRY, awb: "MPL-B-002" },
+      { ...VALID_ENTRY, awb: "MPL-C-003" },
     ]);
-    expect(result.map((e) => e.externalTaskId)).toEqual(["task-a", "task-b", "task-c"]);
+    expect(result.map((e) => e.externalTaskId)).toEqual([
+      "MPL-A-001",
+      "MPL-B-002",
+      "MPL-C-003",
+    ]);
   });
 
   it("leaves internalStatus undefined (S-6 fills it in)", () => {
@@ -93,9 +103,13 @@ describe("parseSuiteFleetWebhookEvents — happy path", () => {
     expect(result[0].raw).toEqual(entry);
   });
 
-  it("coerces a numeric taskId to a string", () => {
-    const result = parseSuiteFleetWebhookEvents([{ ...VALID_ENTRY, taskId: 588 }]);
-    expect(result[0].externalTaskId).toBe("588");
+  it("rejects a numeric awb (Layer 1.5: AWBs are always strings)", () => {
+    // Pre-Layer-1.5 the parser coerced numeric taskId → string. Layer 1.5
+    // narrows to AWB-only and AWB is a string identifier; a numeric
+    // value here means the upstream contract is broken, so the entry
+    // is skipped via the missing-task-id branch (warn-log + drop).
+    const result = parseSuiteFleetWebhookEvents([{ ...VALID_ENTRY, awb: 588 }]);
+    expect(result).toEqual([]);
   });
 });
 
@@ -158,7 +172,7 @@ describe("parseSuiteFleetWebhookEvents — idempotency key", () => {
   it("generates different keys for different payloads", () => {
     const result = parseSuiteFleetWebhookEvents([
       VALID_ENTRY,
-      { ...VALID_ENTRY, taskId: "different-task" },
+      { ...VALID_ENTRY, awb: "MPL-DIFFERENT-AWB" },
     ]);
     expect(result[0].idempotencyKey).not.toBe(result[1].idempotencyKey);
   });
@@ -187,7 +201,7 @@ describe("parseSuiteFleetWebhookEvents — malformed entries", () => {
   it("skips entries that aren't objects (null)", () => {
     const result = parseSuiteFleetWebhookEvents([null, VALID_ENTRY]);
     expect(result).toHaveLength(1);
-    expect(result[0].externalTaskId).toBe(VALID_ENTRY.taskId);
+    expect(result[0].externalTaskId).toBe(VALID_ENTRY.awb);
   });
 
   it("skips entries that aren't objects (string)", () => {
@@ -197,11 +211,11 @@ describe("parseSuiteFleetWebhookEvents — malformed entries", () => {
 
   it("skips entries missing the action field", () => {
     const result = parseSuiteFleetWebhookEvents([
-      { taskId: "x", occurredAt: "2026-04-29T00:00:00Z" },
+      { awb: "MPL-X-001", occurredAt: "2026-04-29T00:00:00Z" },
       VALID_ENTRY,
     ]);
     expect(result).toHaveLength(1);
-    expect(result[0].externalTaskId).toBe(VALID_ENTRY.taskId);
+    expect(result[0].externalTaskId).toBe(VALID_ENTRY.awb);
   });
 
   it("skips entries with empty-string action", () => {
@@ -212,12 +226,34 @@ describe("parseSuiteFleetWebhookEvents — malformed entries", () => {
     expect(result).toHaveLength(1);
   });
 
-  it("skips entries missing the taskId field", () => {
+  it("skips entries missing the awb field (Layer 1.5)", () => {
     const result = parseSuiteFleetWebhookEvents([
       { action: "TASK_HAS_BEEN_DELIVERED" },
       VALID_ENTRY,
     ]);
     expect(result).toHaveLength(1);
+  });
+
+  it("skips entries with empty-string awb (Layer 1.5)", () => {
+    const result = parseSuiteFleetWebhookEvents([
+      { ...VALID_ENTRY, awb: "" },
+      VALID_ENTRY,
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].externalTaskId).toBe(VALID_ENTRY.awb);
+  });
+
+  it("skips entries that carry the legacy taskId/externalTaskId/task_id keys but no awb", () => {
+    // Pre-Layer-1.5 these would have parsed; Layer 1.5 narrowed to
+    // AWB-only so the inferred-key fallback is gone.
+    const result = parseSuiteFleetWebhookEvents([
+      { action: "TASK_HAS_BEEN_DELIVERED", taskId: "sf-legacy-1" },
+      { action: "TASK_HAS_BEEN_DELIVERED", externalTaskId: "sf-legacy-2" },
+      { action: "TASK_HAS_BEEN_DELIVERED", task_id: "sf-legacy-3" },
+      VALID_ENTRY,
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].externalTaskId).toBe(VALID_ENTRY.awb);
   });
 
   it("does not throw when every entry is malformed (returns empty array)", () => {
@@ -241,7 +277,7 @@ describe("parseSuiteFleetWebhookEvents — timestamp extraction", () => {
   it("falls back to eventTimestamp when occurredAt is absent", () => {
     const entry = {
       action: VALID_ENTRY.action,
-      taskId: VALID_ENTRY.taskId,
+      awb: VALID_ENTRY.awb,
       eventTimestamp: "2026-04-29T11:00:00Z",
     };
     const result = parseSuiteFleetWebhookEvents([entry]);
@@ -249,7 +285,7 @@ describe("parseSuiteFleetWebhookEvents — timestamp extraction", () => {
   });
 
   it("falls back to wall-clock when no timestamp field is present", () => {
-    const entry = { action: VALID_ENTRY.action, taskId: VALID_ENTRY.taskId };
+    const entry = { action: VALID_ENTRY.action, awb: VALID_ENTRY.awb };
     const before = Date.now();
     const result = parseSuiteFleetWebhookEvents([entry]);
     const after = Date.now();
@@ -262,7 +298,7 @@ describe("parseSuiteFleetWebhookEvents — timestamp extraction", () => {
     // Same entry parsed twice (no occurredAt → fallback to wall clock).
     // Since the idempotency key derives from the raw payload and not
     // from the occurredAt fallback, the keys must match.
-    const entry = { action: VALID_ENTRY.action, taskId: VALID_ENTRY.taskId };
+    const entry = { action: VALID_ENTRY.action, awb: VALID_ENTRY.awb };
     const a = parseSuiteFleetWebhookEvents([entry]);
     const b = parseSuiteFleetWebhookEvents([entry]);
     expect(a[0].idempotencyKey).toBe(b[0].idempotencyKey);
@@ -346,14 +382,14 @@ describe("parseSuiteFleetWebhookEvents — canonical-JSON idempotency key", () =
     const a = parseSuiteFleetWebhookEvents([
       {
         action: "TASK_HAS_BEEN_DELIVERED",
-        taskId: "x",
+        awb: "MPL-X-001",
         occurredAt: "2026-04-29T00:00:00Z",
       },
     ]);
     const b = parseSuiteFleetWebhookEvents([
       {
         occurredAt: "2026-04-29T00:00:00Z",
-        taskId: "x",
+        awb: "MPL-X-001",
         action: "TASK_HAS_BEEN_DELIVERED",
       },
     ]);
@@ -364,14 +400,14 @@ describe("parseSuiteFleetWebhookEvents — canonical-JSON idempotency key", () =
     const a = parseSuiteFleetWebhookEvents([
       {
         action: "TASK_STATUS_UPDATED_TO_DELIVERED",
-        taskId: "x",
+        awb: "MPL-X-001",
         details: { driverId: "d-1", routeId: "r-1", note: "ok" },
       },
     ]);
     const b = parseSuiteFleetWebhookEvents([
       {
         action: "TASK_STATUS_UPDATED_TO_DELIVERED",
-        taskId: "x",
+        awb: "MPL-X-001",
         details: { note: "ok", routeId: "r-1", driverId: "d-1" },
       },
     ]);
@@ -380,20 +416,20 @@ describe("parseSuiteFleetWebhookEvents — canonical-JSON idempotency key", () =
 
   it("produces different keys when content differs (extra field)", () => {
     const a = parseSuiteFleetWebhookEvents([
-      { action: "TASK_HAS_BEEN_ORDERED", taskId: "x" },
+      { action: "TASK_HAS_BEEN_ORDERED", awb: "MPL-X-001" },
     ]);
     const b = parseSuiteFleetWebhookEvents([
-      { action: "TASK_HAS_BEEN_ORDERED", taskId: "x", extra: "value" },
+      { action: "TASK_HAS_BEEN_ORDERED", awb: "MPL-X-001", extra: "value" },
     ]);
     expect(a[0].idempotencyKey).not.toBe(b[0].idempotencyKey);
   });
 
   it("produces different keys when content differs (different value)", () => {
     const a = parseSuiteFleetWebhookEvents([
-      { action: "TASK_HAS_BEEN_ORDERED", taskId: "x" },
+      { action: "TASK_HAS_BEEN_ORDERED", awb: "MPL-X-001" },
     ]);
     const b = parseSuiteFleetWebhookEvents([
-      { action: "TASK_HAS_BEEN_ORDERED", taskId: "y" },
+      { action: "TASK_HAS_BEEN_ORDERED", awb: "MPL-Y-002" },
     ]);
     expect(a[0].idempotencyKey).not.toBe(b[0].idempotencyKey);
   });
@@ -402,17 +438,78 @@ describe("parseSuiteFleetWebhookEvents — canonical-JSON idempotency key", () =
     const a = parseSuiteFleetWebhookEvents([
       {
         action: "TASK_HAS_BEEN_UPDATED",
-        taskId: "x",
+        awb: "MPL-X-001",
         history: ["ORDERED", "PICKED_UP", "DELIVERED"],
       },
     ]);
     const b = parseSuiteFleetWebhookEvents([
       {
         action: "TASK_HAS_BEEN_UPDATED",
-        taskId: "x",
+        awb: "MPL-X-001",
         history: ["DELIVERED", "PICKED_UP", "ORDERED"],
       },
     ]);
     expect(a[0].idempotencyKey).not.toBe(b[0].idempotencyKey);
+  });
+});
+
+describe("parseSuiteFleetWebhookEvents — Layer 1.5 fixture-driven contract", () => {
+  // Plan §2.3 specifies a real Day-7 capture fixture. No on-disk
+  // capture exists; the fixture at fixtures/test_hook.json is
+  // SYNTHETIC, hand-constructed to mirror the AWB-bearing shape
+  // documented in memory/decision_layer_1_5_awb_only_extraction.md
+  // (id + awb + camelCase deliveryInformation block). PII fields are
+  // synthetic placeholders. AWB strings preserved as the load-bearing
+  // test input.
+  //
+  // When a real capture lands (post-merge production smoke per plan
+  // §10 step 7), this fixture should be replaced with the real one,
+  // sanitised. The contract these tests pin is: parser extracts AWB
+  // from each entry and produces one event per array element.
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("extracts AWBs from the fixture's three entries (Test 1 from plan §2.3)", async () => {
+    const fixture = (await import("./fixtures/test_hook.json")).default;
+    const result = parseSuiteFleetWebhookEvents(fixture);
+    expect(result).toHaveLength(3);
+    expect(result.map((e) => e.externalTaskId)).toEqual([
+      "MPL-25193918",
+      "MPL-25193919",
+      "MPL-25193920",
+    ]);
+  });
+
+  it("preserves the full raw entry verbatim including deliveryInformation block", async () => {
+    const fixture = (await import("./fixtures/test_hook.json")).default;
+    const result = parseSuiteFleetWebhookEvents(fixture);
+    // Layer 2 + Layer 3 service fns read .raw.deliveryInformation.* and
+    // .raw.delivery_date / consignee.location.* — those fields must be
+    // preserved verbatim through the parser.
+    expect(result[2].raw).toMatchObject({
+      action: "TASK_STATUS_UPDATED_TO_DELIVERED",
+      awb: "MPL-25193920",
+      deliveryInformation: {
+        photos: [
+          "https://test-fixture.example.com/pod-1.jpg",
+          "https://test-fixture.example.com/pod-2.jpg",
+        ],
+        consigneeRating: 5,
+        completionLatitude: 25.197,
+      },
+    });
+  });
+
+  it("classifies the fixture's TASK_HAS_BEEN_UPDATED entry as TASK_STATUS_CHANGED kind", async () => {
+    const fixture = (await import("./fixtures/test_hook.json")).default;
+    const result = parseSuiteFleetWebhookEvents(fixture);
+    expect(result[1].kind).toBe("TASK_STATUS_CHANGED");
+    // status-mapper.ts will return null for this action — the
+    // status-fn skips lifecycle-update; Layer 3 picks it up for
+    // edit-event handling (see plan §3.3 step 2 + §4.2).
   });
 });
