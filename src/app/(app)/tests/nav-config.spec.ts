@@ -10,9 +10,11 @@ import { isKnownPermission } from "@/modules/identity/permissions";
 import { ROLES } from "@/modules/identity/roles";
 
 import {
+  ADMIN_NAV_ITEMS,
   LANDING_CARDS,
   NAV_ITEMS,
   isActiveNavPath,
+  visibleAdminNavItems,
   visibleLandingCards,
   visibleNavItems,
 } from "../nav-config";
@@ -103,9 +105,40 @@ describe("visibleLandingCards", () => {
   });
 });
 
+describe("visibleAdminNavItems", () => {
+  // Day 18 / C1 — Transcorp-staff cross-tenant admin nav.
+  // merchant:read_all is systemOnly + carried only by transcorp-sysadmin.
+  const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
+
+  it("transcorp-sysadmin sees the Merchants item", () => {
+    expect(visibleAdminNavItems(TRANSCORP_SYSADMIN).map((i) => i.label)).toEqual([
+      "Merchants",
+    ]);
+  });
+
+  it("Tenant Admin sees no admin nav items", () => {
+    expect(visibleAdminNavItems(TENANT_ADMIN)).toHaveLength(0);
+  });
+
+  it("Ops Manager and CS Agent see no admin nav items", () => {
+    expect(visibleAdminNavItems(OPS_MANAGER)).toHaveLength(0);
+    expect(visibleAdminNavItems(CS_AGENT)).toHaveLength(0);
+  });
+
+  it("empty permission set hides every admin nav item", () => {
+    expect(visibleAdminNavItems(NONE)).toHaveLength(0);
+  });
+});
+
 describe("catalogue drift guard", () => {
   it("every NAV_ITEM permission is a known PermissionId", () => {
     for (const item of NAV_ITEMS) {
+      expect(isKnownPermission(item.permission)).toBe(true);
+    }
+  });
+
+  it("every ADMIN_NAV_ITEM permission is a known PermissionId", () => {
+    for (const item of ADMIN_NAV_ITEMS) {
       expect(isKnownPermission(item.permission)).toBe(true);
     }
   });

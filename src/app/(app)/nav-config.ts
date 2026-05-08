@@ -81,3 +81,35 @@ export function visibleLandingCards(
 ): readonly LandingCard[] {
   return LANDING_CARDS.filter((card) => permissions.has(card.permission));
 }
+
+// -----------------------------------------------------------------------------
+// Day 18 / C1 — Transcorp-staff admin nav (parallel to NAV_ITEMS).
+//
+// Lives alongside the operator NAV_ITEMS rather than merged into it
+// because the (admin)/ route group has its own shell — the brief
+// (§3.2.2) frames Transcorp-staff cross-tenant admin as a distinct
+// surface from tenant-scoped operator UI. Mirroring this split in
+// nav-config keeps each layout's nav source-of-truth declarative
+// without leaking admin items into the operator menu (which would be
+// the case if we merged into NAV_ITEMS gated only by permission).
+//
+// Each entry's permission gate is the systemOnly merchant:* family
+// (registered at permissions.ts:526-560); only `transcorp-sysadmin`
+// resolves to the merchant:read_all permission needed to render the
+// Merchants nav item. Tenant operators never see this nav.
+// -----------------------------------------------------------------------------
+
+export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
+  { label: "Merchants", path: "/admin/merchants", permission: "merchant:read_all" },
+] as const;
+
+/**
+ * Filter admin nav items by an actor's resolved permission set.
+ * Mirrors visibleNavItems' shape so the (admin)/ layout consumes
+ * the same {label, path, active} contract via TopNav-style rendering.
+ */
+export function visibleAdminNavItems(
+  permissions: ReadonlySet<Permission>,
+): readonly NavItem[] {
+  return ADMIN_NAV_ITEMS.filter((item) => permissions.has(item.permission));
+}
