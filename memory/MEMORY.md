@@ -223,3 +223,7 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [Day-5 task module amendment v1](decision_task_module_amendment_v1.md) — amends Day-5 system-only lock; single createTask fn with dual-actor gating (system bypass + user `task:create`); Phase 1 plan-PR §K driver; new perm `task:create` granted to operator roles.
 - [SF outbound edit/cancel — Aqib coordination](followup_suitefleet_outbound_edit_cancel_aqib.md) — 6 open questions on SF endpoint shapes (update/cancel/bulk variants), auth, idempotency, rate-limits; plan-PR §L; adapter signatures lock POST-Aqib comm; expected 24-48 hr turnaround.
 - [Day 19 EOD handoff](handoffs/day-19-eod.md) — canonical Day-19 → Day-20 reviewer handoff covering 15 PRs merged today (Phase 1.5 admin lane + brand pass + Phase 1 plan-PR + supporting memos), 3 architectural body-read findings forming new discipline rules §3.21-§3.24, Phase 1 merchant CRUD lane state at handoff with 6 OQ + 6 §J rulings + 3 architectural concerns, and Day-20 carry-forwards led by morning batched Vercel promote + Phase 1 code-PR open.
+
+## Day 20 (10 May 2026)
+
+- [Phase 1 SuiteFleet outbound — doc-verified Q1-Q4, Q5/Q6 closed](decision_phase_1_aqib_doc_verified.md) — T1 amendment to plan-PR §G.1 + §L; live SF docs confirmed update/cancel/bulk endpoint shapes (`PATCH /api/tasks/awb/{awb}` + `PATCH /api/tasks/bulk/{ids}`) + Bearer+clientId auth; §G.1 adapter signatures UNBLOCKED; Day-21 lane no longer Aqib-gated; Aqib comm shifts to courtesy-confirm. Single residual: Q2 exact status field name (Day-21 sandbox probe).

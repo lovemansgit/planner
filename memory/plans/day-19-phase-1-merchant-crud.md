@@ -325,10 +325,11 @@ interface LastMileAdapter {
   ): Promise<void>;
 
   /**
-   * Day-19 / Phase 1. Bulk cancel — SF endpoint TBD (Aqib comm § L).
-   * If SF supports bulk endpoint: single call. If not: parallel
-   * single-cancel calls with rate-limit throttle (5 req/sec floor
-   * per existing precedent at scripts/probe-sf-label-cap.mjs).
+   * Day-19 / Phase 1. Bulk cancel via single SF bulk PATCH call
+   * (PATCH /api/tasks/bulk/{ids}, comma-separated AWB list, single
+   * mergePatchDocument applied to all). Doc-verified Day-20
+   * (memory/decision_phase_1_aqib_doc_verified.md). NOT parallel
+   * single-cancel fan-out.
    */
   bulkCancelTasks(
     session: AuthenticatedSession,
@@ -338,7 +339,7 @@ interface LastMileAdapter {
 }
 ```
 
-**Adapter signatures NOT YET LOCKED** — pending Aqib comm per §L. Plan-PR opens against best-known assumptions; signatures firm before code-PR locks.
+**Adapter signatures LOCKED Day-20** per doc-verification of plan-PR §L Aqib questions ([`memory/decision_phase_1_aqib_doc_verified.md`](../decision_phase_1_aqib_doc_verified.md)). Q1-Q4 ✓ verified verbatim from SuiteFleet docs; Q5/Q6 ⚠️ closed (not blocking). Adapter signatures above firm. One residual: Q2 exact status field name (Day-21 sandbox probe).
 
 ### §G.2 — SuiteFleetTaskClient implementation
 
@@ -496,7 +497,18 @@ Summary: amends [`memory/decision_task_module_no_user_create_delete.md`](../deci
 
 New memo at [`memory/followup_suitefleet_outbound_edit_cancel_aqib.md`](../followup_suitefleet_outbound_edit_cancel_aqib.md). Drafted as part of this plan-PR.
 
-Summary: 6 open questions for Aqib re: SF API endpoints (update task / cancel task / bulk variants), auth posture (correlation_id header convention), idempotency expectations, rate-limit constraints. Plan-PR §G work proceeds on best-known assumptions; Aqib comm runs parallel; adapter signatures firm up before code-PR locks.
+Summary: 6 open questions for Aqib re: SF API endpoints (update task / cancel task / bulk variants), auth posture, idempotency, rate-limits.
+
+**Day-20 status update** ([`memory/decision_phase_1_aqib_doc_verified.md`](../decision_phase_1_aqib_doc_verified.md)):
+
+- **Q1 ✓** doc-verified — `PATCH /api/tasks/awb/{awb}` + `mergePatchDocument`
+- **Q2 ✓** doc-verified — no separate cancel endpoint; cancel = status-flip via same PATCH. Residual: exact status field name (Day-21 sandbox probe)
+- **Q3 ✓** doc-verified — `PATCH /api/tasks/bulk/{ids}` (comma-separated AWBs); single bulk call, not fan-out
+- **Q4 ✓** doc-verified — Bearer + `clientId` headers (correction: outbound NOT same shape as inbound webhook `clientid`/`clientsecret`)
+- **Q5 ⚠️** closed (not blocking) — idempotency assumption per Day-4 createTask memo; QStash + correlation_id mitigation already in §G
+- **Q6 ⚠️** closed (not blocking) — rate limits already locked at 5 req/sec per Day-3 cutoff memo
+
+Net: §G.1 adapter signatures UNBLOCKED. Day-21 lane no longer Aqib-gated. Aqib comm shifts from blocking-comm to courtesy-confirm.
 
 ---
 
