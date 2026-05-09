@@ -40,6 +40,10 @@ import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
 import type { Uuid } from "@/shared/types";
 
+import {
+  buildCandidateAndEligibleDatesCte,
+  buildResolvedAddressesCte,
+} from "./cte-builder";
 import type { RunRowOutcome } from "./run-row";
 import { writeRunRowPhase4 } from "./run-row";
 
@@ -212,36 +216,18 @@ export async function materializeTenant(
     projected_count: number;
     subscriptions_walked: number;
   };
+  // Day-19 / §M.1 — pure SQL builder per cte-builder.ts. Replaces the 3×
+  // inline duplication that existed pre-refactor at this call site +
+  // Phase 2 INSERT + quarantine counter. Cap-check stops at the
+  // candidate_dates + eligible_dates pair (no resolved_addresses needed
+  // for the COUNT projection — the §2.2 quarantine guard is a separate
+  // SELECT below).
+  const tenantCte = buildCandidateAndEligibleDatesCte({
+    filter: { kind: "tenant", tenantId },
+    dateRange: { kind: "horizonAdvance", targetDate },
+  });
   const capRows = await tx.execute<CapCheckRow>(sqlTag`
-    WITH candidate_dates AS (
-      SELECT
-        s.id            AS subscription_id,
-        d::date         AS delivery_date
-      FROM subscriptions s
-      JOIN subscription_materialization sm
-        ON sm.subscription_id = s.id
-      CROSS JOIN LATERAL generate_series(
-        GREATEST(sm.materialized_through_date + 1, s.start_date),
-        LEAST(${targetDate}::date, COALESCE(s.end_date, ${targetDate}::date)),
-        INTERVAL '1 day'
-      ) AS d
-      WHERE s.tenant_id = ${tenantId}
-        AND s.status = 'active'
-        AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
-    ),
-    eligible_dates AS (
-      SELECT cd.*
-      FROM candidate_dates cd
-      WHERE NOT EXISTS (
-        SELECT 1 FROM subscription_exceptions e
-        WHERE e.subscription_id = cd.subscription_id
-          AND (
-            (e.type = 'skip' AND e.start_date = cd.delivery_date)
-            OR (e.type = 'pause_window'
-                AND cd.delivery_date BETWEEN e.start_date AND e.end_date)
-          )
-      )
-    )
+    WITH ${tenantCte}
     SELECT
       COUNT(*)::int                              AS projected_count,
       COUNT(DISTINCT subscription_id)::int       AS subscriptions_walked
@@ -290,101 +276,16 @@ export async function materializeTenant(
   // PHASE 2 — INSERT…SELECT — happy-path materialization with 4-layer COALESCE
   // address resolution + skip-the-date EXISTS guard + refuse-to-materialize
   // guard.
+  //
+  // Day-19 / §M.1 — CTE chain (`candidate_dates` + `eligible_dates` +
+  // `resolved_addresses`) extracted into pure SQL builder per
+  // `cte-builder.ts`. Behavioral fidelity pinned by the snapshot test at
+  // `tests/cte-builder.spec.ts` (CONCERN C).
   // ---------------------------------------------------------------------------
   type InsertedRow = { id: Uuid };
+  const phase2Cte = sqlTag`${tenantCte}, ${buildResolvedAddressesCte()}`;
   const insertedRows = await tx.execute<InsertedRow>(sqlTag`
-    WITH candidate_dates AS (
-      -- Per-subscription date range from
-      --   GREATEST(materialized_through_date + 1, start_date)
-      -- through
-      --   LEAST(targetDate, COALESCE(end_date, targetDate)),
-      -- expanded by generate_series.
-      --
-      -- COALESCE on end_date is load-bearing: without it,
-      -- LEAST(target, NULL) = NULL collapses generate_series to zero
-      -- rows and silently breaks materialization for open-ended subs.
-      -- COALESCE caps open-ended subs at targetDate naturally.
-      --
-      -- GREATEST on the lower bound handles the case where a brand-new
-      -- subscription was created with start_date in the future and
-      -- materialized_through_date = today (set at subscription create
-      -- time) — picks the later bound so materialization only proceeds
-      -- from start_date onward.
-      SELECT
-        s.id            AS subscription_id,
-        s.tenant_id     AS tenant_id,
-        s.consignee_id  AS consignee_id,
-        s.delivery_window_start AS delivery_window_start,
-        s.delivery_window_end   AS delivery_window_end,
-        d::date         AS delivery_date
-      FROM subscriptions s
-      JOIN subscription_materialization sm
-        ON sm.subscription_id = s.id
-      CROSS JOIN LATERAL generate_series(
-        GREATEST(sm.materialized_through_date + 1, s.start_date),
-        LEAST(${targetDate}::date, COALESCE(s.end_date, ${targetDate}::date)),
-        INTERVAL '1 day'
-      ) AS d
-      WHERE s.tenant_id = ${tenantId}
-        AND s.status = 'active'
-        AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
-    ),
-    eligible_dates AS (
-      -- Skip-the-date exclusion: drop dates covered by skip OR pause_window
-      -- (§2.4 row 1 + row 2 — these are no-INSERT exception types)
-      SELECT cd.*
-      FROM candidate_dates cd
-      WHERE NOT EXISTS (
-        SELECT 1 FROM subscription_exceptions e
-        WHERE e.subscription_id = cd.subscription_id
-          AND (
-            (e.type = 'skip' AND e.start_date = cd.delivery_date)
-            OR (e.type = 'pause_window'
-                AND cd.delivery_date BETWEEN e.start_date AND e.end_date)
-          )
-      )
-    ),
-    resolved_addresses AS (
-      -- 4-layer COALESCE per §2.3, hoisted to compute once per row
-      SELECT
-        ed.*,
-        COALESCE(
-          -- Layer 1: address_override_one_off for THIS date (most specific)
-          -- §2.4 row 3
-          (SELECT e.address_override_id
-             FROM subscription_exceptions e
-            WHERE e.subscription_id = ed.subscription_id
-              AND e.type = 'address_override_one_off'
-              AND e.start_date = ed.delivery_date
-              AND e.address_override_id IS NOT NULL
-            LIMIT 1),
-          -- Layer 2: most-recent active address_override_forward
-          -- §2.4 row 4 (most-recent start_date wins per §2.3 ORDER BY DESC)
-          (SELECT e.address_override_id
-             FROM subscription_exceptions e
-            WHERE e.subscription_id = ed.subscription_id
-              AND e.type = 'address_override_forward'
-              AND e.start_date <= ed.delivery_date
-              AND e.address_override_id IS NOT NULL
-            ORDER BY e.start_date DESC
-            LIMIT 1),
-          -- Layer 3: per-weekday rotation rule
-          (SELECT r.address_id
-             FROM subscription_address_rotations r
-            WHERE r.subscription_id = ed.subscription_id
-              AND r.weekday = EXTRACT(ISODOW FROM ed.delivery_date)::int),
-          -- Layer 4: consignee's primary address
-          -- (is_primary partial UNIQUE in 0014 guarantees AT MOST one;
-          -- ORDER BY a.id is defense-in-depth deterministic tie-break)
-          (SELECT a.id
-             FROM addresses a
-            WHERE a.consignee_id = ed.consignee_id
-              AND a.is_primary = true
-            ORDER BY a.id
-            LIMIT 1)
-        ) AS resolved_address_id
-      FROM eligible_dates ed
-    )
+    WITH ${phase2Cte}
     INSERT INTO tasks (
       tenant_id,
       consignee_id,
@@ -454,62 +355,19 @@ export async function materializeTenant(
     consignee_id: Uuid;
     delivery_date: string;
   };
+  // Day-19 / §M.1 — same builder composition as Phase 2 INSERT, but final
+  // SELECT projects the IS NULL side of the COALESCE. resolved_addresses
+  // CTE is reused (vs. the pre-refactor inline-COALESCE pattern) for SQL
+  // consistency with Phase 2 — both queries now share the same
+  // resolved_address_id column semantic.
   const quarantinedRows = await tx.execute<QuarantinedRow>(sqlTag`
-    WITH candidate_dates AS (
-      SELECT
-        s.id            AS subscription_id,
-        s.consignee_id  AS consignee_id,
-        d::date         AS delivery_date
-      FROM subscriptions s
-      JOIN subscription_materialization sm
-        ON sm.subscription_id = s.id
-      CROSS JOIN LATERAL generate_series(
-        GREATEST(sm.materialized_through_date + 1, s.start_date),
-        LEAST(${targetDate}::date, COALESCE(s.end_date, ${targetDate}::date)),
-        INTERVAL '1 day'
-      ) AS d
-      WHERE s.tenant_id = ${tenantId}
-        AND s.status = 'active'
-        AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
-    ),
-    eligible_dates AS (
-      SELECT cd.*
-      FROM candidate_dates cd
-      WHERE NOT EXISTS (
-        SELECT 1 FROM subscription_exceptions e
-        WHERE e.subscription_id = cd.subscription_id
-          AND (
-            (e.type = 'skip' AND e.start_date = cd.delivery_date)
-            OR (e.type = 'pause_window'
-                AND cd.delivery_date BETWEEN e.start_date AND e.end_date)
-          )
-      )
-    )
+    WITH ${phase2Cte}
     SELECT
-      ed.subscription_id,
-      ed.consignee_id,
-      ed.delivery_date
-    FROM eligible_dates ed
-    WHERE COALESCE(
-      (SELECT e.address_override_id FROM subscription_exceptions e
-        WHERE e.subscription_id = ed.subscription_id
-          AND e.type = 'address_override_one_off'
-          AND e.start_date = ed.delivery_date
-          AND e.address_override_id IS NOT NULL LIMIT 1),
-      (SELECT e.address_override_id FROM subscription_exceptions e
-        WHERE e.subscription_id = ed.subscription_id
-          AND e.type = 'address_override_forward'
-          AND e.start_date <= ed.delivery_date
-          AND e.address_override_id IS NOT NULL
-        ORDER BY e.start_date DESC LIMIT 1),
-      (SELECT r.address_id FROM subscription_address_rotations r
-        WHERE r.subscription_id = ed.subscription_id
-          AND r.weekday = EXTRACT(ISODOW FROM ed.delivery_date)::int),
-      (SELECT a.id FROM addresses a
-        WHERE a.consignee_id = ed.consignee_id
-          AND a.is_primary = true
-        ORDER BY a.id LIMIT 1)
-    ) IS NULL
+      ra.subscription_id,
+      ra.consignee_id,
+      ra.delivery_date
+    FROM resolved_addresses ra
+    WHERE ra.resolved_address_id IS NULL
   `);
 
   for (const row of quarantinedRows) {
@@ -632,5 +490,182 @@ export async function materializeTenant(
     advancedSubscriptionIds,
     runRowOutcome,
     cappedByGate: false,
+  };
+}
+
+// =============================================================================
+// materializeSubscriptionForDateRange — Day-19 / Phase 1 / OQ-2 / §M.1
+// =============================================================================
+//
+// Per-subscription manual-trigger materialization, used by the operator
+// UX when a new subscription is created mid-day and the operator needs
+// the calendar to show generated tasks immediately (instead of waiting
+// for the next 12:00 UTC cron tick).
+//
+// SHARES THE CTE BUILDER with materializeTenant (cte-builder.ts) — no
+// parallel reimplementation of cadence math, skip/pause-window logic,
+// or address resolution. Filter parameter shifts from `tenant` to
+// `subscription`; date-range parameter shifts from `horizonAdvance` to
+// `explicit`.
+//
+// SKIPPED (vs materializeTenant):
+//   - cap-check: a single subscription cannot exceed the per-tenant 7000
+//     cap — at most 7 deliveries/week × 52 weeks = 364 candidates per sub
+//     in the most extreme case. Cap-check overhead is unjustified here.
+//   - run-row Phase 4: per-tenant cron-summary table (task_generation_runs)
+//     is a cron-orchestration concern; per-sub manual triggers don't
+//     emit run-rows.
+//   - horizon advance Phase 3: subscription_materialization.materialized_through_date
+//     is a cron metric (used by next cron tick's lower-bound). Per-sub
+//     manual trigger doesn't advance horizon — caller-supplied range is
+//     bounded by the caller's intent, not by cron's rolling 14-day model.
+//
+// RETAINED (vs materializeTenant):
+//   - quarantine counter: addressResolutionFailedCount surfaces back to
+//     the operator UI ("3 of 14 dates couldn't materialize — fix the
+//     consignee's primary address and retry") for visibility into the
+//     §2.2 refuse-to-materialize path.
+
+export interface MaterializeSubscriptionForDateRangeInput {
+  /** Single subscription to materialize. */
+  subscriptionId: Uuid;
+  /** Lower bound of the date range (ISO YYYY-MM-DD, Asia/Dubai). Inclusive. */
+  startDate: string;
+  /** Upper bound of the date range (ISO YYYY-MM-DD, Asia/Dubai). Inclusive. */
+  endDate: string;
+  /** Request id for log/Sentry context propagation. */
+  requestId: string;
+}
+
+export interface MaterializeSubscriptionForDateRangeResult {
+  /** Task IDs INSERTed by this manual-trigger run. Empty if all dates
+   * were already materialized (idempotent re-run). */
+  newInsertedTaskIds: readonly Uuid[];
+  /** Count of (subscription, delivery_date) tuples whose address
+   * resolution returned NULL — same semantic as the tenant-batch
+   * quarantine counter; surfaces back to the operator UI for action. */
+  addressResolutionFailedCount: number;
+}
+
+/**
+ * Materialize tasks for one subscription across a caller-supplied date
+ * range. Idempotent — re-runs collapse via ON CONFLICT DO NOTHING on the
+ * partial UNIQUE (subscription_id, delivery_date) WHERE subscription_id
+ * IS NOT NULL (same uniqueness constraint as the cron path; same
+ * idempotency posture).
+ *
+ * Caller wraps in `withServiceRole` (consistent with materializeTenant)
+ * — RLS bypass is fine because the caller's permission gate (the
+ * operator-facing service that wraps this) has already done tenant
+ * scope verification at one layer up.
+ *
+ * Validation:
+ *   - startDate / endDate are ISO YYYY-MM-DD strings; format validation
+ *     is the caller's responsibility (Zod boundary). This fn trusts the
+ *     shape and lets Postgres reject invalid dates if drift slips through.
+ *   - subscriptionId existence is NOT pre-flighted here — if the sub
+ *     doesn't exist, the CTE produces zero rows and the function returns
+ *     `{ newInsertedTaskIds: [], addressResolutionFailedCount: 0 }`.
+ *     Caller is responsible for surfacing "subscription not found"
+ *     semantics if needed.
+ *
+ * Logs + Sentry-emits per-sub quarantine warnings (same shape as the
+ * tenant-batch path so ops dashboards stay coherent).
+ */
+export async function materializeSubscriptionForDateRange(
+  tx: DbTx,
+  input: MaterializeSubscriptionForDateRangeInput,
+): Promise<MaterializeSubscriptionForDateRangeResult> {
+  const { subscriptionId, startDate, endDate, requestId } = input;
+  const subLog = log.with({ subscription_id: subscriptionId, request_id: requestId });
+
+  const subCte = buildCandidateAndEligibleDatesCte({
+    filter: { kind: "subscription", subscriptionId },
+    dateRange: { kind: "explicit", startDate, endDate },
+  });
+  const fullCte = sqlTag`${subCte}, ${buildResolvedAddressesCte()}`;
+
+  type InsertedRow = { id: Uuid };
+  const insertedRows = await tx.execute<InsertedRow>(sqlTag`
+    WITH ${fullCte}
+    INSERT INTO tasks (
+      tenant_id,
+      consignee_id,
+      subscription_id,
+      created_via,
+      customer_order_number,
+      internal_status,
+      delivery_date,
+      delivery_start_time,
+      delivery_end_time,
+      delivery_type,
+      task_kind,
+      address_id
+    )
+    SELECT
+      ra.tenant_id,
+      ra.consignee_id,
+      ra.subscription_id,
+      'subscription'                                                     AS created_via,
+      'SUB-' || substring(replace(ra.subscription_id::text, '-', ''), 1, 12)
+              || '-' || to_char(ra.delivery_date, 'YYYYMMDD')            AS customer_order_number,
+      'CREATED'                                                          AS internal_status,
+      ra.delivery_date,
+      ra.delivery_window_start                                           AS delivery_start_time,
+      ra.delivery_window_end                                             AS delivery_end_time,
+      'STANDARD'                                                         AS delivery_type,
+      'DELIVERY'                                                         AS task_kind,
+      ra.resolved_address_id                                             AS address_id
+    FROM resolved_addresses ra
+    WHERE ra.resolved_address_id IS NOT NULL
+    ON CONFLICT (subscription_id, delivery_date) WHERE subscription_id IS NOT NULL DO NOTHING
+    RETURNING id
+  `);
+
+  const newInsertedTaskIds = insertedRows.map((row) => row.id);
+
+  type QuarantinedRow = {
+    subscription_id: Uuid;
+    consignee_id: Uuid;
+    delivery_date: string;
+  };
+  const quarantinedRows = await tx.execute<QuarantinedRow>(sqlTag`
+    WITH ${fullCte}
+    SELECT
+      ra.subscription_id,
+      ra.consignee_id,
+      ra.delivery_date
+    FROM resolved_addresses ra
+    WHERE ra.resolved_address_id IS NULL
+  `);
+
+  for (const row of quarantinedRows) {
+    subLog.warn(
+      {
+        event: "materialization.address_resolution_failed",
+        consignee_id: row.consignee_id,
+        subscription_id: row.subscription_id,
+        target_date: row.delivery_date,
+      },
+      "address resolution failed (per-sub manual trigger) — row not materialized (consignee data gap)",
+    );
+    captureException(
+      new Error(
+        `materialization.address_resolution_failed: subscription=${row.subscription_id} consignee=${row.consignee_id} target_date=${row.delivery_date}`,
+      ),
+      {
+        component: "task_materialization_service",
+        operation: "address_resolution_failed_per_sub",
+        consignee_id: row.consignee_id,
+        subscription_id: row.subscription_id,
+        target_date: row.delivery_date,
+        request_id: requestId,
+      },
+    );
+  }
+
+  return {
+    newInsertedTaskIds,
+    addressResolutionFailedCount: quarantinedRows.length,
   };
 }
