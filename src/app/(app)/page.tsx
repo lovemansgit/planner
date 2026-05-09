@@ -74,7 +74,7 @@ export default async function LandingPage() {
               <Link
                 key={card.path}
                 href={card.path}
-                className="block border border-[color:var(--color-border-strong)] p-8 transition-opacity hover:opacity-80"
+                className="block border border-[color:var(--color-border-strong)] p-8 transition-colors duration-150 hover:border-t-green"
               >
                 <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
                   Shortcut

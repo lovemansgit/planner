@@ -119,15 +119,6 @@ export default async function AdminConsigneesPage({
           <AdminPageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} />
         </div>
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">
-            {rows.length}
-          </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {merchantSlug ? "Filtered (this page)" : "On this page"}
-          </p>
-        </section>
-
         {rows.length === 0 ? (
           <EmptyState filtered={merchantSlug !== undefined} />
         ) : (

@@ -75,7 +75,7 @@ export function PodLightboxModal({
     >
       <div
         ref={panelRef}
-        className="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-sm border border-stone-200 bg-surface-primary p-4 shadow-xl"
+        className="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-sm border border-stone-200 border-t-[1px] border-t-green bg-surface-primary p-4"
       >
         <div className="mb-3 flex items-center justify-between">
           <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
@@ -111,7 +111,7 @@ export function PodLightboxModal({
                 onClick={() =>
                   setIndex((i) => (i - 1 + photos.length) % photos.length)
                 }
-                className="absolute left-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary/90 px-3 py-2 text-sm text-navy shadow-sm hover:bg-surface-primary"
+                className="absolute left-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary/90 px-3 py-2 text-sm text-navy hover:bg-surface-primary"
               >
                 ←
               </button>
@@ -119,7 +119,7 @@ export function PodLightboxModal({
                 type="button"
                 aria-label="Next photo"
                 onClick={() => setIndex((i) => (i + 1) % photos.length)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary/90 px-3 py-2 text-sm text-navy shadow-sm hover:bg-surface-primary"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary/90 px-3 py-2 text-sm text-navy hover:bg-surface-primary"
               >
                 →
               </button>

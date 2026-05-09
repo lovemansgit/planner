@@ -112,7 +112,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
 
         <StatusFilterBar activeStatus={status} />
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] py-6">
+        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
           <p className="font-serif text-5xl font-light tabular-nums leading-none">{totalCount}</p>
           <div className="flex items-center gap-6">
             <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">

@@ -70,7 +70,7 @@ export default async function FailedPushesAdminPage() {
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Unresolved rows
           </p>
-          <p className="mt-4 font-serif text-7xl font-light tabular-nums leading-none">
+          <p className="mt-4 font-serif text-5xl font-light tabular-nums leading-none">
             {rows.length}
           </p>
         </section>

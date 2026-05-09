@@ -158,7 +158,7 @@ function Tier2ConfiguredPanel({ count }: { readonly count: number }) {
         Credential mismatches (last 24h)
       </p>
       <p
-        className={`mt-3 font-serif text-7xl font-light tabular-nums leading-none ${colorClass}`}
+        className={`mt-3 font-serif text-5xl font-light tabular-nums leading-none ${colorClass}`}
       >
         {count}
       </p>

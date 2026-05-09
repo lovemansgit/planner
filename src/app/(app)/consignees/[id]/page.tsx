@@ -131,7 +131,13 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
           ← Consignees
         </Link>
 
-        <header className="mt-6 border-b border-stone-200 pb-8">
+        <header
+          className={
+            consignee.crmState === "HIGH_RISK"
+              ? "mt-6 border-b border-stone-200 bg-red/[0.04] pb-8"
+              : "mt-6 border-b border-stone-200 pb-8"
+          }
+        >
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
