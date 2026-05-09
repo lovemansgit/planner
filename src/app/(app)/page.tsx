@@ -60,7 +60,7 @@ export default async function LandingPage() {
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription planner
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Welcome back</h1>
+          <h1 className="mt-3 text-5xl font-bold tracking-tighter">Welcome back</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Signed in as {greeting}.
           </p>
