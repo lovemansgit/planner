@@ -147,6 +147,120 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
     `);
   });
 
+  it("emits the tenant + explicit-range variant — pins admin-backfill / hot-fix path SQL", () => {
+    // Defensive snapshot — no production caller today, but the builder
+    // accepts this combination. Future Day-22+ admin-backfill tools or
+    // ops-driven re-materialization scripts may invoke this shape; the
+    // snapshot pre-locks the SQL output so accidental builder drift
+    // doesn't silently change behavior in those callers.
+    const cte = buildCandidateAndEligibleDatesCte({
+      filter: { kind: "tenant", tenantId: TENANT_ID },
+      dateRange: { kind: "explicit", startDate: START_DATE, endDate: END_DATE },
+    });
+    const { query, params } = toSqlString(cte);
+    expect({ query, params }).toMatchInlineSnapshot(`
+      {
+        "params": [
+          "2026-05-19",
+          "2026-06-02",
+          "2026-06-02",
+          "11111111-1111-4111-8111-111111111111",
+        ],
+        "query": "
+          candidate_dates AS (
+            SELECT
+              s.id            AS subscription_id,
+              s.tenant_id     AS tenant_id,
+              s.consignee_id  AS consignee_id,
+              s.delivery_window_start AS delivery_window_start,
+              s.delivery_window_end   AS delivery_window_end,
+              d::date         AS delivery_date
+            FROM subscriptions s
+            
+            CROSS JOIN LATERAL generate_series(
+              GREATEST($1::date, s.start_date),
+              LEAST($2::date, COALESCE(s.end_date, $3::date)),
+              INTERVAL '1 day'
+            ) AS d
+            WHERE s.tenant_id = $4
+              AND s.status = 'active'
+              AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
+          ),
+          eligible_dates AS (
+            SELECT cd.*
+            FROM candidate_dates cd
+            WHERE NOT EXISTS (
+              SELECT 1 FROM subscription_exceptions e
+              WHERE e.subscription_id = cd.subscription_id
+                AND (
+                  (e.type = 'skip' AND e.start_date = cd.delivery_date)
+                  OR (e.type = 'pause_window'
+                      AND cd.delivery_date BETWEEN e.start_date AND e.end_date)
+                )
+            )
+          )
+        ",
+      }
+    `);
+  });
+
+  it("emits the subscription + horizonAdvance variant — pins per-sub cron-style trigger SQL", () => {
+    // Defensive snapshot — no production caller today (per-sub manual
+    // trigger uses caller-supplied date range), but the builder
+    // accepts this combination. Future per-sub admin tools that want
+    // to "run cron logic for one sub" (e.g., a debug endpoint that
+    // re-fires the rolling 14-day horizon for a single subscription)
+    // may invoke this shape.
+    const cte = buildCandidateAndEligibleDatesCte({
+      filter: { kind: "subscription", subscriptionId: SUBSCRIPTION_ID },
+      dateRange: { kind: "horizonAdvance", targetDate: TARGET_DATE },
+    });
+    const { query, params } = toSqlString(cte);
+    expect({ query, params }).toMatchInlineSnapshot(`
+      {
+        "params": [
+          "2026-05-19",
+          "2026-05-19",
+          "22222222-2222-4222-8222-222222222222",
+        ],
+        "query": "
+          candidate_dates AS (
+            SELECT
+              s.id            AS subscription_id,
+              s.tenant_id     AS tenant_id,
+              s.consignee_id  AS consignee_id,
+              s.delivery_window_start AS delivery_window_start,
+              s.delivery_window_end   AS delivery_window_end,
+              d::date         AS delivery_date
+            FROM subscriptions s
+            JOIN subscription_materialization sm ON sm.subscription_id = s.id
+            CROSS JOIN LATERAL generate_series(
+              GREATEST(sm.materialized_through_date + 1, s.start_date),
+              LEAST($1::date, COALESCE(s.end_date, $2::date)),
+              INTERVAL '1 day'
+            ) AS d
+            WHERE s.id = $3
+              AND s.status = 'active'
+              AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
+          ),
+          eligible_dates AS (
+            SELECT cd.*
+            FROM candidate_dates cd
+            WHERE NOT EXISTS (
+              SELECT 1 FROM subscription_exceptions e
+              WHERE e.subscription_id = cd.subscription_id
+                AND (
+                  (e.type = 'skip' AND e.start_date = cd.delivery_date)
+                  OR (e.type = 'pause_window'
+                      AND cd.delivery_date BETWEEN e.start_date AND e.end_date)
+                )
+            )
+          )
+        ",
+      }
+    `);
+  });
+
   it("differs between tenant + sub variants only at the JOIN, lower-bound, and filter — invariants", () => {
     const tenantCte = buildCandidateAndEligibleDatesCte({
       filter: { kind: "tenant", tenantId: TENANT_ID },

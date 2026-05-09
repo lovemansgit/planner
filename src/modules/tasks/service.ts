@@ -760,27 +760,29 @@ export async function updateTask(
 
     // Day-19 / Phase 1 / §E.4 address-FK consistency check. addressId
     // patch must reference an address belonging to this task's consignee
-    // within this tenant. Cross-consignee assignment is refused.
+    // within this tenant. Cross-consignee + cross-tenant invariants
+    // collapsed into a single SQL WHERE clause per §3.6 reviewer fix —
+    // moves the integrity check from app-code to DB-layer
+    // (defense-in-depth alongside RLS tenant-scope). Single error
+    // message; UX granularity ("address not found in tenant" vs
+    // "address belongs to different consignee") deliberately collapsed
+    // to reduce information leak about cross-consignee structure.
     if (
       normalised.addressId !== undefined &&
       normalised.addressId !== before.addressId
     ) {
-      type AddressOwnerRow = { consignee_id: Uuid };
-      const addressRows = await tx.execute<AddressOwnerRow>(sqlTag`
-        SELECT consignee_id
+      type AddressExistsRow = { exists: boolean };
+      const addressRows = await tx.execute<AddressExistsRow>(sqlTag`
+        SELECT true AS exists
         FROM addresses
         WHERE id = ${normalised.addressId}
           AND tenant_id = ${tenantId}
+          AND consignee_id = ${before.consigneeId}
         LIMIT 1
       `);
       if (addressRows.length === 0) {
         throw new ValidationError(
-          `addressId '${normalised.addressId}' does not exist in this tenant`,
-        );
-      }
-      if (addressRows[0].consignee_id !== before.consigneeId) {
-        throw new ValidationError(
-          `addressId '${normalised.addressId}' belongs to a different consignee; cross-consignee address assignment refused`,
+          `addressId '${normalised.addressId}' does not exist for this consignee in this tenant`,
         );
       }
     }
