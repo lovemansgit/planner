@@ -42,7 +42,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription Planner
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Sign in</h1>
+          <h1 className="mt-3 text-5xl font-bold tracking-tighter">Sign in</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Enter your operator credentials to continue.
           </p>

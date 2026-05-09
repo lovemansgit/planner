@@ -9,8 +9,8 @@
 // Auth: UnauthorizedError redirects to /login.
 //
 // Transcorp design language:
-//   - Background: warm off-white #FAF7F2
-//   - Foreground: deep navy #0B1F3A
+//   - Background: var(--color-surface-primary) (warm off-white #FAF8F4)
+//   - Foreground: var(--color-navy) (#252d60)
 //   - 0.5px hairline borders, no shadows
 //   - Sentence case throughout
 //   - Hero numeral for the headline count
@@ -51,21 +51,21 @@ export default async function ConsigneesPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#FAF7F2] text-[#0B1F3A]">
+    <main className="min-h-screen bg-surface-primary text-navy">
       <div className="mx-auto max-w-5xl px-12 py-16">
         <header className="mb-16">
-          <p className="text-xs uppercase tracking-[0.2em] text-[#0B1F3A]/60">
+          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription planner
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">Consignees</h1>
-          <p className="mt-3 text-sm text-[#0B1F3A]/70">
+          <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Read-only demo view, scoped to the first tenant in the database.
           </p>
         </header>
 
-        <section className="mb-16 border-t border-b border-[#0B1F3A]/15 py-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[#0B1F3A]/60">Total consignees</p>
-          <p className="mt-4 text-7xl font-light tabular-nums leading-none">
+        <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
+          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">Total consignees</p>
+          <p className="mt-4 text-5xl font-light tabular-nums leading-none">
             {consignees.length}
           </p>
         </section>
@@ -84,7 +84,7 @@ function ConsigneesTable({ rows }: { rows: readonly Consignee[] }) {
   return (
     <table className="w-full border-collapse text-sm">
       <thead>
-        <tr className="border-b border-[#0B1F3A]/15">
+        <tr className="border-b border-[color:var(--color-border-strong)]">
           <Th>Name</Th>
           <Th>Phone</Th>
           <Th>Emirate</Th>
@@ -94,7 +94,7 @@ function ConsigneesTable({ rows }: { rows: readonly Consignee[] }) {
       </thead>
       <tbody>
         {rows.map((c) => (
-          <tr key={c.id} className="border-b border-[#0B1F3A]/10 last:border-b-0 transition-colors hover:bg-ivory">
+          <tr key={c.id} className="border-b border-[color:var(--color-border-default)] last:border-b-0 transition-colors hover:bg-ivory">
             <Td>
               <Link href={`/consignees/${c.id}`} className="text-navy hover:underline">
                 {c.name}
@@ -117,7 +117,7 @@ function ConsigneesTable({ rows }: { rows: readonly Consignee[] }) {
 
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[#0B1F3A]/60">
+    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
       {children}
     </th>
   );
@@ -141,10 +141,10 @@ function Td({
 
 function EmptyState() {
   return (
-    <div className="border-t border-b border-[#0B1F3A]/15 py-16 text-center">
-      <p className="text-base text-[#0B1F3A]">No consignees yet.</p>
-      <p className="mt-3 text-sm text-[#0B1F3A]/60">
-        Add your first via <code className="font-mono text-[#0B1F3A]/80">POST /api/consignees</code>.
+    <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
+      <p className="text-base text-navy">No consignees yet.</p>
+      <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
+        Add your first via <code className="font-mono text-[color:var(--color-text-secondary)]">POST /api/consignees</code>.
       </p>
     </div>
   );
@@ -152,13 +152,13 @@ function EmptyState() {
 
 function SystemNotInitialised() {
   return (
-    <main className="min-h-screen bg-[#FAF7F2] text-[#0B1F3A]">
+    <main className="min-h-screen bg-surface-primary text-navy">
       <div className="mx-auto max-w-2xl px-12 py-32 text-center">
-        <p className="text-xs uppercase tracking-[0.2em] text-[#0B1F3A]/60">
+        <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
           Subscription planner
         </p>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">System not yet initialised</h1>
-        <p className="mt-6 text-sm text-[#0B1F3A]/70">
+        <p className="mt-6 text-sm text-[color:var(--color-text-secondary)]">
           No tenants are configured. Onboard at least one tenant before using the demo views.
         </p>
       </div>
