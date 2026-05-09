@@ -124,7 +124,7 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
         WHERE event_type = 'task.edit_applied_via_webhook'
           AND tenant_id = ${TENANT}
           AND resource_id = ${TASK_TIME_EDIT}
-        ORDER BY created_at DESC LIMIT 1
+        ORDER BY occurred_at DESC LIMIT 1
       `),
     );
     expect((audit as { event_type: string }).event_type).toBe("task.edit_applied_via_webhook");
@@ -217,7 +217,7 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
         WHERE event_type = 'task.edit_applied_via_webhook'
           AND tenant_id = ${TENANT}
           AND resource_id = ${TASK_ADDRESS_AUDIT}
-        ORDER BY created_at DESC LIMIT 1
+        ORDER BY occurred_at DESC LIMIT 1
       `),
     );
     const meta = (audit as { metadata: Record<string, unknown> }).metadata;
@@ -259,7 +259,7 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
         WHERE event_type = 'task.edit_applied_via_webhook'
           AND tenant_id = ${TENANT}
           AND resource_id = ${TASK_DEPRECATED}
-        ORDER BY created_at DESC LIMIT 1
+        ORDER BY occurred_at DESC LIMIT 1
       `),
     );
     const meta = (audit as { metadata: Record<string, unknown> }).metadata;
