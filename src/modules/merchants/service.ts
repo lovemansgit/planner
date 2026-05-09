@@ -50,6 +50,7 @@
 
 import { emit } from "../audit";
 import { withServiceRole } from "../../shared/db";
+import { isUniqueViolation } from "../../shared/db-errors";
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
@@ -110,24 +111,6 @@ function requireValidSlug(value: string): string {
     );
   }
   return trimmed;
-}
-
-/**
- * Postgres SQLSTATE code for unique-violation. Used to discriminate
- * the slug-collision path from generic INSERT failures. Same code
- * pattern as `tests/unit/mp-13-consignee-deactivation-cancels-tasks.spec.ts`
- * comment for FK-violation 23503 — `code` is the postgres-js
- * convention for SQLSTATE.
- */
-const PG_UNIQUE_VIOLATION = "23505";
-
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === PG_UNIQUE_VIOLATION
-  );
 }
 
 // -----------------------------------------------------------------------------

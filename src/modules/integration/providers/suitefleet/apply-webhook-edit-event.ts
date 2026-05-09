@@ -25,6 +25,7 @@ import { sql as sqlTag } from "drizzle-orm";
 
 import { emit as auditEmit } from "@/modules/audit";
 import { withTenant } from "@/shared/db";
+import { isUniqueViolation } from "@/shared/db-errors";
 import { logger } from "@/shared/logger";
 import type { Uuid } from "@/shared/types";
 
@@ -438,12 +439,6 @@ function pickString(value: unknown): string | undefined {
 function pickNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   return undefined;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const code = (err as { code?: unknown }).code;
-  return code === "23505";
 }
 
 async function emitEditAppliedAudit(tenantId: Uuid, meta: AuditMeta): Promise<void> {
