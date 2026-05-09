@@ -6,8 +6,14 @@
 // action emits `user.login_failed` with a structured `reason` enum and
 // returns `{ error }` to be rendered by the client form.
 //
-// Brand language matches /admin/failed-pushes + /admin/webhook-config.
+// Day-20 brand polish (FINDING-4): Transcorp logo lockup at the top of
+// the form column + atmospheric cooler-bag accent at the bottom-right
+// (desktop only; hidden on mobile). Per reviewer Day-20 ruling option
+// (c) — logo + single-column form + small atmospheric accent. The
+// image carries no semantic meaning (alt="" + aria-hidden) and is
+// pointer-events-none so it never intercepts form interactions.
 
+import Image from "next/image";
 import { redirect } from "next/navigation";
 
 import { getServerSupabase } from "@/shared/request-context";
@@ -36,9 +42,41 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   }
 
   return (
-    <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-md px-12 py-32">
+    <main className="relative min-h-screen overflow-hidden bg-surface-primary text-navy font-sans">
+      {/* Atmospheric cooler-bag accent — desktop only. Soft mask fades
+          the top + left edges so the photograph feels embedded in the
+          page rather than pasted on. Decorative; aria-hidden + alt="". */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute bottom-0 right-0 hidden w-[30vw] max-w-[560px] md:block"
+        style={{
+          maskImage:
+            "linear-gradient(to top left, black 25%, transparent 90%)",
+          WebkitMaskImage:
+            "linear-gradient(to top left, black 25%, transparent 90%)",
+        }}
+      >
+        <Image
+          src="/login-hero-cooler-bag.jpg"
+          alt=""
+          width={1600}
+          height={904}
+          priority
+          className="block h-auto w-full"
+        />
+      </div>
+
+      <div className="relative mx-auto max-w-md px-12 py-32">
         <header className="mb-16">
+          <Image
+            src="/brand/transcorp-logo.svg"
+            alt="Transcorp"
+            width={186}
+            height={64}
+            priority
+            unoptimized
+            className="mb-6 h-8 w-auto"
+          />
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription Planner
           </p>
