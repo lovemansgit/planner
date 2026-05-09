@@ -285,7 +285,7 @@ export function CrmStateModal({ consigneeId, currentState }: CrmStateModalProps)
         ref={triggerRef}
         type="button"
         onClick={openModal}
-        className="inline-flex items-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+        className="inline-flex min-w-[120px] items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
       >
         Change state
       </button>

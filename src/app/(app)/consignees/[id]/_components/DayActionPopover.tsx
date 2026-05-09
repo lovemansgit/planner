@@ -36,6 +36,8 @@ import {
   type SkipDeliveryActionResult,
 } from "../_calendar-actions";
 
+import { AddressIndicator } from "./AddressIndicator";
+
 interface DayActionPopoverProps {
   readonly consigneeId: string;
   readonly subscriptionId: string | null;
@@ -47,6 +49,8 @@ interface DayActionPopoverProps {
   readonly statusLabel: string;
   readonly statusClasses: string;
   readonly canSkip: boolean;
+  /** Day-20 §3.3.3 — Home/Office/Other label, rendered below status pill in day cell. */
+  readonly addressLabel: "home" | "office" | "other" | null;
 }
 
 interface PopoverFormProps {
@@ -141,6 +145,7 @@ export function DayActionPopover({
   statusLabel,
   statusClasses,
   canSkip,
+  addressLabel,
 }: DayActionPopoverProps) {
   const [open, setOpen] = useState(false);
   const [formKey, setFormKey] = useState(0);
@@ -201,6 +206,7 @@ export function DayActionPopover({
       >
         <span className="block truncate">{statusLabel}</span>
         <span className="block tabular-nums opacity-70">{timeWindow}</span>
+        <AddressIndicator label={addressLabel} />
       </button>
 
       {open ? (

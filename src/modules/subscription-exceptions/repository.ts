@@ -245,3 +245,47 @@ export async function countExistingSkipsForCap(
   `);
   return rows[0]?.count ?? 0;
 }
+
+// -----------------------------------------------------------------------------
+// Day-20 §3.3.3 calendar render-time projection fetch
+// -----------------------------------------------------------------------------
+
+/**
+ * Day-20 §3.3.3 — fetch skip + append exceptions that affect a
+ * consignee's calendar within a date range. Filters at the DB layer to
+ * `type IN ('skip', 'append_without_skip')` because pause_window and
+ * address-override types do not surface on the calendar's
+ * DayDisplayStatus projection (pause renders distinctly; address
+ * overrides flow through the resolved `tasks.address_id` and
+ * therefore through the address-label LEFT JOIN at the calendar fetch).
+ *
+ * JOINed through subscriptions to filter by consignee — exceptions
+ * carry subscription_id, not consignee_id directly. The tenant
+ * predicate runs on both tables for defence-in-depth (RLS already
+ * enforces).
+ *
+ * Return shape preserves the full SubscriptionException DTO so the
+ * render-time projection can read targetDateOverride / skipWithoutAppend
+ * for popover-detail copy in subsequent lanes (Day-21 popover handlers).
+ */
+export async function listForConsigneeCalendar(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  startDate: string,
+  endDate: string,
+): Promise<readonly SubscriptionException[]> {
+  const rows = await tx.execute<SubscriptionExceptionRow>(sqlTag`
+    SELECT se.*
+    FROM subscription_exceptions se
+    JOIN subscriptions s ON s.id = se.subscription_id
+    WHERE se.tenant_id = ${tenantId}
+      AND s.tenant_id = ${tenantId}
+      AND s.consignee_id = ${consigneeId}
+      AND se.type IN ('skip', 'append_without_skip')
+      AND se.start_date >= ${startDate}::date
+      AND se.start_date <= ${endDate}::date
+    ORDER BY se.start_date ASC
+  `);
+  return rows.map(mapRow);
+}

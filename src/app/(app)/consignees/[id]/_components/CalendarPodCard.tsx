@@ -21,12 +21,16 @@ import { useState } from "react";
 
 import { PodLightboxModal } from "@/app/(app)/tasks/_components/PodLightboxModal";
 
+import { AddressIndicator } from "./AddressIndicator";
+
 interface CalendarPodCardProps {
   readonly photos: readonly string[];
   readonly statusLabel: string;
   readonly statusClasses: string;
   readonly timeWindow: string;
   readonly deliveryDate: string;
+  /** Day-20 §3.3.3 — Home/Office/Other label, rendered below time window. */
+  readonly addressLabel: "home" | "office" | "other" | null;
 }
 
 export function CalendarPodCard({
@@ -35,6 +39,7 @@ export function CalendarPodCard({
   statusClasses,
   timeWindow,
   deliveryDate,
+  addressLabel,
 }: CalendarPodCardProps) {
   const [open, setOpen] = useState(false);
 
@@ -61,6 +66,7 @@ export function CalendarPodCard({
           <span className="mt-0.5 block text-[10px] tabular-nums text-[color:var(--color-text-tertiary)]">
             {timeWindow}
           </span>
+          <AddressIndicator label={addressLabel} />
         </span>
       </button>
 

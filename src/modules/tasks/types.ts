@@ -150,6 +150,15 @@ export interface Task {
    * webhook handler on TASK_STATUS_UPDATED_TO_DELIVERED only.
    */
   readonly podPhotos: readonly string[] | null;
+  /**
+   * Day-20 §3.3.3 calendar — Home/Office/Other label resolved from the
+   * task's resolved `address_id` via LEFT JOIN to addresses(id). Only
+   * populated by the calendar fetch path
+   * (`listTasksByConsigneeAndDateRange`); other read paths leave this
+   * NULL. Address-rotation indicator renders this on each calendar day
+   * cell per brief §3.3.3 line 487.
+   */
+  readonly addressLabel: "home" | "office" | "other" | null;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
   /** Zero or more packages, ordered by `position` ascending. */

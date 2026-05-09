@@ -109,6 +109,12 @@ type TaskRow = {
   pushed_to_external_at: Date | string | null;
   address_id: string | null;
   pod_photos: unknown;
+  /**
+   * Day-20 §3.3.3 calendar JOIN projection — populated only when the
+   * caller's SELECT projects `addresses.label` via a LEFT JOIN. Most
+   * read paths leave this absent (default null at the mapper).
+   */
+  address_label?: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -225,10 +231,23 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
     pushedToExternalAt: toIsoOrNull(row.pushed_to_external_at),
     addressId: row.address_id,
     podPhotos: mapPodPhotos(row.pod_photos),
+    addressLabel: mapAddressLabel(row.address_label),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     packages,
   };
+}
+
+/**
+ * Day-20 §3.3.3 calendar — addresses.label is constrained to
+ * ('home', 'office', 'other') by the 0014 migration's CHECK. Defensive
+ * narrow at the mapper boundary: anything outside the allowlist
+ * (including undefined when the caller didn't JOIN addresses) collapses
+ * to null. Calendar consumers render null as no-indicator.
+ */
+function mapAddressLabel(value: unknown): "home" | "office" | "other" | null {
+  if (value === "home" || value === "office" || value === "other") return value;
+  return null;
 }
 
 /**
@@ -515,6 +534,7 @@ export async function listTasksByConsigneeAndDateRange(
   const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
     SELECT
       t.*,
+      a.label AS address_label,
       COALESCE(
         (
           SELECT json_agg(tp.* ORDER BY tp.position ASC)
@@ -524,6 +544,7 @@ export async function listTasksByConsigneeAndDateRange(
         '[]'::json
       ) AS packages
     FROM tasks t
+    LEFT JOIN addresses a ON t.address_id = a.id
     WHERE t.tenant_id = ${tenantId}
       AND t.consignee_id = ${consigneeId}
       AND t.delivery_date >= ${startDate}::date

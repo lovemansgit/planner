@@ -3,6 +3,7 @@
 export {
   addSubscriptionException,
   appendWithoutSkip,
+  getConsigneeCalendarExceptions,
 } from "./service";
 export type {
   AddSubscriptionExceptionInput,
