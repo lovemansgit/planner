@@ -16,13 +16,22 @@
 // Phase-1.5.1 follow-up if Transcorp staff demand consignee names
 // inline (would extend the backend AdminSubscriptionRow shape).
 //
-// No pagination — mirrors operator /subscriptions. If demo data
-// volume warrants, follow-up PR adds it.
+// Pagination added per Day-19 PR #213 §3.6 counter-review
+// (UX-FINDING-2). Same v1.5 limitation as /admin/tasks: backend ships
+// listAllSubscriptions with offset+limit only; "Page N of M" total
+// deferred (see followup memo Lane D — countAll<X> aggregator).
 
 import { randomUUID } from "node:crypto";
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import {
+  ALLOWED_PAGE_SIZES,
+  PAGE_SIZE_DEFAULT,
+  parsePageParam,
+  parsePerPageParam,
+} from "@/app/(app)/tasks/status";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import {
@@ -37,13 +46,18 @@ import {
 } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
+import { AdminPageSizeDropdown } from "../../_components/AdminPageSizeDropdown";
 import { MerchantFilterDropdown } from "../../_components/MerchantFilterDropdown";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 interface AdminSubscriptionsPageProps {
-  readonly searchParams: Promise<{ readonly merchant?: string }>;
+  readonly searchParams: Promise<{
+    readonly merchant?: string;
+    readonly page?: string;
+    readonly perPage?: string;
+  }>;
 }
 
 export default async function AdminSubscriptionsPage({
@@ -55,13 +69,16 @@ export default async function AdminSubscriptionsPage({
     typeof params.merchant === "string" && params.merchant.length > 0
       ? params.merchant
       : undefined;
+  const page = parsePageParam(params.page);
+  const perPage = parsePerPageParam(params.perPage);
+  const offset = (page - 1) * perPage;
 
   let rows: readonly AdminSubscriptionRow[];
   let merchants: readonly Merchant[];
   try {
     const ctx = await buildRequestContext("/admin/subscriptions", requestId);
     [rows, merchants] = await Promise.all([
-      listAllSubscriptions(ctx, { merchantSlug }),
+      listAllSubscriptions(ctx, { merchantSlug, limit: perPage, offset }),
       listMerchants(ctx),
     ]);
   } catch (err) {
@@ -82,6 +99,7 @@ export default async function AdminSubscriptionsPage({
     name: m.name,
     status: m.status,
   }));
+  const hasNext = rows.length === perPage;
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
@@ -101,6 +119,7 @@ export default async function AdminSubscriptionsPage({
             merchants={dropdownMerchants}
             currentSlug={merchantSlug ?? null}
           />
+          <AdminPageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} />
         </div>
 
         <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] py-6">
@@ -108,7 +127,7 @@ export default async function AdminSubscriptionsPage({
             {rows.length}
           </p>
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {merchantSlug ? "Filtered subscriptions" : "Total subscriptions"}
+            {merchantSlug ? "Filtered (this page)" : "On this page"}
           </p>
         </section>
 
@@ -117,6 +136,13 @@ export default async function AdminSubscriptionsPage({
         ) : (
           <SubscriptionsTable rows={rows} />
         )}
+
+        <Pagination
+          page={page}
+          hasNext={hasNext}
+          merchantSlug={merchantSlug}
+          perPage={perPage}
+        />
       </div>
     </main>
   );
@@ -198,6 +224,73 @@ function StatusBadge({ status }: { status: Subscription["status"] }) {
   }
 }
 
+function Pagination({
+  page,
+  hasNext,
+  merchantSlug,
+  perPage,
+}: {
+  readonly page: number;
+  readonly hasNext: boolean;
+  readonly merchantSlug: string | undefined;
+  readonly perPage: number;
+}) {
+  if (page === 1 && !hasNext) return null;
+  return (
+    <nav
+      aria-label="Pagination"
+      className="mt-12 flex items-center justify-between border-t border-[color:var(--color-border-default)] pt-6"
+    >
+      <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+        Page {page}
+      </p>
+      <div className="flex gap-3">
+        {page > 1 ? (
+          <Link
+            href={buildAdminSubscriptionsHref({ merchantSlug, perPage, page: page - 1 })}
+            className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
+          >
+            ← Previous
+          </Link>
+        ) : (
+          <span className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-tertiary)]">
+            ← Previous
+          </span>
+        )}
+        {hasNext ? (
+          <Link
+            href={buildAdminSubscriptionsHref({ merchantSlug, perPage, page: page + 1 })}
+            className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
+          >
+            Next →
+          </Link>
+        ) : (
+          <span className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-tertiary)]">
+            Next →
+          </span>
+        )}
+      </div>
+    </nav>
+  );
+}
+
+function buildAdminSubscriptionsHref({
+  merchantSlug,
+  perPage,
+  page,
+}: {
+  readonly merchantSlug: string | undefined;
+  readonly perPage: number;
+  readonly page: number;
+}): string {
+  const params = new URLSearchParams();
+  if (merchantSlug) params.set("merchant", merchantSlug);
+  if (perPage !== PAGE_SIZE_DEFAULT) params.set("perPage", String(perPage));
+  if (page > 1) params.set("page", String(page));
+  const qs = params.toString();
+  return qs ? `/admin/subscriptions?${qs}` : "/admin/subscriptions";
+}
+
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function formatDays(days: readonly number[]): string {
@@ -224,12 +317,12 @@ function EmptyState({ filtered }: { readonly filtered: boolean }) {
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
       <p className="text-base text-navy">
-        {filtered ? "No subscriptions match the merchant filter." : "No subscriptions yet."}
+        {filtered ? "No subscriptions match the merchant filter." : "No subscriptions on this page."}
       </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
         {filtered
           ? "Reset to All merchants to see everything."
-          : "Subscriptions seed via scripts/seed-subscriptions.mjs."}
+          : "Try a previous page."}
       </p>
     </div>
   );

@@ -1,18 +1,18 @@
-// Day 19 / Phase 1.5 — page-size dropdown for /admin/tasks.
+// Day 19 / Phase 1.5 — shared page-size dropdown for admin pages.
 //
 // Mirrors the operator-side PageSizeDropdown (Day-17 Session B / PR
-// #175) but path-agnostic via usePathname() so future admin pages
-// with pagination can reuse without an additional prop. Today only
-// /admin/tasks paginates; /admin/consignees + /admin/subscriptions
-// mirror their operator-side counterparts (unpaginated). If those
-// later need pagination, this component is the consumer.
+// #175) but path-agnostic via usePathname(). Consumed by /admin/tasks,
+// /admin/consignees, and /admin/subscriptions — lifted from
+// (admin)/admin/tasks/_components/ to (admin)/_components/ per Day-19
+// PR #213 §3.6 counter-review (UX-FINDING-2: pagination needed on
+// /admin/consignees + /admin/subscriptions for cross-tenant volume).
 //
 // Param mutation discipline (matches MerchantFilterDropdown):
 //   - Resets `page` on size change (page-N at 50/page ≠ page-N at
 //     500/page; preserving stale page is a worse UX than resetting).
 //   - Preserves all other params (merchant, status).
 //   - Default page size is omitted from URL to keep bookmark-friendly
-//     `/admin/tasks` form clean.
+//     URLs clean.
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";

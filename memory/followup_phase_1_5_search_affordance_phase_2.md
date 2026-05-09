@@ -124,11 +124,47 @@ Operator feedback during pilot OR a specific Transcorp-side support escalation t
 
 ---
 
-## §4 Sequencing notes
+## §4 Lane D — `countAll<X>` aggregator + total counts
 
-The three lanes are independent and can land in any order post-pilot. Lane A (search) is the highest-likelihood early trigger because of the scrolling UX pain. Lane B (cursor pagination) is volume-gated. Lane C (Phase 1.6 actions) is a deliberate product decision, not a forced trigger.
+### What's deferred
 
-If multiple lanes land in the same PR, the sequencing is: **A then B then C** (search builds on existing list infrastructure cleanly; cursor pagination is a breaking change that affects search; actions sit on top of both).
+Cross-tenant total-count aggregator service fns (`countAllTasks`, `countAllConsignees`, `countAllSubscriptions`) so the admin pages can render "Page N of M" total counts and accurate "Total" hero numerals on `/admin/consignees` + `/admin/subscriptions`.
+
+Currently Phase 1.5 ships:
+- Pagination on all three admin pages (`/admin/tasks`, `/admin/consignees`, `/admin/subscriptions`)
+- `Page N` (no `of M`) — heuristic "Next" disabled when current page returns < perPage rows
+- Hero numeral framed "On this page" / "Filtered (this page)" — explicit page-rowcount semantics, not misleading totals
+
+### Why deferred from Phase 1.5
+
+Per Day-19 PR #213 §3.6 counter-review (UX-FINDING-3): backend ships listAll<X> with offset+limit only. Adding count fns mid-implementation would have crossed lane boundaries (UI lane edits backend) and was scoped out per "if Session A's backend service shape drifts from plan §4 signatures during their implementation: surface to reviewer; don't workaround in UI." Reviewer ruled to ship pagination with the heuristic Next-disabled UX; honest "On this page" framing replaces misleading "Total" labels.
+
+### Trigger
+
+Demo feedback requires accurate Total Consignees / Total Subscriptions counts (e.g., reviewer asks "how many consignees does Transcorp see across all merchants?"); OR pilot scale exceeds initial page rendering an obvious "is there more?" question; OR an external operator-feedback request.
+
+### Phase 2 scope sketch
+
+- **Tier:** T2 (additive service-layer fns; matches `countTasks` per-tenant precedent)
+- **Service-layer:** new `countAllTasks(ctx, filters?)` / `countAllConsignees` / `countAllSubscriptions`. Same `withServiceRole` + `requirePermission` posture as listAll. Returns single number.
+- **Repository:** `SELECT count(*) FROM <table> JOIN tenants ten ON …` with same `merchantSlug` / `status` filters as the list paths.
+- **UI:** parallel fetch alongside the listAll call; render "Page N of M" + "Total: X" hero numeral; replace "On this page" framing with "Total" or "Filtered" labels.
+- **Coverage:** integration tests for count + filter parity (count and list match).
+- **Estimated effort:** 2-3 hours (lighter than Lanes A/B/C; mostly mechanical).
+
+### Cross-references
+
+- PR #213 §3.6 counter-review UX-FINDING-3 (hero numeral framing rationale)
+- existing `countTasks` per-tenant fn at `src/modules/tasks/service.ts` (precedent for the count signature shape)
+- `/admin/tasks/page.tsx` v1.5 pagination heuristic note (header comment block)
+
+---
+
+## §5 Sequencing notes
+
+The four lanes are independent and can land in any order post-pilot. Lane A (search) is the highest-likelihood early trigger because of the scrolling UX pain. Lane B (cursor pagination) is volume-gated. Lane C (Phase 1.6 actions) is a deliberate product decision, not a forced trigger. Lane D (countAll aggregators) is the lightest-weight and is most likely to land first if reviewer-feedback drives the trigger.
+
+If multiple lanes land in the same PR, the sequencing is: **D then A then B then C** (counts add hero-numeral honesty; search builds on existing list infrastructure cleanly; cursor pagination is a breaking change that affects search; actions sit on top of all reads).
 
 ---
 
