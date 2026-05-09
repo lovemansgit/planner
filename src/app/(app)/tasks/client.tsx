@@ -31,6 +31,7 @@ import type { Task } from "@/modules/tasks/types";
 
 import { PodIcon } from "./_components/PodIcon";
 import { PodLightboxModal } from "./_components/PodLightboxModal";
+import { StatusIcon } from "./_components/StatusIcon";
 import { podCellState } from "./_components/pod-state";
 import { TASK_STATUS_FILTERS } from "./status";
 
@@ -315,8 +316,9 @@ function Row({
       </Td>
       <Td>
         <span
-          className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
         >
+          <StatusIcon status={task.internalStatus} />
           {filter?.label ?? task.internalStatus}
         </span>
       </Td>

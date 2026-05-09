@@ -63,11 +63,11 @@ export default async function ConsigneesPage() {
           </p>
         </header>
 
-        <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">Total consignees</p>
-          <p className="mt-4 text-5xl font-light tabular-nums leading-none">
+        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] py-6">
+          <p className="font-serif text-5xl font-light tabular-nums leading-none">
             {consignees.length}
           </p>
+          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">Total consignees</p>
         </section>
 
         {consignees.length === 0 ? <EmptyState /> : <ConsigneesTable rows={consignees} />}

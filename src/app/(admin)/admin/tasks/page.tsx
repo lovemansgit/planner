@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { StatusIcon } from "@/app/(app)/tasks/_components/StatusIcon";
 import {
   ALLOWED_PAGE_SIZES,
   PAGE_SIZE_DEFAULT,
@@ -131,7 +132,7 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           perPage={perPage}
         />
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] py-6">
+        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] py-6">
           <p className="font-serif text-5xl font-light tabular-nums leading-none">
             {rows.length}
           </p>
@@ -260,8 +261,9 @@ function Row({ row }: { row: AdminTaskRow }) {
       </Td>
       <Td>
         <span
-          className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
         >
+          <StatusIcon status={row.task.internalStatus} />
           {filter?.label ?? row.task.internalStatus}
         </span>
       </Td>
