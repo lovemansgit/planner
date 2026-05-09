@@ -137,7 +137,7 @@ describe("Day-18 / A2 Layer 2 — applyWebhookStatusEvent (real Postgres)", () =
         WHERE event_type = 'task.status_changed_via_webhook'
           AND tenant_id = ${TENANT}
           AND resource_id = ${TASK_PICKED_UP}
-        ORDER BY created_at DESC
+        ORDER BY occurred_at DESC
         LIMIT 1
       `),
     );
@@ -305,7 +305,7 @@ describe("Day-18 / A2 Layer 2 — applyWebhookStatusEvent (real Postgres)", () =
         WHERE tenant_id = ${TENANT}
           AND resource_id = ${TASK_DELIVERED}
           AND event_type IN ('task.status_changed_via_webhook', 'task.pod_received_via_webhook')
-        ORDER BY created_at ASC
+        ORDER BY occurred_at ASC
       `),
     );
     const types = audits.map((a) => (a as { event_type: string }).event_type).sort();
