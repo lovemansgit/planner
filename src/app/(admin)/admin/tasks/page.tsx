@@ -132,15 +132,6 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           perPage={perPage}
         />
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">
-            {rows.length}
-          </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {status ? `Showing ${status.toLowerCase().replace("_", " ")}` : "On this page"}
-          </p>
-        </section>
-
         {rows.length === 0 ? <EmptyState filtered={status !== undefined || merchantSlug !== undefined} /> : <AdminTasksTable rows={rows} />}
 
         <Pagination

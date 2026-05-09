@@ -75,13 +75,18 @@ const STATE_VISUALS: Record<ConsigneeCrmState, StateVisual> = {
 
 export function CrmStateBadge({ state, size = "default" }: CrmStateBadgeProps) {
   const visual = STATE_VISUALS[state];
+  // Day-19 PR-B fix-up — min-w sized by variant so all CRM state labels
+  // (Active / Churned / High risk / Inactive / On hold / Ended) render
+  // at consistent width across rows. "High risk" (9 chars) is the
+  // longest rendered label; widths leave a small margin without forcing
+  // shorter labels to overstretch.
   const sizeClasses =
     size === "lg"
-      ? "px-3 py-1 text-xs"
-      : "px-2 py-0.5 text-[11px]";
+      ? "min-w-[120px] px-3 py-1 text-xs"
+      : "min-w-[100px] px-2 py-0.5 text-[11px]";
   return (
     <span
-      className={`inline-flex items-center rounded-sm uppercase tracking-[0.1em] font-medium ${sizeClasses} ${visual.classes} ${visual.decoration === "line-through" ? "line-through" : ""}`}
+      className={`inline-flex items-center justify-center rounded-sm uppercase tracking-[0.1em] font-medium ${sizeClasses} ${visual.classes} ${visual.decoration === "line-through" ? "line-through" : ""}`}
       aria-label={`CRM state: ${visual.label}`}
     >
       {visual.label}

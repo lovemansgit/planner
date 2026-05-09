@@ -37,7 +37,7 @@ export function AdminTopNav({ items, userIdentity }: AdminTopNavProps) {
       <div className="mx-auto flex max-w-6xl items-center justify-between px-12 py-6">
         <Link
           href="/admin/merchants"
-          className="flex items-center gap-3 transition-opacity duration-150 hover:opacity-80"
+          className="flex items-end gap-3 transition-opacity duration-150 hover:opacity-80"
           aria-label="Subscription Planner — Transcorp admin home"
         >
           <Image
@@ -49,7 +49,7 @@ export function AdminTopNav({ items, userIdentity }: AdminTopNavProps) {
             unoptimized
             className="h-14 w-auto"
           />
-          <span className="font-display text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+          <span className="font-display text-xs uppercase tracking-[0.2em] leading-none text-[color:var(--color-text-secondary)]">
             Subscription planner · Admin
           </span>
         </Link>
