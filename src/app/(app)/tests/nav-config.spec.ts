@@ -108,11 +108,17 @@ describe("visibleLandingCards", () => {
 describe("visibleAdminNavItems", () => {
   // Day 18 / C1 — Transcorp-staff cross-tenant admin nav.
   // merchant:read_all is systemOnly + carried only by transcorp-sysadmin.
+  // Day 19 / Phase 1.5 — added Tasks / Consignees / Subscriptions
+  // backed by task:read_all / consignee:read_all / subscription:read_all
+  // (all systemOnly; only transcorp-sysadmin carries them).
   const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
 
-  it("transcorp-sysadmin sees the Merchants item", () => {
+  it("transcorp-sysadmin sees all 4 admin nav items", () => {
     expect(visibleAdminNavItems(TRANSCORP_SYSADMIN).map((i) => i.label)).toEqual([
       "Merchants",
+      "Tasks",
+      "Consignees",
+      "Subscriptions",
     ]);
   });
 
