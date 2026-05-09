@@ -558,6 +558,33 @@ const PERMISSIONS_DRAFT = {
       "Day 13 / T3. Flip tenant.status from 'active' to 'inactive' (lowercase per plan §1.7.1 prod canon). Reversible — preserves data, blocks new operator logins. Hard archival follows post-pilot data lifecycle policy.",
     systemOnly: true,
   },
+
+  "task:read_all": {
+    id: "task:read_all",
+    resource: "task",
+    action: "read_all",
+    description:
+      "Day 19 / Phase 1.5. Cross-tenant read access to the full task list across all merchants. Powers the /admin/tasks list view per brief §2.3 (v1.9). Granted only to transcorp-sysadmin; tenant operators see only their own tenant's data via task:read (single-tenant scope).",
+    systemOnly: true,
+  },
+
+  "consignee:read_all": {
+    id: "consignee:read_all",
+    resource: "consignee",
+    action: "read_all",
+    description:
+      "Day 19 / Phase 1.5. Cross-tenant read access to the full consignee list across all merchants. Powers the /admin/consignees list view per brief §2.3 (v1.9). Granted only to transcorp-sysadmin; tenant operators see only their own tenant's data via consignee:read (single-tenant scope).",
+    systemOnly: true,
+  },
+
+  "subscription:read_all": {
+    id: "subscription:read_all",
+    resource: "subscription",
+    action: "read_all",
+    description:
+      "Day 19 / Phase 1.5. Cross-tenant read access to the full subscription list across all merchants. Powers the /admin/subscriptions list view per brief §2.3 (v1.9). Granted only to transcorp-sysadmin; tenant operators see only their own tenant's data via subscription:read (single-tenant scope).",
+    systemOnly: true,
+  },
 } as const satisfies Record<Permission, PermissionDef>;
 
 /**
@@ -616,6 +643,12 @@ export const API_KEY_FORBIDDEN_PERMISSIONS: ReadonlySet<PermissionId> = Object.f
     "merchant:read_all",
     "merchant:activate",
     "merchant:deactivate",
+    // Day 19 / Phase 1.5 — cross-tenant read perms are systemOnly per
+    // brief §2.3 (v1.9); API keys must not exfiltrate cross-tenant
+    // operational data.
+    "task:read_all",
+    "consignee:read_all",
+    "subscription:read_all",
     // Identity write paths — exfiltrated keys must not be able to mint/escalate.
     "api_key:create",
     "api_key:update",

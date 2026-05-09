@@ -45,9 +45,22 @@ const ALL: readonly PermissionId[] = Object.freeze(Object.keys(PERMISSIONS) as P
 /** Filter: every non-systemOnly permission. */
 const TENANT_SCOPED: readonly PermissionId[] = ALL.filter((id) => !SYSTEM_ONLY_PERMISSIONS.has(id));
 
-/** Filter: every permission whose resource matches `resource`. */
+/**
+ * Filter: every NON-systemOnly permission whose resource matches `resource`.
+ *
+ * Used by tenant-facing roles (Tenant Admin, Ops Manager, CS Agent) to
+ * spread "all perms for this resource" without inadvertently capturing
+ * systemOnly perms that are added later in the resource family. Day-19
+ * Phase 1.5 added `task:read_all` / `consignee:read_all` /
+ * `subscription:read_all` — three systemOnly perms in the task /
+ * consignee / subscription resource families that would have leaked
+ * into Ops Manager's set without this filter, breaking the
+ * `systemOnlyPermissionsAreNotInTenantRoles` invariant.
+ */
 function permsFor(resource: string): readonly PermissionId[] {
-  return ALL.filter((id) => PERMISSIONS[id].resource === resource);
+  return ALL.filter(
+    (id) => PERMISSIONS[id].resource === resource && !SYSTEM_ONLY_PERMISSIONS.has(id),
+  );
 }
 
 // -----------------------------------------------------------------------------

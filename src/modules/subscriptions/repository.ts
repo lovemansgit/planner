@@ -47,6 +47,8 @@ import type { DbTx } from "@/shared/db";
 import { ConflictError, NotFoundError } from "@/shared/errors";
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
+import type { TenantStatus } from "../merchants/types";
+
 import type {
   CreateSubscriptionInput,
   Subscription,
@@ -214,6 +216,82 @@ export async function listSubscriptionsByTenant(
     ORDER BY created_at DESC
   `);
   return rows.map(mapSubscription);
+}
+
+// -----------------------------------------------------------------------------
+// Day 19 / Phase 1.5 — cross-tenant admin list
+// -----------------------------------------------------------------------------
+
+/**
+ * Filters for listAllSubscriptionsRows. Optional merchantSlug narrows
+ * to a single tenant; limit/offset for pagination (defaults applied
+ * at fn body — default 50, max 500 per merged plan scope item 8).
+ */
+export interface ListAllSubscriptionsFilters {
+  readonly merchantSlug?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+type AdminSubscriptionJoinRow = SubscriptionRow & {
+  readonly merchant_tenant_id: string;
+  readonly merchant_slug: string;
+  readonly merchant_name: string;
+  readonly merchant_status: TenantStatus;
+};
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of subscriptions across all
+ * merchants. Caller is in withServiceRole; no RLS predicate. JOIN
+ * tenants for merchant surface columns per merged plan §5.3.
+ *
+ * ORDER BY created_at DESC per merged plan scope item 9.
+ */
+export async function listAllSubscriptionsRows(
+  tx: DbTx,
+  filters: ListAllSubscriptionsFilters = {},
+): Promise<
+  readonly {
+    subscription: Subscription;
+    merchant: {
+      tenantId: Uuid;
+      slug: string;
+      name: string;
+      status: TenantStatus;
+    };
+  }[]
+> {
+  const limit = Math.min(filters.limit ?? 50, 500);
+  const offset = filters.offset ?? 0;
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+
+  const rows = await tx.execute<AdminSubscriptionJoinRow>(sqlTag`
+    SELECT
+      s.*,
+      ten.id   AS merchant_tenant_id,
+      ten.slug AS merchant_slug,
+      ten.name AS merchant_name,
+      ten.status AS merchant_status
+    FROM subscriptions s
+    JOIN tenants ten ON ten.id = s.tenant_id
+    WHERE 1 = 1
+      ${merchantFilter}
+    ORDER BY s.created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  return rows.map((row) => ({
+    subscription: mapSubscription(row),
+    merchant: {
+      tenantId: row.merchant_tenant_id as Uuid,
+      slug: row.merchant_slug,
+      name: row.merchant_name,
+      status: row.merchant_status,
+    },
+  }));
 }
 
 /**

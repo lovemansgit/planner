@@ -67,9 +67,16 @@ describe("Day-18 / A2 — receiver-route POST end-to-end (real Postgres)", () =>
           (${CONSIGNEE}, ${TENANT}, 'WRR Test Consignee', ${`+97150r${RUN_ID}`},
            'Test Building', 'Dubai', 'Test District')
       `);
+      // Day-19 PR #213 §3.6 fix-up: AWB lives in external_tracking_number
+      // per PR #210's handler-lookup-column fix; external_id is the numeric
+      // SF task id (unset on these fixtures since the receiver-route flow
+      // doesn't need it for status-flip lookup). Pre-fix-up the column was
+      // external_id → handler's WHERE external_tracking_number = ? returned
+      // zero rows → status flip never landed → assertions failed with
+      // 'CREATED' to be 'IN_TRANSIT'.
       await tx.execute(sqlTag`
         INSERT INTO tasks (
-          id, tenant_id, consignee_id, customer_order_number, external_id,
+          id, tenant_id, consignee_id, customer_order_number, external_tracking_number,
           internal_status, delivery_date, delivery_start_time, delivery_end_time,
           created_via
         ) VALUES

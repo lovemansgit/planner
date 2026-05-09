@@ -39,6 +39,8 @@ import { sql as sqlTag, type SQL } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
+import type { TenantStatus } from "../merchants/types";
+
 import type {
   Consignee,
   ConsigneeCrmEvent,
@@ -189,6 +191,82 @@ export async function listConsigneesByTenant(
     ORDER BY created_at DESC
   `);
   return rows.map(mapRow);
+}
+
+// -----------------------------------------------------------------------------
+// Day 19 / Phase 1.5 — cross-tenant admin list
+// -----------------------------------------------------------------------------
+
+/**
+ * Filters for listAllConsigneesRows. Optional merchantSlug narrows
+ * to a single tenant; limit/offset for pagination (defaults applied
+ * at fn body — default 50, max 500 per merged plan scope item 8).
+ */
+export interface ListAllConsigneesFilters {
+  readonly merchantSlug?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+type AdminConsigneeJoinRow = ConsigneeRow & {
+  readonly merchant_tenant_id: string;
+  readonly merchant_slug: string;
+  readonly merchant_name: string;
+  readonly merchant_status: TenantStatus;
+};
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of consignees across all
+ * merchants. Caller is in withServiceRole; no RLS predicate. JOIN
+ * tenants for merchant surface columns per merged plan §5.2.
+ *
+ * ORDER BY created_at DESC per merged plan scope item 9.
+ */
+export async function listAllConsigneesRows(
+  tx: DbTx,
+  filters: ListAllConsigneesFilters = {},
+): Promise<
+  readonly {
+    consignee: Consignee;
+    merchant: {
+      tenantId: Uuid;
+      slug: string;
+      name: string;
+      status: TenantStatus;
+    };
+  }[]
+> {
+  const limit = Math.min(filters.limit ?? 50, 500);
+  const offset = filters.offset ?? 0;
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+
+  const rows = await tx.execute<AdminConsigneeJoinRow>(sqlTag`
+    SELECT
+      c.*,
+      ten.id   AS merchant_tenant_id,
+      ten.slug AS merchant_slug,
+      ten.name AS merchant_name,
+      ten.status AS merchant_status
+    FROM consignees c
+    JOIN tenants ten ON ten.id = c.tenant_id
+    WHERE 1 = 1
+      ${merchantFilter}
+    ORDER BY c.created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  return rows.map((row) => ({
+    consignee: mapRow(row),
+    merchant: {
+      tenantId: row.merchant_tenant_id as Uuid,
+      slug: row.merchant_slug,
+      name: row.merchant_name,
+      status: row.merchant_status,
+    },
+  }));
 }
 
 /**

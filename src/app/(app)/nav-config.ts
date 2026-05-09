@@ -101,6 +101,9 @@ export function visibleLandingCards(
 
 export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
   { label: "Merchants", path: "/admin/merchants", permission: "merchant:read_all" },
+  { label: "Tasks", path: "/admin/tasks", permission: "task:read_all" },
+  { label: "Consignees", path: "/admin/consignees", permission: "consignee:read_all" },
+  { label: "Subscriptions", path: "/admin/subscriptions", permission: "subscription:read_all" },
 ] as const;
 
 /**
