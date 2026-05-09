@@ -231,25 +231,24 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
 
 /**
  * Coerce the jsonb `pod_photos` value to the read-side contract:
- *   NULL    → null              (no POD received)
- *   array   → readonly string[] (Option (A) plain string array per
- *                                 A2 plan §4.4)
- *   other   → null              (defensive — write path only stores
- *                                 string[] or null per
- *                                 apply-webhook-status-event.ts; any
- *                                 other shape is wire pollution and
- *                                 surfaces as "no POD" rather than
- *                                 crashing the row mapper)
+ *   NULL                       → null
+ *   non-array                  → null (defensive; wire pollution)
+ *   array of strings           → readonly string[]
+ *   array with non-strings     → drop non-strings, keep strings
+ *   array empty after filter   → null (treated as no POD, matching
+ *                                  reviewer ruling that empty arrays
+ *                                  surface as muted/no-trigger)
  *
- * postgres-js auto-parses jsonb columns into JS values, so the wire
- * shape arrives as either `null` or `unknown[]`. The string-coercion
- * `String(...)` keeps the read shape strict against `readonly string[]`
- * even if a future write path inadvertently lands a non-string element.
+ * postgres-js auto-parses jsonb columns, so the wire shape arrives as
+ * either `null` or `unknown[]`. Filtering (not coercing) preserves the
+ * Option (A) plain-string-array contract per A2 plan §4.4 — non-string
+ * entries are dropped rather than stringified into broken <img> URLs.
  */
 function mapPodPhotos(value: unknown): readonly string[] | null {
   if (value === null || value === undefined) return null;
   if (!Array.isArray(value)) return null;
-  return value.map((v) => String(v));
+  const strings = value.filter((v): v is string => typeof v === "string");
+  return strings.length === 0 ? null : strings;
 }
 
 function mapTaskWithPackages(row: TaskRowWithPackages): Task {
