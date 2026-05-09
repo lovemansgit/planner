@@ -247,4 +247,16 @@ export interface UpdateTaskPatch {
   readonly signatureRequired?: boolean;
   readonly smsNotifications?: boolean;
   readonly deliverToCustomerOnly?: boolean;
+  /**
+   * Day-19 / Phase 1 / OQ-5. Reassign the task to a different address
+   * within the same consignee. The address must belong to the task's
+   * `consigneeId` (FK consistency check) — cross-consignee assignment
+   * is refused with ValidationError. Use null/omit to leave unchanged.
+   *
+   * To clear addressId back to NULL via this patch is intentionally
+   * NOT supported (mirrors the file-header note about nullable-column
+   * clearing). If a clear-flow is ever needed, extend the patch shape
+   * to `addressId?: Uuid | null` with an explicit sentinel.
+   */
+  readonly addressId?: Uuid;
 }

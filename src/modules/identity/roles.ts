@@ -142,6 +142,14 @@ const ROLES_DRAFT = {
       // but not be able to print their labels — operationally wrong
       // for support investigations where they need the AWB sheet.
       "task:print_labels",
+      // Day-19 / Phase 1 — single-task cancel. §J-5 ruling: CS Agent
+      // owns daily-ops single cancellations (recipient cancels, address
+      // dispute escalations) but NOT bulk variants — `task:bulk_cancel`
+      // and `task:bulk_update` stay Ops-Manager-only via permsFor("task")
+      // auto-pickup at line 109. Single-row mutation matches the existing
+      // CS Agent posture (consignee:update, consignee:delete already in
+      // the list).
+      "task:cancel",
       "audit_event:read",
       // Day 13 / T3 part 1 — exception-model surface. Brief §3.1.3
       // gives CS Agent the default skip + address change workflows

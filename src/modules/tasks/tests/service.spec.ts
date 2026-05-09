@@ -156,7 +156,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     internalStatus: "CREATED",
     externalId: null,
     externalTrackingNumber: null,
-    deliveryDate: "2026-05-01",
+    deliveryDate: "2099-05-01",
     deliveryStartTime: "14:00:00",
     deliveryEndTime: "16:00:00",
     deliveryType: "STANDARD",
@@ -183,7 +183,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
 const baseInput: CreateTaskInput = {
   consigneeId: CONSIGNEE_ID,
   customerOrderNumber: "ORDER-001",
-  deliveryDate: "2026-05-01",
+  deliveryDate: "2099-05-01",
   deliveryStartTime: "14:00",
   deliveryEndTime: "16:00",
   packages: [{ position: 0 }],

@@ -905,6 +905,7 @@ export async function updateTask(
     sets.push(sqlTag`sms_notifications = ${patch.smsNotifications}`);
   if (patch.deliverToCustomerOnly !== undefined)
     sets.push(sqlTag`deliver_to_customer_only = ${patch.deliverToCustomerOnly}`);
+  if (patch.addressId !== undefined) sets.push(sqlTag`address_id = ${patch.addressId}`);
 
   if (sets.length === 0) {
     const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
