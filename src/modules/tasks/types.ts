@@ -143,6 +143,13 @@ export interface Task {
    * defends against NULL via §5.1 amendment 2 (DLQ via failureCallback).
    */
   readonly addressId: Uuid | null;
+  /**
+   * POD photo URLs. NULL = no POD received yet (or non-DELIVERED). When
+   * populated, an array of zero-or-more URL strings — Option (A) plain
+   * string array shape per A2 plan §4.4 ruling. Written by the Layer-3
+   * webhook handler on TASK_STATUS_UPDATED_TO_DELIVERED only.
+   */
+  readonly podPhotos: readonly string[] | null;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
   /** Zero or more packages, ordered by `position` ascending. */

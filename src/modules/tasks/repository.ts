@@ -106,6 +106,7 @@ type TaskRow = {
   deliver_to_customer_only: boolean;
   pushed_to_external_at: Date | string | null;
   address_id: string | null;
+  pod_photos: unknown;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -221,10 +222,34 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
     deliverToCustomerOnly: row.deliver_to_customer_only,
     pushedToExternalAt: toIsoOrNull(row.pushed_to_external_at),
     addressId: row.address_id,
+    podPhotos: mapPodPhotos(row.pod_photos),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     packages,
   };
+}
+
+/**
+ * Coerce the jsonb `pod_photos` value to the read-side contract:
+ *   NULL    → null              (no POD received)
+ *   array   → readonly string[] (Option (A) plain string array per
+ *                                 A2 plan §4.4)
+ *   other   → null              (defensive — write path only stores
+ *                                 string[] or null per
+ *                                 apply-webhook-status-event.ts; any
+ *                                 other shape is wire pollution and
+ *                                 surfaces as "no POD" rather than
+ *                                 crashing the row mapper)
+ *
+ * postgres-js auto-parses jsonb columns into JS values, so the wire
+ * shape arrives as either `null` or `unknown[]`. The string-coercion
+ * `String(...)` keeps the read shape strict against `readonly string[]`
+ * even if a future write path inadvertently lands a non-string element.
+ */
+function mapPodPhotos(value: unknown): readonly string[] | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  return value.map((v) => String(v));
 }
 
 function mapTaskWithPackages(row: TaskRowWithPackages): Task {

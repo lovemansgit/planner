@@ -29,6 +29,9 @@ import { useMemo, useState, useTransition } from "react";
 
 import type { Task } from "@/modules/tasks/types";
 
+import { PodIcon } from "./_components/PodIcon";
+import { PodLightboxModal } from "./_components/PodLightboxModal";
+import { podCellState } from "./_components/pod-state";
 import { TASK_STATUS_FILTERS } from "./status";
 
 interface TasksClientProps {
@@ -59,6 +62,9 @@ export function TasksClient({
   const [selectAllError, setSelectAllError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [isFetchingAll, startFetchingAll] = useTransition();
+  const [lightboxPhotos, setLightboxPhotos] = useState<readonly string[] | null>(
+    null,
+  );
 
   const failedSet = useMemo(() => new Set(failedPushTaskIds), [failedPushTaskIds]);
   const pageIds = useMemo(() => initialTasks.map((t) => t.id), [initialTasks]);
@@ -246,6 +252,9 @@ export function TasksClient({
             <Th>Window</Th>
             <Th>AWB</Th>
             <Th>Issues</Th>
+            <Th>
+              <span className="sr-only">Proof of delivery</span>
+            </Th>
           </tr>
         </thead>
         <tbody>
@@ -256,10 +265,18 @@ export function TasksClient({
               checked={selected.has(task.id)}
               onToggle={() => toggle(task.id)}
               failed={failedSet.has(task.id)}
+              onOpenPod={(photos) => setLightboxPhotos(photos)}
             />
           ))}
         </tbody>
       </table>
+
+      {lightboxPhotos !== null ? (
+        <PodLightboxModal
+          photos={lightboxPhotos}
+          onClose={() => setLightboxPhotos(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -269,13 +286,16 @@ function Row({
   checked,
   onToggle,
   failed,
+  onOpenPod,
 }: {
   readonly task: Task;
   readonly checked: boolean;
   readonly onToggle: () => void;
   readonly failed: boolean;
+  readonly onOpenPod: (photos: readonly string[]) => void;
 }) {
   const filter = TASK_STATUS_FILTERS.find((f) => f.value === task.internalStatus);
+  const podTone = podCellState(task.podPhotos);
   return (
     <tr
       className={
@@ -317,7 +337,47 @@ function Row({
           <span className="text-[color:var(--color-text-tertiary)]">—</span>
         )}
       </Td>
+      <Td>
+        <PodCell task={task} tone={podTone} onOpenPod={onOpenPod} />
+      </Td>
     </tr>
+  );
+}
+
+function PodCell({
+  task,
+  tone,
+  onOpenPod,
+}: {
+  readonly task: Task;
+  readonly tone: "active" | "muted";
+  readonly onOpenPod: (photos: readonly string[]) => void;
+}) {
+  if (tone === "muted") {
+    return (
+      <span
+        aria-label="No proof of delivery"
+        title="No proof of delivery"
+        className="inline-flex items-center justify-center"
+        data-pod-state="muted"
+      >
+        <PodIcon tone="muted" />
+      </span>
+    );
+  }
+  // tone === "active" requires task.podPhotos to be non-null + non-empty
+  // per podCellState contract.
+  const photos = task.podPhotos ?? [];
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenPod(photos)}
+      aria-label={`View proof of delivery for order ${task.customerOrderNumber}`}
+      className="inline-flex items-center justify-center rounded-sm transition-opacity duration-[120ms] ease-out hover:opacity-70"
+      data-pod-state="active"
+    >
+      <PodIcon tone="active" />
+    </button>
   );
 }
 
