@@ -194,3 +194,7 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - [A1 plan §2.5 premise correction](followup_a1_plan_section_2_5_premise_correction.md) — task-push guard kept as race-condition belt; plan §2.5 premise was empirically wrong (resolver runs DOWNSTREAM of guard); Pattern B chosen (keep guard, document role); merged-plan-immutability discipline cited
 - [Brief v1.7 amendment — SF identifier model](decision_brief_v1_7_amendment_sf_identifier_model.md) — region/merchant/AWB-prefix layers locked in brief §3.6; supersedes Day-10 framing in `decision_mvp_shared_suitefleet_credentials.md` (header amendment) and `followup_secrets_manager_swap_critical_path.md` (scope reframed to regional expansion)
 - [Transcorp admin global view — Phase 1.5](followup_transcorp_admin_global_view_phase_1_5.md) — T3 deferral memo: cross-tenant /admin/tasks + /admin/consignees + /admin/subscriptions with merchant-filter dropdown + 3 new systemOnly read_all permissions. Out of May-15 internal demo; in scope May-15→May-18 window. ~6-10 hr post-A2.
+
+## Day 19 (9 May 2026)
+
+- [isUniqueViolation err.cause unwrap bug](followup_isuniqueviolation_err_cause_unwrap_bug.md) — webhook handler dedup path is dead in production; postgres.js sql.begin() wraps inner PostgresError so err.code is undefined while err.cause.code === '23505'. Surfaced by Day-19 T1 audit_events column fix-up re-run (10/12 specs green; 2 fail with 23505 thrown out of applyWebhookStatusEvent / applyWebhookEditEvent). Demo-blocker for A2 production smoke. T2 fix sequencing post-T1 column-name PR.
