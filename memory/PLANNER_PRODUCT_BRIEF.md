@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.8
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections.
+**Version:** v1.9
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read).
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -66,9 +66,10 @@ The Planner is a **meal-plan CRM for merchants**. Merchants use it to manage the
 5. **Apply skip overrides** — move skipped delivery to specific date instead of tail-end; skip without appending (cancel without compensation).
 6. **Maintain consignee CRM state** — transition consignees between states (Active, On Hold, High Risk, Inactive, Churned, Subscription Ended).
 
-### 2.3 One Transcorp-staff workflow
+### 2.3 Two Transcorp-staff workflows
 
 1. **Onboard, activate, deactivate a merchant** — create the merchant tenant (name, slug, pickup address as ship-from), activate, deactivate.
+2. **Cross-tenant operational read** (Phase 1.5, Day-19) — read-only visibility into all tasks, consignees, and subscriptions across all merchants on the platform. Powers the `/admin/tasks`, `/admin/consignees`, `/admin/subscriptions` admin surfaces with merchant-filter dropdown. Backed by 3 systemOnly read_all permissions (`task:read_all` / `consignee:read_all` / `subscription:read_all`) granted only to the `transcorp-sysadmin` role. No action capability — modifications go through the merchant operator's tenant-scoped surface (Phase 1.6 if cross-tenant action capability is needed).
 
 ---
 
