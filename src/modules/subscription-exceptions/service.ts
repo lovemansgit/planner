@@ -77,6 +77,7 @@ import {
   findByIdempotencyKey,
   insertException,
   listActivePauseWindows,
+  listForConsigneeCalendar,
 } from "./repository";
 import { markTaskSkipped } from "@/modules/tasks/repository";
 
@@ -856,4 +857,39 @@ function isoWeekdayOf(date: IsoDate): IsoWeekday {
   }
   const jsDay = d.getUTCDay();
   return (((jsDay + 6) % 7) + 1) as IsoWeekday;
+}
+
+// -----------------------------------------------------------------------------
+// Day-20 §3.3.3 calendar render-time projection fetch
+// -----------------------------------------------------------------------------
+
+/**
+ * Day-20 §3.3.3 — service-layer wrapper around
+ * `repository.listForConsigneeCalendar`. Fetches skip + append
+ * exceptions for a consignee's calendar within a date range.
+ *
+ * Permission: `task:read` — same gate as the calendar's task fetch
+ * (`getConsigneeTasksForDateRange`). Calendar exceptions are render-
+ * time annotations on tasks; the access surface is unified.
+ *
+ * Empty result returns []; the calendar render layer tolerates absence
+ * naturally (no skip/append exceptions in the visible window).
+ */
+export async function getConsigneeCalendarExceptions(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  startDate: string,
+  endDate: string,
+): Promise<readonly SubscriptionException[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "getConsigneeCalendarExceptions");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listForConsigneeCalendar(
+      tx,
+      ctx.tenantId,
+      consigneeId,
+      startDate,
+      endDate,
+    );
+  });
 }

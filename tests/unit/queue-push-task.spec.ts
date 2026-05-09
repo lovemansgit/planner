@@ -126,6 +126,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     pushedToExternalAt: null,
     addressId: ADDRESS_ID,
     podPhotos: null,
+    addressLabel: null,
     createdAt: "2026-05-05T12:00:00.000Z",
     updatedAt: "2026-05-05T12:00:00.000Z",
     packages: [],

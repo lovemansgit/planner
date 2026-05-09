@@ -30,6 +30,10 @@ import {
   getConsignee,
   getConsigneeCrmHistory,
 } from "@/modules/consignees";
+import {
+  getConsigneeCalendarExceptions,
+  type SubscriptionException,
+} from "@/modules/subscription-exceptions";
 import { getConsigneeTasksForDateRange } from "@/modules/tasks";
 import type { Task } from "@/modules/tasks/types";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
@@ -82,6 +86,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let consignee: Consignee | null;
   let history: readonly ConsigneeCrmEvent[] = [];
   let calendarTasks: readonly Task[] = [];
+  let calendarExceptions: readonly SubscriptionException[] = [];
   let canChangeState = false;
   let canSkip = false;
   try {
@@ -101,15 +106,16 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     if (activeTab === "history") {
       history = await getConsigneeCrmHistory(ctx, id as Uuid);
     }
-    // Only fetch calendar tasks when the Calendar tab is active.
+    // Only fetch calendar tasks + exceptions when the Calendar tab is
+    // active. Day-20 §3.3.3 — exceptions feed the DayDisplayStatus
+    // projection (skip + append-without-skip surface in the legend
+    // per DECISION-2 ii).
     if (activeTab === "calendar") {
       const weekEnd = addDays(weekStart, 6);
-      calendarTasks = await getConsigneeTasksForDateRange(
-        ctx,
-        id as Uuid,
-        weekStart,
-        weekEnd,
-      );
+      [calendarTasks, calendarExceptions] = await Promise.all([
+        getConsigneeTasksForDateRange(ctx, id as Uuid, weekStart, weekEnd),
+        getConsigneeCalendarExceptions(ctx, id as Uuid, weekStart, weekEnd),
+      ]);
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -181,6 +187,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
               consigneeId={consignee.id}
               weekStart={weekStart}
               tasks={calendarTasks}
+              exceptions={calendarExceptions}
               canSkip={canSkip}
             />
           ) : null}
