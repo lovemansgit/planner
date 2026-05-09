@@ -106,6 +106,7 @@ type TaskRow = {
   deliver_to_customer_only: boolean;
   pushed_to_external_at: Date | string | null;
   address_id: string | null;
+  pod_photos: unknown;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -221,10 +222,33 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
     deliverToCustomerOnly: row.deliver_to_customer_only,
     pushedToExternalAt: toIsoOrNull(row.pushed_to_external_at),
     addressId: row.address_id,
+    podPhotos: mapPodPhotos(row.pod_photos),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     packages,
   };
+}
+
+/**
+ * Coerce the jsonb `pod_photos` value to the read-side contract:
+ *   NULL                       → null
+ *   non-array                  → null (defensive; wire pollution)
+ *   array of strings           → readonly string[]
+ *   array with non-strings     → drop non-strings, keep strings
+ *   array empty after filter   → null (treated as no POD, matching
+ *                                  reviewer ruling that empty arrays
+ *                                  surface as muted/no-trigger)
+ *
+ * postgres-js auto-parses jsonb columns, so the wire shape arrives as
+ * either `null` or `unknown[]`. Filtering (not coercing) preserves the
+ * Option (A) plain-string-array contract per A2 plan §4.4 — non-string
+ * entries are dropped rather than stringified into broken <img> URLs.
+ */
+function mapPodPhotos(value: unknown): readonly string[] | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  const strings = value.filter((v): v is string => typeof v === "string");
+  return strings.length === 0 ? null : strings;
 }
 
 function mapTaskWithPackages(row: TaskRowWithPackages): Task {

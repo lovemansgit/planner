@@ -171,6 +171,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     deliverToCustomerOnly: false,
     pushedToExternalAt: null,
     addressId: null,
+    podPhotos: null,
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     packages: [],

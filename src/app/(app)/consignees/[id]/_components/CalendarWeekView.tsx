@@ -16,6 +16,7 @@ import Link from "next/link";
 
 import type { Task, TaskInternalStatus } from "@/modules/tasks/types";
 
+import { CalendarPodCard } from "./CalendarPodCard";
 import { DayActionPopover } from "./DayActionPopover";
 
 export interface CalendarWeekViewProps {
@@ -165,20 +166,38 @@ export function CalendarWeekView({
                   {dayTasks.map((task) => {
                     const visual = STATUS_VISUALS[task.internalStatus];
                     const subscriptionId = task.subscriptionId;
+                    // Plan §6.2 interpretation (ii): swap trigger to inline
+                    // POD card when DELIVERED + populated photos. All
+                    // other states (incl. DELIVERED with no POD yet)
+                    // keep the popover.
+                    const showPodCard =
+                      task.internalStatus === "DELIVERED" &&
+                      task.podPhotos !== null &&
+                      task.podPhotos.length > 0;
                     return (
                       <li key={task.id}>
-                        <DayActionPopover
-                          consigneeId={consigneeId}
-                          subscriptionId={subscriptionId}
-                          taskId={task.id}
-                          deliveryDate={task.deliveryDate}
-                          deliveryStartTime={task.deliveryStartTime}
-                          deliveryEndTime={task.deliveryEndTime}
-                          internalStatus={task.internalStatus}
-                          statusLabel={visual.label}
-                          statusClasses={visual.classes}
-                          canSkip={canSkip}
-                        />
+                        {showPodCard ? (
+                          <CalendarPodCard
+                            photos={task.podPhotos as readonly string[]}
+                            statusLabel={visual.label}
+                            statusClasses={visual.classes}
+                            timeWindow={`${task.deliveryStartTime.slice(0, 5)}–${task.deliveryEndTime.slice(0, 5)}`}
+                            deliveryDate={task.deliveryDate}
+                          />
+                        ) : (
+                          <DayActionPopover
+                            consigneeId={consigneeId}
+                            subscriptionId={subscriptionId}
+                            taskId={task.id}
+                            deliveryDate={task.deliveryDate}
+                            deliveryStartTime={task.deliveryStartTime}
+                            deliveryEndTime={task.deliveryEndTime}
+                            internalStatus={task.internalStatus}
+                            statusLabel={visual.label}
+                            statusClasses={visual.classes}
+                            canSkip={canSkip}
+                          />
+                        )}
                       </li>
                     );
                   })}
