@@ -65,7 +65,7 @@ interface AuditMeta {
  *   2. If null → skip (non-lifecycle or unknown action).
  *   3. Open withTenant transaction.
  *   4. INSERT into webhook_events.
- *   5. SELECT (id, internal_status) FROM tasks WHERE external_id = AWB.
+ *   5. SELECT (id, internal_status) FROM tasks WHERE external_tracking_number = AWB.
  *   6. UPDATE tasks SET internal_status (+ pod_photos when DELIVERED).
  *   7. Emit audit events (after tx commits).
  *
@@ -117,10 +117,15 @@ export async function applyWebhookStatusEvent(
       // Step 5: SELECT (id, internal_status) — single read provides
       // both the lookup result AND previous_status for the audit emit
       // (no second read; plan §3.3 step 5).
+      //
+      // Layer 1.5 parser extracts AWB; production stores AWB in
+      // external_tracking_number (numeric SF id is in external_id).
+      // Lookup must use external_tracking_number to match the
+      // parser-extracted value.
       const taskRows = (await tx.execute(sqlTag`
         SELECT id, internal_status
         FROM tasks
-        WHERE external_id = ${event.externalTaskId} AND tenant_id = ${tenantId}
+        WHERE external_tracking_number = ${event.externalTaskId} AND tenant_id = ${tenantId}
         LIMIT 1
       `)) as readonly { id: string; internal_status: string }[];
 

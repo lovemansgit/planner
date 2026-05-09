@@ -132,7 +132,11 @@ export async function applyWebhookEditEvent(
           completion_latitude,
           completion_longitude
         FROM tasks
-        WHERE external_id = ${event.externalTaskId} AND tenant_id = ${tenantId}
+        -- Layer 1.5 parser extracts AWB; production stores AWB in
+        -- external_tracking_number (numeric SF id is in external_id).
+        -- Lookup must use external_tracking_number to match the
+        -- parser-extracted value.
+        WHERE external_tracking_number = ${event.externalTaskId} AND tenant_id = ${tenantId}
         LIMIT 1
       `)) as unknown as readonly TaskRow[];
 

@@ -46,6 +46,15 @@ const TASK_ADDRESS_AUDIT = randomUUID() as Uuid;
 const TASK_DEPRECATED = randomUUID() as Uuid;
 const TASK_NO_DIFF = randomUUID() as Uuid;
 
+// Numeric placeholders for tasks.external_id — production stores SF numeric
+// IDs here while AWB strings live on tasks.external_tracking_number.
+const EXT_ID_BASE = parseInt(RUN_ID, 16);
+const EXT_ID_TIME_EDIT = String(EXT_ID_BASE + 1);
+const EXT_ID_FULL_FIELDS = String(EXT_ID_BASE + 2);
+const EXT_ID_ADDRESS_AUDIT = String(EXT_ID_BASE + 3);
+const EXT_ID_DEPRECATED = String(EXT_ID_BASE + 4);
+const EXT_ID_NO_DIFF = String(EXT_ID_BASE + 5);
+
 function buildEditEvent(awb: string, occurredAt: string, raw: Record<string, unknown>): WebhookEvent {
   return {
     kind: "TASK_STATUS_CHANGED",
@@ -71,20 +80,26 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
       `);
       await tx.execute(sqlTag`
         INSERT INTO tasks (
-          id, tenant_id, consignee_id, customer_order_number, external_id,
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
           internal_status, delivery_date, delivery_start_time, delivery_end_time,
           created_via
         ) VALUES
           (${TASK_TIME_EDIT}, ${TENANT}, ${CONSIGNEE}, ${`WEE-T-${RUN_ID}`},
-           ${AWB_TIME_EDIT}, 'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+           ${EXT_ID_TIME_EDIT}, ${AWB_TIME_EDIT},
+           'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_FULL_FIELDS}, ${TENANT}, ${CONSIGNEE}, ${`WEE-F-${RUN_ID}`},
-           ${AWB_FULL_FIELDS}, 'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+           ${EXT_ID_FULL_FIELDS}, ${AWB_FULL_FIELDS},
+           'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_ADDRESS_AUDIT}, ${TENANT}, ${CONSIGNEE}, ${`WEE-A-${RUN_ID}`},
-           ${AWB_ADDRESS_AUDIT}, 'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+           ${EXT_ID_ADDRESS_AUDIT}, ${AWB_ADDRESS_AUDIT},
+           'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_DEPRECATED}, ${TENANT}, ${CONSIGNEE}, ${`WEE-D-${RUN_ID}`},
-           ${AWB_DEPRECATED}, 'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+           ${EXT_ID_DEPRECATED}, ${AWB_DEPRECATED},
+           'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_NO_DIFF}, ${TENANT}, ${CONSIGNEE}, ${`WEE-N-${RUN_ID}`},
-           ${AWB_NO_DIFF}, 'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin')
+           ${EXT_ID_NO_DIFF}, ${AWB_NO_DIFF},
+           'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin')
       `);
     });
   });

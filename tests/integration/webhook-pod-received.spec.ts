@@ -51,6 +51,14 @@ const TASK_EMPTY = randomUUID() as Uuid;
 const TASK_MISSING = randomUUID() as Uuid;
 const TASK_DUPLICATE = randomUUID() as Uuid;
 
+// Numeric placeholders for tasks.external_id — production stores SF numeric
+// IDs here while AWB strings live on tasks.external_tracking_number.
+const EXT_ID_BASE = parseInt(RUN_ID, 16);
+const EXT_ID_POPULATED = String(EXT_ID_BASE + 1);
+const EXT_ID_EMPTY = String(EXT_ID_BASE + 2);
+const EXT_ID_MISSING = String(EXT_ID_BASE + 3);
+const EXT_ID_DUPLICATE = String(EXT_ID_BASE + 4);
+
 function buildDeliveredEvent(
   awb: string,
   occurredAt: string,
@@ -85,18 +93,23 @@ describe("Day-18 / A2 Layer 3 — POD reception (real Postgres)", () => {
       `);
       await tx.execute(sqlTag`
         INSERT INTO tasks (
-          id, tenant_id, consignee_id, customer_order_number, external_id,
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
           internal_status, delivery_date, delivery_start_time, delivery_end_time,
           created_via
         ) VALUES
           (${TASK_POPULATED}, ${TENANT}, ${CONSIGNEE}, ${`WPR-P-${RUN_ID}`},
-           ${AWB_POPULATED}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+           ${EXT_ID_POPULATED}, ${AWB_POPULATED},
+           'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_EMPTY}, ${TENANT}, ${CONSIGNEE}, ${`WPR-E-${RUN_ID}`},
-           ${AWB_EMPTY}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+           ${EXT_ID_EMPTY}, ${AWB_EMPTY},
+           'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_MISSING}, ${TENANT}, ${CONSIGNEE}, ${`WPR-M-${RUN_ID}`},
-           ${AWB_MISSING}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+           ${EXT_ID_MISSING}, ${AWB_MISSING},
+           'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_DUPLICATE}, ${TENANT}, ${CONSIGNEE}, ${`WPR-D-${RUN_ID}`},
-           ${AWB_DUPLICATE}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin')
+           ${EXT_ID_DUPLICATE}, ${AWB_DUPLICATE},
+           'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin')
       `);
     });
   });
