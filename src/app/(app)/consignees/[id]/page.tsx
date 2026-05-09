@@ -134,7 +134,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
         <header
           className={
             consignee.crmState === "HIGH_RISK"
-              ? "mt-6 border-b border-stone-200 bg-red/[0.025] pb-8"
+              ? "mt-6 border-b border-stone-200 bg-red/[0.04] pb-8"
               : "mt-6 border-b border-stone-200 pb-8"
           }
         >

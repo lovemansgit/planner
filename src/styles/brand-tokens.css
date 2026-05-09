@@ -38,11 +38,13 @@
 
   /* Atmospheric tint — Day-19 PR-B brand pass / Lane 2 R1.
    * Single sanctioned ultra-subtle wash for hero-numeral strips
-   * (operator /tasks + admin Phase 1.5 listing pages + /admin/merchants).
-   * 1.5% navy is below the perceptual threshold under direct gaze but
-   * anchors the strip with tactile depth in peripheral vision. NOT a
-   * generic background utility — uses are enumerated and reviewable. */
-  --color-tint-navy-subtle: rgba(37, 45, 96, 0.015);
+   * (operator /tasks + admin Phase 1.5 listing pages + /admin/merchants
+   * + /consignees post-chrome-align). 2.5% navy is the calibrated
+   * setting per Love's Vercel walkthrough — 1.5% read as imperceptible
+   * under direct gaze; 2.5% reads as "subtly anchored" without becoming
+   * "too visible." NOT a generic background utility — uses are
+   * enumerated and reviewable. */
+  --color-tint-navy-subtle: rgba(37, 45, 96, 0.025);
 
   /* Typography — next/font/google variables registered in layout.tsx */
   --font-sans:

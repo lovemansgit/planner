@@ -182,10 +182,16 @@ export function TasksClient({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-          {selectionLabel}
-        </p>
+      <div
+        className={`flex items-center ${
+          someSelected ? "justify-between" : "justify-end"
+        }`}
+      >
+        {someSelected ? (
+          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+            {selectionLabel}
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={printLabels}

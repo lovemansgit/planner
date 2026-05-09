@@ -122,7 +122,7 @@ export default async function AdminSubscriptionsPage({
           <AdminPageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} />
         </div>
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] py-6">
+        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
           <p className="font-serif text-5xl font-light tabular-nums leading-none">
             {rows.length}
           </p>
