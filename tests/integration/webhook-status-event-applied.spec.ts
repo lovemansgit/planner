@@ -44,9 +44,20 @@ const CONSIGNEE = randomUUID();
 const AWB_PICKED_UP = `WSE-${RUN_ID}-PICKED_UP`;
 const AWB_DELIVERED = `WSE-${RUN_ID}-DELIVERED`;
 const AWB_NOT_FOUND = `WSE-${RUN_ID}-MISSING`;
+const AWB_LOOKUP_REGRESSION = `WSE-${RUN_ID}-LOOKUPREG`;
 
 const TASK_PICKED_UP = randomUUID() as Uuid;
 const TASK_DELIVERED = randomUUID() as Uuid;
+const TASK_LOOKUP_REGRESSION = randomUUID() as Uuid;
+
+// Numeric placeholders for tasks.external_id — production stores SF numeric
+// IDs here while AWB strings live on tasks.external_tracking_number. Tests
+// mirror the production data layout so the webhook handler's
+// external_tracking_number lookup matches the parser-extracted AWB.
+const EXT_ID_BASE = parseInt(RUN_ID, 16);
+const EXT_ID_PICKED_UP = String(EXT_ID_BASE + 1);
+const EXT_ID_DELIVERED = String(EXT_ID_BASE + 2);
+const EXT_ID_LOOKUP_REGRESSION = String(EXT_ID_BASE + 3);
 
 function buildEvent(awb: string, occurredAt: string, raw: Record<string, unknown>): WebhookEvent {
   return {
@@ -73,15 +84,22 @@ describe("Day-18 / A2 Layer 2 — applyWebhookStatusEvent (real Postgres)", () =
       `);
       await tx.execute(sqlTag`
         INSERT INTO tasks (
-          id, tenant_id, consignee_id, customer_order_number, external_id,
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
           internal_status, delivery_date, delivery_start_time, delivery_end_time,
           created_via
         ) VALUES
           (${TASK_PICKED_UP}, ${TENANT}, ${CONSIGNEE}, ${`WSE-PICKED-${RUN_ID}`},
-           ${AWB_PICKED_UP}, 'CREATED', '2026-05-09', '08:00', '10:00',
+           ${EXT_ID_PICKED_UP}, ${AWB_PICKED_UP},
+           'CREATED', '2026-05-09', '08:00', '10:00',
            'manual_admin'),
           (${TASK_DELIVERED}, ${TENANT}, ${CONSIGNEE}, ${`WSE-DELIV-${RUN_ID}`},
-           ${AWB_DELIVERED}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00',
+           ${EXT_ID_DELIVERED}, ${AWB_DELIVERED},
+           'IN_TRANSIT', '2026-05-09', '08:00', '10:00',
+           'manual_admin'),
+          (${TASK_LOOKUP_REGRESSION}, ${TENANT}, ${CONSIGNEE}, ${`WSE-LOOKUP-${RUN_ID}`},
+           ${EXT_ID_LOOKUP_REGRESSION}, ${AWB_LOOKUP_REGRESSION},
+           'CREATED', '2026-05-09', '08:00', '10:00',
            'manual_admin')
       `);
     });
@@ -320,5 +338,51 @@ describe("Day-18 / A2 Layer 2 — applyWebhookStatusEvent (real Postgres)", () =
     const podMeta = (podAudit as { metadata: Record<string, unknown> }).metadata;
     expect(podMeta.photo_count).toBe(2);
     expect(podMeta.suitefleet_task_id).toBe(AWB_DELIVERED);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-19 T3 lookup-column regression — production stores the AWB on
+  // tasks.external_tracking_number while tasks.external_id holds the SF
+  // numeric id. The handler must look up by external_tracking_number to
+  // resolve the parser-extracted AWB. Pre-fix the handler queried
+  // external_id, which silently returned task_not_found against
+  // production-shaped rows.
+  // ---------------------------------------------------------------------------
+
+  it("lookup uses external_tracking_number, not external_id, for AWB-keyed event", async () => {
+    const occurredAt = "2026-05-09T18:00:00.000Z";
+
+    // Positive case — fire with the AWB. Handler should resolve the
+    // task and flip status (not return task_not_found).
+    const matchEvent = buildEvent(AWB_LOOKUP_REGRESSION, occurredAt, {
+      action: "TASK_STATUS_UPDATED_TO_PICKED_UP",
+      eventTimestamp: occurredAt,
+    });
+    const matchResult = await applyWebhookStatusEvent(
+      TENANT,
+      matchEvent,
+      "TASK_STATUS_UPDATED_TO_PICKED_UP",
+    );
+    expect(matchResult.applied).toBe(true);
+    if (matchResult.applied) {
+      expect(matchResult.taskId).toBe(TASK_LOOKUP_REGRESSION);
+    }
+
+    // Negative case — fire with the NUMERIC external_id as the AWB
+    // payload field. Handler must NOT resolve the task (because it
+    // looks up by external_tracking_number, which holds the AWB).
+    const nonMatchEvent = buildEvent(EXT_ID_LOOKUP_REGRESSION, occurredAt, {
+      action: "TASK_STATUS_UPDATED_TO_PICKED_UP",
+      eventTimestamp: occurredAt,
+    });
+    const nonMatchResult = await applyWebhookStatusEvent(
+      TENANT,
+      nonMatchEvent,
+      "TASK_STATUS_UPDATED_TO_PICKED_UP",
+    );
+    expect(nonMatchResult.applied).toBe(false);
+    if (!nonMatchResult.applied) {
+      expect(nonMatchResult.reason).toBe("task_not_found");
+    }
   });
 });
