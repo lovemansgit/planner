@@ -49,6 +49,8 @@ import { sql as sqlTag, type SQL } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
+import type { TenantStatus } from "../merchants/types";
+
 import type {
   CreateTaskInput,
   CreateTaskPackageInput,
@@ -561,6 +563,100 @@ export async function listTasksByTenant(
     ${offsetClause}
   `);
   return rows.map(mapTaskWithPackages);
+}
+
+// -----------------------------------------------------------------------------
+// Day 19 / Phase 1.5 — cross-tenant admin list
+// -----------------------------------------------------------------------------
+
+/**
+ * Filters for listAllTasksRows. Same shape as ListTasksOpts plus an
+ * optional merchantSlug for narrowing to a single tenant's rows.
+ */
+export interface ListAllTasksFilters {
+  readonly merchantSlug?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly status?: TaskInternalStatus;
+}
+
+/**
+ * Wide row shape for the JOIN tenants admin SELECT. The task columns
+ * are the existing TaskRow shape; merchant_* columns come from the
+ * tenants alias.
+ */
+type AdminTaskJoinRow = TaskRow & {
+  readonly merchant_tenant_id: string;
+  readonly merchant_slug: string;
+  readonly merchant_name: string;
+  readonly merchant_status: TenantStatus;
+};
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of tasks across all merchants.
+ * Caller is in withServiceRole; no RLS predicate (cross-tenant scope by
+ * definition). Per merged plan §5.1 SQL pattern: JOIN tenants for the
+ * merchant surface columns (id, slug, name, status); single round-trip.
+ *
+ * Pagination defaults match the operator-side conventions from merged
+ * plan scope item 8: default limit 50, max 500. Offset-based; cursor
+ * pagination is a Phase 2 candidate per plan §5 amendment if cross-tenant
+ * volume scales to 10k+ rows.
+ *
+ * Packages NOT loaded for the cross-tenant view — admin operators
+ * don't drill into package detail in the cross-tenant table; the
+ * single-tenant /tasks page remains the authoritative per-package
+ * surface. AdminTaskRow.task.packages comes back as [] by construction.
+ */
+export async function listAllTasksRows(
+  tx: DbTx,
+  filters: ListAllTasksFilters = {},
+): Promise<
+  readonly {
+    task: Task;
+    merchant: {
+      tenantId: Uuid;
+      slug: string;
+      name: string;
+      status: TenantStatus;
+    };
+  }[]
+> {
+  const limit = Math.min(filters.limit ?? 50, 500);
+  const offset = filters.offset ?? 0;
+  const statusFilter = filters.status
+    ? sqlTag`AND t.internal_status = ${filters.status}`
+    : sqlTag``;
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+
+  const rows = await tx.execute<AdminTaskJoinRow>(sqlTag`
+    SELECT
+      t.*,
+      ten.id   AS merchant_tenant_id,
+      ten.slug AS merchant_slug,
+      ten.name AS merchant_name,
+      ten.status AS merchant_status
+    FROM tasks t
+    JOIN tenants ten ON ten.id = t.tenant_id
+    WHERE 1 = 1
+      ${statusFilter}
+      ${merchantFilter}
+    ORDER BY t.delivery_date DESC, t.created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  return rows.map((row) => ({
+    task: mapTask(row, []),
+    merchant: {
+      tenantId: row.merchant_tenant_id as Uuid,
+      slug: row.merchant_slug,
+      name: row.merchant_name,
+      status: row.merchant_status,
+    },
+  }));
 }
 
 /**
