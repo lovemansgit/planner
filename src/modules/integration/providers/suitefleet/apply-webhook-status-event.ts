@@ -26,6 +26,7 @@ import { sql as sqlTag } from "drizzle-orm";
 
 import { emit as auditEmit } from "@/modules/audit";
 import { withTenant } from "@/shared/db";
+import { isUniqueViolation } from "@/shared/db-errors";
 import { logger } from "@/shared/logger";
 import type { Uuid } from "@/shared/types";
 
@@ -216,12 +217,6 @@ function extractPodPhotos(rawPayload: unknown): unknown[] | null {
   const photos = (deliveryInfo as Record<string, unknown>).photos;
   if (!Array.isArray(photos) || photos.length === 0) return null;
   return photos;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const code = (err as { code?: unknown }).code;
-  return code === "23505";
 }
 
 async function emitStatusChangedAudit(tenantId: Uuid, meta: AuditMeta): Promise<void> {

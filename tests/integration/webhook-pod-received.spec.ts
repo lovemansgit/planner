@@ -44,10 +44,12 @@ const CONSIGNEE = randomUUID();
 const AWB_POPULATED = `WPR-${RUN_ID}-POPULATED`;
 const AWB_EMPTY = `WPR-${RUN_ID}-EMPTY`;
 const AWB_MISSING = `WPR-${RUN_ID}-MISSING`;
+const AWB_DUPLICATE = `WPR-${RUN_ID}-DUP`;
 
 const TASK_POPULATED = randomUUID() as Uuid;
 const TASK_EMPTY = randomUUID() as Uuid;
 const TASK_MISSING = randomUUID() as Uuid;
+const TASK_DUPLICATE = randomUUID() as Uuid;
 
 function buildDeliveredEvent(
   awb: string,
@@ -92,7 +94,9 @@ describe("Day-18 / A2 Layer 3 — POD reception (real Postgres)", () => {
           (${TASK_EMPTY}, ${TENANT}, ${CONSIGNEE}, ${`WPR-E-${RUN_ID}`},
            ${AWB_EMPTY}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
           (${TASK_MISSING}, ${TENANT}, ${CONSIGNEE}, ${`WPR-M-${RUN_ID}`},
-           ${AWB_MISSING}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin')
+           ${AWB_MISSING}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin'),
+          (${TASK_DUPLICATE}, ${TENANT}, ${CONSIGNEE}, ${`WPR-D-${RUN_ID}`},
+           ${AWB_DUPLICATE}, 'IN_TRANSIT', '2026-05-09', '08:00', '10:00', 'manual_admin')
       `);
     });
   });
@@ -170,6 +174,78 @@ describe("Day-18 / A2 Layer 3 — POD reception (real Postgres)", () => {
       `),
     );
     expect(podAudits).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-19 T2 regression — pin POD-path dedup against the drizzle-wrap bug
+  // (memory/followup_isuniqueviolation_err_cause_unwrap_bug.md). Pre-fix the
+  // second call rethrew the wrapped DrizzleQueryError; post-fix
+  // isUniqueViolation walks err.cause and the dedup branch returns cleanly.
+  // ---------------------------------------------------------------------------
+
+  it("duplicate DELIVERED replay returns reason='duplicate'; no double-write to webhook_events or audit", async () => {
+    const occurredAt = "2026-05-09T16:00:00.000Z";
+    const photos = [
+      "https://test-fixture.example.com/dup-pod-1.jpg",
+      "https://test-fixture.example.com/dup-pod-2.jpg",
+    ];
+    const event = buildDeliveredEvent(AWB_DUPLICATE, occurredAt, { photos });
+
+    const first = await applyWebhookStatusEvent(
+      TENANT,
+      event,
+      "TASK_STATUS_UPDATED_TO_DELIVERED",
+    );
+    expect(first.applied).toBe(true);
+
+    const [{ count: preWh }] = (await withServiceRole(
+      "count webhook_events pre-replay",
+      async (tx) =>
+        tx.execute(
+          sqlTag`SELECT COUNT(*)::int AS count FROM webhook_events WHERE suitefleet_task_id = ${AWB_DUPLICATE}`,
+        ),
+    )) as readonly { count: number }[];
+    const [{ count: preAudit }] = (await withServiceRole(
+      "count audit pre-replay",
+      async (tx) =>
+        tx.execute(sqlTag`
+          SELECT COUNT(*)::int AS count FROM audit_events
+          WHERE tenant_id = ${TENANT}
+            AND resource_id = ${TASK_DUPLICATE}
+            AND event_type IN ('task.status_changed_via_webhook', 'task.pod_received_via_webhook')
+        `),
+    )) as readonly { count: number }[];
+
+    const second = await applyWebhookStatusEvent(
+      TENANT,
+      event,
+      "TASK_STATUS_UPDATED_TO_DELIVERED",
+    );
+    expect(second.applied).toBe(false);
+    if (!second.applied) {
+      expect(second.reason).toBe("duplicate");
+    }
+
+    const [{ count: postWh }] = (await withServiceRole(
+      "count webhook_events post-replay",
+      async (tx) =>
+        tx.execute(
+          sqlTag`SELECT COUNT(*)::int AS count FROM webhook_events WHERE suitefleet_task_id = ${AWB_DUPLICATE}`,
+        ),
+    )) as readonly { count: number }[];
+    const [{ count: postAudit }] = (await withServiceRole(
+      "count audit post-replay",
+      async (tx) =>
+        tx.execute(sqlTag`
+          SELECT COUNT(*)::int AS count FROM audit_events
+          WHERE tenant_id = ${TENANT}
+            AND resource_id = ${TASK_DUPLICATE}
+            AND event_type IN ('task.status_changed_via_webhook', 'task.pod_received_via_webhook')
+        `),
+    )) as readonly { count: number }[];
+
+    expect(postWh).toBe(preWh);
+    expect(postAudit).toBe(preAudit);
   });
 
   it("missing photos field → pod_photos NULL; no POD audit fires", async () => {

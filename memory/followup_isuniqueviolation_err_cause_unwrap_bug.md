@@ -1,6 +1,6 @@
 ---
 name: isUniqueViolation err.cause unwrap bug — webhook handler dedup path dead
-description: Day-19 morning — applyWebhookStatusEvent / applyWebhookEditEvent isUniqueViolation only checks err.code, but postgres.js sql.begin() wraps the inner PostgresError so err.code is undefined and err.cause.code === '23505'. Catch fails → throw rethrows → duplicate replays 500 instead of returning {applied: false, reason: 'duplicate'}. Demo-blocker for A2 production smoke.
+description: Day-19 — three callers (apply-webhook-status-event, apply-webhook-edit-event, merchants/service.createMerchant) share an isUniqueViolation that only checks err.code, but drizzle-orm pg-core/session.js queryWithCache wraps the inner PostgresError in DrizzleQueryError so err.code is undefined and err.cause.code === '23505'. Catch fails → throw rethrows → webhook duplicates 500 + admin merchant slug collisions 500 instead of clean dedup / 409. T2 fix lands shared src/shared/db-errors.ts with recursive cause walk.
 type: project
 ---
 
@@ -17,26 +17,35 @@ Day-19 morning T1 audit_events column fix-up (`day19/t1-audit-events-occurred-at
 
 These are NOT cascade from the column-name bug. The 5 column substitutions are correct; the previously-failing tests now reach assertion stage and pass. These two are a pre-existing, independent failure that PR #200's CI also exhibited (per Day-18 EOD §6.1 + bootstrap brief §4.1 caveat).
 
-## §2 Hypothesis
+## §2 Root cause (confirmed by Day-19 spike, attribution amended)
 
-Production handlers wrap the INSERT inside a `try/catch` keyed on `isUniqueViolation`:
+**Original hypothesis attributed the wrap to `postgres.js sql.begin()`. The Day-19 spike output confirms the wrap actually happens at drizzle-orm, not postgres.js.** The original PostgresError surfaces via `err.cause`; the outer error is a `DrizzleQueryError`.
 
-- `src/modules/integration/providers/suitefleet/apply-webhook-status-event.ts:99-186` (try/catch); `:221-225` (`isUniqueViolation`).
-- `src/modules/integration/providers/suitefleet/apply-webhook-edit-event.ts:189` (catch site); `:443-446` (`isUniqueViolation`).
+Spike-observed err shape (RUN_ID `cf4e4f04`):
 
-Both `isUniqueViolation` implementations are identical:
-
-```ts
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const code = (err as { code?: unknown }).code;
-  return code === "23505";
-}
+```
+typeof err                   : object
+err.constructor?.name        : DrizzleQueryError
+err.code                     : undefined
+err.cause?.code              : "23505"
+err.cause?.constructor?.name : PostgresError
 ```
 
-The vitest trace shows `Caused by: PostgresError: duplicate key value violates unique constraint "webhook_events_dedup_idx"` — the `Caused by` framing implies `postgres.js`'s `sql.begin()` (called by `withTenant` at `src/shared/db.ts:124`) wraps the inner `PostgresError` before it exits the transaction scope. The outer error has `err.cause.code === '23505'` while `err.code` is undefined; `isUniqueViolation` returns `false` → `throw err` rethrows.
+Stack trace shows the wrap site:
 
-The dedup-detection code path is therefore dead in production.
+```
+at PostgresJsPreparedQuery.queryWithCache
+   (.../drizzle-orm/pg-core/session.js:41:15)
+```
+
+The wrap fires inside drizzle's `pg-core/session.js` `queryWithCache` method (line 41) — the drizzle layer, not postgres.js's `sql.begin`. The original `PostgresError` (with `code = "23505"`, `constraint_name = "webhook_events_dedup_idx"`, full SQLSTATE detail) becomes `err.cause` on the outer `DrizzleQueryError`.
+
+A naive `err.code === "23505"` check returns false on the outer wrapper, dropping the unique-violation branch. Affected callers:
+
+- `src/modules/integration/providers/suitefleet/apply-webhook-status-event.ts:99-186` (try/catch); `:221-225` (pre-fix local `isUniqueViolation`).
+- `src/modules/integration/providers/suitefleet/apply-webhook-edit-event.ts:189` (catch site); `:443-446` (pre-fix local `isUniqueViolation`).
+
+The dedup-detection code path is therefore dead in production. T2 fix lands a shared helper at `src/shared/db-errors.ts` that walks `err.cause` recursively; all callers migrate to the shared helper.
 
 ## §3 Production impact
 
@@ -44,6 +53,10 @@ Any duplicate webhook replay (SF retry, double-fire, manual replay) returns 500 
 
 1. **A2 production smoke (Day-19 carry §6.1)** — if the smoke triggers a redelivery (path (b) Aqib-initiated test event re-fired, or path (a) SF redelivery during transient network failure), the receiver 500s and the smoke fails on a path orthogonal to the actual handler logic.
 2. **Steady-state pilot operations** — SF retries on its own schedule; first duplicate after any production webhook lands as a 500 + Sentry alert + `webhook_events` row missing for the duplicate (because the catch never runs to record it as a deduped no-op).
+
+### §3.1 Third call site discovered during T2 implementation pre-PR survey
+
+`src/modules/merchants/service.ts:124-130` carries an identical `isUniqueViolation` copy with the same bug. Path: admin operator calls `POST /api/admin/merchants` → `createMerchant` → `withServiceRole(... insertMerchant ...)` → drizzle `tx.execute` INSERT → 23505 on `tenants_slug_key` UNIQUE → `DrizzleQueryError` wrap → broken `isUniqueViolation` returns false → `throw err` rethrows → API layer returns generic 500 instead of `ConflictError` (intended 409 with "merchant slug already exists" message). Demo-relevant: admin merchant onboarding is in May-15 CAIO demo critical path. Test coverage at `src/app/api/admin/merchants/tests/route.spec.ts:285` passes despite the bug because it mocks the service-layer rejection (`mockCreateMerchant.mockRejectedValue(new ConflictError(...))`) and never exercises the real DB path. T2 fix bundles this third caller migration to the shared `src/shared/db-errors.ts` helper alongside the two webhook handlers, with a new integration regression spec at `tests/integration/merchant-slug-collision-conflict.spec.ts` exercising the real 23505 path.
 
 ## §4 Diagnostic next step
 
