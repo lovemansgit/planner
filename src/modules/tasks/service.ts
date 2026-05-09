@@ -69,11 +69,17 @@ import { requirePermission } from "../identity";
 
 import type { LastMileAdapter } from "../integration";
 
+import { sql as sqlTag } from "drizzle-orm";
+
+import type { TenantStatus } from "../merchants/types";
+
 import {
   countTasksByTenant,
   findTaskById,
   insertTaskWithPackages,
+  type ListAllTasksFilters,
   listAllTaskIdsByTenant,
+  listAllTasksRows,
   type ListTasksOpts,
   listTasksByConsigneeAndDateRange,
   listTasksByTenant,
@@ -86,6 +92,25 @@ import type {
   TaskInternalStatus,
   UpdateTaskPatch,
 } from "./types";
+
+export type { ListAllTasksFilters } from "./repository";
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant admin row shape returned by
+ * listAllTasks. Wraps the tenant-scoped Task plus the merchant
+ * surface columns from the repo's JOIN tenants. Per merged plan
+ * §4.4 OQ-4 ruling: merchant columns are restricted to id, slug,
+ * name, status — no extension to customer_code etc.
+ */
+export interface AdminTaskRow {
+  readonly task: Task;
+  readonly merchant: {
+    readonly tenantId: Uuid;
+    readonly slug: string;
+    readonly name: string;
+    readonly status: TenantStatus;
+  };
+}
 
 export type { ListTasksOpts } from "./repository";
 
@@ -494,6 +519,45 @@ export async function listTasks(
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listTasksByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of tasks across all merchants.
+ * Read-only; no audit emit per R-4 (matches listMerchants posture at
+ * src/modules/merchants/service.ts:357-359). Joined with tenants for
+ * merchant-side surface columns. Optional merchantSlug filter narrows
+ * to a single tenant; unknown slug throws ValidationError per merged
+ * plan §3.6 OQ-3 ruling.
+ *
+ * Pagination: limit/offset; defaults applied at the repository layer
+ * (default 50; max 500) per merged plan scope item 8. Cursor pagination
+ * is a Phase 2 candidate per plan §5 amendment if cross-tenant volume
+ * scales to 10k+ rows.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `task:read_all`.
+ *   - ValidationError   merchantSlug filter does not resolve to an
+ *                       existing tenant.
+ */
+export async function listAllTasks(
+  ctx: RequestContext,
+  filters: ListAllTasksFilters = {},
+): Promise<readonly AdminTaskRow[]> {
+  requirePermission(ctx, "task:read_all");
+
+  return withServiceRole("transcorp_staff:list_all_tasks", async (tx) => {
+    if (filters.merchantSlug !== undefined) {
+      const rows = await tx.execute(
+        sqlTag`SELECT 1 FROM tenants WHERE slug = ${filters.merchantSlug} LIMIT 1`,
+      );
+      if (rows.length === 0) {
+        throw new ValidationError(
+          `merchantSlug filter does not resolve to an existing tenant: ${filters.merchantSlug}`,
+        );
+      }
+    }
+    return listAllTasksRows(tx, filters);
   });
 }
 

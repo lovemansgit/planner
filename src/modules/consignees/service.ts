@@ -24,13 +24,16 @@
 //     a paste-from-Excel re-edit that lands on the same canonical
 //     phone does NOT count as a change.
 
+import { sql as sqlTag } from "drizzle-orm";
+
 import { emit } from "../audit";
-import { withTenant } from "../../shared/db";
+import { withServiceRole, withTenant } from "../../shared/db";
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
+import type { TenantStatus } from "../merchants/types";
 
 import { normaliseToE164 } from "./phone";
 import {
@@ -39,11 +42,31 @@ import {
   findConsigneeForCrmUpdate,
   insertConsignee,
   insertConsigneeCrmEvent,
+  type ListAllConsigneesFilters,
+  listAllConsigneesRows,
   listConsigneesByTenant,
   selectCrmHistoryForConsignee,
   updateConsignee as updateConsigneeRow,
   updateConsigneeCrmState,
 } from "./repository";
+
+export type { ListAllConsigneesFilters } from "./repository";
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant admin row shape returned by
+ * listAllConsignees. Wraps the tenant-scoped Consignee plus the
+ * merchant surface columns from the repo's JOIN tenants. Per merged
+ * plan §4.4 OQ-4 ruling.
+ */
+export interface AdminConsigneeRow {
+  readonly consignee: Consignee;
+  readonly merchant: {
+    readonly tenantId: Uuid;
+    readonly slug: string;
+    readonly name: string;
+    readonly status: TenantStatus;
+  };
+}
 import { canTransition } from "./transitions";
 import type {
   ChangeConsigneeCrmStateInput,
@@ -178,6 +201,38 @@ export async function listConsignees(ctx: RequestContext): Promise<readonly Cons
   assertTenantScoped(ctx, "consignee:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listConsigneesByTenant(tx, ctx.tenantId!);
+  });
+}
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of consignees across all
+ * merchants. Read-only; no audit emit per R-4. Joined with tenants
+ * for merchant-side surface columns. Optional merchantSlug filter;
+ * unknown slug throws ValidationError per merged plan §3.6 OQ-3 ruling.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `consignee:read_all`.
+ *   - ValidationError   merchantSlug filter does not resolve to an
+ *                       existing tenant.
+ */
+export async function listAllConsignees(
+  ctx: RequestContext,
+  filters: ListAllConsigneesFilters = {},
+): Promise<readonly AdminConsigneeRow[]> {
+  requirePermission(ctx, "consignee:read_all");
+
+  return withServiceRole("transcorp_staff:list_all_consignees", async (tx) => {
+    if (filters.merchantSlug !== undefined) {
+      const rows = await tx.execute(
+        sqlTag`SELECT 1 FROM tenants WHERE slug = ${filters.merchantSlug} LIMIT 1`,
+      );
+      if (rows.length === 0) {
+        throw new ValidationError(
+          `merchantSlug filter does not resolve to an existing tenant: ${filters.merchantSlug}`,
+        );
+      }
+    }
+    return listAllConsigneesRows(tx, filters);
   });
 }
 
