@@ -48,7 +48,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           page rather than pasted on. Decorative; aria-hidden + alt="". */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute bottom-0 right-0 hidden w-[30vw] max-w-[560px] md:block"
+        className="pointer-events-none absolute bottom-[25%] right-10 hidden w-[25vw] max-w-[480px] md:block"
         style={{
           maskImage:
             "linear-gradient(to top left, black 25%, transparent 90%)",
@@ -75,7 +75,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             height={64}
             priority
             unoptimized
-            className="mb-6 h-8 w-auto"
+            className="mb-6 h-12 w-auto"
           />
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription Planner
