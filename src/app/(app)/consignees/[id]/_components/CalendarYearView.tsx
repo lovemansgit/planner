@@ -56,15 +56,27 @@ interface DayBucket {
 }
 
 /**
- * Density → Tailwind class mapping. Brand canon green (--color-green)
- * tinted by opacity ramp; matches the editorial-minimalist palette
- * established in week + month views without introducing a new color.
+ * Density → Tailwind background class mapping. Three-channel encoding
+ * per BRD §6.2.1 ("delivery, skip, and failure density"):
+ *   - Failures dominate: red ramp (failure read as alarm signal,
+ *     overrides delivery green even if other statuses landed same day)
+ *   - Append overlay: green-bordered (anomaly highlight)
+ *   - Skip-on-empty-day: muted grey + line-through (handled inline)
+ *   - Delivery density: green ramp (brand canon)
+ *   - Empty (no signal): visible neutral (`bg-stone-200/40`) — must
+ *     NOT match `bg-paper` because the page background is paper too;
+ *     blending was the root cause of the Day-21 visual gate failure.
  */
-function densityClass(total: number): string {
-  if (total === 0) return "bg-paper";
+function deliveryDensityClass(total: number): string {
   if (total === 1) return "bg-green/20";
   if (total === 2) return "bg-green/40";
   return "bg-green/60";
+}
+
+function failureDensityClass(failed: number): string {
+  if (failed === 1) return "bg-red/25";
+  if (failed === 2) return "bg-red/45";
+  return "bg-red/65";
 }
 
 const MONTH_NAMES = [
@@ -150,24 +162,34 @@ export function CalendarYearView({
         </p>
       </div>
 
-      {/* Density legend — brand-canon green with 4 opacity steps.
-          Skip / append tints come from DayDisplayStatus visuals already
-          shown in the week/month status legend; the year view's
-          legend is density-only to avoid duplication. */}
-      <div className="mb-6 flex items-center gap-3 text-[10px] uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+      {/* Density legend — three channels per BRD §6.2.1 (delivery,
+          skip, failure). Each cell on the grid is a hairline-bordered
+          square so the structure stays visible even on empty days
+          (the original Day-21 visual-gate fix-up; bg-paper blended
+          with the page bg). */}
+      <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px] uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+        <span>Deliveries</span>
         <span>Less</span>
-        <span className="h-3 w-3 rounded-sm border border-stone-200 bg-paper" />
-        <span className="h-3 w-3 rounded-sm bg-green/20" />
-        <span className="h-3 w-3 rounded-sm bg-green/40" />
-        <span className="h-3 w-3 rounded-sm bg-green/60" />
+        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-stone-200/40" />
+        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-green/20" />
+        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-green/40" />
+        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-green/60" />
         <span>More</span>
-        <span className="ml-4 inline-block h-3 w-3 rounded-sm bg-[color:var(--color-text-secondary)]/15 line-through" />
+        <span className="ml-2">Failures</span>
+        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-red/25" />
+        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-red/45" />
+        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-red/65" />
+        <span className="ml-2 inline-block h-3 w-3 rounded-sm border border-stone-200/60 bg-[color:var(--color-text-secondary)]/15 line-through" />
         <span>Skipped</span>
-        <span className="ml-2 inline-block h-3 w-3 rounded-sm border border-green/30 bg-green/10" />
+        <span className="ml-2 inline-block h-3 w-3 rounded-sm border border-green/40 bg-green/10" />
         <span>Appended</span>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {/* Outer month-block grid. xl:grid-cols-12 lays all 12 months
+          side-by-side on standard ~1280px viewports per Love's spec
+          ("12 month-blocks fit on the year-view surface side-by-side").
+          Smaller viewports wrap progressively. */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-12">
         {MONTH_NAMES.map((monthName, monthIdx) => {
           const monthAnchor = `${year}-${String(monthIdx + 1).padStart(2, "0")}-01`;
           const monthEnd = computeMonthEnd(new Date(`${monthAnchor}T00:00:00Z`));
@@ -181,60 +203,73 @@ export function CalendarYearView({
           for (let i = 0; i < leadingBlanks; i++) cells.push({ kind: "blank" });
           for (const date of monthDays) cells.push({ kind: "day", date });
           return (
-            <div key={monthAnchor}>
-              <Link
-                href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${monthAnchor}`}
-                className="mb-2 inline-block text-xs font-medium uppercase tracking-[0.1em] text-navy hover:underline"
-                aria-label={`Drill to ${monthName} ${year} month view`}
-              >
+            <Link
+              key={monthAnchor}
+              href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${monthAnchor}`}
+              className="block rounded-sm transition-colors duration-[120ms] ease-out hover:bg-ivory/60"
+              aria-label={`Drill to ${monthName} ${year} month view`}
+            >
+              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-[0.14em] text-navy">
                 {monthName}
-              </Link>
+              </span>
               <div className="grid grid-cols-7 gap-px">
                 {cells.map((cell, idx) => {
                   if (cell.kind === "blank") {
-                    return <div key={`blank-${idx}`} className="h-4 w-full" />;
+                    return <div key={`blank-${idx}`} className="aspect-square w-full" />;
                   }
                   const bucket = countsByDate.get(cell.date);
                   const dayExceptions = exceptionsByDate.get(cell.date) ?? [];
                   const total = bucket?.total ?? 0;
+                  const failed = bucket?.byStatus.get("FAILED") ?? 0;
                   const isToday = cell.date === today;
                   const skipException = dayExceptions.find((e) => e.type === "skip");
                   const appendException = dayExceptions.find(
                     (e) => e.type === "append_without_skip",
                   );
-                  // Render priority — skip on empty day (no deliveries
-                  // landed) reads as "operator removed this day"; append
-                  // overlay (regardless of count) reads as "extra
-                  // delivery on this day"; otherwise density.
-                  let cellClass: string;
-                  if (total === 0 && skipException !== undefined) {
-                    cellClass =
-                      "bg-[color:var(--color-text-secondary)]/15 line-through";
-                  } else if (appendException !== undefined) {
-                    cellClass = "border border-green/30 bg-green/10";
+                  // Render precedence — failures dominate (alarm signal
+                  // overrides delivery green); append shows as anomaly
+                  // border; skip on empty day reads as muted grey;
+                  // otherwise delivery-density green; empty days get a
+                  // visible neutral so the grid skeleton is readable.
+                  let bgClass: string;
+                  let lineThrough = "";
+                  if (failed > 0) {
+                    bgClass = failureDensityClass(failed);
+                  } else if (total === 0 && skipException !== undefined) {
+                    bgClass = "bg-[color:var(--color-text-secondary)]/15";
+                    lineThrough = " line-through";
+                  } else if (total > 0) {
+                    bgClass = deliveryDensityClass(total);
                   } else {
-                    cellClass = densityClass(total);
+                    bgClass = "bg-stone-200/40";
                   }
+                  const borderClass =
+                    appendException !== undefined
+                      ? "border border-green/40"
+                      : "border border-stone-200/60";
                   const todayRing = isToday ? " ring-1 ring-green" : "";
-                  // Aria-label exposes the per-status breakdown so
-                  // assistive tech surfaces "3 delivered, 1 failed" not
-                  // just "4 deliveries".
+                  // Aria-label + native title surface per-status
+                  // breakdown so hover + assistive tech see the same
+                  // signal: "3 delivered, 1 failed" rather than just
+                  // "4 deliveries".
                   const breakdown = bucket
                     ? Array.from(bucket.byStatus.entries())
                         .map(([s, n]) => `${n} ${s.toLowerCase()}`)
                         .join(", ")
-                    : "no deliveries";
+                    : skipException !== undefined
+                      ? "skipped"
+                      : "no deliveries";
                   return (
                     <div
                       key={cell.date}
                       title={`${cell.date} — ${breakdown}`}
                       aria-label={`${cell.date}: ${breakdown}`}
-                      className={`h-4 w-full rounded-sm ${cellClass}${todayRing}`}
+                      className={`aspect-square w-full rounded-sm ${borderClass} ${bgClass}${lineThrough}${todayRing}`}
                     />
                   );
                 })}
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>
