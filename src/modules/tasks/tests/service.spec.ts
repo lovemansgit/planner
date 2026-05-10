@@ -35,6 +35,13 @@ vi.mock("../repository", () => ({
   listVisibleTaskExternalIds: vi.fn(),
 }));
 
+vi.mock("../../task-outbound-queue", () => ({
+  enqueueCancelTask: vi.fn().mockResolvedValue(undefined),
+  enqueueUpdateTask: vi.fn().mockResolvedValue(undefined),
+  enqueueBulkCancelTasks: vi.fn().mockResolvedValue({ enqueuedCount: 0, failedChunks: 0, totalCount: 0 }),
+  enqueueBulkUpdateTasks: vi.fn().mockResolvedValue({ enqueuedCount: 0, failedChunks: 0, totalCount: 0 }),
+}));
+
 vi.mock("../../../shared/logger", () => {
   const child = {
     debug: vi.fn(),
@@ -81,14 +88,25 @@ import {
 } from "../repository";
 import {
   BulkValidationError,
+  bulkCancelTasks,
   bulkCreateTasks,
+  bulkUpdateTasks,
+  cancelTask,
   createTask,
   getTask,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,
   updateTask,
+  updateTaskAndPushOutbound,
 } from "../service";
+
+import {
+  enqueueBulkCancelTasks,
+  enqueueBulkUpdateTasks,
+  enqueueCancelTask,
+  enqueueUpdateTask,
+} from "../../task-outbound-queue";
 import type { CreateTaskInput, Task } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
@@ -758,5 +776,367 @@ describe("printLabelsForTasks — Day-17 external_id translation", () => {
     expect(emitArg.metadata?.printed_count).toBe(1);
     expect(emitArg.metadata?.skipped_count).toBe(1);
     expect(emitArg.metadata?.skipped_task_ids).toEqual([TASK_ID_2]);
+  });
+});
+
+// =============================================================================
+// Day 22 / Phase 1 — cancelTask / bulkCancelTasks / bulkUpdateTasks /
+// updateTaskAndPushOutbound
+// =============================================================================
+//
+// Covers the new SF-outbound-coupled service-layer fns. Mocks
+// task-outbound-queue publishers + repository updateTaskRow + audit emit.
+// All four fns share the post-commit-enqueue posture: local DB tx commits
+// FIRST, audit + QStash enqueue happen AFTER. Tests verify that posture
+// + the per-task cutoff guard + the idempotent fast-paths.
+
+const mockEnqueueCancelTask = vi.mocked(enqueueCancelTask);
+const mockEnqueueUpdateTask = vi.mocked(enqueueUpdateTask);
+const mockEnqueueBulkCancelTasks = vi.mocked(enqueueBulkCancelTasks);
+const mockEnqueueBulkUpdateTasks = vi.mocked(enqueueBulkUpdateTasks);
+
+const FAR_FUTURE_DATE = "2099-05-01"; // never elapsed past Dubai cutoff in test runs
+const STALE_PAST_DATE = "2020-01-01"; // always past cutoff
+
+describe("cancelTask — single-task cancel + outbound enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({} as never),
+    );
+  });
+
+  it("rejects user without task:cancel with ForbiddenError", async () => {
+    await expect(cancelTask(userCtx([]), TASK_ID as never)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+
+  it("happy path: UPDATE, audit task.updated, enqueue cancel-task message", async () => {
+    const before = taskFixture({
+      internalStatus: "CREATED",
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-72915243",
+    });
+    const after = { ...before, internalStatus: "CANCELED" as const };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    const result = await cancelTask(userCtx(["task:cancel"]), TASK_ID as never);
+
+    expect(result.internalStatus).toBe("CANCELED");
+    expect(mockUpdate).toHaveBeenCalledWith(expect.anything(), TENANT_ID, TASK_ID, {
+      internalStatus: "CANCELED",
+    });
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("task.updated");
+    expect(emitArg.metadata?.changed_fields).toEqual(["internalStatus"]);
+    expect(emitArg.metadata?.to_internal_status).toBe("CANCELED");
+    expect(mockEnqueueCancelTask).toHaveBeenCalledTimes(1);
+    const enqueuePayload = mockEnqueueCancelTask.mock.calls[0][0];
+    expect(enqueuePayload.tenant_id).toBe(TENANT_ID);
+    expect(enqueuePayload.task_id).toBe(TASK_ID);
+    expect(enqueuePayload.awb).toBe("MPL-72915243");
+    expect(enqueuePayload.correlation_id).toBeTypeOf("string");
+  });
+
+  it("idempotent fast-path on already-CANCELED: no UPDATE, no audit, no enqueue", async () => {
+    const already = taskFixture({
+      internalStatus: "CANCELED",
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-X",
+    });
+    mockFindById.mockResolvedValueOnce(already);
+
+    const result = await cancelTask(userCtx(["task:cancel"]), TASK_ID as never);
+
+    expect(result).toBe(already);
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEnqueueCancelTask).not.toHaveBeenCalled();
+  });
+
+  it("rejects DELIVERED tasks with ValidationError", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ internalStatus: "DELIVERED", deliveryDate: FAR_FUTURE_DATE }),
+    );
+    await expect(
+      cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects past-cutoff delivery_date with ValidationError", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ internalStatus: "CREATED", deliveryDate: STALE_PAST_DATE }),
+    );
+    await expect(
+      cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("skips QStash enqueue when task has no external_tracking_number (pre-push cancel)", async () => {
+    const before = taskFixture({
+      internalStatus: "CREATED",
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: null,
+    });
+    const after = { ...before, internalStatus: "CANCELED" as const };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await cancelTask(userCtx(["task:cancel"]), TASK_ID as never);
+
+    expect(mockUpdate).toHaveBeenCalled();
+    expect(mockEmit).toHaveBeenCalled();
+    expect(mockEnqueueCancelTask).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+describe("bulkCancelTasks — transactional cancel + fan-out enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({} as never),
+    );
+  });
+
+  it("rejects user without task:bulk_cancel with ForbiddenError", async () => {
+    await expect(
+      bulkCancelTasks(userCtx([]), [TASK_ID as never]),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("returns empty result on empty input without DB / audit / enqueue", async () => {
+    const result = await bulkCancelTasks(userCtx(["task:bulk_cancel"]), []);
+    expect(result).toEqual({ canceled: [], alreadyCanceled: [], failures: [] });
+    expect(mockWithTenant).not.toHaveBeenCalled();
+  });
+
+  it("happy path: cancels N tasks, emits N audits, enqueues bulk", async () => {
+    const t1 = taskFixture({ id: "t1" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-1" });
+    const t2 = taskFixture({ id: "t2" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-2" });
+    mockFindById.mockResolvedValueOnce(t1).mockResolvedValueOnce(t2);
+    mockUpdate
+      .mockResolvedValueOnce({ ...t1, internalStatus: "CANCELED" })
+      .mockResolvedValueOnce({ ...t2, internalStatus: "CANCELED" });
+
+    const result = await bulkCancelTasks(
+      userCtx(["task:bulk_cancel"]),
+      ["t1" as never, "t2" as never],
+    );
+
+    expect(result.canceled).toHaveLength(2);
+    expect(result.alreadyCanceled).toHaveLength(0);
+    expect(result.failures).toHaveLength(0);
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    expect(mockEnqueueBulkCancelTasks).toHaveBeenCalledTimes(1);
+    const payloads = mockEnqueueBulkCancelTasks.mock.calls[0][0];
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0].awb).toBe("MPL-1");
+    expect(payloads[1].awb).toBe("MPL-2");
+  });
+
+  it("partial: per-task cutoff failure collected; valid tasks still cancel + enqueue", async () => {
+    const ok = taskFixture({ id: "ok" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-OK" });
+    const stale = taskFixture({ id: "stale" as never, deliveryDate: STALE_PAST_DATE });
+    mockFindById.mockResolvedValueOnce(ok).mockResolvedValueOnce(stale);
+    mockUpdate.mockResolvedValueOnce({ ...ok, internalStatus: "CANCELED" });
+
+    const result = await bulkCancelTasks(
+      userCtx(["task:bulk_cancel"]),
+      ["ok" as never, "stale" as never],
+    );
+
+    expect(result.canceled).toHaveLength(1);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].taskId).toBe("stale");
+    expect(result.failures[0].reason).toMatch(/Dubai cut-off/);
+    expect(mockEnqueueBulkCancelTasks).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueBulkCancelTasks.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it("classifies already-CANCELED into alreadyCanceled (no audit, no enqueue for it)", async () => {
+    const already = taskFixture({ id: "x" as never, internalStatus: "CANCELED", deliveryDate: FAR_FUTURE_DATE });
+    mockFindById.mockResolvedValueOnce(already);
+
+    const result = await bulkCancelTasks(userCtx(["task:bulk_cancel"]), ["x" as never]);
+
+    expect(result.alreadyCanceled).toHaveLength(1);
+    expect(result.canceled).toHaveLength(0);
+    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
+  });
+
+  it("does not enqueue when canceled tasks lack external_tracking_number (pre-push)", async () => {
+    const t = taskFixture({ id: "t" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: null });
+    mockFindById.mockResolvedValueOnce(t);
+    mockUpdate.mockResolvedValueOnce({ ...t, internalStatus: "CANCELED" });
+
+    const result = await bulkCancelTasks(userCtx(["task:bulk_cancel"]), ["t" as never]);
+
+    expect(result.canceled).toHaveLength(1);
+    expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulkUpdateTasks — transactional patch + fan-out enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: vi.fn().mockResolvedValue([{ exists: true }]) } as never),
+    );
+  });
+
+  it("rejects user without task:bulk_update with ForbiddenError", async () => {
+    await expect(
+      bulkUpdateTasks(userCtx([]), [TASK_ID as never], { deliveryDate: FAR_FUTURE_DATE }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("happy path: updates N tasks, emits N audits, enqueues bulk", async () => {
+    const t1 = taskFixture({ id: "t1" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-1" });
+    const t2 = taskFixture({ id: "t2" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-2" });
+    const newDate = "2099-06-01";
+    mockFindById.mockResolvedValueOnce(t1).mockResolvedValueOnce(t2);
+    mockUpdate
+      .mockResolvedValueOnce({ ...t1, deliveryDate: newDate })
+      .mockResolvedValueOnce({ ...t2, deliveryDate: newDate });
+
+    const result = await bulkUpdateTasks(
+      userCtx(["task:bulk_update"]),
+      ["t1" as never, "t2" as never],
+      { deliveryDate: newDate },
+    );
+
+    expect(result.updated).toHaveLength(2);
+    expect(result.unchanged).toHaveLength(0);
+    expect(result.failures).toHaveLength(0);
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    expect(mockEnqueueBulkUpdateTasks).toHaveBeenCalledTimes(1);
+    const payloads = mockEnqueueBulkUpdateTasks.mock.calls[0][0];
+    expect(payloads[0].patch.window?.date).toBe(newDate);
+  });
+
+  it("rejects past-cutoff target deliveryDate per-row", async () => {
+    const t = taskFixture({ id: "t" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-T" });
+    mockFindById.mockResolvedValueOnce(t);
+
+    const result = await bulkUpdateTasks(
+      userCtx(["task:bulk_update"]),
+      ["t" as never],
+      { deliveryDate: STALE_PAST_DATE },
+    );
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].reason).toMatch(/target delivery date/);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("classifies no-op patches into unchanged (no audit, no enqueue)", async () => {
+    const t = taskFixture({ id: "t" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-T", notes: "same" });
+    mockFindById.mockResolvedValueOnce(t);
+    mockUpdate.mockResolvedValueOnce(t);
+
+    const result = await bulkUpdateTasks(userCtx(["task:bulk_update"]), ["t" as never], {
+      notes: "same", // identical → no change
+    });
+
+    expect(result.updated).toHaveLength(0);
+    expect(result.unchanged).toHaveLength(1);
+    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEnqueueBulkUpdateTasks).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateTaskAndPushOutbound — wrapper around updateTask + enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: vi.fn().mockResolvedValue([{ exists: true }]) } as never),
+    );
+  });
+
+  it("delegates to updateTask + enqueues update-task message when task has AWB + window patch", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-WRAP",
+    });
+    const after = { ...before, deliveryDate: "2099-06-01" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    const result = await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { deliveryDate: "2099-06-01" },
+    );
+
+    expect(result).toBe(after);
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(1);
+    const payload = mockEnqueueUpdateTask.mock.calls[0][0];
+    expect(payload.awb).toBe("MPL-WRAP");
+    expect(payload.patch.window?.date).toBe("2099-06-01");
+  });
+
+  it("skips enqueue when task has no external_tracking_number", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: null,
+    });
+    const after = { ...before, deliveryDate: "2099-06-01" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { deliveryDate: "2099-06-01" },
+    );
+
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+  });
+
+  it("skips enqueue when integration patch is empty (e.g. only addressId without snapshot mapping)", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-T",
+      addressId: null,
+    });
+    const after = {
+      ...before,
+      addressId: "00000000-0000-0000-0000-000000000bbb" as never,
+    };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { addressId: "00000000-0000-0000-0000-000000000bbb" as never },
+    );
+
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+  });
+
+  it("propagates underlying updateTask errors (e.g. cutoff guard)", async () => {
+    const stale = taskFixture({ deliveryDate: STALE_PAST_DATE, externalTrackingNumber: "MPL-X" });
+    mockFindById.mockResolvedValueOnce(stale);
+
+    await expect(
+      updateTaskAndPushOutbound(userCtx(["task:update"]), TASK_ID as never, {
+        notes: "x",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
   });
 });
