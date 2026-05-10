@@ -31,16 +31,36 @@ Of the 6 open questions filed at [`followup_suitefleet_outbound_edit_cancel_aqib
 
 **Residual:** Exact field name (`status: "CANCELED"` vs `internalStatus: "CANCEL"` vs other) NOT documented. **Resolution:** Day-21 sandbox empirical test (single-call probe against the `meal-plan-scheduler` tenant). Not Aqib-blocking — empirical-probe pattern is established (`scripts/probe-sf-*.mjs` precedent).
 
-## Q3 — bulkCancelTasks endpoint shape ✓ verified
+## Q3 — bulkCancelTasks endpoint shape ✓ verified (with Day-21 empirical correction)
 
 **Endpoint:** `PATCH /api/tasks/bulk/{ids}`
 
-- **Path param:** `ids` (string, comma-separated AWB list — same `?awbs=` convention as the asset-tracking endpoint per [`followup_suitefleet_asset_tracking_api.md`](followup_suitefleet_asset_tracking_api.md), Day 6)
-- **Body:** `mergePatchDocument` (single patch applied to all listed AWBs)
+- **Path param:** `ids` (string, comma-separated **numeric SF task id** list — see Day-21 empirical correction below). Original Day-20 doc-verified ruling claimed AWB strings on the basis of the Day-6 asset-tracking `?awbs=` convention; the path-param name `{ids}` was the tell, but the AWB extrapolation was not empirically verified at filing time.
+- **Body:** `mergePatchDocument` (single patch applied to all listed tasks)
 - **Headers:** Same as Q1 (`Authorization: Bearer` + `clientId`)
 - **Async variant:** `POST /api/tasks/bulkUpdateAsync` exists for very-large jobs; not needed for v1's bulk-cancel scope (≤100 tasks per operation per plan-PR §F.4 transactional bound).
 
-**Consequence on §G.1:** `bulkCancelTasks` adapter resolves to a single bulk PATCH call, NOT parallel single-cancel fan-out. The "if SF supports bulk endpoint / if not" prose in plan §G.1 retires.
+### Day-21 empirical correction (filed during code-PR LANE 1 probe)
+
+The Day-20 doc-verified state claimed the bulk endpoint takes comma-separated AWBs. The Day-21 sandbox probe (`scripts/probe-sf-bulk-cancel-shape.mjs`, extended from the Q2 cancel-status field probe) **empirically refuted** the AWB shape:
+
+- `PATCH /api/tasks/bulk/MPL-68604017,MPL-92760002` with `{status:"CANCELED"}` returned **500 Internal Server Error** in 184ms with body `{"method":"PATCH","message":["For input string: \"MPL-68604017\""],"status":"INTERNAL_SERVER_ERROR"}` — Java NumberFormatException-style parse error on the path-param.
+- Inline retry against the same 2 stale-CREATED tasks with **numeric SF ids** (`PATCH /api/tasks/bulk/59414,59421`) returned **200 OK** in 266ms with an aggregate job-summary body: `{"id":1764,"tasksExecutedCount":2,"expectedTasksCount":2,"executionTimeInSeconds":0,"status":"COMPLETED","bulkUpdateSource":"BULK_UPDATE",...}`.
+- Webhook reflection on numeric-id success: 4 events for 2 tasks (TASK_HAS_BEEN_UPDATED + TASK_STATUS_UPDATED_TO_CANCELED for each AWB), all within ~400ms of the bulk PATCH.
+
+**Consequence on §G.1 + adapter design:**
+- `bulkCancelTasks(session, sfTaskIds, correlationId)` accepts numeric SF task id strings (the `tasks.external_id` column), NOT AWBs (the `tasks.external_tracking_number` column). Service-layer callers must fetch the numeric column for bulk paths.
+- Single-cancel `cancelTask(session, awb, correlationId)` continues to use AWB at the path level (the single endpoint is `/api/tasks/awb/{awb}` — different addressing convention).
+- Adapter SF-side asymmetry mirrors the wire reality cleanly; caller-side AWB→numeric resolution lands with the Phase 1 merchant CRUD UI PR (Day 22+).
+- Adapter validates string-numeric shape at the boundary in `SuiteFleetTaskClient.bulkCancelTasks` (regex `/^[1-9]\d*$/`); accidental AWB-string inputs throw `ValidationError` at the adapter layer rather than letting a 500 bubble out.
+- Bulk response is **aggregate job-summary**, not per-task results — the adapter parses `BulkCancelResult { jobId, executedCount, expectedCount, status }` and throws `ValidationError` when `executedCount < expectedCount` (response does not say WHICH tasks failed; whole batch DLQ-routable).
+
+**References:**
+- Day-21 LANE 1 probe outcome thread (code-PR §3.6) — captures full request + response bytes for both the AWB rejection (500) and the numeric-id success (200) paths.
+- `bulkCancelTasks` adapter docstring at [`src/modules/integration/last-mile-adapter.ts`](../src/modules/integration/last-mile-adapter.ts) — IMPORTANT block describing the numeric-id contract + the empirical correction.
+- `SuiteFleetTaskClient.bulkCancelTasks` at [`src/modules/integration/providers/suitefleet/task-client.ts`](../src/modules/integration/providers/suitefleet/task-client.ts) — implementation with the numeric-id validator + aggregate parser.
+
+**Consequence on §G.1 (preserved from Day-20):** `bulkCancelTasks` adapter resolves to a single bulk PATCH call, NOT parallel single-cancel fan-out. The "if SF supports bulk endpoint / if not" prose in plan §G.1 retires.
 
 ## Q4 — auth posture ✓ verified (with correction)
 
