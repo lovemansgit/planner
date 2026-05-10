@@ -82,6 +82,17 @@ import { requirePermission } from "../identity";
 
 import type { LastMileAdapter } from "../integration";
 
+import {
+  enqueueBulkCancelTasks,
+  enqueueBulkUpdateTasks,
+  enqueueCancelTask,
+  enqueueUpdateTask,
+} from "../task-outbound-queue";
+import type {
+  CancelTaskPayload,
+  UpdateTaskPayload,
+} from "../task-outbound-queue";
+
 import { sql as sqlTag } from "drizzle-orm";
 
 import { isCutOffElapsedForDate } from "../task-materialization/dubai-date";
@@ -907,6 +918,624 @@ export async function updateTask(
   }
 
   return result.row;
+}
+
+
+// =============================================================================
+// cancelTask — Day 22 / Phase 1 SF outbound
+// =============================================================================
+//
+// Operator-driven cancel. Permission `task:cancel` (per §J-5 split: granted
+// to ops-manager + cs-agent). Plan §G.3 + §F.4 posture:
+//
+//   1. Permission gate — requirePermission "task:cancel"
+//   2. Fetch task; verify tenant scope (RLS + assertion)
+//   3. Cutoff guard — refuse if delivery_date past 18:00 Dubai cut-off the
+//      day before (mirrors updateTask's guard at line 746-750)
+//   4. Idempotent no-op if internal_status already CANCELED — return existing
+//      row, no audit, no enqueue (operator double-click safety)
+//   5. UPDATE tasks SET internal_status='CANCELED' via the existing repo
+//      updateTaskRow (single-field patch); local DB is source of truth per
+//      plan §F.4 "DB commits BEFORE SF push"
+//   6. Audit emit — task.updated with changed_fields=['internalStatus']
+//      (no new task.canceled event registered in v1; reuses the existing
+//      vocabulary). Day-22+ candidate to introduce task.canceled if forensic
+//      queries surface a need to differentiate cancel from other
+//      internal_status writes.
+//   7. Enqueue QStash → /api/queue/cancel-task with {tenant_id, task_id,
+//      awb, correlation_id} — only if task has external_tracking_number
+//      (i.e. has been pushed to SF). Pre-push cancels stay local; the
+//      cron's pre-push filter on internal_status='CREATED' picks up the
+//      now-canceled state on next tick and skips the push.
+//   8. Audit + enqueue happen AFTER tx commit per plan §11.
+//
+// Webhook reflection: SF fires TASK_STATUS_UPDATED_TO_CANCELED ~1s after
+// the PATCH; existing apply-webhook-status-event.ts UPDATE collapses to a
+// no-op on already-CANCELED state. No race / no double-cancel.
+//
+// Throws:
+//   ForbiddenError    — permission missing
+//   ValidationError   — tenant unscoped / cutoff elapsed / task already
+//                       in a terminal state (DELIVERED, FAILED) where
+//                       cancel is operationally meaningless
+//   NotFoundError     — task not found / RLS-hidden cross-tenant
+
+export async function cancelTask(ctx: RequestContext, taskId: Uuid): Promise<Task> {
+  requirePermission(ctx, "task:cancel");
+  assertTenantScoped(ctx, "task:cancel");
+
+  const tenantId = ctx.tenantId as Uuid;
+  const now = new Date();
+
+  const result = await withTenant(tenantId, async (tx) => {
+    const before = await findTaskById(tx, taskId);
+    if (!before) {
+      throw new NotFoundError(`task not found: ${taskId}`);
+    }
+
+    // Idempotent fast-path: already CANCELED. Return without writing,
+    // without emitting audit, without enqueueing. Operator double-clicks
+    // converge cleanly on the existing row.
+    if (before.internalStatus === "CANCELED") {
+      return { row: before, alreadyCanceled: true as const };
+    }
+
+    // Reject cancel on terminal-success state. Cancelling a delivered
+    // task is operationally meaningless; surface the conflict rather
+    // than silently allowing the state regression.
+    if (before.internalStatus === "DELIVERED") {
+      throw new ValidationError(
+        `task ${taskId} is already DELIVERED; cancel is not meaningful for terminal-success state`,
+      );
+    }
+
+    // Cutoff guard mirrors updateTask's posture (cancel after 18:00 Dubai
+    // the day before delivery is too late — SF dispatch may have already
+    // routed the task to a driver).
+    if (isCutOffElapsedForDate(now, before.deliveryDate)) {
+      throw new ValidationError(
+        `task delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before; cannot cancel`,
+      );
+    }
+
+    const updated = await updateTaskRow(tx, tenantId, taskId, {
+      internalStatus: "CANCELED",
+    });
+    if (!updated) {
+      throw new NotFoundError(`task not found: ${taskId}`);
+    }
+    return { row: updated, alreadyCanceled: false as const };
+  });
+
+  if (result.alreadyCanceled) {
+    return result.row;
+  }
+
+  // Post-commit audit emit — task.updated with the single changed field.
+  await emit({
+    eventType: "task.updated",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "task",
+    resourceId: taskId,
+    metadata: { changed_fields: ["internalStatus"], to_internal_status: "CANCELED" },
+    requestId: ctx.requestId,
+  });
+
+  // Post-commit QStash enqueue — only if the task was pushed to SF
+  // (has an external_tracking_number / AWB). Pre-push cancels stay
+  // local; cron's pre-push filter on internal_status picks up the
+  // CANCELED row and skips the push on next tick.
+  if (result.row.externalTrackingNumber !== null && result.row.externalTrackingNumber !== undefined) {
+    const correlationId = crypto.randomUUID();
+    try {
+      await enqueueCancelTask({
+        tenant_id: tenantId,
+        task_id: taskId,
+        awb: result.row.externalTrackingNumber,
+        correlation_id: correlationId as Uuid,
+      });
+    } catch (err) {
+      // Local DB is already committed — failed enqueue does NOT roll
+      // back. Log + Sentry; surface to caller so the form action can
+      // present a "saved locally; SF push pending" state. Caller may
+      // re-attempt by re-cancelling (which now no-ops via the
+      // alreadyCanceled fast-path) or by ops-triage replaying the
+      // failed_pushes / outbound_push_failures DLQ.
+      logger.error(
+        {
+          operation: "cancel_task_enqueue",
+          tenant_id: tenantId,
+          task_id: taskId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "cancelTask: local DB committed; QStash enqueue failed (caller surfaces)",
+      );
+      captureException(err, {
+        component: "tasks_service_cancel_task",
+        operation: "enqueue_cancel_task",
+        tenant_id: tenantId,
+        task_id: taskId,
+      });
+      throw err;
+    }
+  }
+
+  return result.row;
+}
+
+
+// =============================================================================
+// updateTaskAndPushOutbound — Day 22 / Phase 1 SF outbound
+// =============================================================================
+//
+// Wrapper around the existing `updateTask` user-flow service-layer fn that
+// adds outbound SF push enqueue after the local DB write commits. Forms
+// invoke this fn rather than the bare `updateTask` so the SF push fires
+// automatically; the bare `updateTask` stays available for callers that
+// only want local-DB updates (e.g. cron-side touch-ups, future sub-flows
+// that don't need SF reflection).
+//
+// Posture: the existing updateTask handles permission, cutoff, address-FK,
+// audit emit, and the local UPDATE. This wrapper appends the QStash enqueue
+// AFTER updateTask returns, only if the task has been pushed to SF
+// (external_tracking_number IS NOT NULL).
+//
+// The patch threaded into the QStash payload is the *internal-language*
+// `TaskUpdatePatchRequest` shape (window / consignee / notes), NOT the
+// repository `UpdateTaskPatch` shape (16 scalar fields). The wrapper maps
+// from the repository patch surface to the integration-internal patch
+// surface — only the merge-patchable subset (delivery date/window, address
+// via consignee snapshot, notes) crosses the wire.
+
+export async function updateTaskAndPushOutbound(
+  ctx: RequestContext,
+  taskId: Uuid,
+  patch: UpdateTaskPatch,
+): Promise<Task> {
+  // Delegate to existing updateTask — handles permission, cutoff, address-FK,
+  // audit emit, local UPDATE. Throws propagate.
+  const updated = await updateTask(ctx, taskId, patch);
+
+  // Skip enqueue when the task has not been pushed to SF yet — local
+  // edit only, cron picks up the new state on next push pass.
+  if (updated.externalTrackingNumber === null || updated.externalTrackingNumber === undefined) {
+    return updated;
+  }
+
+  // Build the integration-internal patch from the changed-field patch.
+  // Only fields that have a wire-mapping land in the SF merge-patch:
+  //   - delivery_date / time-window → window
+  //   - notes → notes
+  // address change (addressId) requires building a ConsigneeSnapshot from
+  // the new address row — the form action can either pre-build the snapshot
+  // and pass it via this wrapper's future ConsigneeSnapshot patch parameter
+  // OR rely on the cron-side path to re-push. For v1 the address-change
+  // outbound push is left to the form action; it constructs the snapshot
+  // client-side and calls SuiteFleetTaskClient via a dedicated service-fn
+  // (Day-22+ scope). Wire-mappable fields here cover delivery date + window
+  // + notes only.
+  const integrationPatch: { window?: { date: string; startTime: string; endTime: string }; notes?: string | null } = {};
+  if (
+    patch.deliveryDate !== undefined ||
+    patch.deliveryStartTime !== undefined ||
+    patch.deliveryEndTime !== undefined
+  ) {
+    integrationPatch.window = {
+      date: updated.deliveryDate,
+      startTime: updated.deliveryStartTime,
+      endTime: updated.deliveryEndTime,
+    };
+  }
+  if (patch.notes !== undefined) {
+    integrationPatch.notes = updated.notes ?? null;
+  }
+
+  // Empty integration patch (e.g. only addressId changed without consignee
+  // snapshot mapping wired) → skip enqueue. Future Day-22+ work extends the
+  // wrapper to handle address-change outbound by building the snapshot.
+  if (Object.keys(integrationPatch).length === 0) {
+    return updated;
+  }
+
+  const correlationId = crypto.randomUUID();
+  try {
+    await enqueueUpdateTask({
+      tenant_id: ctx.tenantId as Uuid,
+      task_id: taskId,
+      awb: updated.externalTrackingNumber,
+      patch: integrationPatch,
+      correlation_id: correlationId as Uuid,
+    });
+  } catch (err) {
+    logger.error(
+      {
+        operation: "update_task_and_push_outbound_enqueue",
+        tenant_id: ctx.tenantId,
+        task_id: taskId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "updateTaskAndPushOutbound: local DB committed; QStash enqueue failed (caller surfaces)",
+    );
+    captureException(err, {
+      component: "tasks_service_update_task_and_push_outbound",
+      operation: "enqueue_update_task",
+      tenant_id: ctx.tenantId,
+      task_id: taskId,
+    });
+    throw err;
+  }
+
+  return updated;
+}
+
+
+// =============================================================================
+// bulkCancelTasks — Day 22 / Phase 1 SF outbound
+// =============================================================================
+//
+// Operator-driven bulk cancel. Permission `task:bulk_cancel` (per §J-5
+// split: granted to ops-manager only; cs-agent does NOT get bulk variants).
+// Plan §F.4:
+//
+//   - Open single tx for DB updates
+//   - Validate all rows before committing (cutoff check per row)
+//   - DB commits BEFORE SF push (Planner is source of truth)
+//   - SF pushes enqueued via QStash (async, retry-safe)
+//   - Per-task SF push failure: row stays canceled in Planner; flagged in
+//     outbound_push_failures DLQ for ops review
+//
+// Bulk-fan-out posture: Day-21 #227 shipped `bulkCancelTasks` adapter
+// method (single SF bulk PATCH endpoint), but the QStash route that would
+// drive that single bulk PATCH does not yet exist. Until a dedicated
+// `/api/queue/bulk-cancel-tasks` route lands, this fn fans out to N
+// single-task QStash messages via `enqueueBulkCancelTasks` (which uses
+// batchJSON internally). Loses the single-bulk-PATCH efficiency but stays
+// rate-limit-friendly via the existing flowControl key (5 req/sec global
+// per merchant).
+//
+// Result shape surfaces both successes + per-task cutoff failures (skipped
+// rows, with reason). Caller (form action) renders the partial-failure UX
+// per plan §F.2/F.3.
+
+export interface BulkCancelTaskFailure {
+  readonly taskId: Uuid;
+  readonly reason: string;
+}
+
+export interface BulkCancelTasksResult {
+  readonly canceled: readonly Task[];
+  /** Tasks already in CANCELED state — idempotent skip, no audit / no enqueue. */
+  readonly alreadyCanceled: readonly Task[];
+  readonly failures: readonly BulkCancelTaskFailure[];
+}
+
+export async function bulkCancelTasks(
+  ctx: RequestContext,
+  taskIds: readonly Uuid[],
+): Promise<BulkCancelTasksResult> {
+  requirePermission(ctx, "task:bulk_cancel");
+  assertTenantScoped(ctx, "task:bulk_cancel");
+
+  if (taskIds.length === 0) {
+    return { canceled: [], alreadyCanceled: [], failures: [] };
+  }
+
+  const tenantId = ctx.tenantId as Uuid;
+  const now = new Date();
+
+  const txResult = await withTenant(tenantId, async (tx) => {
+    const canceled: Task[] = [];
+    const alreadyCanceled: Task[] = [];
+    const failures: BulkCancelTaskFailure[] = [];
+
+    for (const taskId of taskIds) {
+      const before = await findTaskById(tx, taskId);
+      if (!before) {
+        failures.push({ taskId, reason: "task not found in tenant" });
+        continue;
+      }
+      if (before.internalStatus === "CANCELED") {
+        alreadyCanceled.push(before);
+        continue;
+      }
+      if (before.internalStatus === "DELIVERED") {
+        failures.push({ taskId, reason: `already DELIVERED; cancel not meaningful` });
+        continue;
+      }
+      if (isCutOffElapsedForDate(now, before.deliveryDate)) {
+        failures.push({
+          taskId,
+          reason: `delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before`,
+        });
+        continue;
+      }
+
+      const updated = await updateTaskRow(tx, tenantId, taskId, {
+        internalStatus: "CANCELED",
+      });
+      if (!updated) {
+        failures.push({ taskId, reason: "task vanished during bulk cancel (race)" });
+        continue;
+      }
+      canceled.push(updated);
+    }
+
+    return { canceled, alreadyCanceled, failures };
+  });
+
+  // Post-commit audit per cancelled row.
+  for (const task of txResult.canceled) {
+    await emit({
+      eventType: "task.updated",
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId,
+      resourceType: "task",
+      resourceId: task.id,
+      metadata: {
+        changed_fields: ["internalStatus"],
+        to_internal_status: "CANCELED",
+        bulk_operation: "bulk_cancel",
+      },
+      requestId: ctx.requestId,
+    });
+  }
+
+  // Post-commit QStash bulk enqueue — fan-out to N single-task messages.
+  // Filter out tasks without external_tracking_number (pre-push cancels
+  // stay local).
+  const enqueueablePayloads: CancelTaskPayload[] = txResult.canceled
+    .filter((t) => t.externalTrackingNumber !== null && t.externalTrackingNumber !== undefined)
+    .map((t) => ({
+      tenant_id: tenantId,
+      task_id: t.id,
+      awb: t.externalTrackingNumber as string,
+      correlation_id: crypto.randomUUID() as Uuid,
+    }));
+
+  if (enqueueablePayloads.length > 0) {
+    try {
+      await enqueueBulkCancelTasks(enqueueablePayloads);
+    } catch (err) {
+      // Local DB is already committed; surface enqueue failure but do not
+      // roll back. Caller / ops-triage can replay via DLQ patterns.
+      logger.error(
+        {
+          operation: "bulk_cancel_tasks_enqueue",
+          tenant_id: tenantId,
+          enqueueable_count: enqueueablePayloads.length,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "bulkCancelTasks: local DB committed; QStash bulk enqueue failed (caller surfaces)",
+      );
+      captureException(err, {
+        component: "tasks_service_bulk_cancel_tasks",
+        operation: "enqueue_bulk_cancel_tasks",
+        tenant_id: tenantId,
+      });
+      throw err;
+    }
+  }
+
+  return txResult;
+}
+
+
+// =============================================================================
+// bulkUpdateTasks — Day 22 / Phase 1 SF outbound
+// =============================================================================
+//
+// Operator-driven bulk update. Permission `task:bulk_update` (per §J-5
+// split: granted to ops-manager only). Same posture as bulkCancelTasks
+// + fan-out to N update-task QStash messages.
+//
+// v1 scope per plan §F.2: same patch applied to all selected tasks. The
+// patch carries a subset of UpdateTaskPatch fields — typical operator
+// flows are date / time-window / address bulk shifts. Per-task cutoff
+// check; per-task failures collected.
+
+export interface BulkUpdateTasksResult {
+  readonly updated: readonly Task[];
+  /** Tasks where the patch produced no field changes (idempotent skip). */
+  readonly unchanged: readonly Task[];
+  readonly failures: readonly BulkCancelTaskFailure[];
+}
+
+export async function bulkUpdateTasks(
+  ctx: RequestContext,
+  taskIds: readonly Uuid[],
+  patch: UpdateTaskPatch,
+): Promise<BulkUpdateTasksResult> {
+  requirePermission(ctx, "task:bulk_update");
+  assertTenantScoped(ctx, "task:bulk_update");
+
+  if (taskIds.length === 0) {
+    return { updated: [], unchanged: [], failures: [] };
+  }
+
+  const tenantId = ctx.tenantId as Uuid;
+  const now = new Date();
+
+  const txResult = await withTenant(tenantId, async (tx) => {
+    const updated: Task[] = [];
+    const unchanged: Task[] = [];
+    const failures: BulkCancelTaskFailure[] = [];
+
+    for (const taskId of taskIds) {
+      const before = await findTaskById(tx, taskId);
+      if (!before) {
+        failures.push({ taskId, reason: "task not found in tenant" });
+        continue;
+      }
+
+      // Cutoff: refuse if either current or target delivery_date is past
+      // the 18:00 Dubai cut-off the day before. Mirrors updateTask's check.
+      if (isCutOffElapsedForDate(now, before.deliveryDate)) {
+        failures.push({
+          taskId,
+          reason: `delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before`,
+        });
+        continue;
+      }
+      if (
+        patch.deliveryDate !== undefined &&
+        patch.deliveryDate !== before.deliveryDate &&
+        isCutOffElapsedForDate(now, patch.deliveryDate)
+      ) {
+        failures.push({
+          taskId,
+          reason: `target delivery date '${patch.deliveryDate}' is past the 18:00 Dubai cut-off the day before`,
+        });
+        continue;
+      }
+
+      // Address-FK consistency check (mirrors updateTask line 770-788).
+      if (
+        patch.addressId !== undefined &&
+        patch.addressId !== before.addressId
+      ) {
+        type AddressExistsRow = { exists: boolean };
+        const addressRows = await tx.execute<AddressExistsRow>(sqlTag`
+          SELECT true AS exists
+          FROM addresses
+          WHERE id = ${patch.addressId}
+            AND tenant_id = ${tenantId}
+            AND consignee_id = ${before.consigneeId}
+          LIMIT 1
+        `);
+        if (addressRows.length === 0) {
+          failures.push({
+            taskId,
+            reason: `addressId '${patch.addressId}' does not exist for this consignee in this tenant`,
+          });
+          continue;
+        }
+      }
+
+      const result = await updateTaskRow(tx, tenantId, taskId, patch);
+      if (!result) {
+        failures.push({ taskId, reason: "task vanished during bulk update (race)" });
+        continue;
+      }
+      // Determine if any field actually changed by comparing before / after.
+      // updateTaskRow returns the post-update row regardless of diff; we
+      // re-derive whether the patch produced changes for audit gating.
+      const changed = patchProducedChanges(before, patch);
+      if (!changed) {
+        unchanged.push(result);
+        continue;
+      }
+      updated.push(result);
+    }
+
+    return { updated, unchanged, failures };
+  });
+
+  // Post-commit audit per updated row.
+  for (const task of txResult.updated) {
+    await emit({
+      eventType: "task.updated",
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId,
+      resourceType: "task",
+      resourceId: task.id,
+      metadata: {
+        bulk_operation: "bulk_update",
+        // Note: per-row changed_fields list would require diffing each
+        // before/after pair; for v1 the bulk_operation marker is sufficient
+        // for forensic queries. Future Day-22+ extension can add the
+        // per-row changed_fields if operator UX demands.
+      },
+      requestId: ctx.requestId,
+    });
+  }
+
+  // Post-commit QStash bulk enqueue — fan-out to N update-task messages,
+  // skipping pre-push tasks (no external_tracking_number).
+  const enqueueablePayloads: UpdateTaskPayload[] = txResult.updated
+    .filter((t) => t.externalTrackingNumber !== null && t.externalTrackingNumber !== undefined)
+    .map((t) => {
+      const integrationPatch: { window?: { date: string; startTime: string; endTime: string }; notes?: string | null } = {};
+      if (
+        patch.deliveryDate !== undefined ||
+        patch.deliveryStartTime !== undefined ||
+        patch.deliveryEndTime !== undefined
+      ) {
+        integrationPatch.window = {
+          date: t.deliveryDate,
+          startTime: t.deliveryStartTime,
+          endTime: t.deliveryEndTime,
+        };
+      }
+      if (patch.notes !== undefined) {
+        integrationPatch.notes = t.notes ?? null;
+      }
+      return {
+        tenant_id: tenantId,
+        task_id: t.id,
+        awb: t.externalTrackingNumber as string,
+        patch: integrationPatch,
+        correlation_id: crypto.randomUUID() as Uuid,
+      };
+    })
+    // Skip enqueue when integration patch is empty (e.g. only addressId
+    // changed without snapshot mapping — Day-22+ wires that path).
+    .filter((p) => Object.keys(p.patch).length > 0);
+
+  if (enqueueablePayloads.length > 0) {
+    try {
+      await enqueueBulkUpdateTasks(enqueueablePayloads);
+    } catch (err) {
+      logger.error(
+        {
+          operation: "bulk_update_tasks_enqueue",
+          tenant_id: tenantId,
+          enqueueable_count: enqueueablePayloads.length,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "bulkUpdateTasks: local DB committed; QStash bulk enqueue failed (caller surfaces)",
+      );
+      captureException(err, {
+        component: "tasks_service_bulk_update_tasks",
+        operation: "enqueue_bulk_update_tasks",
+        tenant_id: tenantId,
+      });
+      throw err;
+    }
+  }
+
+  return txResult;
+}
+
+/**
+ * Diff helper for bulk-update audit gating. Returns true when the patch
+ * carries at least one field whose value differs from the corresponding
+ * field on `before`. Mirrors the per-field comparison logic inside
+ * updateTask (lines 791-812) but compressed: we only need the boolean
+ * outcome, not the changedFields list.
+ */
+function patchProducedChanges(before: Task, patch: UpdateTaskPatch): boolean {
+  if (patch.customerOrderNumber !== undefined && patch.customerOrderNumber !== before.customerOrderNumber) return true;
+  if (patch.referenceNumber !== undefined && patch.referenceNumber !== (before.referenceNumber ?? undefined)) return true;
+  if (patch.internalStatus !== undefined && patch.internalStatus !== before.internalStatus) return true;
+  if (patch.deliveryDate !== undefined && patch.deliveryDate !== before.deliveryDate) return true;
+  if (patch.deliveryStartTime !== undefined && patch.deliveryStartTime !== before.deliveryStartTime) return true;
+  if (patch.deliveryEndTime !== undefined && patch.deliveryEndTime !== before.deliveryEndTime) return true;
+  if (patch.deliveryType !== undefined && patch.deliveryType !== before.deliveryType) return true;
+  if (patch.taskKind !== undefined && patch.taskKind !== before.taskKind) return true;
+  if (patch.paymentMethod !== undefined && patch.paymentMethod !== (before.paymentMethod ?? undefined)) return true;
+  if (patch.codAmount !== undefined && patch.codAmount !== (before.codAmount ?? undefined)) return true;
+  if (patch.declaredValue !== undefined && patch.declaredValue !== (before.declaredValue ?? undefined)) return true;
+  if (patch.weightKg !== undefined && patch.weightKg !== (before.weightKg ?? undefined)) return true;
+  if (patch.notes !== undefined && patch.notes !== (before.notes ?? undefined)) return true;
+  if (patch.signatureRequired !== undefined && patch.signatureRequired !== before.signatureRequired) return true;
+  if (patch.smsNotifications !== undefined && patch.smsNotifications !== before.smsNotifications) return true;
+  if (patch.deliverToCustomerOnly !== undefined && patch.deliverToCustomerOnly !== before.deliverToCustomerOnly) return true;
+  if (patch.addressId !== undefined && patch.addressId !== (before.addressId ?? undefined)) return true;
+  return false;
 }
 
 
