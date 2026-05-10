@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.9
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read).
+**Version:** v1.10
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match).
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -820,7 +820,7 @@ Each item filed as deferral memo in `memory/` during Day-13 setup.
 - At least one mid-subscription skip with tail-end appended (visual variation)
 - At least one delivered task with **POD photo via real SF webhook flow** (architectural honesty — not direct DB insert)
 - Fatima Al Mansouri pre-configured with Home/Office address rotation as the demo persona
-- Sarah Khouri pre-configured with High Risk CRM state and history of failed deliveries
+- Sarah Khouri pre-configured with ACTIVE CRM state and ≥2 FAILED deliveries to enable HIGH_RISK transition during demo
 
 ### 5.3 Pre-demo verification (`demo-preflight.sh`)
 
@@ -833,7 +833,7 @@ Runs twice on Day 19 (start of dry-run, 30 min before live demo):
 5. ≥1 task with status=DELIVERED and `tasks.pod_photos IS NOT NULL` (sourced via real webhook → Layer 2 status-fn write → Layer 3 POD-extraction populates the jsonb in the same UPDATE statement; v1.8 amendment binds the gate to the concrete column landed by the A2 plan-PR)
 6. ≥1 subscription with applied skip + populated compensating_date
 7. Fatima Al Mansouri has address rotation configured
-8. Sarah Khouri has CRM state=HIGH_RISK with ≥2 failed deliveries in history
+8. Sarah Khouri has ≥2 FAILED deliveries in history; CRM state=ACTIVE pre-demo
 9. SF integration responsive (ping known-safe endpoint)
 10. Auth flows work for `transcorp_staff` test account and `tenant_admin` test account
 
@@ -974,6 +974,8 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.6 | 7 May 2026 (Day 17, ~1:30 PM Dubai) | Locked decision: labels proxied as-is from SF; no logo swap in scope (Phase 1 or Phase 2). §3.5 amended to reflect MVP-final state — current `/api/tasks/labels` flow (PR #170 drizzle hotfix + PR #172 UUID translation) IS the final label rendering path. Demo framing: SF logo on label is by design; Transcorp's value-add is upstream operator workflow, not label rendering. Filed at `memory/decision_brief_v1_6_amendment_no_logo_swap.md`. |
 | v1.7 | 8 May 2026 (Day 18) | §3.6 rewritten to reflect actual SF identifier model — three layers locked: region `client_id` env-backed (transcorpsb / transcorpuae / transcorpqatar), per-merchant `customerId` DB-backed via `tenants.suitefleet_customer_code` and resolved per-tenant by `src/modules/credentials/suitefleet-resolver.ts`, AWB prefix `customer.code` cosmetic only with no routing role. Phase 2 (§4) row updated: "per-tenant SuiteFleet credential isolation" replaced with "regional credential expansion." §3.5 label-generation language reframed for region+customerId model. §5.4 Q&A rehearsal updated. Filed at `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`; A1 code-PR landed the resolver swap + bundled scope (migration 0013 comment, two Day-10 memo amendments, this brief amendment, MEMORY.md index update, premise-correction memo at `memory/followup_a1_plan_section_2_5_premise_correction.md`). |
 | v1.8 | 8 May 2026 (Day 18, post-A2-plan-PR) | Two amendments folded with the A2 webhook-handler 3-layer plan-PR. **§3.1.10 webhook payload format corrected** — original `?sf-format=object` (single-event JSON) was empirically wrong; SF sends JSON arrays per Day-7 capture and receiver/parser enforce array shape ([route.ts:146](../../src/app/api/webhooks/suitefleet/%5BtenantId%5D/route.ts#L146); [webhook-parser.ts:149](../../src/modules/integration/providers/suitefleet/webhook-parser.ts#L149)). New text describes batched array shape + dedup UNIQUE collapsing retries. **§5.3 Gate 5 reworded** to bind to the concrete column landed by the A2 plan-PR: `tasks.pod_photos IS NOT NULL` rather than free-text "POD photo URL." §3.3.8 cache-from-webhook commitment unchanged — POD remains the canonical example. Filed in `memory/plans/day-18-a2-webhook-handler-3-layer.md` §7. |
+| v1.9 | 9 May 2026 (Day 19, post-A2-smoke-PASS) | §2.3 expansion to two Transcorp-staff workflows — adds the Phase 1.5 admin cross-tenant operational read surface (`/admin/tasks` / `/admin/consignees` / `/admin/subscriptions` with merchant-filter dropdown; backed by `task:read_all` / `consignee:read_all` / `subscription:read_all` systemOnly perms granted to the `transcorp-sysadmin` role). Read-only — no action capability. v1.6 if cross-tenant action capability is needed. Filed inline at §2.3 + §1.7 amendment; no separate decision memo — Phase 1.5 lane already shipped, brief catches up. |
+| v1.10 | 10 May 2026 (Day 21, evening, post Session B Day-21 data-check) | **Sarah Khouri demo-persona pre-seed reconciliation.** §5.1 Step 5 narrative ("drill into Sarah → consignee timeline shows pattern of failed deliveries → click Change CRM state → mark High Risk") implies a **live-flip during the demo**. §5.2 (pre-seeded HIGH_RISK) and §5.3 Gate 8 (HIGH_RISK + ≥2 failures) implied a **pre-seed HIGH_RISK** state. Internal contradiction surfaced during Day-21 overnight prep when Session A's data-check found Sarah at `crm_state=ACTIVE` with 3 FAILED deliveries (May 2/5/7 2026) — empirical state matches the §5.1 live-flip narrative, NOT the §5.2/§5.3 pre-seed assumption. **Resolution: §5.1 wins.** §5.2 amended to "Sarah Khouri pre-configured with ACTIVE CRM state and ≥2 FAILED deliveries to enable HIGH_RISK transition during demo." §5.3 Gate 8 amended to "Sarah Khouri has ≥2 FAILED deliveries in history; CRM state=ACTIVE pre-demo." No data changes required — current sandbox state already matches the new pre-demo invariant. Filed at `memory/decision_brief_v1_10_amendment_sarah_khouri_pre_seed.md`. |
 
 ---
 
@@ -989,4 +991,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.8.**
+**End of v1.10.**
