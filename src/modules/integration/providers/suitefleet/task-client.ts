@@ -1011,6 +1011,13 @@ export function createSuiteFleetTaskClient(
       // ValidationError so the QStash worker DLQs the whole batch for
       // ops triage. Caller pairs this with a per-task DB sweep to
       // identify which AWBs are still CREATED post-bulk.
+      //
+      // Retry-safe: QStash will retry this throw before exhausting to
+      // failureCallback. Re-running the bulk PATCH on the same id list
+      // is a no-op for the tasks that did succeed — `{status:"CANCELED"}`
+      // merge-patch on an already-CANCELED task is idempotent SF-side
+      // (a re-cancel does not double-cancel or re-fire the
+      // TASK_STATUS_UPDATED_TO_CANCELED webhook lifecycle event).
       if (result.executedCount !== result.expectedCount) {
         requestLog.warn({
           error_code: "bulk_partial_failure",
