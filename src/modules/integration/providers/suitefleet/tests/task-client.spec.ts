@@ -10,7 +10,9 @@ import { CredentialError, ValidationError } from "../../../../../shared/errors";
 
 import {
   buildSuiteFleetTaskBody,
+  buildSuiteFleetUpdatePatchBody,
   createSuiteFleetTaskClient,
+  parseSuiteFleetBulkCancelResponse,
   parseSuiteFleetTaskActivitiesResponse,
   parseSuiteFleetTaskResponse,
   SuiteFleetAwbExistsError,
@@ -796,5 +798,402 @@ describe("createTask client — getTaskByAwb (D8-4b)", () => {
         awb: DOC_DERIVED_AWB,
       }),
     ).rejects.toBeInstanceOf(SuiteFleetTimelineParseError);
+  });
+});
+
+// =============================================================================
+// Day 21 / Phase 1 — updateTask / cancelTask / bulkCancelTasks
+// =============================================================================
+// Empirical anchors locked at Day-21 sandbox probe (see code-PR §3.6 thread):
+//   - cancel field name: { status: "CANCELED" } — variant A 200 OK first attempt
+//   - bulk endpoint takes NUMERIC SF task ids, not AWBs (Q3 memo correction)
+//   - bulk response is aggregate job summary, not per-task results
+//   - SF returns 200 + full task entity on cancel/update, NOT 204
+// All three methods are single-attempt (mirrors createTask).
+
+const SAMPLE_AWB = "MPL-72915243";
+
+describe("buildSuiteFleetUpdatePatchBody — RFC 7396 merge-patch shape", () => {
+  it("returns an empty object when no fields are present", () => {
+    expect(buildSuiteFleetUpdatePatchBody({})).toEqual({});
+  });
+
+  it("splits window into deliveryDate / deliveryStartTime / deliveryEndTime", () => {
+    const body = buildSuiteFleetUpdatePatchBody({
+      window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" },
+    });
+    expect(body).toEqual({
+      deliveryDate: "2026-05-12",
+      deliveryStartTime: "09:00:00",
+      deliveryEndTime: "11:00:00",
+    });
+  });
+
+  it("preserves explicit null on notes (clear-field semantic)", () => {
+    const body = buildSuiteFleetUpdatePatchBody({ notes: null });
+    expect(body).toHaveProperty("notes", null);
+  });
+
+  it("omits notes when undefined (RFC 7396 absence vs explicit null)", () => {
+    const body = buildSuiteFleetUpdatePatchBody({ notes: undefined });
+    expect(body).not.toHaveProperty("notes");
+  });
+
+  it("rebuilds full consignee snapshot via buildConsignee", () => {
+    const body = buildSuiteFleetUpdatePatchBody({
+      consignee: SAMPLE_REQUEST.consignee,
+    });
+    expect(body).toHaveProperty("consignee");
+    expect((body.consignee as { name: string }).name).toBe("Sample Consignee");
+  });
+
+  it("composes multiple patch fields without leaking absent keys", () => {
+    const body = buildSuiteFleetUpdatePatchBody({
+      window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" },
+      notes: "Updated note",
+    });
+    expect(body).toEqual({
+      deliveryDate: "2026-05-12",
+      deliveryStartTime: "09:00:00",
+      deliveryEndTime: "11:00:00",
+      notes: "Updated note",
+    });
+    expect(body).not.toHaveProperty("consignee");
+  });
+});
+
+describe("parseSuiteFleetBulkCancelResponse — aggregate job summary", () => {
+  const SAMPLE_BULK_OK = {
+    id: 1764,
+    tasksExecutedCount: 2,
+    expectedTasksCount: 2,
+    executionTimeInSeconds: 0,
+    status: "COMPLETED",
+    bulkUpdateSource: "BULK_UPDATE",
+  };
+
+  it("extracts jobId / executedCount / expectedCount / status from happy response", () => {
+    const result = parseSuiteFleetBulkCancelResponse(SAMPLE_BULK_OK);
+    expect(result).toEqual({
+      jobId: "1764",
+      executedCount: 2,
+      expectedCount: 2,
+      status: "COMPLETED",
+    });
+  });
+
+  it("stringifies numeric jobId for storage parity (matches TaskCreateResult.externalId)", () => {
+    const result = parseSuiteFleetBulkCancelResponse({ ...SAMPLE_BULK_OK, id: 9999 });
+    expect(result.jobId).toBe("9999");
+    expect(typeof result.jobId).toBe("string");
+  });
+
+  it("throws ValidationError on null body", () => {
+    expect(() => parseSuiteFleetBulkCancelResponse(null)).toThrow(ValidationError);
+  });
+
+  it("throws ValidationError on missing tasksExecutedCount", () => {
+    const rest = { ...SAMPLE_BULK_OK } as Record<string, unknown>;
+    delete rest.tasksExecutedCount;
+    expect(() => parseSuiteFleetBulkCancelResponse(rest)).toThrow(ValidationError);
+  });
+
+  it("throws ValidationError on missing status", () => {
+    const rest = { ...SAMPLE_BULK_OK } as Record<string, unknown>;
+    delete rest.status;
+    expect(() => parseSuiteFleetBulkCancelResponse(rest)).toThrow(ValidationError);
+  });
+
+  it("throws ValidationError on non-finite executedCount", () => {
+    expect(() =>
+      parseSuiteFleetBulkCancelResponse({ ...SAMPLE_BULK_OK, tasksExecutedCount: NaN }),
+    ).toThrow(ValidationError);
+  });
+});
+
+describe("SuiteFleetTaskClient.updateTask — wire posture + error mapping", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function happyResponse(): Response {
+    // Empirically observed: SF returns 200 + the full task entity on
+    // updateTask. Adapter discards the body but tests assert on it via
+    // the fetch mock to lock the wire contract.
+    return jsonResponse({ id: 59383, awb: SAMPLE_AWB, status: "ORDERED" });
+  }
+
+  it("issues PATCH /api/tasks/awb/{awb} with merge-patch+json content type", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(happyResponse());
+    await makeClient(fetchMock).updateTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      patch: { window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" } },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`https://api.suitefleet.com/api/tasks/awb/${SAMPLE_AWB}`);
+    expect(init.method).toBe("PATCH");
+    expect(init.headers["Content-Type"]).toBe("application/merge-patch+json");
+    expect(init.headers.Authorization).toBe(`Bearer ${SAMPLE_SESSION.token}`);
+    expect(init.headers.Clientid).toBe("transcorpsb");
+  });
+
+  it("URL-encodes the AWB into the path segment", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(happyResponse());
+    await makeClient(fetchMock).updateTask({
+      session: SAMPLE_SESSION,
+      awb: "MPL/with slash",
+      patch: { notes: "x" },
+    });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("MPL%2Fwith%20slash");
+  });
+
+  it("does not parse the 200 response body — discards explicitly", async () => {
+    // LANE 1 reviewer ruling: parser must not crash on body presence.
+    // Lock the contract: HTML or any non-JSON 200 should not throw.
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("<html>not-json", 200));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("maps 4xx to ValidationError carrying response excerpt", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("Bad Request", 400));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("maps 401 to CredentialError (auth-level)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("Unauthorized", 401));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+  });
+
+  it("maps 5xx to CredentialError without retry (single-attempt policy)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("oops", 502));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps network error to CredentialError (single-attempt)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("ECONNRESET"));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SuiteFleetTaskClient.cancelTask — locked field name + fire-and-forget posture", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends body { status: 'CANCELED' } verbatim — Day-21 probe-locked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 59383, status: "CANCELED" }));
+    await makeClient(fetchMock).cancelTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      correlationId: "corr-xyz",
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ status: "CANCELED" });
+  });
+
+  it("does NOT put correlationId on the wire (SF ignores Idempotency-Key)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "CANCELED" }));
+    await makeClient(fetchMock).cancelTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      correlationId: "corr-LEAK-CHECK",
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).not.toContain("corr-LEAK-CHECK");
+    expect(init.headers["Idempotency-Key"]).toBeUndefined();
+    expect(init.body).not.toContain("corr-LEAK-CHECK");
+  });
+
+  it("returns void on 200 (fire-and-forget; webhook drives state convergence)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "CANCELED" }));
+    const result = await makeClient(fetchMock).cancelTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      correlationId: "corr-1",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("maps 401 to CredentialError, 4xx to ValidationError, 5xx to CredentialError, network to CredentialError", async () => {
+    const fetch401 = vi.fn().mockResolvedValue(plainResponse("nope", 401));
+    const fetch4xx = vi.fn().mockResolvedValue(plainResponse("nope", 422));
+    const fetch5xx = vi.fn().mockResolvedValue(plainResponse("oops", 503));
+    const fetchNet = vi.fn().mockRejectedValue(new TypeError("net"));
+
+    const args = { session: SAMPLE_SESSION, awb: SAMPLE_AWB, correlationId: "c" };
+    await expect(makeClient(fetch401).cancelTask(args)).rejects.toBeInstanceOf(CredentialError);
+    await expect(makeClient(fetch4xx).cancelTask(args)).rejects.toBeInstanceOf(ValidationError);
+    await expect(makeClient(fetch5xx).cancelTask(args)).rejects.toBeInstanceOf(CredentialError);
+    await expect(makeClient(fetchNet).cancelTask(args)).rejects.toBeInstanceOf(CredentialError);
+  });
+});
+
+describe("SuiteFleetTaskClient.bulkCancelTasks — numeric ids + aggregate parsing + partial-failure", () => {
+  const HAPPY = {
+    id: 1764,
+    tasksExecutedCount: 2,
+    expectedTasksCount: 2,
+    status: "COMPLETED",
+    bulkUpdateSource: "BULK_UPDATE",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("rejects empty sfTaskIds with ValidationError (no SF call)", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: [],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects AWB-shaped strings with ValidationError (defensive — bulk takes numeric ids)", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["MPL-12345"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects leading-zero ids (canonical positive-integer regex)", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["059414"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("issues PATCH /api/tasks/bulk/{ids} with comma-separated numeric ids", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(HAPPY));
+    await makeClient(fetchMock).bulkCancelTasks({
+      session: SAMPLE_SESSION,
+      sfTaskIds: ["59414", "59421"],
+      correlationId: "c",
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.suitefleet.com/api/tasks/bulk/59414,59421");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ status: "CANCELED" });
+    expect(init.headers["Content-Type"]).toBe("application/merge-patch+json");
+  });
+
+  it("returns aggregate BulkCancelResult on full-success 200", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(HAPPY));
+    const result = await makeClient(fetchMock).bulkCancelTasks({
+      session: SAMPLE_SESSION,
+      sfTaskIds: ["59414", "59421"],
+      correlationId: "c",
+    });
+    expect(result).toEqual({
+      jobId: "1764",
+      executedCount: 2,
+      expectedCount: 2,
+      status: "COMPLETED",
+    });
+  });
+
+  it("throws ValidationError on partial failure (executedCount < expectedCount)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ ...HAPPY, tasksExecutedCount: 1, expectedTasksCount: 2 }),
+    );
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["59414", "59421"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("throws ValidationError on non-JSON 200 body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("<html>", 200));
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["59414"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("maps 4xx / 5xx / network errors to ValidationError / CredentialError respectively", async () => {
+    const args = {
+      session: SAMPLE_SESSION,
+      sfTaskIds: ["59414", "59421"],
+      correlationId: "c",
+    };
+    await expect(
+      makeClient(vi.fn().mockResolvedValue(plainResponse("nope", 422))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      makeClient(vi.fn().mockResolvedValue(plainResponse("nope", 401))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(CredentialError);
+    await expect(
+      makeClient(vi.fn().mockResolvedValue(plainResponse("oops", 502))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(CredentialError);
+    await expect(
+      makeClient(vi.fn().mockRejectedValue(new TypeError("net"))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(CredentialError);
   });
 });

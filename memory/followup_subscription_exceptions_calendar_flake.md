@@ -38,3 +38,19 @@ Option (a) is the cleanest — pure-deterministic fixture without coupling test 
 ## §6 Sequencing
 
 Day-20 T1 candidate; not blocking. Reviewer D's Day-18 framing as "not a T2 blocker" still holds — this surfaces only on real-today-Saturday/Sunday CI runs and produces a single deterministic failure that operators can ignore as "calendar-flake (this PR)."
+
+## §7 Day-21 (Sunday 2026-05-10) re-fire — PR #227
+
+Re-fired during PR #227 (Day-21 Phase 1 SF outbound adapter) CI run [25634735640](https://github.com/lovemansgit/planner/actions/runs/25634735640). Identical failure mode:
+
+- Job: `test (integration)` — 274/275 pass; 1 fail
+- File: `tests/integration/subscription-exceptions/service.spec.ts:325` ("appendWithoutSkip happy path: exception inserted + end_date extended + audit pair")
+- Error: `ValidationError: skip date is not an eligible delivery weekday for this subscription`
+- Source line: `src/modules/subscription-exceptions/service.ts:319` (`computeCompensatingDateForSkip` throw on `skip_date_not_eligible_weekday`)
+- Real-today on CI runner: Sunday 2026-05-10 — exactly the §2 hypothesis trigger condition
+
+**No overlap with PR #227 scope.** PR #227 touches `src/modules/integration/*`, `src/modules/outbound-push-failures/*`, `src/modules/task-outbound-queue/*`, queue routes, migration 0023, and a single comment ride-along at `src/modules/tasks/index.ts`. The `subscription-exceptions` module is not in this PR's diff.
+
+**Branch protection on `main` blocked auto-merge** because the integration job failed. Per (T3) reviewer §3.6 precedent + the fact that the flake is pre-existing + production-zero impact, merged via `gh pr merge 227 --squash --admin` override after surfacing the diagnosis to reviewer.
+
+**Fix scope unchanged from §4.** Priority unchanged from §6 (T1 when triggered, post-Day-21 SF outbound merge). Sequencing candidates: Day-22+ when the Phase 1 merchant CRUD UI lane has buffer, or any earlier Sunday CI run that re-blocks a substantive PR.

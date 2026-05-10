@@ -169,6 +169,53 @@ export function createSuiteFleetLastMileAdapter(
       });
     },
 
+    async updateTask(session, awb, patch) {
+      // Day 21 / Phase 1. Per-call construction mirrors createTask. SF
+      // updateTask is keyed by AWB at the path level (no customerId in
+      // path or query; the task is uniquely addressed by AWB across the
+      // tenant's account). clientId still required for the per-tenant
+      // header credential gate.
+      const credentials = await resolveCredentials(session.tenantId);
+      const taskClient = createSuiteFleetTaskClient({
+        fetch: deps.fetch,
+        clock: deps.clock,
+        clientId: credentials.clientId,
+        baseUrl: deps.baseUrl,
+      });
+      await taskClient.updateTask({ session, awb, patch });
+    },
+
+    async cancelTask(session, awb, correlationId) {
+      // Day 21 / Phase 1. Same per-call construction as updateTask. The
+      // wire shape is also keyed by AWB; correlationId stays
+      // Planner-side (logged + DLQ-bound, never on the wire).
+      const credentials = await resolveCredentials(session.tenantId);
+      const taskClient = createSuiteFleetTaskClient({
+        fetch: deps.fetch,
+        clock: deps.clock,
+        clientId: credentials.clientId,
+        baseUrl: deps.baseUrl,
+      });
+      await taskClient.cancelTask({ session, awb, correlationId });
+    },
+
+    async bulkCancelTasks(session, sfTaskIds, correlationId) {
+      // Day 21 / Phase 1. Bulk endpoint is keyed by NUMERIC SF task ids
+      // (Day-21 probe-locked; the Q3 memo's AWB claim was empirically
+      // wrong). Service-layer callers fetch tasks.external_id
+      // (numeric stringified), NOT tasks.external_tracking_number. The
+      // adapter validates string-numeric shape defensively at its
+      // boundary (see SuiteFleetTaskClient.bulkCancelTasks impl).
+      const credentials = await resolveCredentials(session.tenantId);
+      const taskClient = createSuiteFleetTaskClient({
+        fetch: deps.fetch,
+        clock: deps.clock,
+        clientId: credentials.clientId,
+        baseUrl: deps.baseUrl,
+      });
+      return taskClient.bulkCancelTasks({ session, sfTaskIds, correlationId });
+    },
+
     async printLabels(session, taskIds) {
       // D8-6: per-call construction (same posture as createTask /
       // getTaskByAwb). The label endpoint uses a different subdomain
