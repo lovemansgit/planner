@@ -44,7 +44,11 @@ import {
   type ChangeCrmStateActionResult,
 } from "../_actions";
 
-import { CRM_STATE_LABELS } from "./CrmStateBadge";
+import {
+  CRM_PILL_BASE_CLASSES,
+  CRM_PILL_SIZE_LG_CLASSES,
+  CRM_STATE_LABELS,
+} from "./CrmStateBadge";
 
 interface FormChildProps {
   readonly consigneeId: string;
@@ -281,13 +285,31 @@ export function CrmStateModal({ consigneeId, currentState }: CrmStateModalProps)
 
   return (
     <>
+      {/*
+        Day-21 PR-A2 / Session B — UX-FINDING-5 fix.
+        PR #223 aligned the trigger's Tailwind classes with CrmStateBadge
+        size="lg", but rendered pixels still diverged — root cause is
+        element-type asymmetry. <button> form-controls retain UA-mediated
+        rendering quirks (-webkit-appearance: button, baseline computation
+        in inline-flex, text-rendering hints) that Tailwind preflight
+        does not fully neutralise. Wrap pattern: button is a transparent
+        click target; the visible pill is a <span> sharing the badge's
+        sizing tokens (CRM_PILL_BASE_CLASSES + CRM_PILL_SIZE_LG_CLASSES)
+        as the single source of truth, so element-type and class-string
+        match the badge exactly → pixel-snap parity.
+      */}
       <button
         ref={triggerRef}
         type="button"
         onClick={openModal}
-        className="inline-flex min-w-[120px] items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+        aria-label="Change CRM state"
+        className="group inline-flex appearance-none border-0 bg-transparent p-0 cursor-pointer focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy"
       >
-        Change state
+        <span
+          className={`${CRM_PILL_BASE_CLASSES} ${CRM_PILL_SIZE_LG_CLASSES} border border-navy bg-paper text-navy transition-colors duration-[120ms] ease-out group-hover:bg-ivory`}
+        >
+          Change state
+        </span>
       </button>
 
       {open ? (

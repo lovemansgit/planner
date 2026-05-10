@@ -39,6 +39,16 @@ interface StateVisual {
   readonly decoration?: "line-through";
 }
 
+// Day-21 PR-A2 / Session B — UX-FINDING-5 ride-along.
+// Sizing/typography tokens extracted so the CrmStateModal trigger
+// button can render a <span> with identical classes (element-type
+// parity → pixel-snap match between the badge on the header card
+// and the trigger pill that opens the change-state modal).
+export const CRM_PILL_BASE_CLASSES =
+  "inline-flex items-center justify-center rounded-sm uppercase tracking-[0.1em] font-medium";
+export const CRM_PILL_SIZE_LG_CLASSES = "min-w-[120px] px-3 py-1 text-xs";
+const CRM_PILL_SIZE_DEFAULT_CLASSES = "min-w-[100px] px-2 py-0.5 text-[11px]";
+
 const STATE_VISUALS: Record<ConsigneeCrmState, StateVisual> = {
   ACTIVE: {
     label: "Active",
@@ -81,12 +91,10 @@ export function CrmStateBadge({ state, size = "default" }: CrmStateBadgeProps) {
   // longest rendered label; widths leave a small margin without forcing
   // shorter labels to overstretch.
   const sizeClasses =
-    size === "lg"
-      ? "min-w-[120px] px-3 py-1 text-xs"
-      : "min-w-[100px] px-2 py-0.5 text-[11px]";
+    size === "lg" ? CRM_PILL_SIZE_LG_CLASSES : CRM_PILL_SIZE_DEFAULT_CLASSES;
   return (
     <span
-      className={`inline-flex items-center justify-center rounded-sm uppercase tracking-[0.1em] font-medium ${sizeClasses} ${visual.classes} ${visual.decoration === "line-through" ? "line-through" : ""}`}
+      className={`${CRM_PILL_BASE_CLASSES} ${sizeClasses} ${visual.classes} ${visual.decoration === "line-through" ? "line-through" : ""}`}
       aria-label={`CRM state: ${visual.label}`}
     >
       {visual.label}
