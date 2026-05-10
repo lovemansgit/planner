@@ -122,6 +122,38 @@ class StubAdapter implements LastMileAdapter {
     void awb;
     return [];
   }
+  async updateTask(
+    session: AuthenticatedSession,
+    awb: string,
+    patch: import("../types").TaskUpdatePatchRequest,
+  ): Promise<void> {
+    void session;
+    void awb;
+    void patch;
+  }
+  async cancelTask(
+    session: AuthenticatedSession,
+    awb: string,
+    correlationId: string,
+  ): Promise<void> {
+    void session;
+    void awb;
+    void correlationId;
+  }
+  async bulkCancelTasks(
+    session: AuthenticatedSession,
+    sfTaskIds: readonly string[],
+    correlationId: string,
+  ): Promise<import("../types").BulkCancelResult> {
+    void session;
+    void correlationId;
+    return {
+      jobId: "stub-bulk-job",
+      executedCount: sfTaskIds.length,
+      expectedCount: sfTaskIds.length,
+      status: "COMPLETED",
+    };
+  }
 }
 
 describe("LastMileAdapter contract", () => {

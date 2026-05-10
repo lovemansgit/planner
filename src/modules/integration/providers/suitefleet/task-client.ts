@@ -73,11 +73,13 @@ import type { IsoTimestamp } from "../../../../shared/types";
 
 import type {
   AuthenticatedSession,
+  BulkCancelResult,
   ConsigneeSnapshot,
   DeliveryAddress,
   TaskByAwbResult,
   TaskCreateRequest,
   TaskCreateResult,
+  TaskUpdatePatchRequest,
 } from "../../types";
 
 const log = logger.with({ component: "suitefleet_task_client" });
@@ -185,6 +187,41 @@ export interface SuiteFleetTaskClient {
     customerId: number;
     awb: string;
   }): Promise<TaskByAwbResult>;
+  /**
+   * Day 21 / Phase 1. Merge-patch update against
+   * `PATCH /api/tasks/awb/{awb}` with `application/merge-patch+json`.
+   * Builds a partial wire body from the internal patch (only present
+   * fields land on the wire). Returns void; SF returns the full task
+   * entity 200 OK and we discard.
+   */
+  updateTask(args: {
+    session: AuthenticatedSession;
+    awb: string;
+    patch: TaskUpdatePatchRequest;
+  }): Promise<void>;
+  /**
+   * Day 21 / Phase 1. Status-flip cancel against the same merge-patch
+   * endpoint as updateTask. Body is the locked single shape
+   * `{ status: "CANCELED" }`. correlationId is for Planner-side
+   * traceability only; never reaches the wire (SF ignores
+   * `Idempotency-Key`).
+   */
+  cancelTask(args: {
+    session: AuthenticatedSession;
+    awb: string;
+    correlationId: string;
+  }): Promise<void>;
+  /**
+   * Day 21 / Phase 1. Single bulk PATCH against
+   * `PATCH /api/tasks/bulk/{numeric_ids_csv}` with body
+   * `{ status: "CANCELED" }`. Input is **numeric SF task ids**, not
+   * AWBs (probe-locked). Returns aggregate `BulkCancelResult`.
+   */
+  bulkCancelTasks(args: {
+    session: AuthenticatedSession;
+    sfTaskIds: readonly string[];
+    correlationId: string;
+  }): Promise<BulkCancelResult>;
 }
 
 interface SuiteFleetLocationBody {
@@ -226,6 +263,81 @@ function buildConsignee(consignee: ConsigneeSnapshot): {
     contactPhone: consignee.contactPhone,
     location: buildLocation(consignee.address, consignee.contactPhone),
   };
+}
+
+/**
+ * Day 21 / Phase 1. Build the merge-patch body for `updateTask`.
+ * RFC 7396 semantics — only present fields land on the wire. Date +
+ * window go top-level (matches createTask's `deliveryDate /
+ * deliveryStartTime / deliveryEndTime` split). The full consignee
+ * snapshot replaces the previous one when present (no second
+ * address-only mutation path on the wire — service-layer constructs
+ * the snapshot from the chosen address row before calling).
+ *
+ * `notes` propagates `null` as the explicit "clear field" signal
+ * (RFC 7396 distinguishes absence-from-field from explicit-null).
+ */
+export function buildSuiteFleetUpdatePatchBody(
+  patch: TaskUpdatePatchRequest,
+): Record<string, unknown> {
+  return {
+    ...(patch.window !== undefined && {
+      deliveryDate: patch.window.date,
+      deliveryStartTime: patch.window.startTime,
+      deliveryEndTime: patch.window.endTime,
+    }),
+    ...(patch.consignee !== undefined && {
+      consignee: buildConsignee(patch.consignee),
+    }),
+    ...(patch.notes !== undefined && { notes: patch.notes }),
+  };
+}
+
+/**
+ * Day 21 / Phase 1. Numeric-only validator for SF task ids passed to
+ * `bulkCancelTasks`. The bulk endpoint parses the path-param as
+ * Long; AWB strings 500 with "For input string" (probe-confirmed).
+ * Defensive validator catches caller mistakes at the adapter
+ * boundary instead of letting a 500 bubble out.
+ */
+const SF_NUMERIC_TASK_ID_RE = /^[1-9]\d*$/;
+
+interface SuiteFleetBulkUpdateResponseBody {
+  readonly id?: number | string;
+  readonly tasksExecutedCount?: number;
+  readonly expectedTasksCount?: number;
+  readonly status?: string;
+}
+
+export function parseSuiteFleetBulkCancelResponse(body: unknown): BulkCancelResult {
+  const bodyExcerpt = (() => {
+    try { return JSON.stringify(body).slice(0, 400); }
+    catch { return String(body).slice(0, 400); }
+  })();
+  if (typeof body !== "object" || body === null) {
+    throw new ValidationError(
+      `SuiteFleet bulkCancelTasks response is not an object: ${bodyExcerpt}`,
+    );
+  }
+  const o = body as SuiteFleetBulkUpdateResponseBody;
+  const jobId =
+    typeof o.id === "number" ? String(o.id) : typeof o.id === "string" ? o.id : null;
+  const executedCount =
+    typeof o.tasksExecutedCount === "number" && Number.isFinite(o.tasksExecutedCount)
+      ? o.tasksExecutedCount
+      : null;
+  const expectedCount =
+    typeof o.expectedTasksCount === "number" && Number.isFinite(o.expectedTasksCount)
+      ? o.expectedTasksCount
+      : null;
+  const status = typeof o.status === "string" ? o.status : null;
+  if (jobId === null || executedCount === null || expectedCount === null || status === null) {
+    throw new ValidationError(
+      `SuiteFleet bulkCancelTasks response missing required fields ` +
+        `(id, tasksExecutedCount, expectedTasksCount, status). Body: ${bodyExcerpt}`,
+    );
+  }
+  return { jobId, executedCount, expectedCount, status };
 }
 
 export function buildSuiteFleetTaskBody(
@@ -633,6 +745,291 @@ export function createSuiteFleetTaskClient(
         tenant_id: session.tenantId,
         awb,
         external_id: result.externalId,
+      });
+
+      return result;
+    },
+
+    async updateTask({ session, awb, patch }) {
+      // Day 21 / Phase 1. PATCH /api/tasks/awb/{awb} with merge-patch body.
+      // SAFETY: single-attempt by design — same idempotency policy as
+      // createTask (file header). QStash decoupling handles retry via
+      // /api/queue/update-task-failed → outbound_push_failures DLQ.
+      const url = `${baseUrl}/api/tasks/awb/${encodeURIComponent(awb)}`;
+      const body = buildSuiteFleetUpdatePatchBody(patch);
+
+      let response: Response;
+      try {
+        response = await deps.fetch(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+            Clientid: deps.clientId,
+            "Content-Type": "application/merge-patch+json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+      } catch (err) {
+        log.warn({
+          operation: "update_task",
+          error_code: "network_error",
+          tenant_id: session.tenantId,
+          awb,
+          message: err instanceof Error ? err.message : "unknown",
+        });
+        throw new CredentialError(
+          "SuiteFleet updateTask network error — single-attempt policy, no retry",
+          err instanceof Error ? { cause: err } : undefined,
+        );
+      }
+
+      if (response.status >= 500) {
+        log.warn({
+          operation: "update_task",
+          status: response.status,
+          error_code: "server_5xx",
+          tenant_id: session.tenantId,
+          awb,
+        });
+        throw new CredentialError(
+          `SuiteFleet updateTask returned ${response.status} — single-attempt policy, no retry`,
+        );
+      }
+
+      if (response.status >= 400) {
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
+        log.warn({
+          operation: "update_task",
+          status: response.status,
+          error_code: "client_4xx",
+          tenant_id: session.tenantId,
+          awb,
+          response_excerpt: responseText.slice(0, 400),
+        });
+        if (response.status === 401) {
+          throw new CredentialError(
+            "SuiteFleet updateTask rejected — credentials invalid or session expired",
+          );
+        }
+        throw new ValidationError(
+          `SuiteFleet updateTask rejected with status ${response.status}: ${responseText.slice(0, 400)}`,
+        );
+      }
+
+      // 200 OK — Day-21 probe confirmed SF returns the full task entity, not
+      // 204. We discard the body explicitly per LANE 1 reviewer ruling
+      // ("Type-handle returned entity or explicitly discard; parser must not
+      // crash on body presence"). Consume to free the connection; do not parse.
+      try { await response.text(); } catch { /* ignore */ }
+
+      log.info({
+        operation: "update_task",
+        tenant_id: session.tenantId,
+        awb,
+        patch_keys: Object.keys(body).join(","),
+      });
+    },
+
+    async cancelTask({ session, awb, correlationId }) {
+      // Day 21 / Phase 1. PATCH /api/tasks/awb/{awb} with body
+      // { status: "CANCELED" } — Day-21 sandbox probe locked the field
+      // name (memory/decision_phase_1_aqib_doc_verified.md Q2). The
+      // correlationId is Planner-side traceability only — never reaches
+      // the wire because SF ignores Idempotency-Key (Day-4 createTask
+      // idempotency-policy block). It propagates into the QStash message
+      // body, the audit log, and the DLQ row.
+      //
+      // Fire-and-forget at the adapter layer: webhook receiver applies
+      // TASK_STATUS_UPDATED_TO_CANCELED to local state ~1s later. SF
+      // also fires TASK_HAS_BEEN_UPDATED first (non-lifecycle, mapper
+      // returns null — no-op). Both rows land in webhook_events keyed
+      // by (suitefleet_task_id, action, event_timestamp) UNIQUE so the
+      // 2-event fan-out doesn't collide. See LANE 1 probe outcome in
+      // §3.6 thread for the empirical capture.
+      const url = `${baseUrl}/api/tasks/awb/${encodeURIComponent(awb)}`;
+      const requestLog = log.with({
+        operation: "cancel_task",
+        tenant_id: session.tenantId,
+        awb,
+        correlation_id: correlationId,
+      });
+
+      let response: Response;
+      try {
+        response = await deps.fetch(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+            Clientid: deps.clientId,
+            "Content-Type": "application/merge-patch+json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ status: "CANCELED" }),
+        });
+      } catch (err) {
+        requestLog.warn({
+          error_code: "network_error",
+          message: err instanceof Error ? err.message : "unknown",
+        });
+        throw new CredentialError(
+          "SuiteFleet cancelTask network error — single-attempt policy, no retry",
+          err instanceof Error ? { cause: err } : undefined,
+        );
+      }
+
+      if (response.status >= 500) {
+        requestLog.warn({ status: response.status, error_code: "server_5xx" });
+        throw new CredentialError(
+          `SuiteFleet cancelTask returned ${response.status} — single-attempt policy, no retry`,
+        );
+      }
+
+      if (response.status >= 400) {
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
+        requestLog.warn({
+          status: response.status,
+          error_code: "client_4xx",
+          response_excerpt: responseText.slice(0, 400),
+        });
+        if (response.status === 401) {
+          throw new CredentialError(
+            "SuiteFleet cancelTask rejected — credentials invalid or session expired",
+          );
+        }
+        throw new ValidationError(
+          `SuiteFleet cancelTask rejected with status ${response.status}: ${responseText.slice(0, 400)}`,
+        );
+      }
+
+      try { await response.text(); } catch { /* ignore */ }
+
+      requestLog.info({});
+    },
+
+    async bulkCancelTasks({ session, sfTaskIds, correlationId }) {
+      // Day 21 / Phase 1. Single bulk PATCH against
+      // /api/tasks/bulk/{numeric_ids_csv}. Path-param is COMMA-SEPARATED
+      // numeric SF task ids (NOT AWBs — Day-21 probe-locked correction
+      // of the Q3 memo's AWB claim). Body is the same merge-patch
+      // {status:"CANCELED"} as single cancel; SF applies it to all
+      // listed tasks in one transaction-bounded job (response carries
+      // the bulk-job summary).
+      //
+      // Defensive validation at the adapter boundary catches caller
+      // mistakes (e.g. accidentally passing AWBs that would 500 with
+      // "For input string"). Service-layer caller is expected to pull
+      // tasks.external_id (numeric stringified), NOT
+      // tasks.external_tracking_number (AWB).
+      if (sfTaskIds.length === 0) {
+        throw new ValidationError(
+          "SuiteFleet bulkCancelTasks: sfTaskIds must be non-empty",
+        );
+      }
+      for (const id of sfTaskIds) {
+        if (!SF_NUMERIC_TASK_ID_RE.test(id)) {
+          throw new ValidationError(
+            `SuiteFleet bulkCancelTasks: sfTaskIds must be numeric strings (no AWBs); ` +
+              `got "${id}". Did you pass external_tracking_number instead of external_id?`,
+          );
+        }
+      }
+
+      const idsCsv = sfTaskIds.join(",");
+      const url = `${baseUrl}/api/tasks/bulk/${idsCsv}`;
+      const requestLog = log.with({
+        operation: "bulk_cancel_tasks",
+        tenant_id: session.tenantId,
+        correlation_id: correlationId,
+        task_count: sfTaskIds.length,
+      });
+
+      let response: Response;
+      try {
+        response = await deps.fetch(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+            Clientid: deps.clientId,
+            "Content-Type": "application/merge-patch+json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ status: "CANCELED" }),
+        });
+      } catch (err) {
+        requestLog.warn({
+          error_code: "network_error",
+          message: err instanceof Error ? err.message : "unknown",
+        });
+        throw new CredentialError(
+          "SuiteFleet bulkCancelTasks network error — single-attempt policy, no retry",
+          err instanceof Error ? { cause: err } : undefined,
+        );
+      }
+
+      if (response.status >= 500) {
+        requestLog.warn({ status: response.status, error_code: "server_5xx" });
+        throw new CredentialError(
+          `SuiteFleet bulkCancelTasks returned ${response.status} — single-attempt policy, no retry`,
+        );
+      }
+
+      if (response.status >= 400) {
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
+        requestLog.warn({
+          status: response.status,
+          error_code: "client_4xx",
+          response_excerpt: responseText.slice(0, 400),
+        });
+        if (response.status === 401) {
+          throw new CredentialError(
+            "SuiteFleet bulkCancelTasks rejected — credentials invalid or session expired",
+          );
+        }
+        throw new ValidationError(
+          `SuiteFleet bulkCancelTasks rejected with status ${response.status}: ${responseText.slice(0, 400)}`,
+        );
+      }
+
+      let parsedBody: unknown;
+      try {
+        parsedBody = await response.json();
+      } catch (err) {
+        throw new ValidationError(
+          "SuiteFleet bulkCancelTasks response was not valid JSON",
+          err instanceof Error ? { cause: err } : undefined,
+        );
+      }
+
+      const result = parseSuiteFleetBulkCancelResponse(parsedBody);
+
+      // Aggregate sanity check — if SF executed fewer tasks than expected,
+      // the response does not say WHICH tasks failed. Surface as
+      // ValidationError so the QStash worker DLQs the whole batch for
+      // ops triage. Caller pairs this with a per-task DB sweep to
+      // identify which AWBs are still CREATED post-bulk.
+      if (result.executedCount !== result.expectedCount) {
+        requestLog.warn({
+          error_code: "bulk_partial_failure",
+          job_id: result.jobId,
+          executed_count: result.executedCount,
+          expected_count: result.expectedCount,
+          job_status: result.status,
+        });
+        throw new ValidationError(
+          `SuiteFleet bulkCancelTasks partial failure: executed=${result.executedCount} ` +
+            `expected=${result.expectedCount} job_id=${result.jobId} job_status=${result.status}`,
+        );
+      }
+
+      requestLog.info({
+        job_id: result.jobId,
+        executed_count: result.executedCount,
+        expected_count: result.expectedCount,
+        job_status: result.status,
       });
 
       return result;

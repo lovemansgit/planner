@@ -149,6 +149,15 @@ function makeAdapter(records: readonly AssetTrackingPackage[]): LastMileAdapter 
     async printLabels() {
       throw new Error("not used");
     },
+    async updateTask() {
+      throw new Error("not used");
+    },
+    async cancelTask() {
+      throw new Error("not used");
+    },
+    async bulkCancelTasks() {
+      throw new Error("not used");
+    },
     async fetchAssetTrackingByAwb() {
       return records;
     },

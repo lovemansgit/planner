@@ -1,15 +1,24 @@
 // tasks module — plan §3.3 / §4.5 (task lifecycle) + §4.6 (nightly batch).
 //
 // Day 5 / T-3: service-layer surface for the tasks module. Bimodal
-// design captured in
-// memory/decision_task_module_no_user_create_delete.md:
+// design originally captured in
+// memory/decision_task_module_no_user_create_delete.md, AMENDED on
+// Day 19 by memory/decision_task_module_amendment_v1.md (Phase 1
+// merchant CRUD lane) — see plan-PR §K:
 //
-//   - createTask, bulkCreateTasks are SYSTEM-ONLY (no user-facing
-//     permission in the catalogue; the cron and the migration-import
-//     flow are the legitimate callers).
+//   - createTask is now DUAL-ACTOR. The single fn dispatches on
+//     ctx.actor.kind: system actors bypass via assertSystemActor (cron
+//     + migration-import flow continue as before); user actors require
+//     the new task:create permission for ad-hoc operator-initiated
+//     task creation. NOT a separate createTaskAsUser fn — one wire
+//     path, one place for SF push to live.
+//
+//   - bulkCreateTasks remains SYSTEM-ONLY (cron + import flows).
 //
 //   - getTask, listTasks, updateTask are user-flow methods gated on
-//     existing task:read / task:update permissions.
+//     existing task:read / task:update permissions. Day-19 §A5 also
+//     extends the UpdateTaskPatch surface with addressId + cutoff
+//     guard for the operator edit-task flow.
 //
 // No deleteTask method — no MVP caller. If a future requirement
 // surfaces (GDPR erasure, manual cleanup), it lands then with
