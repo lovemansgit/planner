@@ -185,11 +185,14 @@ export function CalendarYearView({
         <span>Appended</span>
       </div>
 
-      {/* Outer month-block grid. xl:grid-cols-12 lays all 12 months
-          side-by-side on standard ~1280px viewports per Love's spec
-          ("12 month-blocks fit on the year-view surface side-by-side").
-          Smaller viewports wrap progressively. */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-12">
+      {/* Outer month-block grid. 4×3 layout at standard widths gives
+          each month-block ~25% of the row, so the inner 7-col day
+          grid renders cells at ~36-40px square — visible at glance
+          without losing the at-a-year overview. Tighter than GitHub's
+          12-across at the same viewport, but BRD §6.2.1 framing is
+          "compact density view," not single-row layout. Wraps to 3×4
+          on tablet and 2×6 on narrow viewports. */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
         {MONTH_NAMES.map((monthName, monthIdx) => {
           const monthAnchor = `${year}-${String(monthIdx + 1).padStart(2, "0")}-01`;
           const monthEnd = computeMonthEnd(new Date(`${monthAnchor}T00:00:00Z`));
@@ -209,7 +212,7 @@ export function CalendarYearView({
               className="block rounded-sm transition-colors duration-[120ms] ease-out hover:bg-ivory/60"
               aria-label={`Drill to ${monthName} ${year} month view`}
             >
-              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-[0.14em] text-navy">
+              <span className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-navy">
                 {monthName}
               </span>
               <div className="grid grid-cols-7 gap-px">
