@@ -36,6 +36,7 @@ export {
   bulkCreateTasks,
   countTasks,
   createTask,
+  getConsigneeTaskCountByDayBucket,
   getConsigneeTasksForDateRange,
   getTask,
   listAllTaskIds,
@@ -49,6 +50,8 @@ export {
   type ListTasksOpts,
   type PrintLabelsForTasksResult,
 } from "./service";
+
+export type { DayBucketCount } from "./repository";
 
 // Day-16 — repository-layer helpers exposed for cross-module callers
 // that need to UPDATE tasks transactionally inside a multi-table

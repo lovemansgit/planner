@@ -717,6 +717,60 @@ export async function listAllTaskIdsByTenant(
 }
 
 /**
+ * Day-21 PR-A2 — per-day-per-status task counts for a single consignee
+ * within an inclusive ISO date range. Powers the consignee detail-page
+ * Calendar tab Year view (heat-map per BRD §6.2.1) per DECISION-1 (b)
+ * locked at PR #221 plan-PR. Single-pass GROUP BY aggregation; the
+ * caller (CalendarYearView) buckets the rows into a Map<date, ...> for
+ * O(1) per-cell lookup.
+ *
+ * Tenant filter is explicit alongside RLS — same value, same result,
+ * but query is self-describing in pg_stat. delivery_date + tenant_id
+ * indices already exist (Day 11 + Day 17), so the GROUP BY hits an
+ * index scan rather than a sequential walk.
+ *
+ * Empty result returns [] when no tasks fall in the window. Caller
+ * renders blank cells uniformly without a separate guard.
+ */
+export interface DayBucketCount {
+  readonly date: string;
+  readonly status: TaskInternalStatus;
+  readonly count: number;
+}
+
+export async function countTasksByConsigneeAndDayBucket(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  startDate: string,
+  endDate: string,
+): Promise<readonly DayBucketCount[]> {
+  type Row = {
+    date: string;
+    status: TaskInternalStatus;
+    count: string | number;
+  };
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT
+      to_char(delivery_date, 'YYYY-MM-DD') AS date,
+      internal_status AS status,
+      COUNT(*)::int AS count
+    FROM tasks
+    WHERE tenant_id = ${tenantId}
+      AND consignee_id = ${consigneeId}
+      AND delivery_date >= ${startDate}::date
+      AND delivery_date <= ${endDate}::date
+    GROUP BY delivery_date, internal_status
+    ORDER BY delivery_date ASC, internal_status ASC
+  `);
+  return rows.map((r) => ({
+    date: r.date,
+    status: r.status,
+    count: typeof r.count === "string" ? Number.parseInt(r.count, 10) : r.count,
+  }));
+}
+
+/**
  * Day 11 / P5 — count tasks for `tenantId` with the same optional
  * status filter as listTasksByTenant. Used by the operator UI to
  * render total counts + total page count without a second pass over
