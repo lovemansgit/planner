@@ -50,6 +50,10 @@ interface StateVisual {
 // copy. Default size keeps min-w floor (no consumer with overflow).
 export const CRM_PILL_BASE_CLASSES =
   "inline-flex items-center justify-center rounded-sm uppercase tracking-[0.1em] font-medium";
+// Pinned to longest CRM state label at lg type scale (+ "Change state"
+// trigger copy); brief §3.4 locks the 6-state set so the value is
+// contract-stable. Phase 2 if §3.4 amends the state set or adds a
+// trigger surface with longer copy.
 export const CRM_PILL_SIZE_LG_CLASSES = "w-[140px] px-3 py-1 text-xs";
 const CRM_PILL_SIZE_DEFAULT_CLASSES = "min-w-[100px] px-2 py-0.5 text-[11px]";
 
