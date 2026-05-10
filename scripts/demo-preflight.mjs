@@ -29,6 +29,17 @@
 //   node scripts/demo-preflight.mjs
 //
 // Or use the wrapper at scripts/demo-preflight.sh which sources for you.
+//
+// RUNBOOK — when to run on demo day:
+//   Brief §5.3 schedules two runs (start of dry-run + 30 min before live).
+//   Gate 4 (cron-recency) is intentionally generous at 24h to keep the
+//   gate stable across morning rehearsal + afternoon dress-rehearsal +
+//   evening live demo windows. For tightest signal, run the preflight
+//   AFTER the daily 16:00-17:00 Dubai cron tick has fired — that
+//   guarantees Gate 4 reflects the same horizon-advance the live demo
+//   will show. A pre-cron-window run can pass Gate 4 against
+//   yesterday's tick (still <24h) but won't catch a same-day cron
+//   regression.
 
 import postgres from "postgres";
 
@@ -116,6 +127,13 @@ async function gate4CronRecency(sql) {
 }
 
 async function gate5DeliveredWithPodPhoto(sql) {
+  // Doubles as a regression-detector for the v1.8 brief amendment
+  // (POD via webhook → Layer 2 status-fn write → Layer 3 POD-extraction
+  // populates tasks.pod_photos in the same UPDATE; brief §3.3.8
+  // "cache from webhook, never live-fetch"). A regression that
+  // reverts to polling or that loses the in-UPDATE pod_photos write
+  // would zero this gate even if the rest of the demo state is
+  // healthy.
   const rows = await sql`
     SELECT count(*)::int AS n
     FROM tasks
