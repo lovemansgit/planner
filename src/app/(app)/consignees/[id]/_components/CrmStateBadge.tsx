@@ -39,6 +39,24 @@ interface StateVisual {
   readonly decoration?: "line-through";
 }
 
+// Day-21 PR-A2 / Session B — UX-FINDING-5 v2 fix.
+// PR #223 aligned the trigger's classes with the badge but pixels
+// still diverged. Bounding-box probe (Playwright) showed the cause
+// is content-driven width: `min-w-[120px]` is a floor, not fixed.
+// Badge content ("Active" / "High risk") sits under the floor and
+// pins to 120px; trigger content ("Change state") exceeds the floor
+// and grows to ~131.9px. Resolution: lg variant becomes a fixed
+// width that fits both the longest CRM label and the modal trigger
+// copy. Default size keeps min-w floor (no consumer with overflow).
+export const CRM_PILL_BASE_CLASSES =
+  "inline-flex items-center justify-center rounded-sm uppercase tracking-[0.1em] font-medium";
+// Pinned to longest CRM state label at lg type scale (+ "Change state"
+// trigger copy); brief §3.4 locks the 6-state set so the value is
+// contract-stable. Phase 2 if §3.4 amends the state set or adds a
+// trigger surface with longer copy.
+export const CRM_PILL_SIZE_LG_CLASSES = "w-[140px] px-3 py-1 text-xs";
+const CRM_PILL_SIZE_DEFAULT_CLASSES = "min-w-[100px] px-2 py-0.5 text-[11px]";
+
 const STATE_VISUALS: Record<ConsigneeCrmState, StateVisual> = {
   ACTIVE: {
     label: "Active",
@@ -75,18 +93,11 @@ const STATE_VISUALS: Record<ConsigneeCrmState, StateVisual> = {
 
 export function CrmStateBadge({ state, size = "default" }: CrmStateBadgeProps) {
   const visual = STATE_VISUALS[state];
-  // Day-19 PR-B fix-up — min-w sized by variant so all CRM state labels
-  // (Active / Churned / High risk / Inactive / On hold / Ended) render
-  // at consistent width across rows. "High risk" (9 chars) is the
-  // longest rendered label; widths leave a small margin without forcing
-  // shorter labels to overstretch.
   const sizeClasses =
-    size === "lg"
-      ? "min-w-[120px] px-3 py-1 text-xs"
-      : "min-w-[100px] px-2 py-0.5 text-[11px]";
+    size === "lg" ? CRM_PILL_SIZE_LG_CLASSES : CRM_PILL_SIZE_DEFAULT_CLASSES;
   return (
     <span
-      className={`inline-flex items-center justify-center rounded-sm uppercase tracking-[0.1em] font-medium ${sizeClasses} ${visual.classes} ${visual.decoration === "line-through" ? "line-through" : ""}`}
+      className={`${CRM_PILL_BASE_CLASSES} ${sizeClasses} ${visual.classes} ${visual.decoration === "line-through" ? "line-through" : ""}`}
       aria-label={`CRM state: ${visual.label}`}
     >
       {visual.label}

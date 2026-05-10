@@ -44,7 +44,11 @@ import {
   type ChangeCrmStateActionResult,
 } from "../_actions";
 
-import { CRM_STATE_LABELS } from "./CrmStateBadge";
+import {
+  CRM_PILL_BASE_CLASSES,
+  CRM_PILL_SIZE_LG_CLASSES,
+  CRM_STATE_LABELS,
+} from "./CrmStateBadge";
 
 interface FormChildProps {
   readonly consigneeId: string;
@@ -285,7 +289,7 @@ export function CrmStateModal({ consigneeId, currentState }: CrmStateModalProps)
         ref={triggerRef}
         type="button"
         onClick={openModal}
-        className="inline-flex min-w-[120px] items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+        className={`${CRM_PILL_BASE_CLASSES} ${CRM_PILL_SIZE_LG_CLASSES} border border-navy bg-paper text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory`}
       >
         Change state
       </button>

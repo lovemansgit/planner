@@ -19,6 +19,7 @@ import Link from "next/link";
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
 import type { Task } from "@/modules/tasks/types";
 
+import { addDays, computeWeekStart, toIsoDate } from "./calendar-dates";
 import { CalendarPodCard } from "./CalendarPodCard";
 import { CalendarStatusLegend } from "./CalendarStatusLegend";
 import {
@@ -41,29 +42,6 @@ export interface CalendarWeekViewProps {
   readonly exceptions: readonly SubscriptionException[];
   /** Whether the actor has subscription:skip permission. Drives popover button visibility. */
   readonly canSkip: boolean;
-}
-
-/** Compute the ISO Monday of the week containing the given date. */
-export function computeWeekStart(date: Date): string {
-  // ISO weekday: Mon=1...Sun=7. JS getDay(): Sun=0...Sat=6.
-  const jsDay = date.getUTCDay();
-  const isoDay = jsDay === 0 ? 7 : jsDay;
-  const daysToMonday = isoDay - 1;
-  const monday = new Date(date);
-  monday.setUTCDate(date.getUTCDate() - daysToMonday);
-  return toIsoDate(monday);
-}
-
-/** Add `days` to an ISO date string, returning a new ISO date string. */
-export function addDays(isoDate: string, days: number): string {
-  const d = new Date(`${isoDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return toIsoDate(d);
-}
-
-/** Stringify a Date as YYYY-MM-DD (UTC). */
-function toIsoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
 }
 
 /** Display the day name + numeric date in header rows. */

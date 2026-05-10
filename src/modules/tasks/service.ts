@@ -88,7 +88,9 @@ import { isCutOffElapsedForDate } from "../task-materialization/dubai-date";
 import type { TenantStatus } from "../merchants/types";
 
 import {
+  countTasksByConsigneeAndDayBucket,
   countTasksByTenant,
+  type DayBucketCount,
   findTaskById,
   insertTaskWithPackages,
   type ListAllTasksFilters,
@@ -614,6 +616,35 @@ export async function getConsigneeTasksForDateRange(
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listTasksByConsigneeAndDateRange(
+      tx,
+      ctx.tenantId!,
+      consigneeId,
+      startDate,
+      endDate,
+    );
+  });
+}
+
+/**
+ * Day-21 PR-A2 — per-day-per-status task counts for a single consignee
+ * within an inclusive ISO date range. Powers the consignee detail-page
+ * Calendar tab Year view (heat-map per BRD §6.2.1) per DECISION-1 (b).
+ *
+ * Read-only; no audit emit (R-4). Same `task:read` gate as the Week +
+ * Month range fetches; tenant filter explicit alongside RLS via
+ * withTenant. Caller (CalendarYearView) buckets the rows into
+ * Map<date, ...> for O(1) per-cell lookup at render time.
+ */
+export async function getConsigneeTaskCountByDayBucket(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  startDate: string,
+  endDate: string,
+): Promise<readonly DayBucketCount[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "task:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return countTasksByConsigneeAndDayBucket(
       tx,
       ctx.tenantId!,
       consigneeId,
