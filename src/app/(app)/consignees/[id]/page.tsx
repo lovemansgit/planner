@@ -137,6 +137,8 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let calendarYearCounts: readonly DayBucketCount[] = [];
   let canChangeState = false;
   let canSkip = false;
+  let canEditConsignee = false;
+  let canCreateSubscription = false;
   try {
     const ctx = await buildRequestContext(`/consignees/${id}`, requestId);
     consignee = await getConsignee(ctx, id as Uuid);
@@ -146,6 +148,16 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
       canChangeState = perms.has("consignee:change_crm_state");
       canSkip = perms.has("subscription:skip");
+      // Day-22 forms-lane CTAs.
+      // - Edit consignee gate: consignee:update only (the edit form
+      //   covers non-address scalar fields per brief v1.11 §3.1).
+      // - New subscription gate: per Day-19 §J-5 SPLIT PERMS,
+      //   /subscriptions/new requires BOTH subscription:create AND
+      //   task:create (subscription mode dispatches createSubscription;
+      //   single-task mode dispatches createTask).
+      canEditConsignee = perms.has("consignee:update");
+      canCreateSubscription =
+        perms.has("subscription:create") && perms.has("task:create");
     }
 
     // Only fetch history if the History tab is active — defers the
@@ -239,6 +251,26 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
               <CrmStateBadge state={consignee.crmState} size="lg" />
               {canChangeState ? (
                 <CrmStateModal consigneeId={consignee.id} currentState={consignee.crmState} />
+              ) : null}
+              {canEditConsignee || canCreateSubscription ? (
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  {canEditConsignee ? (
+                    <Link
+                      href={`/consignees/${consignee.id}/edit`}
+                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                    >
+                      Edit
+                    </Link>
+                  ) : null}
+                  {canCreateSubscription ? (
+                    <Link
+                      href={`/subscriptions/new?consigneeId=${consignee.id}`}
+                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                    >
+                      New subscription
+                    </Link>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           </div>

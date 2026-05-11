@@ -22,11 +22,13 @@
 
 import { randomUUID } from "node:crypto";
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { listSubscriptions, type Subscription } from "@/modules/subscriptions";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
+import type { Permission } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -35,9 +37,18 @@ export default async function SubscriptionsPage() {
   const requestId = randomUUID();
 
   let subscriptions: readonly Subscription[];
+  let canCreate = false;
   try {
     const ctx = await buildRequestContext("/subscriptions", requestId);
     subscriptions = await listSubscriptions(ctx);
+    // /subscriptions/new gates on BOTH subscription:create AND
+    // task:create per Day-19 §J-5 SPLIT PERMS (single-task mode
+    // dispatches createTask; subscription mode dispatches
+    // createSubscription).
+    if (ctx.actor.kind === "user") {
+      const perms = ctx.actor.permissions as ReadonlySet<Permission>;
+      canCreate = perms.has("subscription:create") && perms.has("task:create");
+    }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/subscriptions"));
@@ -51,14 +62,24 @@ export default async function SubscriptionsPage() {
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-5xl px-12 py-16">
-        <header className="mb-16">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Subscription planner
-          </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Subscriptions</h1>
-          <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-            Read-only demo view, scoped to the first tenant in the database.
-          </p>
+        <header className="mb-16 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+              Subscription planner
+            </p>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Subscriptions</h1>
+            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
+              Recurring delivery rules + ad-hoc tasks. Create new from here.
+            </p>
+          </div>
+          {canCreate ? (
+            <Link
+              href="/subscriptions/new"
+              className="inline-flex items-center justify-center rounded-sm border border-navy bg-navy px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90"
+            >
+              New subscription
+            </Link>
+          ) : null}
         </header>
 
         <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
