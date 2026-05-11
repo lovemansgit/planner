@@ -149,3 +149,62 @@ export interface ConsigneeCrmEvent {
   readonly actor: Uuid;
   readonly occurredAt: IsoTimestamp;
 }
+
+// -----------------------------------------------------------------------------
+// Consignee timeline (Day 22 / §3.3.7 — wires consignee_timeline_events VIEW)
+// -----------------------------------------------------------------------------
+//
+// The view (migration 0016 lines 206-256) UNION ALL projects three event
+// kinds: crm_state transitions, subscription_exceptions (skip / pause /
+// address overrides), and task_status terminal events (DELIVERED / FAILED
+// / SKIPPED / CANCELED). The view filters out non-terminal task lifecycle
+// states because those are noisy and not useful for the consignee timeline.
+
+/** Subscription-exception types per CHECK on subscription_exceptions.type. */
+export type SubscriptionExceptionType =
+  | "skip"
+  | "pause_window"
+  | "address_override_one_off"
+  | "address_override_forward"
+  | "append_without_skip";
+
+/** Terminal task statuses surfaced via the view (filtered in 0016 §3). */
+export type TaskTerminalStatus = "DELIVERED" | "FAILED" | "SKIPPED" | "CANCELED";
+
+/**
+ * Discriminated union row shape returned by `getConsigneeTimeline`.
+ * One variant per `event_kind` projected by `consignee_timeline_events`;
+ * the service layer maps jsonb `payload` into the kind-specific scalar
+ * fields so the UI never touches raw jsonb.
+ *
+ * `actor` is nullable on task_status because terminal lifecycle events
+ * arrive from external systems (cron polling SuiteFleet) without a
+ * tenant-actor uuid — the underlying row has no actor column.
+ */
+export type TimelineEvent =
+  | {
+      readonly kind: "crm_state";
+      readonly eventAt: IsoTimestamp;
+      readonly fromState: ConsigneeCrmState | null;
+      readonly toState: ConsigneeCrmState;
+      readonly reason: string | null;
+      readonly actor: Uuid;
+    }
+  | {
+      readonly kind: "subscription_exception";
+      readonly eventAt: IsoTimestamp;
+      readonly type: SubscriptionExceptionType;
+      readonly subscriptionId: Uuid;
+      readonly startDate: string;
+      readonly endDate: string | null;
+      readonly compensatingDate: string | null;
+      readonly reason: string | null;
+      readonly actor: Uuid;
+    }
+  | {
+      readonly kind: "task_status";
+      readonly eventAt: IsoTimestamp;
+      readonly taskId: Uuid;
+      readonly internalStatus: TaskTerminalStatus;
+      readonly deliveryDate: string;
+    };

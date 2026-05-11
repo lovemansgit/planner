@@ -2,7 +2,8 @@
 //
 // Server component. Composes against:
 //   - getConsignee (existing) for header card data
-//   - getConsigneeCrmHistory (NEW Day 17) for the History tab
+//   - getConsigneeTimeline (Day 22 — broadened from Day-17's
+//     getConsigneeCrmHistory to the unified §3.3.7 timeline view)
 //   - changeCrmStateAction (NEW Day 17) wired into CrmStateModal
 //
 // Tab navigation is URL-based (`?tab=overview|history`) so the page
@@ -26,9 +27,9 @@ import { notFound, redirect } from "next/navigation";
 
 import {
   type Consignee,
-  type ConsigneeCrmEvent,
+  type TimelineEvent,
   getConsignee,
-  getConsigneeCrmHistory,
+  getConsigneeTimeline,
 } from "@/modules/consignees";
 import {
   getConsigneeCalendarExceptions,
@@ -131,7 +132,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     : computeYearStart(today);
 
   let consignee: Consignee | null;
-  let history: readonly ConsigneeCrmEvent[] = [];
+  let history: readonly TimelineEvent[] = [];
   let calendarTasks: readonly Task[] = [];
   let calendarExceptions: readonly SubscriptionException[] = [];
   let calendarYearCounts: readonly DayBucketCount[] = [];
@@ -163,8 +164,11 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     // Only fetch history if the History tab is active — defers the
     // DB roundtrip when the operator's on Overview. Same scope check
     // (consignee:read via the service fn) applies whichever tab.
+    // Day 22 / §3.3.7 — broadened from CRM-only to the unified
+    // timeline view (CRM transitions + subscription exceptions +
+    // terminal task statuses).
     if (activeTab === "history") {
-      history = await getConsigneeCrmHistory(ctx, id as Uuid);
+      history = await getConsigneeTimeline(ctx, id as Uuid);
     }
     // Only fetch calendar data when the Calendar tab is active. View
     // dispatch picks the fetch range:
