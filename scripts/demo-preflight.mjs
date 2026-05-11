@@ -17,7 +17,9 @@
 //   5. ≥1 task with status=DELIVERED and pod_photos IS NOT NULL
 //   6. ≥1 subscription_exception of type=skip with compensating_date
 //   7. Fatima Al Mansouri has address rotation configured
-//   8. Sarah Khouri has CRM state=HIGH_RISK with ≥2 failed deliveries
+//   8. Sarah Khouri has CRM state=ACTIVE pre-demo + ≥2 FAILED deliveries
+//      (brief v1.10 amendment: live HIGH_RISK flip is the demo-theater
+//      action, not a pre-seed invariant)
 //   9. SF integration responsive (ping /api/auth/authenticate)
 //  10. Auth flows work for test accounts
 //
@@ -183,7 +185,13 @@ async function gate7FatimaAddressRotation(sql) {
   return { passed: true, detail: `Fatima Al Mansouri has ${r.rotation_count} address rotation rows` };
 }
 
-async function gate8SarahHighRiskFailedDeliveries(sql) {
+async function gate8SarahActivePreDemoFailedDeliveries(sql) {
+  // Brief v1.10 amendment (line 836, filed Day 21): Sarah Khouri must be
+  // crm_state='ACTIVE' pre-demo with ≥2 FAILED deliveries in history.
+  // The live HIGH_RISK flip is the demo-theater action during Chapter 5
+  // of the storyline (operator marks her HIGH_RISK on stage), NOT a
+  // pre-seed invariant. If seed-demo-personas.mjs sets her to HIGH_RISK
+  // before the demo, the theater fails because there's nothing to flip.
   const rows = await sql`
     SELECT
       c.id AS consignee_id,
@@ -199,14 +207,14 @@ async function gate8SarahHighRiskFailedDeliveries(sql) {
     return { passed: false, detail: "Sarah Khouri not found in consignees" };
   }
   const r = rows[0];
-  if (r.crm_state !== "HIGH_RISK") {
-    return { passed: false, detail: `Sarah found (${r.consignee_id.slice(0, 8)}...) but crm_state=${r.crm_state} (need HIGH_RISK)` };
+  if (r.crm_state !== "ACTIVE") {
+    return { passed: false, detail: `Sarah found (${r.consignee_id.slice(0, 8)}...) but crm_state=${r.crm_state} (need ACTIVE pre-demo per brief v1.10)` };
   }
   const failed = Number(r.failed_count);
   if (failed < 2) {
-    return { passed: false, detail: `Sarah found + HIGH_RISK but only ${failed} FAILED deliveries (need ≥2)` };
+    return { passed: false, detail: `Sarah found + ACTIVE but only ${failed} FAILED deliveries (need ≥2)` };
   }
-  return { passed: true, detail: `Sarah Khouri crm_state=HIGH_RISK with ${failed} FAILED deliveries` };
+  return { passed: true, detail: `Sarah Khouri crm_state=ACTIVE pre-demo with ${failed} FAILED deliveries (HIGH_RISK flip is the live demo action)` };
 }
 
 async function gate9SfIntegrationResponsive() {
@@ -290,7 +298,7 @@ async function main() {
     { label: "5. ≥1 DELIVERED task with POD photos", run: () => gate5DeliveredWithPodPhoto(sql) },
     { label: "6. ≥1 skip with compensating_date", run: () => gate6SkipWithCompensatingDate(sql) },
     { label: "7. Fatima Al Mansouri has address rotation", run: () => gate7FatimaAddressRotation(sql) },
-    { label: "8. Sarah Khouri HIGH_RISK with ≥2 failures", run: () => gate8SarahHighRiskFailedDeliveries(sql) },
+    { label: "8. Sarah Khouri ACTIVE pre-demo with ≥2 FAILED", run: () => gate8SarahActivePreDemoFailedDeliveries(sql) },
     { label: "9. SF integration responsive", run: () => gate9SfIntegrationResponsive() },
     { label: "10. Auth flows for test accounts", run: () => gate10AuthFlowsTestAccounts(sql) },
   ];
