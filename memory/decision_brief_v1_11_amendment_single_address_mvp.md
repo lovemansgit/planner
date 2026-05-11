@@ -47,6 +47,10 @@ Reviewer ruled (Day-22 AM, Block 2):
 - **§1** (Onboard a consignee, line 62) language tightened: "primary + alternative addresses, per-weekday address rotation" → "primary delivery address" with Phase-2 cross-reference.
 - **§9** version log: v1.11 entry added.
 
+### §3.1 Edit-consignee form scope (Day-22 ratification)
+
+Per ratification at PR #238 §3.6 verdict: `/consignees/[id]/edit` excludes ALL address fields (including the legacy inline scalar columns `addressLine`, `district`, `emirateOrRegion`). Rationale: editing inline columns without the `addresses` table row would silently desync display from routing — operators believe they corrected the address, deliveries continue routing to the stale row. The exclusion is a deliberate honesty-over-partial-fix choice, paired with the in-page header copy ("Update non-address details. Delivery address editing ships in Phase 2 alongside multi-address rotation."). Phase-2 unblock per `memory/followup_multi_address_rotation_phase_2.md` §1.5.
+
 ## §4 Phase-2 followup filing
 
 `memory/followup_multi_address_rotation_phase_2.md` files the deferred surface area + trigger conditions for unblocking:
