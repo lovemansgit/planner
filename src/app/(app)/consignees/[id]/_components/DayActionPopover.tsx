@@ -653,6 +653,22 @@ export function DayActionPopover({
   const visibleActions = actions.filter((a) => a.visible);
   const showTimelineButton = permissions.canViewTimeline;
 
+  // Day-22 / PR-B fix-up — empty-state diagnostic discrimination. Mirrors
+  // the same boolean derived inside buildActions; duplicated here to keep
+  // the empty-state copy keyed on root cause without changing buildActions'
+  // signature. `hasAnyMutationPerm` is the OR of every permission flag that
+  // can light a menu action (canSkipOverride covers both action 2 and the
+  // D1-reused action 6 cancel-no-append).
+  const mutationEligible =
+    subscriptionId !== null && MUTATION_ELIGIBLE_STATUSES.has(internalStatus);
+  const hasAnyMutationPerm =
+    permissions.canSkip ||
+    permissions.canSkipOverride ||
+    permissions.canPause ||
+    permissions.canChangeAddressOneOff ||
+    permissions.canChangeAddressForward ||
+    permissions.canAddNote;
+
   // Time window (HH:MM-HH:MM). Slice to mm precision; deliveryStartTime
   // arrives as HH:MM:SS from postgres-js.
   const timeWindow = `${deliveryStartTime.slice(0, 5)}–${deliveryEndTime.slice(0, 5)}`;
@@ -711,9 +727,15 @@ export function DayActionPopover({
 
             {mode === "menu" ? (
               <div className="mt-5 space-y-2">
-                {visibleActions.length === 0 && !showTimelineButton ? (
+                {visibleActions.length === 0 ? (
                   <p className="text-xs text-[color:var(--color-text-secondary)]">
-                    No actions available for this delivery state.
+                    {!mutationEligible
+                      ? showTimelineButton
+                        ? "This delivery is past the action window or already complete. View task timeline below for full history."
+                        : "This delivery is past the action window or already complete."
+                      : !hasAnyMutationPerm
+                        ? "Your role does not include calendar mutation permissions. Contact your ops manager if you need access."
+                        : null}
                   </p>
                 ) : null}
                 {visibleActions.map((action) => (
