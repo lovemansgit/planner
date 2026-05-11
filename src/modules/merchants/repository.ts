@@ -125,13 +125,15 @@ export async function insertMerchant(
       name,
       pickup_address_line,
       pickup_address_district,
-      pickup_address_emirate
+      pickup_address_emirate,
+      suitefleet_customer_code
     ) VALUES (
       ${input.slug},
       ${input.name},
       ${input.pickupAddress.line},
       ${input.pickupAddress.district},
-      ${input.pickupAddress.emirate}
+      ${input.pickupAddress.emirate},
+      ${input.suitefleetCustomerCode}
     )
     RETURNING *
   `);
