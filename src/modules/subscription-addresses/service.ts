@@ -29,12 +29,14 @@ import {
   deleteRotationEntries,
   findAddressForConsignee,
   findSubscriptionForRotation,
+  listAddressesForConsignee,
   selectCurrentRotation,
   upsertRotationEntries,
 } from "./repository";
 import type {
   ChangeAddressRotationInput,
   ChangeAddressRotationResult,
+  ConsigneeAddressRow,
   IsoWeekday,
   RotationEntry,
 } from "./types";
@@ -252,5 +254,37 @@ export async function changeAddressRotation(
       subscriptionId,
       rotation: input.rotation,
     } as const;
+  });
+}
+
+
+// =============================================================================
+// listConsigneeAddresses — Day-22 / PR-B (calendar popover picker source)
+// =============================================================================
+//
+// Reads every address belonging to `consigneeId` within the request's tenant.
+// Powers the consignee detail page's calendar popover address-override
+// actions (4 + 5 per brief §3.3.3) — the operator picks one of these rows
+// to land as the `address_override_id` on a subscription_exceptions row.
+//
+// Permission gate: `consignee:read` (addresses are part of the consignee's
+// data surface; no separate addresses-read perm). Per R-4 read-not-audited
+// convention, no audit emit.
+//
+// Throws:
+//   ForbiddenError    — actor lacks `consignee:read`
+//   ValidationError   — tenant unscoped
+
+export async function listConsigneeAddresses(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+): Promise<readonly ConsigneeAddressRow[]> {
+  requirePermission(ctx, "consignee:read");
+  assertTenantScoped(ctx, "consignee:read");
+
+  const tenantId = ctx.tenantId;
+
+  return await withTenant(tenantId, async (tx) => {
+    return await listAddressesForConsignee(tx, tenantId, consigneeId);
   });
 }

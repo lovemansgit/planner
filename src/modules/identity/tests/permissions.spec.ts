@@ -382,6 +382,63 @@ describe("task:print_labels permission (Day 8 / D8-6)", () => {
   });
 });
 
+describe("task:add_note permission (Day-22 / PR-B, action 7)", () => {
+  // Pins the routine customer-service-facing posture for driver-note
+  // appends. Per D2 ruling: cs-agent + ops-manager hold it; ops-manager
+  // via permsFor('task') auto-pickup, cs-agent via explicit-list
+  // addition (cs-agent's task perms are hand-rolled).
+
+  it("registers task:add_note in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["task:add_note"]).toBeDefined();
+    expect(PERMISSIONS["task:add_note"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly (resource=task)", () => {
+    expect(PERMISSIONS["task:add_note"].resource).toBe("task");
+    expect(PERMISSIONS["task:add_note"].action).toBe("add_note");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("task:add_note")).toBe(true);
+  });
+
+  it("Ops Manager holds it (permsFor('task') auto-pickup)", () => {
+    expect(ROLES["ops-manager"].permissions.has("task:add_note")).toBe(true);
+  });
+
+  it("CS Agent holds it (explicit-list addition — routine CS-facing surface)", () => {
+    expect(ROLES["cs-agent"].permissions.has("task:add_note")).toBe(true);
+  });
+});
+
+describe("task:view_timeline permission (Day-22 / PR-B, action 8)", () => {
+  // Pins the read-only timeline drawer perm. Per D3 ruling: cs-agent +
+  // ops-manager hold it; read-only with no mutation, no audit emit per
+  // R-4 read-not-audited convention.
+
+  it("registers task:view_timeline in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["task:view_timeline"]).toBeDefined();
+    expect(PERMISSIONS["task:view_timeline"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly (resource=task)", () => {
+    expect(PERMISSIONS["task:view_timeline"].resource).toBe("task");
+    expect(PERMISSIONS["task:view_timeline"].action).toBe("view_timeline");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("task:view_timeline")).toBe(true);
+  });
+
+  it("Ops Manager holds it (permsFor('task') auto-pickup)", () => {
+    expect(ROLES["ops-manager"].permissions.has("task:view_timeline")).toBe(true);
+  });
+
+  it("CS Agent holds it (explicit-list addition — read-only investigation surface)", () => {
+    expect(ROLES["cs-agent"].permissions.has("task:view_timeline")).toBe(true);
+  });
+});
+
 describe("webhook_config:read permission (Day 9 / P4a)", () => {
   // Pins the auto-pickup behaviour for the new webhook-configuration
   // page read permission. /admin/webhook-config is admin-tier

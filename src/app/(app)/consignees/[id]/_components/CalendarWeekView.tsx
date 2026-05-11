@@ -17,6 +17,7 @@
 import Link from "next/link";
 
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
+import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 import type { Task } from "@/modules/tasks/types";
 
 import { addDays, computeWeekStart, toIsoDate } from "./calendar-dates";
@@ -26,7 +27,7 @@ import {
   DAY_DISPLAY_VISUALS,
   projectDayDisplayStatus,
 } from "./DayDisplayStatus";
-import { DayActionPopover } from "./DayActionPopover";
+import { DayActionPopover, type CalendarActionPermissions } from "./DayActionPopover";
 
 export interface CalendarWeekViewProps {
   readonly consigneeId: string;
@@ -40,8 +41,10 @@ export interface CalendarWeekViewProps {
    * APPENDED visual override on existing tasks.
    */
   readonly exceptions: readonly SubscriptionException[];
-  /** Whether the actor has subscription:skip permission. Drives popover button visibility. */
-  readonly canSkip: boolean;
+  /** Day-22 / PR-B — actor's calendar-action permissions. Drives popover button visibility per brief §3.3.10 rule 1. */
+  readonly permissions: CalendarActionPermissions;
+  /** Day-22 / PR-B — consignee's addresses for the popover address-override actions (4 + 5). */
+  readonly availableAddresses: readonly ConsigneeAddressRow[];
 }
 
 /** Display the day name + numeric date in header rows. */
@@ -57,7 +60,8 @@ export function CalendarWeekView({
   weekStart,
   tasks,
   exceptions,
-  canSkip,
+  permissions,
+  availableAddresses,
 }: CalendarWeekViewProps) {
   // Build 7-day window starting from weekStart.
   const days: readonly string[] = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -196,7 +200,8 @@ export function CalendarWeekView({
                             internalStatus={task.internalStatus}
                             statusLabel={visual.label}
                             statusClasses={visual.classes}
-                            canSkip={canSkip}
+                            permissions={permissions}
+                            availableAddresses={availableAddresses}
                             addressLabel={task.addressLabel}
                           />
                         )}

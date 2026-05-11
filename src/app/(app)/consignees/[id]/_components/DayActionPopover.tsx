@@ -1,42 +1,66 @@
-// Day 17 / Session A — click-into-day popover (client component).
+// Click-into-day popover (client component).
 //
-// Third React client component in the codebase (after UserMenu in
-// PR #168 and CrmStateModal in PR #174). Same architectural patterns:
+// Day-17 PR #177 shipped action 1 (skip-default). Day-22 / PR-B
+// extends to the full 7-action surface per brief §3.3.3 lines 500-508:
+//   1. skip-default (existing)
+//   2. skip-with-override (move-to-date / skip-without-append)
+//   3. pause-from-this-date
+//   4. change-address-one-off
+//   5. change-address-forward
+//   6. cancel-no-append (D1 ruling: reuses subscription:override_skip_rules)
+//   7. add-note-to-driver
+//   8. view-task-timeline (opens TaskTimelineDrawer)
+//
+// Architectural patterns:
 // - Direct imports from sub-modules — NOT @/modules/<module> barrel
 //   (Turbopack bundling discipline from PR #174 fix)
 // - useActionState for server-action submissions
 // - Click-outside + Escape close, 120ms transition timing
-// - Action result drives modal state via key-based form remount
-//   (avoids setState-in-effect lint rule)
+// - State-machine `mode` switches between menu + per-action panels
 //
-// SCOPE-LOCKED per Day-17 reviewer ruling: ONLY the Skip-default
-// action is wired in this PR. The popover layout reserves visual
-// space for the other 6 actions (target_date_override, skip-without-
-// append, pause, address one-off, address forward, cancel) — those
-// ship in follow-up PRs per
-// `memory/followup_calendar_popover_action_expansion.md`.
+// Permission gating per brief §3.3.10 rule 1: HIDE action buttons the
+// actor lacks the perm for. Status eligibility filters further (skip /
+// pause / address / cancel / note are hidden for terminal statuses).
+// View-timeline (action 8) is read-only — available in any state.
 //
-// Permission gate per brief §3.3.10 rule 1: HIDE Skip button if
-// actor lacks subscription:skip. Visible-but-disabled would read
-// as broken; hidden reads as "not available".
-//
-// Status eligibility: Skip is hidden for terminal statuses
-// (DELIVERED, FAILED, CANCELED, SKIPPED) — those tasks can't be
-// skipped a second time. Surfaces as "Action not available" message
-// when no actions are visible.
+// Cut-off semantics live in the service layer; UI surfaces the
+// resulting ValidationError as inline text inside the action panel.
 
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TaskInternalStatus } from "@/modules/tasks/types";
+import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
 import {
+  addNoteToDriverAction,
+  cancelNoAppendAction,
+  changeAddressForwardAction,
+  changeAddressOneOffAction,
+  pauseFromDateAction,
   skipDeliveryAction,
+  skipWithOverrideAction,
+  type CalendarPopoverActionResult,
   type SkipDeliveryActionResult,
 } from "../_calendar-actions";
 
 import { AddressIndicator } from "./AddressIndicator";
+import { TaskTimelineDrawer } from "./TaskTimelineDrawer";
+
+// -----------------------------------------------------------------------------
+// Props + types
+// -----------------------------------------------------------------------------
+
+export interface CalendarActionPermissions {
+  readonly canSkip: boolean;
+  readonly canSkipOverride: boolean;
+  readonly canPause: boolean;
+  readonly canChangeAddressOneOff: boolean;
+  readonly canChangeAddressForward: boolean;
+  readonly canAddNote: boolean;
+  readonly canViewTimeline: boolean;
+}
 
 interface DayActionPopoverProps {
   readonly consigneeId: string;
@@ -48,48 +72,138 @@ interface DayActionPopoverProps {
   readonly internalStatus: TaskInternalStatus;
   readonly statusLabel: string;
   readonly statusClasses: string;
-  readonly canSkip: boolean;
+  readonly permissions: CalendarActionPermissions;
+  /** Day-22 / PR-B — addresses for the change-address actions (4 + 5). */
+  readonly availableAddresses: readonly ConsigneeAddressRow[];
   /** Day-20 §3.3.3 — Home/Office/Other label, rendered below status pill in day cell. */
   readonly addressLabel: "home" | "office" | "other" | null;
 }
 
-interface PopoverFormProps {
-  readonly consigneeId: string;
-  readonly subscriptionId: string;
-  readonly taskId: string;
-  readonly deliveryDate: string;
-  readonly onSuccess: () => void;
-}
+type PopoverMode =
+  | "menu"
+  | "skip"
+  | "skip-override"
+  | "pause"
+  | "addr-one-off"
+  | "addr-forward"
+  | "cancel-no-append"
+  | "add-note";
 
 /**
- * Status states where Skip-default is operationally meaningful.
- * SKIPPED + CANCELED already terminal-ish; DELIVERED / FAILED past;
- * IN_TRANSIT past the cutoff per brief §3.1.8. CREATED + ASSIGNED +
- * ON_HOLD are the eligible states.
+ * Status states where mutation actions (skip / pause / address /
+ * cancel / note) are operationally meaningful. SKIPPED + CANCELED +
+ * DELIVERED + FAILED are terminal-ish; IN_TRANSIT is past cut-off.
+ * CREATED + ASSIGNED + ON_HOLD are the eligible states.
+ *
+ * Note: view-timeline (action 8) is read-only — runs in ANY state,
+ * including terminal ones. Gating happens at the button level.
  */
-const SKIP_ELIGIBLE_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
+const MUTATION_ELIGIBLE_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
   "CREATED",
   "ASSIGNED",
   "ON_HOLD",
 ]);
 
-function PopoverForm({
+interface ActionDescriptor {
+  readonly mode: Exclude<PopoverMode, "menu">;
+  readonly label: string;
+  readonly description: string;
+  readonly visible: boolean;
+}
+
+function buildActions(
+  permissions: CalendarActionPermissions,
+  subscriptionId: string | null,
+  internalStatus: TaskInternalStatus,
+): readonly ActionDescriptor[] {
+  const mutationEligible =
+    subscriptionId !== null && MUTATION_ELIGIBLE_STATUSES.has(internalStatus);
+  // Action 6 (cancel-no-append) reuses subscription:override_skip_rules per D1.
+  const canCancelNoAppend = permissions.canSkipOverride;
+  return [
+    {
+      mode: "skip",
+      label: "Skip this delivery",
+      description: "Apply default skip rules with tail-end reinsertion.",
+      visible: permissions.canSkip && mutationEligible,
+    },
+    {
+      mode: "skip-override",
+      label: "Skip with override",
+      description: "Move the skip to a specific date or skip without tail-end append.",
+      visible: permissions.canSkipOverride && mutationEligible,
+    },
+    {
+      mode: "pause",
+      label: "Pause from this date",
+      description: "Cancel deliveries in a window; subscription end date extends.",
+      visible: permissions.canPause && mutationEligible,
+    },
+    {
+      mode: "addr-one-off",
+      label: "Change address (this delivery only)",
+      description: "Override the address for just this delivery.",
+      visible: permissions.canChangeAddressOneOff && mutationEligible,
+    },
+    {
+      mode: "addr-forward",
+      label: "Change address (from this delivery onwards)",
+      description: "Override the address from this date forward.",
+      visible: permissions.canChangeAddressForward && mutationEligible,
+    },
+    {
+      mode: "cancel-no-append",
+      label: "Cancel delivery (no append)",
+      description: "Cancel this delivery; subscription count reduces by one.",
+      visible: canCancelNoAppend && mutationEligible,
+    },
+    {
+      mode: "add-note",
+      label: "Add note to driver",
+      description: "Append a driver-facing instruction to this delivery.",
+      visible: permissions.canAddNote && mutationEligible,
+    },
+  ];
+}
+
+// -----------------------------------------------------------------------------
+// Inline result banner shared across action forms
+// -----------------------------------------------------------------------------
+
+function ResultBanner({
+  result,
+}: {
+  readonly result: CalendarPopoverActionResult | SkipDeliveryActionResult | { kind: "idle" } | null;
+}) {
+  if (result === null || result.kind === "idle") return null;
+  if (result.kind === "success" || result.kind === "idempotent_replay") return null;
+  const message = "message" in result ? result.message : "";
+  return (
+    <p
+      role="alert"
+      className="mb-3 rounded-sm border border-red/40 bg-red/10 px-2 py-1.5 text-xs text-red"
+    >
+      {message}
+    </p>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Action 1 — Skip default
+// -----------------------------------------------------------------------------
+
+function SkipDefaultPanel({
   consigneeId,
   subscriptionId,
-  taskId: _taskId,
   deliveryDate,
   onSuccess,
-}: PopoverFormProps) {
-  // Bind consigneeId + subscriptionId + deliveryDate; useActionState
-  // contract handles prevState + formData. taskId not currently used
-  // by the action (skip operates on the subscription + date) but
-  // accepted in the prop shape for future per-task actions.
-  const boundAction = skipDeliveryAction.bind(
-    null,
-    consigneeId,
-    subscriptionId,
-    deliveryDate,
-  );
+}: {
+  readonly consigneeId: string;
+  readonly subscriptionId: string;
+  readonly deliveryDate: string;
+  readonly onSuccess: () => void;
+}) {
+  const boundAction = skipDeliveryAction.bind(null, consigneeId, subscriptionId, deliveryDate);
   const [actionResult, formAction, isPending] = useActionState<
     SkipDeliveryActionResult | { readonly kind: "idle" },
     FormData
@@ -101,28 +215,13 @@ function PopoverForm({
     }
   }, [actionResult.kind, onSuccess]);
 
-  const errorMessage =
-    actionResult.kind === "conflict" ||
-    actionResult.kind === "validation" ||
-    actionResult.kind === "forbidden" ||
-    actionResult.kind === "not_found"
-      ? actionResult.message
-      : null;
-
   return (
     <form action={formAction} className="mt-4">
       <p className="mb-3 text-xs text-[color:var(--color-text-secondary)]">
         Reinsert this delivery at the tail end of the subscription. The
         subscription end date will extend by one eligible day.
       </p>
-      {errorMessage ? (
-        <p
-          role="alert"
-          className="mb-3 rounded-sm border border-red/40 bg-red/10 px-2 py-1.5 text-xs text-red"
-        >
-          {errorMessage}
-        </p>
-      ) : null}
+      <ResultBanner result={actionResult} />
       <button
         type="submit"
         disabled={isPending}
@@ -134,6 +233,362 @@ function PopoverForm({
   );
 }
 
+// -----------------------------------------------------------------------------
+// Action 2 — Skip with override
+// -----------------------------------------------------------------------------
+
+function SkipOverridePanel({
+  consigneeId,
+  subscriptionId,
+  deliveryDate,
+  onSuccess,
+}: {
+  readonly consigneeId: string;
+  readonly subscriptionId: string;
+  readonly deliveryDate: string;
+  readonly onSuccess: () => void;
+}) {
+  const boundAction = skipWithOverrideAction.bind(
+    null,
+    consigneeId,
+    subscriptionId,
+    deliveryDate,
+  );
+  const [actionResult, formAction, isPending] = useActionState<
+    CalendarPopoverActionResult | { readonly kind: "idle" },
+    FormData
+  >(boundAction, { kind: "idle" });
+  const [overrideKind, setOverrideKind] = useState<"move_to_date" | "skip_without_append">(
+    "move_to_date",
+  );
+
+  useEffect(() => {
+    if (actionResult.kind === "success" || actionResult.kind === "idempotent_replay") {
+      onSuccess();
+    }
+  }, [actionResult.kind, onSuccess]);
+
+  return (
+    <form action={formAction} className="mt-4 space-y-3">
+      <fieldset className="space-y-2">
+        <legend className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+          Override
+        </legend>
+        <label className="flex items-start gap-2 text-xs text-navy">
+          <input
+            type="radio"
+            name="override_kind"
+            value="move_to_date"
+            checked={overrideKind === "move_to_date"}
+            onChange={() => setOverrideKind("move_to_date")}
+            className="mt-0.5"
+          />
+          <span>Move this delivery to a specific date.</span>
+        </label>
+        <label className="flex items-start gap-2 text-xs text-navy">
+          <input
+            type="radio"
+            name="override_kind"
+            value="skip_without_append"
+            checked={overrideKind === "skip_without_append"}
+            onChange={() => setOverrideKind("skip_without_append")}
+            className="mt-0.5"
+          />
+          <span>Skip without tail-end append (reduces subscription count).</span>
+        </label>
+      </fieldset>
+
+      {overrideKind === "move_to_date" ? (
+        <label className="block">
+          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+            Target date
+          </span>
+          <input
+            type="date"
+            name="target_date_override"
+            required
+            className="mt-1 w-full rounded-sm border border-stone-200 bg-paper px-2 py-1.5 text-sm text-navy focus:border-navy focus:outline-none"
+          />
+        </label>
+      ) : null}
+
+      <ResultBanner result={actionResult} />
+      <button
+        type="submit"
+        disabled={isPending}
+        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {isPending ? "Applying…" : "Apply override"}
+      </button>
+    </form>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Action 3 — Pause from this date
+// -----------------------------------------------------------------------------
+
+function PausePanel({
+  consigneeId,
+  subscriptionId,
+  deliveryDate,
+  onSuccess,
+}: {
+  readonly consigneeId: string;
+  readonly subscriptionId: string;
+  readonly deliveryDate: string;
+  readonly onSuccess: () => void;
+}) {
+  const boundAction = pauseFromDateAction.bind(
+    null,
+    consigneeId,
+    subscriptionId,
+    deliveryDate,
+  );
+  const [actionResult, formAction, isPending] = useActionState<
+    CalendarPopoverActionResult | { readonly kind: "idle" },
+    FormData
+  >(boundAction, { kind: "idle" });
+
+  useEffect(() => {
+    if (actionResult.kind === "success" || actionResult.kind === "idempotent_replay") {
+      onSuccess();
+    }
+  }, [actionResult.kind, onSuccess]);
+
+  return (
+    <form action={formAction} className="mt-4 space-y-3">
+      <p className="text-xs text-[color:var(--color-text-secondary)]">
+        Pause window starts {deliveryDate}. Deliveries in the window will cancel; the subscription
+        end date extends to compensate.
+      </p>
+      <label className="block">
+        <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+          Pause until
+        </span>
+        <input
+          type="date"
+          name="pause_end"
+          required
+          min={deliveryDate}
+          className="mt-1 w-full rounded-sm border border-stone-200 bg-paper px-2 py-1.5 text-sm text-navy focus:border-navy focus:outline-none"
+        />
+      </label>
+      <label className="block">
+        <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+          Reason (optional)
+        </span>
+        <textarea
+          name="reason"
+          rows={2}
+          maxLength={500}
+          className="mt-1 w-full rounded-sm border border-stone-200 bg-paper px-2 py-1.5 text-sm text-navy focus:border-navy focus:outline-none"
+        />
+      </label>
+      <ResultBanner result={actionResult} />
+      <button
+        type="submit"
+        disabled={isPending}
+        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {isPending ? "Applying…" : "Apply pause"}
+      </button>
+    </form>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Actions 4 + 5 — Change address (one-off / forward)
+// -----------------------------------------------------------------------------
+
+function ChangeAddressPanel({
+  consigneeId,
+  subscriptionId,
+  deliveryDate,
+  scope,
+  availableAddresses,
+  onSuccess,
+}: {
+  readonly consigneeId: string;
+  readonly subscriptionId: string;
+  readonly deliveryDate: string;
+  readonly scope: "one-off" | "forward";
+  readonly availableAddresses: readonly ConsigneeAddressRow[];
+  readonly onSuccess: () => void;
+}) {
+  const action = scope === "one-off" ? changeAddressOneOffAction : changeAddressForwardAction;
+  const boundAction = action.bind(null, consigneeId, subscriptionId, deliveryDate);
+  const [actionResult, formAction, isPending] = useActionState<
+    CalendarPopoverActionResult | { readonly kind: "idle" },
+    FormData
+  >(boundAction, { kind: "idle" });
+
+  useEffect(() => {
+    if (actionResult.kind === "success" || actionResult.kind === "idempotent_replay") {
+      onSuccess();
+    }
+  }, [actionResult.kind, onSuccess]);
+
+  if (availableAddresses.length === 0) {
+    return (
+      <p className="mt-4 text-xs text-[color:var(--color-text-secondary)]">
+        No alternative addresses on file. Add a second address from the consignee form first.
+      </p>
+    );
+  }
+
+  return (
+    <form action={formAction} className="mt-4 space-y-3">
+      <fieldset className="space-y-2">
+        <legend className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+          Address
+        </legend>
+        {availableAddresses.map((addr) => (
+          <label
+            key={addr.id}
+            className="flex items-start gap-2 rounded-sm border border-stone-200 bg-paper px-3 py-2 text-xs text-navy transition-colors duration-[120ms] ease-out hover:border-navy"
+          >
+            <input
+              type="radio"
+              name="address_override_id"
+              value={addr.id}
+              required
+              className="mt-0.5"
+            />
+            <span>
+              <span className="block text-[10px] font-medium uppercase tracking-[0.1em] text-[color:var(--color-text-tertiary)]">
+                {addr.label}
+                {addr.isPrimary ? " · primary" : ""}
+              </span>
+              <span className="block">
+                {addr.line}, {addr.district}
+              </span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <ResultBanner result={actionResult} />
+      <button
+        type="submit"
+        disabled={isPending}
+        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {isPending
+          ? "Saving…"
+          : scope === "one-off"
+            ? "Override for this delivery"
+            : "Override from this date forward"}
+      </button>
+    </form>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Action 6 — Cancel delivery (no append)
+// -----------------------------------------------------------------------------
+
+function CancelNoAppendPanel({
+  consigneeId,
+  subscriptionId,
+  deliveryDate,
+  onSuccess,
+}: {
+  readonly consigneeId: string;
+  readonly subscriptionId: string;
+  readonly deliveryDate: string;
+  readonly onSuccess: () => void;
+}) {
+  const boundAction = cancelNoAppendAction.bind(
+    null,
+    consigneeId,
+    subscriptionId,
+    deliveryDate,
+  );
+  const [actionResult, formAction, isPending] = useActionState<
+    CalendarPopoverActionResult | { readonly kind: "idle" },
+    FormData
+  >(boundAction, { kind: "idle" });
+
+  useEffect(() => {
+    if (actionResult.kind === "success" || actionResult.kind === "idempotent_replay") {
+      onSuccess();
+    }
+  }, [actionResult.kind, onSuccess]);
+
+  return (
+    <form action={formAction} className="mt-4 space-y-3">
+      <p className="text-xs text-[color:var(--color-text-secondary)]">
+        This delivery will be skipped without a tail-end compensating insert. The total subscription
+        count drops by one. The end date does not move.
+      </p>
+      <ResultBanner result={actionResult} />
+      <button
+        type="submit"
+        disabled={isPending}
+        className="w-full rounded-sm border border-red bg-red px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {isPending ? "Cancelling…" : "Cancel delivery"}
+      </button>
+    </form>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Action 7 — Add note to driver
+// -----------------------------------------------------------------------------
+
+function AddNotePanel({
+  consigneeId,
+  taskId,
+  onSuccess,
+}: {
+  readonly consigneeId: string;
+  readonly taskId: string;
+  readonly onSuccess: () => void;
+}) {
+  const boundAction = addNoteToDriverAction.bind(null, consigneeId, taskId);
+  const [actionResult, formAction, isPending] = useActionState<
+    CalendarPopoverActionResult | { readonly kind: "idle" },
+    FormData
+  >(boundAction, { kind: "idle" });
+
+  useEffect(() => {
+    if (actionResult.kind === "success" || actionResult.kind === "idempotent_replay") {
+      onSuccess();
+    }
+  }, [actionResult.kind, onSuccess]);
+
+  return (
+    <form action={formAction} className="mt-4 space-y-3">
+      <label className="block">
+        <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+          Note for driver
+        </span>
+        <textarea
+          name="note"
+          rows={3}
+          required
+          maxLength={1000}
+          placeholder="e.g. gate code 4521; call on arrival"
+          className="mt-1 w-full rounded-sm border border-stone-200 bg-paper px-2 py-1.5 text-sm text-navy focus:border-navy focus:outline-none"
+        />
+      </label>
+      <ResultBanner result={actionResult} />
+      <button
+        type="submit"
+        disabled={isPending}
+        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {isPending ? "Saving…" : "Save note"}
+      </button>
+    </form>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// DayActionPopover (default export — wires everything together)
+// -----------------------------------------------------------------------------
+
 export function DayActionPopover({
   consigneeId,
   subscriptionId,
@@ -144,25 +599,29 @@ export function DayActionPopover({
   internalStatus,
   statusLabel,
   statusClasses,
-  canSkip,
+  permissions,
+  availableAddresses,
   addressLabel,
 }: DayActionPopoverProps) {
   const [open, setOpen] = useState(false);
-  const [formKey, setFormKey] = useState(0);
+  const [mode, setMode] = useState<PopoverMode>("menu");
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   function openPopover() {
     setOpen(true);
-    setFormKey((k) => k + 1);
+    setMode("menu");
   }
   function closePopover() {
     setOpen(false);
+    setMode("menu");
   }
 
   // Click-outside close (mousedown-based; matches UserMenu pattern).
+  // Disabled when timeline drawer is open (drawer owns dismissal).
   useEffect(() => {
-    if (!open) return;
+    if (!open || timelineOpen) return;
     function handleMousedown(event: MouseEvent) {
       const target = event.target as Node | null;
       if (!target) return;
@@ -172,11 +631,11 @@ export function DayActionPopover({
     }
     document.addEventListener("mousedown", handleMousedown);
     return () => document.removeEventListener("mousedown", handleMousedown);
-  }, [open]);
+  }, [open, timelineOpen]);
 
   // Escape close.
   useEffect(() => {
-    if (!open) return;
+    if (!open || timelineOpen) return;
     function handleKeydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setOpen(false);
@@ -185,12 +644,14 @@ export function DayActionPopover({
     }
     document.addEventListener("keydown", handleKeydown);
     return () => document.removeEventListener("keydown", handleKeydown);
-  }, [open]);
+  }, [open, timelineOpen]);
 
-  const skipAvailable =
-    canSkip &&
-    subscriptionId !== null &&
-    SKIP_ELIGIBLE_STATUSES.has(internalStatus);
+  const actions = useMemo(
+    () => buildActions(permissions, subscriptionId, internalStatus),
+    [permissions, subscriptionId, internalStatus],
+  );
+  const visibleActions = actions.filter((a) => a.visible);
+  const showTimelineButton = permissions.canViewTimeline;
 
   // Time window (HH:MM-HH:MM). Slice to mm precision; deliveryStartTime
   // arrives as HH:MM:SS from postgres-js.
@@ -223,9 +684,7 @@ export function DayActionPopover({
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
               Delivery
             </p>
-            <h2 className="mt-1 font-display text-lg font-semibold text-navy">
-              {deliveryDate}
-            </h2>
+            <h2 className="mt-1 font-display text-lg font-semibold text-navy">{deliveryDate}</h2>
 
             <dl className="mt-4 space-y-2 text-sm">
               <div className="flex items-center justify-between">
@@ -250,34 +709,131 @@ export function DayActionPopover({
               </div>
             </dl>
 
-            {skipAvailable ? (
-              <PopoverForm
-                key={formKey}
-                consigneeId={consigneeId}
-                subscriptionId={subscriptionId}
-                taskId={taskId}
-                deliveryDate={deliveryDate}
-                onSuccess={closePopover}
-              />
+            {mode === "menu" ? (
+              <div className="mt-5 space-y-2">
+                {visibleActions.length === 0 && !showTimelineButton ? (
+                  <p className="text-xs text-[color:var(--color-text-secondary)]">
+                    No actions available for this delivery state.
+                  </p>
+                ) : null}
+                {visibleActions.map((action) => (
+                  <button
+                    key={action.mode}
+                    type="button"
+                    onClick={() => setMode(action.mode)}
+                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy"
+                  >
+                    <span className="block text-xs font-medium text-navy">{action.label}</span>
+                    <span className="mt-0.5 block text-[10px] text-[color:var(--color-text-secondary)]">
+                      {action.description}
+                    </span>
+                  </button>
+                ))}
+                {showTimelineButton ? (
+                  <button
+                    type="button"
+                    onClick={() => setTimelineOpen(true)}
+                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy"
+                  >
+                    <span className="block text-xs font-medium text-navy">View task timeline</span>
+                    <span className="mt-0.5 block text-[10px] text-[color:var(--color-text-secondary)]">
+                      Full state-transition history sourced from cached webhooks.
+                    </span>
+                  </button>
+                ) : null}
+              </div>
             ) : (
-              <p className="mt-4 text-xs text-[color:var(--color-text-secondary)]">
-                {canSkip
-                  ? "No actions available for this delivery state."
-                  : "You don't have permission to modify this delivery."}
-              </p>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setMode("menu")}
+                  className="mt-5 text-[10px] uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy"
+                >
+                  ← Back to actions
+                </button>
+
+                {mode === "skip" && subscriptionId !== null ? (
+                  <SkipDefaultPanel
+                    consigneeId={consigneeId}
+                    subscriptionId={subscriptionId}
+                    deliveryDate={deliveryDate}
+                    onSuccess={closePopover}
+                  />
+                ) : null}
+                {mode === "skip-override" && subscriptionId !== null ? (
+                  <SkipOverridePanel
+                    consigneeId={consigneeId}
+                    subscriptionId={subscriptionId}
+                    deliveryDate={deliveryDate}
+                    onSuccess={closePopover}
+                  />
+                ) : null}
+                {mode === "pause" && subscriptionId !== null ? (
+                  <PausePanel
+                    consigneeId={consigneeId}
+                    subscriptionId={subscriptionId}
+                    deliveryDate={deliveryDate}
+                    onSuccess={closePopover}
+                  />
+                ) : null}
+                {mode === "addr-one-off" && subscriptionId !== null ? (
+                  <ChangeAddressPanel
+                    consigneeId={consigneeId}
+                    subscriptionId={subscriptionId}
+                    deliveryDate={deliveryDate}
+                    scope="one-off"
+                    availableAddresses={availableAddresses}
+                    onSuccess={closePopover}
+                  />
+                ) : null}
+                {mode === "addr-forward" && subscriptionId !== null ? (
+                  <ChangeAddressPanel
+                    consigneeId={consigneeId}
+                    subscriptionId={subscriptionId}
+                    deliveryDate={deliveryDate}
+                    scope="forward"
+                    availableAddresses={availableAddresses}
+                    onSuccess={closePopover}
+                  />
+                ) : null}
+                {mode === "cancel-no-append" && subscriptionId !== null ? (
+                  <CancelNoAppendPanel
+                    consigneeId={consigneeId}
+                    subscriptionId={subscriptionId}
+                    deliveryDate={deliveryDate}
+                    onSuccess={closePopover}
+                  />
+                ) : null}
+                {mode === "add-note" ? (
+                  <AddNotePanel
+                    consigneeId={consigneeId}
+                    taskId={taskId}
+                    onSuccess={closePopover}
+                  />
+                ) : null}
+              </>
             )}
 
             <div className="mt-6 flex justify-end">
               <button
                 type="button"
                 onClick={closePopover}
-                className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
+                className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy"
               >
                 Close
               </button>
             </div>
           </div>
         </div>
+      ) : null}
+
+      {timelineOpen ? (
+        <TaskTimelineDrawer
+          consigneeId={consigneeId}
+          taskId={taskId}
+          deliveryDate={deliveryDate}
+          onClose={() => setTimelineOpen(false)}
+        />
       ) : null}
     </>
   );

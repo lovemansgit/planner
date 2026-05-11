@@ -414,6 +414,52 @@ const PERMISSIONS_DRAFT = {
       "Generate and download SuiteFleet shipment labels (4x6 indv-small format) for one or more tasks via /api/tasks/labels. Server-side passthrough of the SF generate-label endpoint — operator browser never sees the SF token (architectural rule per memory/followup_suitefleet_label_endpoint.md).",
     systemOnly: false,
   },
+  // Day-22 / PR-B — calendar popover action 7 (add note to driver).
+  // Routine customer-facing communication; no destructive cascade. Lands
+  // a free-text note on `tasks.notes` (existing column from 0006_task.sql)
+  // via the dedicated addNoteToDriver service fn — semantically distinct
+  // from generic updateTask, with its own audit event (task.note_added)
+  // matching the subscription.exception.created precedent.
+  //
+  // Auto-pickup distribution:
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup
+  //   - Ops Manager:  permsFor("task") auto-pickup
+  //   - CS Agent:     EXPLICIT-list addition (cs-agent's task perms are
+  //                   hand-rolled; without an explicit add they'd lack
+  //                   the routine note-add surface despite owning the
+  //                   customer-service-facing workflow)
+  "task:add_note": {
+    id: "task:add_note",
+    resource: "task",
+    action: "add_note",
+    description:
+      "Day-22 / PR-B. Append a free-text driver note to a single task. Routine customer-facing communication; no state mutation beyond tasks.notes text. Distinct from task:update — semantic intent is a driver-facing instruction (e.g., 'gate code 4521', 'call before arriving'). Subject to the 18:00 Dubai cut-off the day before delivery (mirrors task:update cutoff semantics — once SF has been notified of a task's delivery date, the operator can no longer modify it).",
+    systemOnly: false,
+  },
+  // Day-22 / PR-B — calendar popover action 8 (view per-task timeline).
+  // Read-only surface; renders the state-transition history of a single
+  // task per brief §3.3.6: Created → Assigned → In transit → Delivered /
+  // Failed / Skipped. Sourced from local DB cached webhook_events
+  // (per brief §3.3.8 cache-from-webhook architectural commitment) +
+  // the originating task.created event. No mutation; per R-4 read-not-
+  // audited convention, no audit event emitted on view.
+  //
+  // Auto-pickup distribution:
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup
+  //   - Ops Manager:  permsFor("task") auto-pickup
+  //   - CS Agent:     EXPLICIT-list addition (cs-agent's task perms are
+  //                   hand-rolled; the timeline drawer is the
+  //                   customer-service-facing investigation surface,
+  //                   matches the existing task:read + task:print_labels
+  //                   posture)
+  "task:view_timeline": {
+    id: "task:view_timeline",
+    resource: "task",
+    action: "view_timeline",
+    description:
+      "Day-22 / PR-B. View the full state-transition timeline for a single task (brief §3.3.6): creation event + webhook-driven status changes + edit-apply events + POD receipt. Read-only; sourced from local DB cached webhook_events (brief §3.3.8). No mutation, no audit emit (R-4 read-not-audited convention).",
+    systemOnly: false,
+  },
 
   // ---- asset_tracking (Day 6 / B-2) --------------------------------------
   // Read permission for the asset-tracking cache. The cache itself is
