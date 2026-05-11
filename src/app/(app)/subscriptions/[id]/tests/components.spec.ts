@@ -375,6 +375,27 @@ describe("SubscriptionTasksList", () => {
     expect(html).toMatch(/—/);
   });
 
+  // Day-22 PM overnight §1 FIX 2 — "Pushed to SuiteFleet" indicator
+  it("renders the 'Pushed to SuiteFleet' indicator when AWB is populated", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [taskFixture({ externalTrackingNumber: "MPL-685000001" })],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).toMatch(/Pushed to SuiteFleet/);
+  });
+
+  it("does NOT render the 'Pushed to SuiteFleet' indicator when AWB is null", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [taskFixture({ externalTrackingNumber: null })],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).not.toMatch(/Pushed to SuiteFleet/);
+  });
+
   it("renders DELIVERED status in green-tone", () => {
     const html = renderToStaticMarkup(
       SubscriptionTasksList({

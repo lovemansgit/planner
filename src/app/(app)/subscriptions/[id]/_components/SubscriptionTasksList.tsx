@@ -74,7 +74,14 @@ export function SubscriptionTasksList({
                 <StatusBadge status={t.internalStatus} />
               </Td>
               <Td className="font-mono text-xs">
-                {t.externalTrackingNumber ?? (
+                {t.externalTrackingNumber !== null ? (
+                  <span className="flex flex-col gap-0.5">
+                    <span>{t.externalTrackingNumber}</span>
+                    <span className="font-sans text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
+                      <span className="text-navy">✓</span> Pushed to SuiteFleet
+                    </span>
+                  </span>
+                ) : (
                   <span className="text-[color:var(--color-text-tertiary)]">—</span>
                 )}
               </Td>

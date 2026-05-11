@@ -294,10 +294,22 @@ export async function createConsigneeWithSubscription(
   // operator-driven flows; the failure mode is "saved locally; SF push
   // pending" rather than "user-visible 5xx that hides the successful
   // commit".
+  console.info("[createConsigneeWithSubscription] enqueueing SF push attempt", {
+    tenantId,
+    subscriptionId: created.subscription.id,
+    taskCount: created.newInsertedTaskIds.length,
+    requestId: ctx.requestId,
+  });
   try {
     await enqueueTaskPushBatch({
       tenantId,
       taskIds: created.newInsertedTaskIds,
+      requestId: ctx.requestId,
+    });
+    console.info("[createConsigneeWithSubscription] enqueueTaskPushBatch succeeded", {
+      tenantId,
+      subscriptionId: created.subscription.id,
+      taskCount: created.newInsertedTaskIds.length,
       requestId: ctx.requestId,
     });
   } catch (err) {

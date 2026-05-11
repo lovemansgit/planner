@@ -366,7 +366,16 @@ function Row({
         {task.deliveryStartTime.slice(0, 5)} – {task.deliveryEndTime.slice(0, 5)}
       </Td>
       <Td className="font-mono text-xs tabular-nums">
-        {task.externalTrackingNumber ?? <span className="text-[color:var(--color-text-tertiary)]">—</span>}
+        {task.externalTrackingNumber !== null ? (
+          <span className="flex flex-col gap-0.5">
+            <span>{task.externalTrackingNumber}</span>
+            <span className="font-sans text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
+              <span className="text-navy">✓</span> Pushed to SuiteFleet
+            </span>
+          </span>
+        ) : (
+          <span className="text-[color:var(--color-text-tertiary)]">—</span>
+        )}
       </Td>
       <Td>
         {failed ? (

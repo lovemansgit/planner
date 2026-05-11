@@ -293,10 +293,22 @@ export async function createSubscription(
   // durable, and a failed enqueue must NOT roll back the materialised
   // tasks. Next-tick cron reconciliation re-discovers via Phase-1
   // reconciliation tuples (generate-tasks/route.ts).
+  console.info("[createSubscription] enqueueing SF push attempt", {
+    tenantId,
+    subscriptionId: created.id,
+    taskCount: txResult.newInsertedTaskIds.length,
+    requestId: ctx.requestId,
+  });
   try {
     await enqueueTaskPushBatch({
       tenantId,
       taskIds: txResult.newInsertedTaskIds,
+      requestId: ctx.requestId,
+    });
+    console.info("[createSubscription] enqueueTaskPushBatch succeeded", {
+      tenantId,
+      subscriptionId: created.id,
+      taskCount: txResult.newInsertedTaskIds.length,
       requestId: ctx.requestId,
     });
   } catch (err) {
