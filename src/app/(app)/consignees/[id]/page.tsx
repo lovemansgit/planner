@@ -263,12 +263,20 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                     </Link>
                   ) : null}
                   {canCreateSubscription ? (
-                    <Link
-                      href={`/subscriptions/new?consigneeId=${consignee.id}`}
-                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-                    >
-                      New subscription
-                    </Link>
+                    <>
+                      <Link
+                        href={`/subscriptions/new?consigneeId=${consignee.id}`}
+                        className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                      >
+                        New subscription
+                      </Link>
+                      <Link
+                        href={`/subscriptions/new?consigneeId=${consignee.id}&mode=single-task`}
+                        className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                      >
+                        Add ad-hoc task
+                      </Link>
+                    </>
                   ) : null}
                 </div>
               ) : null}

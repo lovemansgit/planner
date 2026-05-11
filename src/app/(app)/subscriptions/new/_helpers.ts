@@ -35,6 +35,29 @@ export const CADENCE_PRESETS: ReadonlyArray<CadencePreset> = [
 ];
 
 /**
+ * Form-mode values for the mode toggle. Mirrors the literal union in
+ * SubscriptionWithModeForm so a single source of truth carries the
+ * query-param → state mapping.
+ */
+export type SubscriptionFormMode = "subscription" | "single-task";
+
+/**
+ * Resolve the initial form mode from a `?mode=` query-param string.
+ *
+ * Used by /subscriptions/new to honour deep-links from
+ * /consignees/[id]'s "Add ad-hoc task" CTA, which routes to
+ * `?mode=single-task` so the form opens with the single-task fields
+ * already exposed (no extra click).
+ *
+ * Defensive default: any unrecognised value falls back to
+ * "subscription" — the operator can always toggle. Single-task mode
+ * is opt-in via the explicit param.
+ */
+export function resolveInitialMode(raw: string | undefined): SubscriptionFormMode {
+  return raw === "single-task" ? "single-task" : "subscription";
+}
+
+/**
  * Detect which preset (if any) matches the current weekday selection.
  * Used to re-highlight a preset chip when the WeekdaySelector state
  * matches it. Returns "custom" when no preset matches the selection.

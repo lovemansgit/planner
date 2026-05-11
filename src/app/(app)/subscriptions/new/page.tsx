@@ -21,17 +21,22 @@ import { ForbiddenError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
 import { SubscriptionWithModeForm } from "./_components/SubscriptionWithModeForm";
+import { resolveInitialMode } from "./_helpers";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 interface PageProps {
-  readonly searchParams: Promise<{ readonly consigneeId?: string }>;
+  readonly searchParams: Promise<{
+    readonly consigneeId?: string;
+    readonly mode?: string;
+  }>;
 }
 
 export default async function NewSubscriptionPage({ searchParams }: PageProps) {
   const requestId = randomUUID();
-  const { consigneeId: preselectedRaw } = await searchParams;
+  const { consigneeId: preselectedRaw, mode: modeRaw } = await searchParams;
+  const initialMode = resolveInitialMode(modeRaw);
 
   let consignees;
   try {
@@ -79,9 +84,13 @@ export default async function NewSubscriptionPage({ searchParams }: PageProps) {
         ) : (
           // Mode-toggleable surface — the form owns the H1 + eyebrow so
           // they can shift with the mode per Day-19 §J-4 ruling.
+          // initialMode is seeded from ?mode=single-task (or defaults to
+          // subscription) to honour the consignee-detail "Add ad-hoc
+          // task" CTA per PR #238 §6.
           <SubscriptionWithModeForm
             consignees={consigneeOptions}
             preselectedConsigneeId={preselectedConsigneeId}
+            initialMode={initialMode}
           />
         )}
       </div>

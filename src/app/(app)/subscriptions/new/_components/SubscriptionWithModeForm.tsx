@@ -39,10 +39,11 @@ import {
 import {
   CADENCE_PRESETS,
   detectPreset,
+  type SubscriptionFormMode,
 } from "../_helpers";
 import { SubscriptionPreviewCard } from "./SubscriptionPreviewCard";
 
-type Mode = "subscription" | "single-task";
+type Mode = SubscriptionFormMode;
 
 interface ConsigneeOption {
   readonly id: string;
@@ -52,6 +53,7 @@ interface ConsigneeOption {
 interface SubscriptionWithModeFormProps {
   readonly consignees: ReadonlyArray<ConsigneeOption>;
   readonly preselectedConsigneeId: string | null;
+  readonly initialMode?: Mode;
 }
 
 const TODAY_ISO = new Date().toISOString().slice(0, 10);
@@ -59,9 +61,10 @@ const TODAY_ISO = new Date().toISOString().slice(0, 10);
 export function SubscriptionWithModeForm({
   consignees,
   preselectedConsigneeId,
+  initialMode = "subscription",
 }: SubscriptionWithModeFormProps) {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>("subscription");
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [cadenceKey, setCadenceKey] = useState<string>("mon-fri");
   const [selectedWeekdays, setSelectedWeekdays] = useState<ReadonlyArray<Weekday>>(
     CADENCE_PRESETS[0].weekdays,

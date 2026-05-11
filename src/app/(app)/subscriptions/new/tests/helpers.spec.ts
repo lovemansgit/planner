@@ -12,6 +12,7 @@ import {
   detectPreset,
   formatDateRange,
   parseSubscriptionForm,
+  resolveInitialMode,
 } from "../_helpers";
 
 describe("CADENCE_PRESETS", () => {
@@ -263,5 +264,35 @@ describe("parseSubscriptionForm — validation errors", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.fieldErrors.window).toMatch(/at least 30 minutes/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveInitialMode — PR #238 §6 ad-hoc task CTA query-param wiring
+// ---------------------------------------------------------------------------
+//
+// The /consignees/[id] detail page routes operators to
+// /subscriptions/new?consigneeId=…&mode=single-task to open the form
+// with single-task mode preselected. Any other `?mode=` value (or its
+// absence) defaults to subscription mode — operators can always toggle
+// in-form.
+
+describe("resolveInitialMode", () => {
+  it("defaults to subscription mode when no mode query param is present", () => {
+    expect(resolveInitialMode(undefined)).toBe("subscription");
+  });
+
+  it("returns single-task when mode=single-task query param is present", () => {
+    expect(resolveInitialMode("single-task")).toBe("single-task");
+  });
+
+  it("returns subscription when mode=subscription is explicit", () => {
+    expect(resolveInitialMode("subscription")).toBe("subscription");
+  });
+
+  it("defaults to subscription mode defensively for unrecognised values", () => {
+    expect(resolveInitialMode("bogus")).toBe("subscription");
+    expect(resolveInitialMode("")).toBe("subscription");
+    expect(resolveInitialMode("SINGLE-TASK")).toBe("subscription");
   });
 });
