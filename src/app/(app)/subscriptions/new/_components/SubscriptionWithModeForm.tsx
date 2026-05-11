@@ -108,8 +108,29 @@ export function SubscriptionWithModeForm({
   const detectedPreset = detectPreset(new Set(selectedWeekdays));
   const previewEndDate = isRange && endDate.length > 0 ? endDate : null;
 
+  // Mode-conditional page header per Day-19 §J-4 ruling. The H1 +
+  // breadcrumb eyebrow + subtitle all shift when the operator picks
+  // single-task mode, so the URL stays at /subscriptions/new while the
+  // surface reads as a different operation.
+  const eyebrowText = mode === "subscription" ? "Subscriptions" : "Tasks";
+  const h1Text = mode === "subscription" ? "New subscription" : "New ad-hoc task";
+  const subtitleText =
+    mode === "subscription"
+      ? "Recurring delivery rule for an existing consignee."
+      : "One-off ad-hoc tasks for an existing consignee.";
+
   return (
     <>
+      <header className="mb-8">
+        <p className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
+          {eyebrowText}
+        </p>
+        <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight">{h1Text}</h1>
+        <p className="mt-3 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
+          {subtitleText}
+        </p>
+      </header>
+
       <ModeToggle mode={mode} onChange={setMode} />
 
       <FormError message={formError} className="mt-6" />

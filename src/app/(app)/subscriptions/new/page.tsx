@@ -58,25 +58,27 @@ export default async function NewSubscriptionPage({ searchParams }: PageProps) {
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-3xl px-12 py-16">
-        <header className="mb-8">
-          <p className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
-            Subscriptions
-          </p>
-          <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight">
-            New subscription
-          </h1>
-          <p className="mt-3 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
-            Recurring delivery rule, or one-off ad-hoc tasks for an existing consignee.
-          </p>
-        </header>
-
         {consigneeOptions.length === 0 ? (
-          <div className="rounded-sm border border-stone-200 bg-paper p-6">
-            <p className="text-sm text-[color:var(--color-text-secondary)]">
-              No consignees yet. Onboard one first via the new-consignee wizard.
-            </p>
-          </div>
+          <>
+            {/* Empty state — no operator-toggleable mode, so the header
+                stays static. */}
+            <header className="mb-8">
+              <p className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
+                Subscriptions
+              </p>
+              <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight">
+                New subscription
+              </h1>
+            </header>
+            <div className="rounded-sm border border-stone-200 bg-paper p-6">
+              <p className="text-sm text-[color:var(--color-text-secondary)]">
+                No consignees yet. Onboard one first via the new-consignee wizard.
+              </p>
+            </div>
+          </>
         ) : (
+          // Mode-toggleable surface — the form owns the H1 + eyebrow so
+          // they can shift with the mode per Day-19 §J-4 ruling.
           <SubscriptionWithModeForm
             consignees={consigneeOptions}
             preselectedConsigneeId={preselectedConsigneeId}
