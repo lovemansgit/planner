@@ -25,9 +25,10 @@ const CS_AGENT = ROLES["cs-agent"].permissions;
 const NONE = new Set<never>() as ReadonlySet<never>;
 
 describe("visibleNavItems", () => {
-  it("Tenant Admin sees all 5 items", () => {
+  it("Tenant Admin sees all 6 items", () => {
     const visible = visibleNavItems(TENANT_ADMIN);
     expect(visible.map((i) => i.label)).toEqual([
+      "Calendar",
       "Tasks",
       "Subscriptions",
       "Consignees",
@@ -36,9 +37,10 @@ describe("visibleNavItems", () => {
     ]);
   });
 
-  it("Ops Manager sees 4 items (Failed pushes hidden)", () => {
+  it("Ops Manager sees 5 items (Failed pushes hidden)", () => {
     const visible = visibleNavItems(OPS_MANAGER);
     expect(visible.map((i) => i.label)).toEqual([
+      "Calendar",
       "Tasks",
       "Subscriptions",
       "Consignees",
@@ -47,9 +49,10 @@ describe("visibleNavItems", () => {
     expect(visible.some((i) => i.label === "Failed pushes")).toBe(false);
   });
 
-  it("CS Agent sees 3 items (Failed pushes + Webhook config hidden)", () => {
+  it("CS Agent sees 4 items (Failed pushes + Webhook config hidden)", () => {
     const visible = visibleNavItems(CS_AGENT);
     expect(visible.map((i) => i.label)).toEqual([
+      "Calendar",
       "Tasks",
       "Subscriptions",
       "Consignees",

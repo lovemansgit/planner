@@ -7,7 +7,7 @@
 // tested in tests/integration/*; these specs verify the *shape* of
 // the queries we send.
 
-import { sql as sqlTag, type SQL } from "drizzle-orm";
+import { type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
