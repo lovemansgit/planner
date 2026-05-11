@@ -289,3 +289,35 @@ export async function listForConsigneeCalendar(
   `);
   return rows.map(mapRow);
 }
+
+// -----------------------------------------------------------------------------
+// Day-22 §3.3.5 — recent-exceptions list for the subscription detail page
+// -----------------------------------------------------------------------------
+
+/**
+ * List the N most recent exceptions for a single subscription, newest
+ * first. Powers the "Recent exceptions" panel on `/subscriptions/[id]`
+ * per brief §3.3.5. All exception types surface (skip / pause_window /
+ * address overrides / append_without_skip) — the detail page renders
+ * type-specific copy per row.
+ *
+ * Scoped to (tenantId, subscriptionId) for defence-in-depth alongside
+ * RLS. `limit` is capped at 50 to bound the fetch.
+ */
+export async function listRecentExceptionsForSubscription(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  limit = 10,
+): Promise<readonly SubscriptionException[]> {
+  const safeLimit = Math.min(Math.max(limit, 1), 50);
+  const rows = await tx.execute<SubscriptionExceptionRow>(sqlTag`
+    SELECT *
+    FROM subscription_exceptions
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+    ORDER BY created_at DESC
+    LIMIT ${safeLimit}
+  `);
+  return rows.map(mapRow);
+}

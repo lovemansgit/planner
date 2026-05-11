@@ -4,6 +4,7 @@ export {
   addSubscriptionException,
   appendWithoutSkip,
   getConsigneeCalendarExceptions,
+  getRecentExceptionsForSubscription,
 } from "./service";
 export type {
   AddSubscriptionExceptionInput,

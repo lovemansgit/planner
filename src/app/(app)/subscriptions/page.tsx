@@ -126,7 +126,14 @@ function SubscriptionsTable({ rows }: { rows: readonly Subscription[] }) {
             <Td>
               <StatusBadge status={s.status} />
             </Td>
-            <Td className="font-mono text-xs tabular-nums">{shortId(s.consigneeId)}</Td>
+            <Td className="font-mono text-xs tabular-nums">
+              <Link
+                href={`/subscriptions/${s.id}`}
+                className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+              >
+                {shortId(s.consigneeId)}
+              </Link>
+            </Td>
             <Td className="tabular-nums">{s.startDate}</Td>
             <Td className="tabular-nums">{formatDays(s.daysOfWeek)}</Td>
             <Td className="tabular-nums">

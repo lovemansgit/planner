@@ -78,6 +78,7 @@ import {
   insertException,
   listActivePauseWindows,
   listForConsigneeCalendar,
+  listRecentExceptionsForSubscription,
 } from "./repository";
 import { markTaskSkipped } from "@/modules/tasks/repository";
 
@@ -890,6 +891,31 @@ export async function getConsigneeCalendarExceptions(
       consigneeId,
       startDate,
       endDate,
+    );
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Day-22 §3.3.5 — recent-exceptions reader for the subscription detail page
+// -----------------------------------------------------------------------------
+//
+// Returns the N most recent exception events for a single subscription,
+// newest first. Powers the "Recent exceptions" panel per brief §3.3.5.
+// Permission: subscription:read (same as the detail page itself).
+
+export async function getRecentExceptionsForSubscription(
+  ctx: RequestContext,
+  subscriptionId: Uuid,
+  limit = 10,
+): Promise<readonly SubscriptionException[]> {
+  requirePermission(ctx, "subscription:read");
+  assertTenantScoped(ctx, "getRecentExceptionsForSubscription");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listRecentExceptionsForSubscription(
+      tx,
+      ctx.tenantId,
+      subscriptionId,
+      limit,
     );
   });
 }
