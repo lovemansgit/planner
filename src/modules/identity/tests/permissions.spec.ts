@@ -382,6 +382,48 @@ describe("task:print_labels permission (Day 8 / D8-6)", () => {
   });
 });
 
+describe("subscription:override_skip_rules permission (Day 13 / T3 part 1 + Day-22 D1 reuse)", () => {
+  // Pins the role-distribution for `subscription:override_skip_rules`. Brief
+  // §3.1.3 reserves the perm to Tenant Admin + Ops Manager — CS Agent gets
+  // the default `subscription:skip` but NOT the override variants
+  // (move-to-date / skip-without-append / append-without-skip).
+  //
+  // Day-22 / PR-B D1 ruling reuses this perm for popover action 6
+  // (cancel-no-append) via the existing `skipWithoutAppend=true` path on
+  // addSubscriptionException — NOT a new perm. This catalogue invariant is
+  // the regression guard against accidental cs-agent grant for that action.
+  // The service-layer deny path is exercised by
+  // src/modules/subscription-exceptions/tests/service.spec.ts (lines 254,
+  // 294, 883 — appendWithoutSkip + skip-with-target_date_override +
+  // skip-without-append all refuse actors missing this perm).
+  //
+  // If a future PR adds CS Agent's explicit `subscription:override_skip_rules`
+  // entry, this test breaks and forces a conscious decision about widening
+  // CS Agent's surface to operationally-destructive skip-override flows.
+
+  it("registers subscription:override_skip_rules in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["subscription:override_skip_rules"]).toBeDefined();
+    expect(PERMISSIONS["subscription:override_skip_rules"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly", () => {
+    expect(PERMISSIONS["subscription:override_skip_rules"].resource).toBe("subscription");
+    expect(PERMISSIONS["subscription:override_skip_rules"].action).toBe("override_skip_rules");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("subscription:override_skip_rules")).toBe(true);
+  });
+
+  it("Ops Manager holds it (permsFor('subscription') auto-pickup)", () => {
+    expect(ROLES["ops-manager"].permissions.has("subscription:override_skip_rules")).toBe(true);
+  });
+
+  it("CS Agent does NOT hold subscription:override_skip_rules (D1 brief-spec-first reuse for action 6 cancel-no-append)", () => {
+    expect(ROLES["cs-agent"].permissions.has("subscription:override_skip_rules")).toBe(false);
+  });
+});
+
 describe("task:add_note permission (Day-22 / PR-B, action 7)", () => {
   // Pins the routine customer-service-facing posture for driver-note
   // appends. Per D2 ruling: cs-agent + ops-manager hold it; ops-manager
