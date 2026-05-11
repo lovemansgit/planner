@@ -28,7 +28,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 
 import { FormError } from "@/components/forms/FormError";
 import { FormField } from "@/components/forms/FormField";
@@ -40,6 +40,7 @@ import {
   onboardConsigneeAction,
   type OnboardConsigneeActionResult,
 } from "../_actions";
+import { validateStep, type WizardStep } from "../_helpers";
 
 type Step = 1 | 2 | 3;
 
@@ -51,7 +52,15 @@ const ADDRESS_LABEL_OPTIONS: ReadonlyArray<{ value: "home" | "office" | "other";
 
 export function OnboardConsigneeWizard() {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
   const [currentStep, setCurrentStep] = useState<Step>(1);
+  // Day-22 PM §3.22 — client-side per-step validation errors. Set by
+  // the Continue button when the operator tries to advance with
+  // invalid fields. Cleared when (a) Continue succeeds, (b) operator
+  // clicks Back, or (c) a new server-action result arrives (server
+  // becomes authoritative).
+  const [clientFieldErrors, setClientFieldErrors] = useState<Readonly<Record<string, string>>>({});
+
   const [actionResult, formAction, isPending] = useActionState<
     OnboardConsigneeActionResult | { readonly kind: "idle" },
     FormData
@@ -64,6 +73,14 @@ export function OnboardConsigneeWizard() {
       router.push(`/consignees/${actionResult.consigneeId}`);
     }
   }, [actionResult, router]);
+
+  // Note: client-side fieldErrors are cleared by the Continue / Back
+  // handlers themselves (on successful Continue advance + on every
+  // Back click). The merge below puts server errors over client
+  // errors on overlapping keys so server validation is authoritative
+  // post-submit; non-overlapping client errors (operator hasn't
+  // resubmitted yet) are still visible until the operator interacts
+  // with that step's navigation.
 
   // Compute the step that should be displayed. When a validation
   // error lands, override the operator's chosen `currentStep` with
@@ -84,11 +101,15 @@ export function OnboardConsigneeWizard() {
     return 3;
   }, [actionResult, currentStep]);
 
-  const fieldErrors = useMemo(
-    () =>
-      actionResult.kind === "validation" ? actionResult.fieldErrors : {},
-    [actionResult],
-  );
+  // Merge client + server errors. Server errors override on
+  // overlapping keys because the server is authoritative post-submit
+  // (e.g. service-layer phone normalisation rejecting a value that
+  // passed the client E.164 shape check). Client errors fill in
+  // step-1 / step-2 fields that haven't been server-validated yet.
+  const fieldErrors = useMemo(() => {
+    const server = actionResult.kind === "validation" ? actionResult.fieldErrors : {};
+    return { ...clientFieldErrors, ...server };
+  }, [actionResult, clientFieldErrors]);
   // Top-of-form error banner. Fires on conflict / forbidden, on
   // service-layer ValidationError mapped to `_form`, AND on any
   // field-level validation result so operators have a visible global
@@ -114,7 +135,7 @@ export function OnboardConsigneeWizard() {
 
       <FormError message={formError} className="mb-6" />
 
-      <form action={formAction} className="space-y-8">
+      <form ref={formRef} action={formAction} className="space-y-8">
         {/* Step 1 — identity */}
         <fieldset hidden={displayedStep !== 1} className="space-y-6">
           <legend className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
@@ -337,7 +358,10 @@ export function OnboardConsigneeWizard() {
             {displayedStep > 1 ? (
               <button
                 type="button"
-                onClick={() => setCurrentStep((s) => (s === 3 ? 2 : 1))}
+                onClick={() => {
+                  setClientFieldErrors({});
+                  setCurrentStep((s) => (s === 3 ? 2 : 1));
+                }}
                 disabled={isPending}
                 className="rounded-sm border border-stone-200 bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:border-navy disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -347,7 +371,24 @@ export function OnboardConsigneeWizard() {
             {displayedStep < 3 ? (
               <button
                 type="button"
-                onClick={() => setCurrentStep((s) => (s === 1 ? 2 : 3))}
+                onClick={() => {
+                  // Day-22 PM §3.22 — gate forward navigation on
+                  // per-step client validation. Operators get inline
+                  // errors immediately on Continue rather than after a
+                  // server-action roundtrip at final submit.
+                  const form = formRef.current;
+                  if (!form) {
+                    setCurrentStep((s) => (s === 1 ? 2 : 3));
+                    return;
+                  }
+                  const result = validateStep(displayedStep as WizardStep, new FormData(form));
+                  if (!result.ok) {
+                    setClientFieldErrors(result.fieldErrors);
+                    return;
+                  }
+                  setClientFieldErrors({});
+                  setCurrentStep((s) => (s === 1 ? 2 : 3));
+                }}
                 disabled={isPending}
                 className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >

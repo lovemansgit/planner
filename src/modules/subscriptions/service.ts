@@ -61,6 +61,8 @@ import type { Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
 import type { TenantStatus } from "../merchants/types";
+import { computeTargetDateInDubai } from "../task-materialization/dubai-date";
+import { materializeSubscriptionForDateRange } from "../task-materialization/service";
 
 import {
   endSubscription as endSubscriptionRow,
@@ -254,7 +256,29 @@ export async function createSubscription(
 
   const tenantId = ctx.tenantId;
   const created = await withTenant(tenantId, async (tx) => {
-    return insertSubscription(tx, tenantId, normalised);
+    const subscription = await insertSubscription(tx, tenantId, normalised);
+
+    // Day-22 PM §3.22 — synchronous materialization for the 14-day
+    // rolling horizon. Operators see tasks immediately on submit
+    // rather than waiting until the next 12:00 UTC cron tick (and
+    // the cron doesn't fire on Vercel preview deployments at all).
+    // Same withTenant tx as the INSERT so a materialization throw
+    // rolls back the subscription — no orphan state. The daily cron
+    // remains the horizon-extender that materialises newly-eligible
+    // dates as the rolling window advances.
+    const horizonEnd = computeTargetDateInDubai(new Date());
+    const rangeEnd =
+      subscription.endDate !== null && subscription.endDate < horizonEnd
+        ? subscription.endDate
+        : horizonEnd;
+    await materializeSubscriptionForDateRange(tx, {
+      subscriptionId: subscription.id,
+      startDate: subscription.startDate,
+      endDate: rangeEnd,
+      requestId: ctx.requestId,
+    });
+
+    return subscription;
   });
 
   await emit({

@@ -48,6 +48,17 @@ vi.mock("../../subscriptions", async () => {
   };
 });
 
+vi.mock("../../task-materialization/service", () => ({
+  materializeSubscriptionForDateRange: vi.fn().mockResolvedValue({
+    newInsertedTaskIds: [],
+    addressResolutionFailedCount: 0,
+  }),
+}));
+
+vi.mock("../../task-materialization/dubai-date", () => ({
+  computeTargetDateInDubai: vi.fn().mockReturnValue("2026-05-25"),
+}));
+
 import { withTenant } from "../../../shared/db";
 import { ForbiddenError, ValidationError } from "../../../shared/errors";
 import type { RequestContext } from "../../../shared/tenant-context";
@@ -56,6 +67,7 @@ import type { Permission } from "../../../shared/types";
 import { emit } from "../../audit";
 import { insertAddress } from "../../addresses";
 import { insertSubscription } from "../../subscriptions";
+import { materializeSubscriptionForDateRange } from "../../task-materialization/service";
 
 import { insertConsignee } from "../repository";
 import { createConsigneeWithSubscription } from "../onboarding";
@@ -71,6 +83,7 @@ const mockEmit = vi.mocked(emit);
 const mockInsertConsignee = vi.mocked(insertConsignee);
 const mockInsertAddress = vi.mocked(insertAddress);
 const mockInsertSubscription = vi.mocked(insertSubscription);
+const mockMaterialize = vi.mocked(materializeSubscriptionForDateRange);
 
 function ctx(
   perms: readonly Permission[],
@@ -336,5 +349,76 @@ describe("createConsigneeWithSubscription", () => {
     expect(consigneeCall[2].addressLine).toBe("Building 4, Apt 12");
     expect(consigneeCall[2].district).toBe("Al Quoz");
     expect(consigneeCall[2].emirateOrRegion).toBe("Dubai");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §3.22 — synchronous materialization inside the orchestration tx
+  // ---------------------------------------------------------------------------
+  //
+  // Pre-fixup: tasks materialised only via the 12:00 UTC cron, which doesn't
+  // fire on Vercel preview deployments — operators saw the subscription
+  // appear but the calendar / /tasks list stayed empty. Fixup wires
+  // materializeSubscriptionForDateRange into the same withTenant tx as the
+  // INSERTs so a fresh subscription appears with its 14-day rolling-horizon
+  // tasks already created.
+
+  it("calls materializeSubscriptionForDateRange inside the orchestration tx with subscription.startDate + computed horizon", async () => {
+    await createConsigneeWithSubscription(
+      ctx(["consignee:create", "subscription:create"]),
+      VALID_INPUT,
+    );
+
+    expect(mockMaterialize).toHaveBeenCalledTimes(1);
+    const args = mockMaterialize.mock.calls[0];
+    // (tx, input)
+    expect(args[1].subscriptionId).toBe(SUBSCRIPTION_ID);
+    expect(args[1].startDate).toBe("2026-05-12");
+    expect(args[1].endDate).toBe("2026-05-25"); // mocked computeTargetDateInDubai
+    expect(args[1].requestId).toBe("test-request");
+  });
+
+  it("caps materialization endDate at subscription.endDate when shorter than the 14-day horizon", async () => {
+    mockInsertSubscription.mockResolvedValueOnce({
+      id: SUBSCRIPTION_ID,
+      tenantId: TENANT_ID,
+      consigneeId: CONSIGNEE_ID,
+      status: "active",
+      startDate: "2026-05-12",
+      endDate: "2026-05-18", // shorter than mocked horizon 2026-05-25
+      daysOfWeek: [1, 2, 3, 4, 5],
+      deliveryWindowStart: "09:00:00",
+      deliveryWindowEnd: "11:00:00",
+      deliveryAddressOverride: null,
+      mealPlanName: null,
+      externalRef: null,
+      notesInternal: null,
+      pausedAt: null,
+      endedAt: null,
+      createdAt: "2026-05-11T07:00:00.000Z",
+      updatedAt: "2026-05-11T07:00:00.000Z",
+    });
+
+    await createConsigneeWithSubscription(
+      ctx(["consignee:create", "subscription:create"]),
+      { ...VALID_INPUT, subscription: { ...VALID_INPUT.subscription, endDate: "2026-05-18" } },
+    );
+
+    expect(mockMaterialize.mock.calls[0][1].endDate).toBe("2026-05-18");
+  });
+
+  it("rolls back the entire tx (no audit emits) when materialization throws inside the tx", async () => {
+    mockMaterialize.mockRejectedValueOnce(new Error("address resolution failed"));
+
+    await expect(
+      createConsigneeWithSubscription(
+        ctx(["consignee:create", "subscription:create"]),
+        VALID_INPUT,
+      ),
+    ).rejects.toThrow("address resolution failed");
+
+    // Audit emits live post-commit; a materialization throw inside the
+    // tx prevents commit, so neither consignee.created nor
+    // subscription.created should fire.
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });

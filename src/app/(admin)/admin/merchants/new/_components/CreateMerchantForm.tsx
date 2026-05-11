@@ -127,8 +127,8 @@ export function CreateMerchantForm() {
           <Field
             label="SuiteFleet customer code"
             name="suitefleet_customer_code"
-            placeholder="588"
-            hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 588). Positive integer, no leading zeros."
+            placeholder="000"
+            hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
             error={fieldErrors.suitefleet_customer_code}
             required
           />

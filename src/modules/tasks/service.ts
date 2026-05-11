@@ -296,6 +296,33 @@ function validateCreateTaskInput(
     }
   });
 
+  // Composite invariant pre-check, mirroring migration 0010's
+  // `tasks_creation_source_invariant` CHECK:
+  //   created_via = 'subscription' iff subscription_id IS NOT NULL.
+  // Catching this at the validator surfaces a typed ValidationError
+  // instead of letting Postgres throw 23514 from inside the
+  // withServiceRole tx (which propagates as a raw Error and reads
+  // as "Unexpected error mid-batch" to the operator).
+  //
+  // Day-22 PM §3.22 final-blocker fixup — previously the validator
+  // stripped `createdVia` from the normalised output (see below),
+  // masking the issue until the CHECK fired at INSERT time.
+  if (input.createdVia === "subscription" && input.subscriptionId === undefined) {
+    push(
+      "createdVia",
+      "createdVia 'subscription' requires a non-null subscriptionId (composite CHECK tasks_creation_source_invariant)",
+    );
+  } else if (
+    input.createdVia !== undefined &&
+    input.createdVia !== "subscription" &&
+    input.subscriptionId !== undefined
+  ) {
+    push(
+      "createdVia",
+      `createdVia '${input.createdVia}' requires subscriptionId to be null (composite CHECK tasks_creation_source_invariant)`,
+    );
+  }
+
   if (failures.length > 0) {
     return { ok: false, failures };
   }
@@ -305,6 +332,13 @@ function validateCreateTaskInput(
     normalised: {
       consigneeId,
       subscriptionId: input.subscriptionId,
+      // Day-22 PM §3.22 final-blocker fixup — propagate `createdVia`
+      // through validation so it reaches the repository's INSERT.
+      // Previously stripped, causing the SQL DEFAULT 'subscription'
+      // to take effect and the composite CHECK to fire when callers
+      // (e.g. /subscriptions/new single-task mode) omitted
+      // subscriptionId.
+      createdVia: input.createdVia,
       customerOrderNumber,
       referenceNumber: optionalTrim(input.referenceNumber),
       internalStatus: input.internalStatus,

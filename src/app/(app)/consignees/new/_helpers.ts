@@ -45,6 +45,83 @@ export type ParseOnboardResult =
       readonly fieldErrors: Readonly<Record<string, string>>;
     };
 
+export type WizardStep = 1 | 2 | 3;
+
+export type ValidateStepResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly fieldErrors: Readonly<Record<string, string>> };
+
+/**
+ * Day-22 PM §3.22 — per-step client-side validation gate for the
+ * wizard's "Continue" button. Steps 1 + 2 are inside `hidden`
+ * fieldsets, so HTML5 `required` is barred from constraint validation
+ * — meaning operators could click Continue with empty fields and only
+ * discover the issue at final submit (round-trip via the server
+ * action). This helper duplicates the parseOnboardForm rules for the
+ * fields that belong to a given step so the wizard can short-circuit
+ * locally before advancing.
+ *
+ * Step 3 is the submit step; final submit goes through parseOnboardForm
+ * on the server. validateStep does not duplicate step-3 rules to avoid
+ * double-validating the path that's already covered.
+ *
+ * Returns `{ ok: true }` when the step passes, or
+ * `{ ok: false, fieldErrors }` with field-keyed messages mirroring
+ * parseOnboardForm's surface. Wizard consumes fieldErrors into local
+ * state for inline rendering.
+ */
+export function validateStep(step: WizardStep, formData: FormData): ValidateStepResult {
+  const fieldErrors: Record<string, string> = {};
+  const trimmed = (key: string): string => {
+    const v = formData.get(key);
+    return typeof v === "string" ? v.trim() : "";
+  };
+
+  if (step === 1) {
+    const name = trimmed("name");
+    if (name.length === 0) fieldErrors.name = "Name is required.";
+
+    const phoneRaw = trimmed("phone");
+    if (phoneRaw.length === 0) {
+      fieldErrors.phone = "Phone is required.";
+    } else if (!isLikelyE164(phoneRaw)) {
+      fieldErrors.phone = "Phone must be E.164 format (e.g. +971501234567).";
+    }
+
+    const emailRaw = trimmed("email");
+    if (emailRaw.length > 0 && !emailRaw.includes("@")) {
+      fieldErrors.email = "Email must contain @.";
+    }
+  } else if (step === 2) {
+    const addressLabelRaw = trimmed("address_label");
+    if (!ADDRESS_LABELS.includes(addressLabelRaw as AddressLabel)) {
+      fieldErrors.address_label = "Pick a label (home, office, or other).";
+    }
+
+    const addressLine = trimmed("address_line");
+    if (addressLine.length === 0) {
+      fieldErrors.address_line = "Address line is required.";
+    }
+
+    const addressDistrict = trimmed("address_district");
+    if (addressDistrict.length === 0) {
+      fieldErrors.address_district = "District / Area is required.";
+    }
+
+    const addressEmirate = trimmed("address_emirate");
+    if (addressEmirate.length === 0) {
+      fieldErrors.address_emirate = "Emirate is required.";
+    }
+  }
+  // step === 3 — final submit is validated by parseOnboardForm on the
+  // server. No client-side step gate.
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return { ok: false, fieldErrors };
+  }
+  return { ok: true };
+}
+
 /**
  * Parse + validate the FormData payload from the OnboardConsigneeWizard.
  * Returns a discriminated union; the action short-circuits with the

@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { parseOnboardForm } from "../_helpers";
+import { parseOnboardForm, validateStep } from "../_helpers";
 
 function validForm(): FormData {
   const fd = new FormData();
@@ -134,5 +134,157 @@ describe("parseOnboardForm — validation errors", () => {
     expect(result.fieldErrors.subscription_delivery_window).toMatch(
       /at least 30/i,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateStep — Day-22 PM §3.22 per-step client-side validation
+// ---------------------------------------------------------------------------
+//
+// The helper duplicates parseOnboardForm's per-step rules so the wizard
+// can short-circuit forward navigation locally without a server-action
+// roundtrip. Previously HTML5 `required` on fields inside `hidden`
+// fieldsets was barred from constraint validation, so operators could
+// click Continue through empty Step 1 / Step 2 fields.
+
+describe("validateStep", () => {
+  function makeFD(overrides: Record<string, string> = {}): FormData {
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(overrides)) fd.set(k, v);
+    return fd;
+  }
+
+  describe("step 1 — identity", () => {
+    it("passes when name + valid phone are present", () => {
+      const fd = makeFD({ name: "Sarah Khouri", phone: "+971501234567" });
+      expect(validateStep(1, fd)).toEqual({ ok: true });
+    });
+
+    it("rejects empty name", () => {
+      const fd = makeFD({ name: "", phone: "+971501234567" });
+      const result = validateStep(1, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.name).toMatch(/required/i);
+    });
+
+    it("rejects whitespace-only name", () => {
+      const fd = makeFD({ name: "   ", phone: "+971501234567" });
+      const result = validateStep(1, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.name).toMatch(/required/i);
+    });
+
+    it("rejects malformed phone (missing + prefix)", () => {
+      const fd = makeFD({ name: "Sarah", phone: "971501234567" });
+      const result = validateStep(1, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.phone).toMatch(/E\.164/);
+    });
+
+    it("rejects empty phone", () => {
+      const fd = makeFD({ name: "Sarah", phone: "" });
+      const result = validateStep(1, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.phone).toMatch(/required/i);
+    });
+
+    it("rejects email missing @ (when provided)", () => {
+      const fd = makeFD({ name: "Sarah", phone: "+971501234567", email: "not-an-email" });
+      const result = validateStep(1, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.email).toMatch(/@/);
+    });
+
+    it("passes when email is empty (optional)", () => {
+      const fd = makeFD({ name: "Sarah", phone: "+971501234567", email: "" });
+      expect(validateStep(1, fd)).toEqual({ ok: true });
+    });
+
+    it("aggregates multiple step-1 errors in a single pass", () => {
+      const fd = makeFD({ name: "", phone: "bad", email: "no-at" });
+      const result = validateStep(1, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.name).toBeTruthy();
+      expect(result.fieldErrors.phone).toBeTruthy();
+      expect(result.fieldErrors.email).toBeTruthy();
+    });
+  });
+
+  describe("step 2 — primary address", () => {
+    function step2(overrides: Record<string, string> = {}): FormData {
+      return makeFD({
+        address_label: "home",
+        address_line: "Building 4",
+        address_district: "Al Quoz",
+        address_emirate: "Dubai",
+        ...overrides,
+      });
+    }
+
+    it("passes when all address fields are present + label is valid", () => {
+      expect(validateStep(2, step2())).toEqual({ ok: true });
+    });
+
+    it("rejects unknown address label", () => {
+      const fd = step2({ address_label: "warehouse" });
+      const result = validateStep(2, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.address_label).toMatch(/home, office, or other/i);
+    });
+
+    it("rejects empty district — the §3.22 regression Love flagged", () => {
+      const fd = step2({ address_district: "" });
+      const result = validateStep(2, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.address_district).toMatch(/required/i);
+    });
+
+    it("rejects empty address line", () => {
+      const fd = step2({ address_line: "" });
+      const result = validateStep(2, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.address_line).toMatch(/required/i);
+    });
+
+    it("rejects empty emirate", () => {
+      const fd = step2({ address_emirate: "" });
+      const result = validateStep(2, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.fieldErrors.address_emirate).toMatch(/required/i);
+    });
+
+    it("aggregates multiple step-2 errors in one pass", () => {
+      const fd = step2({
+        address_label: "warehouse",
+        address_line: "",
+        address_district: "",
+        address_emirate: "",
+      });
+      const result = validateStep(2, fd);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(Object.keys(result.fieldErrors).length).toBe(4);
+    });
+  });
+
+  describe("step 3 — submit step (no client gate)", () => {
+    it("always returns ok=true; final submit is validated server-side via parseOnboardForm", () => {
+      // Empty FormData would fail parseOnboardForm, but validateStep
+      // intentionally skips step 3 because the server is authoritative
+      // for the final submit. Asserts the intent so a future refactor
+      // that adds step-3 client rules without updating wizard wiring
+      // surfaces in test.
+      expect(validateStep(3, new FormData())).toEqual({ ok: true });
+    });
   });
 });

@@ -271,6 +271,69 @@ describe("createTask", () => {
     expect(emitArg.resourceId).toBe(TASK_ID);
     expect(result.id).toBe(TASK_ID);
   });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §3.22 — createdVia preservation + composite invariant
+  // ---------------------------------------------------------------------------
+  //
+  // Before fixup: validateCreateTaskInput dropped `createdVia` from its
+  // normalised output, so the repository fell back to SQL default
+  // 'subscription'. The composite CHECK `tasks_creation_source_invariant`
+  // then fired at INSERT time when `subscriptionId` was undefined
+  // (single-task / manual_admin paths). Operator saw "Unexpected error
+  // mid-batch". These tests anchor:
+  //   1. createdVia=manual_admin reaches the repository (no SQL-default
+  //      regression)
+  //   2. validator catches `subscription` + no subscriptionId pre-DB so
+  //      Postgres never sees the CHECK violation
+
+  it("preserves createdVia='manual_admin' through validation (was previously stripped)", async () => {
+    const ctx = systemCtx();
+    mockInsert.mockResolvedValue(taskFixture({ createdVia: "manual_admin" }));
+
+    await createTask(ctx, { ...baseInput, createdVia: "manual_admin" });
+
+    expect(mockInsert).toHaveBeenCalledOnce();
+    // Inspect the (tx, tenantId, input) call — input is arg[2].
+    const repoInput = mockInsert.mock.calls[0][2] as CreateTaskInput;
+    expect(repoInput.createdVia).toBe("manual_admin");
+  });
+
+  it("rejects createdVia='subscription' with no subscriptionId via ValidationError (pre-DB CHECK guard)", async () => {
+    const ctx = systemCtx();
+    await expect(
+      createTask(ctx, { ...baseInput, createdVia: "subscription" }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects createdVia='manual_admin' WITH a subscriptionId via ValidationError (composite invariant inverse)", async () => {
+    const ctx = systemCtx();
+    await expect(
+      createTask(ctx, {
+        ...baseInput,
+        createdVia: "manual_admin",
+        subscriptionId: "33333333-3333-3333-3333-333333333333" as never,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("preserves createdVia='subscription' WHEN subscriptionId is provided (happy path through validator)", async () => {
+    const ctx = systemCtx();
+    mockInsert.mockResolvedValue(taskFixture({ createdVia: "subscription" }));
+
+    await createTask(ctx, {
+      ...baseInput,
+      createdVia: "subscription",
+      subscriptionId: "33333333-3333-3333-3333-333333333333" as never,
+    });
+
+    expect(mockInsert).toHaveBeenCalledOnce();
+    const repoInput = mockInsert.mock.calls[0][2] as CreateTaskInput;
+    expect(repoInput.createdVia).toBe("subscription");
+    expect(repoInput.subscriptionId).toBe("33333333-3333-3333-3333-333333333333");
+  });
 });
 
 // -----------------------------------------------------------------------------

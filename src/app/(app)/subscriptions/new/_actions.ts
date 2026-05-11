@@ -181,17 +181,26 @@ async function handleSingleTaskMode(
       } catch (err) {
         // Partial-failure surface: report what landed + which date
         // failed + the underlying error message. Operator decides
-        // whether to retry.
+        // whether to retry. Day-22 PM §3.22 — surface the typed
+        // error.message (including unknown errors) so operators get
+        // a useful hint instead of the previous "Unexpected error
+        // mid-batch" copy; log the underlying error for ops debug.
         const message =
           err instanceof ValidationError
             ? err.message
             : err instanceof ConflictError
               ? err.message
               : err instanceof ForbiddenError
-                ? "Permission denied mid-batch."
+                ? "Permission denied."
                 : err instanceof NotFoundError
-                  ? "Consignee not found mid-batch."
-                  : "Unexpected error mid-batch.";
+                  ? "Consignee not found."
+                  : err instanceof Error
+                    ? `${err.message}. Please retry or contact ops.`
+                    : "Unknown error. Please retry or contact ops.";
+        if (!(err instanceof ValidationError) && !(err instanceof ConflictError) &&
+            !(err instanceof ForbiddenError) && !(err instanceof NotFoundError)) {
+          console.error("[createSubscriptionFormAction] mid-batch task error:", err);
+        }
         return {
           kind: "partial_single_task",
           createdTaskIds,
