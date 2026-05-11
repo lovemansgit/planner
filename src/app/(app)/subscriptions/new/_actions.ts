@@ -59,7 +59,8 @@ export type CreateSubscriptionFormResult =
     }
   | { readonly kind: "conflict"; readonly message: string }
   | { readonly kind: "forbidden"; readonly message: string }
-  | { readonly kind: "not_found"; readonly message: string };
+  | { readonly kind: "not_found"; readonly message: string }
+  | { readonly kind: "internal_error"; readonly message: string };
 
 type Mode = "subscription" | "single-task";
 
@@ -246,5 +247,15 @@ function mapServiceError(
   if (err instanceof ValidationError) {
     return { kind: "validation", fieldErrors: { _form: err.message } };
   }
-  throw err;
+  // Unknown error — surface a generic operator-facing banner and log
+  // the underlying error to Vercel function logs for ops debugging.
+  // Avoids the Vercel generic 500 page that wipes operator state.
+  console.error(`[createSubscriptionFormAction] unknown ${resource} error:`, err);
+  return {
+    kind: "internal_error",
+    message:
+      resource === "subscription"
+        ? "Something went wrong creating the subscription. Please try again or contact ops if this persists."
+        : "Something went wrong creating the task. Please try again or contact ops if this persists.",
+  };
 }

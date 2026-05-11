@@ -42,7 +42,8 @@ export type OnboardConsigneeActionResult =
       readonly fieldErrors: Readonly<Record<string, string>>;
     }
   | { readonly kind: "conflict"; readonly message: string }
-  | { readonly kind: "forbidden"; readonly message: string };
+  | { readonly kind: "forbidden"; readonly message: string }
+  | { readonly kind: "internal_error"; readonly message: string };
 
 export async function onboardConsigneeAction(
   _prevState: OnboardConsigneeActionResult | { kind: "idle" },
@@ -87,8 +88,15 @@ export async function onboardConsigneeAction(
         fieldErrors: { _form: err.message },
       };
     }
-    // Unknown error — re-throw to Next.js error boundary so we don't
-    // leak internal detail.
-    throw err;
+    // Unknown error — surface a generic operator-facing banner and log
+    // the underlying error to Vercel function logs for ops debugging.
+    // Avoids the Vercel generic 500 page (mid-flow operators lose all
+    // input on hard error, terrible demo UX).
+    console.error("[onboardConsigneeAction] unknown error:", err);
+    return {
+      kind: "internal_error",
+      message:
+        "Something went wrong creating the consignee. Please try again or contact ops if this persists.",
+    };
   }
 }

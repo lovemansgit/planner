@@ -93,6 +93,7 @@ export function SubscriptionWithModeForm({
     if (actionResult.kind === "conflict") return actionResult.message;
     if (actionResult.kind === "forbidden") return actionResult.message;
     if (actionResult.kind === "not_found") return actionResult.message;
+    if (actionResult.kind === "internal_error") return actionResult.message;
     if (actionResult.kind === "validation" && fieldErrors._form) return fieldErrors._form;
     if (actionResult.kind === "partial_single_task") {
       return `Created ${actionResult.createdTaskIds.length} of intended tasks before failing on ${actionResult.failedDate}: ${actionResult.message}`;

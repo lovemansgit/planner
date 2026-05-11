@@ -98,6 +98,7 @@ export function OnboardConsigneeWizard() {
   const formError = useMemo(() => {
     if (actionResult.kind === "conflict") return actionResult.message;
     if (actionResult.kind === "forbidden") return actionResult.message;
+    if (actionResult.kind === "internal_error") return actionResult.message;
     if (actionResult.kind === "validation") {
       if (fieldErrors._form) return fieldErrors._form;
       if (Object.keys(fieldErrors).length > 0) {
