@@ -25,7 +25,11 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { listSubscriptions, type Subscription } from "@/modules/subscriptions";
+import {
+  listSubscriptionsWithConsignee,
+  type SubscriptionWithConsignee,
+  type Subscription,
+} from "@/modules/subscriptions";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
@@ -36,11 +40,11 @@ export const revalidate = 0;
 export default async function SubscriptionsPage() {
   const requestId = randomUUID();
 
-  let subscriptions: readonly Subscription[];
+  let subscriptions: readonly SubscriptionWithConsignee[];
   let canCreate = false;
   try {
     const ctx = await buildRequestContext("/subscriptions", requestId);
-    subscriptions = await listSubscriptions(ctx);
+    subscriptions = await listSubscriptionsWithConsignee(ctx);
     // /subscriptions/new gates on BOTH subscription:create AND
     // task:create per Day-19 §J-5 SPLIT PERMS (single-task mode
     // dispatches createTask; subscription mode dispatches
@@ -105,7 +109,7 @@ export default async function SubscriptionsPage() {
 // Components
 // -----------------------------------------------------------------------------
 
-function SubscriptionsTable({ rows }: { rows: readonly Subscription[] }) {
+function SubscriptionsTable({ rows }: { rows: readonly SubscriptionWithConsignee[] }) {
   return (
     <table className="w-full border-collapse text-sm">
       <thead>
@@ -118,7 +122,7 @@ function SubscriptionsTable({ rows }: { rows: readonly Subscription[] }) {
         </tr>
       </thead>
       <tbody>
-        {rows.map((s) => (
+        {rows.map(({ subscription: s, consigneeName }) => (
           <tr
             key={s.id}
             className="border-b border-[color:var(--color-border-default)] last:border-b-0"
@@ -126,12 +130,12 @@ function SubscriptionsTable({ rows }: { rows: readonly Subscription[] }) {
             <Td>
               <StatusBadge status={s.status} />
             </Td>
-            <Td className="font-mono text-xs tabular-nums">
+            <Td>
               <Link
                 href={`/subscriptions/${s.id}`}
                 className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
               >
-                {shortId(s.consigneeId)}
+                {consigneeName}
               </Link>
             </Td>
             <Td className="tabular-nums">{s.startDate}</Td>
@@ -232,6 +236,3 @@ function formatDays(days: readonly number[]): string {
   return days.map((d) => DAY_LABELS[d - 1] ?? `?${d}`).join(", ");
 }
 
-function shortId(uuid: string): string {
-  return uuid.slice(0, 8);
-}

@@ -9,10 +9,12 @@ import { describe, expect, it } from "vitest";
 
 import type { Subscription } from "@/modules/subscriptions";
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
+import type { Task } from "@/modules/tasks";
 
 import { RecentExceptions } from "../_components/RecentExceptions";
 import { SubscriptionDetailHeader } from "../_components/SubscriptionDetailHeader";
 import { SubscriptionRuleSummary } from "../_components/SubscriptionRuleSummary";
+import { SubscriptionTasksList } from "../_components/SubscriptionTasksList";
 
 const SUB_ID = "00000000-0000-0000-0000-000000000001";
 const CONSIGNEE_ID = "00000000-0000-0000-0000-000000000002";
@@ -289,5 +291,151 @@ describe("RecentExceptions", () => {
     const olderIdx = html.indexOf("2026-05-10");
     expect(newestIdx).toBeGreaterThanOrEqual(0);
     expect(olderIdx).toBeGreaterThan(newestIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SubscriptionTasksList — Day-22 §3.22 Fix 2
+// ---------------------------------------------------------------------------
+
+function taskFixture(overrides: Partial<Task> = {}): Task {
+  return {
+    id: "00000000-0000-0000-0000-000000000111" as never,
+    tenantId: "00000000-0000-0000-0000-00000000000a" as never,
+    consigneeId: CONSIGNEE_ID as never,
+    subscriptionId: SUB_ID as never,
+    createdVia: "subscription",
+    customerOrderNumber: "SUB-abc-20260512",
+    referenceNumber: null,
+    internalStatus: "CREATED",
+    externalId: null,
+    externalTrackingNumber: null,
+    deliveryDate: "2026-05-12",
+    deliveryStartTime: "09:00:00",
+    deliveryEndTime: "11:00:00",
+    deliveryType: "STANDARD",
+    taskKind: "DELIVERY",
+    paymentMethod: null,
+    codAmount: null,
+    declaredValue: null,
+    weightKg: null,
+    notes: null,
+    signatureRequired: false,
+    smsNotifications: false,
+    deliverToCustomerOnly: false,
+    pushedToExternalAt: null,
+    addressId: null,
+    podPhotos: null,
+    addressLabel: null,
+    createdAt: FIXED_ISO as never,
+    updatedAt: FIXED_ISO as never,
+    packages: [],
+    ...overrides,
+  };
+}
+
+describe("SubscriptionTasksList", () => {
+  it("renders empty-state copy when no tasks present", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({ tasks: [], consigneeId: CONSIGNEE_ID }),
+    );
+    expect(html).toMatch(/No tasks yet/);
+    expect(html).toMatch(/rolling 14-day horizon/);
+  });
+
+  it("renders the delivery date + window (seconds dropped)", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [
+          taskFixture({
+            deliveryDate: "2026-05-12",
+            deliveryStartTime: "09:30:00",
+            deliveryEndTime: "11:00:00",
+          }),
+        ],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).toMatch(/2026-05-12/);
+    expect(html).toMatch(/09:30 – 11:00/);
+    expect(html).not.toMatch(/09:30:00/);
+  });
+
+  it("renders the AWB when externalTrackingNumber is set, em-dash when null", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [
+          taskFixture({ externalTrackingNumber: "MPL-685000001" }),
+          taskFixture({ id: "row-2" as never, externalTrackingNumber: null }),
+        ],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).toMatch(/MPL-685000001/);
+    expect(html).toMatch(/—/);
+  });
+
+  it("renders DELIVERED status in green-tone", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [taskFixture({ internalStatus: "DELIVERED" })],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).toMatch(/Delivered/);
+    expect(html).toMatch(/text-green/);
+  });
+
+  it("renders FAILED status in red-tone", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [taskFixture({ internalStatus: "FAILED" })],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).toMatch(/Failed/);
+    expect(html).toMatch(/text-red/);
+  });
+
+  it("renders CANCELED status in muted-tertiary tone", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [taskFixture({ internalStatus: "CANCELED" })],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).toMatch(/Cancelled/);
+  });
+
+  it("renders a Calendar action link routing to /consignees/[id]?tab=calendar&week=YYYY-MM-DD", () => {
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({
+        tasks: [taskFixture({ deliveryDate: "2026-05-12" })],
+        consigneeId: CONSIGNEE_ID,
+      }),
+    );
+    expect(html).toMatch(
+      new RegExp(`href="/consignees/${CONSIGNEE_ID}\\?tab=calendar&(?:amp;)?week=2026-05-12"`),
+    );
+  });
+
+  it("renders the 'Showing first 30 (chronological)' note when count is at the limit", () => {
+    const tasks = Array.from({ length: 30 }, (_v, i) =>
+      taskFixture({ id: `row-${i}` as never, deliveryDate: `2026-05-${String(i + 1).padStart(2, "0")}` }),
+    );
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({ tasks, consigneeId: CONSIGNEE_ID }),
+    );
+    expect(html).toMatch(/Showing first 30/);
+  });
+
+  it("renders the actual count when under 30", () => {
+    const tasks = Array.from({ length: 5 }, (_v, i) =>
+      taskFixture({ id: `row-${i}` as never, deliveryDate: `2026-05-${String(i + 1).padStart(2, "0")}` }),
+    );
+    const html = renderToStaticMarkup(
+      SubscriptionTasksList({ tasks, consigneeId: CONSIGNEE_ID }),
+    );
+    expect(html).toMatch(/Showing 5/);
   });
 });

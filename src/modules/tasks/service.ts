@@ -109,6 +109,7 @@ import {
   listAllTasksRows,
   type ListTasksOpts,
   listTasksByConsigneeAndDateRange,
+  listTasksBySubscription,
   listTasksByTenant,
   listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
@@ -600,6 +601,28 @@ export async function listTasks(
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listTasksByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day-22 §3.22 Fix 2 — list tasks attached to a single subscription,
+ * ordered by delivery_date ASC (chronological — newest deliveries at
+ * the bottom of the operator's eye-line, matching the calendar's
+ * forward-in-time scan). Powers the "Tasks" panel on
+ * /subscriptions/[id]. Default limit 30; clamp at 200 in the
+ * repository.
+ *
+ * Permission: task:read. Read path — no audit emit per R-4.
+ */
+export async function getTasksForSubscription(
+  ctx: RequestContext,
+  subscriptionId: Uuid,
+  limit = 30,
+): Promise<readonly Task[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "task:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listTasksBySubscription(tx, ctx.tenantId!, subscriptionId, limit);
   });
 }
 

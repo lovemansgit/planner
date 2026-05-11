@@ -224,6 +224,47 @@ export async function listSubscriptionsByTenant(
 }
 
 // -----------------------------------------------------------------------------
+// Day-22 §3.22 Fix 1 — list subscriptions with consignee name JOIN
+// -----------------------------------------------------------------------------
+
+/**
+ * Wrapper row returned by `listSubscriptionsWithConsigneeByTenant`.
+ * Adds the consignee's display name + id as separate fields so the
+ * /subscriptions list page can render the operator-readable name
+ * instead of a truncated UUID.
+ */
+export interface SubscriptionWithConsignee {
+  readonly subscription: Subscription;
+  readonly consigneeName: string;
+}
+
+/**
+ * Day-22 §3.22 Fix 1 — JOIN subscriptions + consignees so the operator
+ * /subscriptions list shows consignee names instead of UUID
+ * shorthands. Tenant-scoped on both tables for defence-in-depth
+ * alongside RLS. Newest-first per existing convention.
+ */
+export async function listSubscriptionsWithConsigneeByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+): Promise<readonly SubscriptionWithConsignee[]> {
+  type JoinedRow = SubscriptionRow & {
+    readonly consignee_name: string;
+  };
+  const rows = await tx.execute<JoinedRow>(sqlTag`
+    SELECT s.*, c.name AS consignee_name
+    FROM subscriptions s
+    JOIN consignees c ON c.id = s.consignee_id AND c.tenant_id = s.tenant_id
+    WHERE s.tenant_id = ${tenantId}
+    ORDER BY s.created_at DESC
+  `);
+  return rows.map((row) => ({
+    subscription: mapSubscription(row),
+    consigneeName: row.consignee_name,
+  }));
+}
+
+// -----------------------------------------------------------------------------
 // Day 19 / Phase 1.5 — cross-tenant admin list
 // -----------------------------------------------------------------------------
 

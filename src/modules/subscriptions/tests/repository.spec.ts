@@ -23,6 +23,7 @@ import {
   findSubscriptionById,
   insertSubscription,
   listSubscriptionsByTenant,
+  listSubscriptionsWithConsigneeByTenant,
   updateSubscription,
 } from "../repository";
 import type { CreateSubscriptionInput, UpdateSubscriptionPatch } from "../types";
@@ -340,6 +341,43 @@ describe("listSubscriptionsByTenant", () => {
   it("returns an empty array when no rows match (tenant has no subscriptions yet)", async () => {
     const tx = makeStubTx([[]]);
     const result = await listSubscriptionsByTenant(tx, TENANT_ID);
+    expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 1 — listSubscriptionsWithConsigneeByTenant
+// ---------------------------------------------------------------------------
+
+describe("listSubscriptionsWithConsigneeByTenant", () => {
+  it("JOINs consignees + returns mapped { subscription, consigneeName } pairs newest-first", async () => {
+    const tx = makeStubTx([
+      [
+        { ...subRowFixture({ id: "row-1" }), consignee_name: "Sarah Khouri" },
+        { ...subRowFixture({ id: "row-2" }), consignee_name: "Love Mansukhani" },
+      ],
+    ]);
+
+    const result = await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
+
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM subscriptions s/);
+    expect(sql).toMatch(/JOIN consignees c/);
+    expect(sql).toMatch(/c\.tenant_id = s\.tenant_id/);
+    expect(sql).toMatch(/WHERE s\.tenant_id =/);
+    expect(sql).toMatch(/ORDER BY s\.created_at DESC/);
+    expect(params).toContain(TENANT_ID);
+
+    expect(result.length).toBe(2);
+    expect(result[0].subscription.id).toBe("row-1");
+    expect(result[0].consigneeName).toBe("Sarah Khouri");
+    expect(result[1].subscription.id).toBe("row-2");
+    expect(result[1].consigneeName).toBe("Love Mansukhani");
+  });
+
+  it("returns an empty array when the tenant has no subscriptions yet", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
     expect(result).toEqual([]);
   });
 });

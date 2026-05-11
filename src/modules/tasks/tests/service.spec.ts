@@ -29,6 +29,7 @@ vi.mock("../repository", () => ({
   insertTaskWithPackages: vi.fn(),
   findTaskById: vi.fn(),
   listTasksByTenant: vi.fn(),
+  listTasksBySubscription: vi.fn(),
   listAllTaskIdsByTenant: vi.fn(),
   updateTask: vi.fn(),
   listVisibleTaskIds: vi.fn(),
@@ -82,6 +83,7 @@ import {
   findTaskById,
   insertTaskWithPackages,
   listAllTaskIdsByTenant,
+  listTasksBySubscription,
   listTasksByTenant,
   listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
@@ -94,6 +96,7 @@ import {
   cancelTask,
   createTask,
   getTask,
+  getTasksForSubscription,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,
@@ -115,6 +118,7 @@ const mockEmit = vi.mocked(emit);
 const mockInsert = vi.mocked(insertTaskWithPackages);
 const mockFindById = vi.mocked(findTaskById);
 const mockListByTenant = vi.mocked(listTasksByTenant);
+const mockListBySubscription = vi.mocked(listTasksBySubscription);
 const mockListAllTaskIdsByTenant = vi.mocked(listAllTaskIdsByTenant);
 const mockUpdate = vi.mocked(updateTaskRow);
 const mockListVisibleTaskExternalIds = vi.mocked(listVisibleTaskExternalIds);
@@ -1201,5 +1205,81 @@ describe("updateTaskAndPushOutbound — wrapper around updateTask + enqueue", ()
       }),
     ).rejects.toBeInstanceOf(ValidationError);
     expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 2 — getTasksForSubscription
+// ---------------------------------------------------------------------------
+
+describe("getTasksForSubscription", () => {
+  const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
+
+  beforeEach(() => {
+    mockListBySubscription.mockReset();
+    mockWithTenant.mockReset();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      (fn as (tx: unknown) => Promise<unknown>)({}),
+    );
+  });
+
+  it("throws ForbiddenError when actor lacks task:read", async () => {
+    await expect(
+      getTasksForSubscription(userCtx([]), SUBSCRIPTION_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockListBySubscription).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when ctx has no tenantId", async () => {
+    await expect(
+      getTasksForSubscription(userCtx(["task:read"], null), SUBSCRIPTION_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockListBySubscription).not.toHaveBeenCalled();
+  });
+
+  it("forwards subscriptionId + default limit 30 to the repository", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+
+    expect(mockListBySubscription).toHaveBeenCalledTimes(1);
+    const args = mockListBySubscription.mock.calls[0];
+    // (tx, tenantId, subscriptionId, limit)
+    expect(args[1]).toBe(TENANT_ID);
+    expect(args[2]).toBe(SUBSCRIPTION_ID);
+    expect(args[3]).toBe(30);
+  });
+
+  it("forwards a custom limit through to the repository", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never, 50);
+    expect(mockListBySubscription.mock.calls[0][3]).toBe(50);
+  });
+
+  it("runs inside withTenant scoped to ctx.tenantId", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+
+    expect(mockWithTenant).toHaveBeenCalledTimes(1);
+    expect(mockWithTenant.mock.calls[0][0]).toBe(TENANT_ID);
+  });
+
+  it("returns rows from the repository unchanged (no further filtering)", async () => {
+    const rows = [
+      taskFixture({ id: "row-1" as never, deliveryDate: "2026-05-12" }),
+      taskFixture({ id: "row-2" as never, deliveryDate: "2026-05-13" }),
+    ];
+    mockListBySubscription.mockResolvedValueOnce(rows as never);
+    const result = await getTasksForSubscription(
+      userCtx(["task:read"]),
+      SUBSCRIPTION_ID as never,
+    );
+    expect(result).toBe(rows);
+  });
+
+  it("does NOT emit an audit event (read path is not audited per R-4)", async () => {
+    mockEmit.mockClear();
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });

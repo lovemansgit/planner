@@ -25,13 +25,14 @@ export {
   endSubscription,
   getSubscription,
   listSubscriptions,
+  listSubscriptionsWithConsignee,
   pauseSubscription,
   resumeSubscription,
   sweepEndedSubscriptions,
   updateSubscription,
 } from "./service";
 
-export type { AutoPauseInput, SweepResult } from "./service";
+export type { AutoPauseInput, SubscriptionWithConsignee, SweepResult } from "./service";
 
 // -----------------------------------------------------------------------------
 // Orchestration-only repository surface (Day 22 / Phase 1 forms lane)

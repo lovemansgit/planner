@@ -72,10 +72,14 @@ import {
   type ListAllSubscriptionsFilters,
   listAllSubscriptionsRows,
   listSubscriptionsByTenant,
+  listSubscriptionsWithConsigneeByTenant,
+  type SubscriptionWithConsignee,
   listSweepCandidates,
   pauseSubscription as pauseSubscriptionRow,
   updateSubscription as updateSubscriptionRow,
 } from "./repository";
+
+export type { SubscriptionWithConsignee } from "./repository";
 
 export type { ListAllSubscriptionsFilters } from "./repository";
 
@@ -352,6 +356,22 @@ export async function listSubscriptions(
   assertTenantScoped(ctx, "subscription:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listSubscriptionsByTenant(tx, ctx.tenantId!);
+  });
+}
+
+/**
+ * Day-22 §3.22 Fix 1 — List subscriptions JOINed with their
+ * consignee's display name. Used by the operator /subscriptions
+ * list page so rows render the consignee name instead of a UUID
+ * shorthand. Same permission gate as listSubscriptions.
+ */
+export async function listSubscriptionsWithConsignee(
+  ctx: RequestContext,
+): Promise<readonly SubscriptionWithConsignee[]> {
+  requirePermission(ctx, "subscription:read");
+  assertTenantScoped(ctx, "subscription:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listSubscriptionsWithConsigneeByTenant(tx, ctx.tenantId!);
   });
 }
 

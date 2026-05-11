@@ -48,6 +48,7 @@ export {
   getConsigneeTaskCountByDayBucket,
   getConsigneeTasksForDateRange,
   getTask,
+  getTasksForSubscription,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,

@@ -30,6 +30,7 @@ import { getConsignee } from "@/modules/consignees";
 import { requirePermission } from "@/modules/identity";
 import { getRecentExceptionsForSubscription } from "@/modules/subscription-exceptions";
 import { getSubscription } from "@/modules/subscriptions";
+import { getTasksForSubscription } from "@/modules/tasks";
 import { ForbiddenError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission, Uuid } from "@/shared/types";
@@ -38,6 +39,7 @@ import { PauseResumeActions } from "./edit/_components/PauseResumeActions";
 import { RecentExceptions } from "./_components/RecentExceptions";
 import { SubscriptionDetailHeader } from "./_components/SubscriptionDetailHeader";
 import { SubscriptionRuleSummary } from "./_components/SubscriptionRuleSummary";
+import { SubscriptionTasksList } from "./_components/SubscriptionTasksList";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -63,11 +65,13 @@ export default async function SubscriptionDetailPage({ params }: PageProps) {
   const subscription = await getSubscription(ctx.ctx, id as Uuid);
   if (!subscription) notFound();
 
-  // Two follow-up fetches in parallel — consignee for header link +
-  // address fields, exceptions for the bottom panel.
-  const [consignee, exceptions] = await Promise.all([
+  // Three follow-up fetches in parallel — consignee for header link +
+  // address fields, exceptions for the recent-exceptions panel, tasks
+  // for the materialised-tasks panel.
+  const [consignee, exceptions, tasks] = await Promise.all([
     getConsignee(ctx.ctx, subscription.consigneeId),
     getRecentExceptionsForSubscription(ctx.ctx, subscription.id, 10),
+    getTasksForSubscription(ctx.ctx, subscription.id, 30),
   ]);
   if (!consignee) notFound();
 
@@ -126,6 +130,8 @@ export default async function SubscriptionDetailPage({ params }: PageProps) {
             />
           </div>
         </section>
+
+        <SubscriptionTasksList tasks={tasks} consigneeId={consignee.id} />
 
         <RecentExceptions exceptions={exceptions} />
       </div>
