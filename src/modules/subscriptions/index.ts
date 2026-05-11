@@ -32,3 +32,18 @@ export {
 } from "./service";
 
 export type { AutoPauseInput, SweepResult } from "./service";
+
+// -----------------------------------------------------------------------------
+// Orchestration-only repository surface (Day 22 / Phase 1 forms lane)
+// -----------------------------------------------------------------------------
+// `insertSubscription` is exported for use INSIDE existing
+// `withTenant(...)` transactions opened by orchestration fns (e.g.
+// consignees/onboarding.ts createConsigneeWithSubscription). NEVER
+// call this from a route handler or server action directly — the
+// service-layer surface (createSubscription) is the audited /
+// permission-gated entry point. Any consumer must:
+//   1. Check the relevant permissions (subscription:create).
+//   2. Run inside its own withTenant block.
+//   3. Emit subscription.created post-commit.
+// Mis-use will leave the audit trail incomplete.
+export { insertSubscription } from "./repository";
