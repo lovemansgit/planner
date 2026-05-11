@@ -89,14 +89,23 @@ export function OnboardConsigneeWizard() {
       actionResult.kind === "validation" ? actionResult.fieldErrors : {},
     [actionResult],
   );
-  const formError =
-    actionResult.kind === "conflict"
-      ? actionResult.message
-      : actionResult.kind === "forbidden"
-        ? actionResult.message
-        : actionResult.kind === "validation" && fieldErrors._form
-          ? fieldErrors._form
-          : null;
+  // Top-of-form error banner. Fires on conflict / forbidden, on
+  // service-layer ValidationError mapped to `_form`, AND on any
+  // field-level validation result so operators have a visible global
+  // signal that something needs attention — the inline field errors
+  // are small (text-xs text-red) and easy to miss when the wizard
+  // jumps to a different step than the operator was viewing.
+  const formError = useMemo(() => {
+    if (actionResult.kind === "conflict") return actionResult.message;
+    if (actionResult.kind === "forbidden") return actionResult.message;
+    if (actionResult.kind === "validation") {
+      if (fieldErrors._form) return fieldErrors._form;
+      if (Object.keys(fieldErrors).length > 0) {
+        return "Some fields need attention. Check the highlighted inputs and try again.";
+      }
+    }
+    return null;
+  }, [actionResult, fieldErrors]);
 
   return (
     <>
