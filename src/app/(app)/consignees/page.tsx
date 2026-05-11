@@ -1,10 +1,11 @@
-// /consignees — read-only list view.
+// /consignees — operator subscriber-base list.
 //
-// Server component. Fetches via the C-3 service path through
-// buildRequestContext. Full chain exercised end-to-end:
+// Server component. Fetches via listConsignees through
+// buildRequestContext. Full chain:
 //
 //   migration (0004) → repository (C-2) → service + audit (C-3)
 //   → buildRequestContext (Day 10) → server-rendered HTML (this file)
+//   → ConsigneesSearchableTable client wrapper (Day-22 fixup)
 //
 // Auth: UnauthorizedError redirects to /login.
 //
@@ -16,8 +17,13 @@
 //   - Hero numeral for the headline count
 //   - Generous whitespace (px-12 py-16, mb-12, etc.)
 //
-// Edit / create / delete UI is intentionally absent — those land Day 4
-// or later. The empty-state copy directs operators to the API for now.
+// Day-22 fixup per PR #238 §3.22:
+//   - Onboard CTA in header (gated on consignee:create +
+//     subscription:create)
+//   - Client-side search by name / phone via
+//     ConsigneesSearchableTable wrapper
+//   - Inline ConsigneesTable / Th / Td / EmptyState helpers moved
+//     into the client component (single source of truth)
 
 import { randomUUID } from "node:crypto";
 
@@ -29,7 +35,7 @@ import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
 
-import { CrmStateBadge } from "./[id]/_components/CrmStateBadge";
+import { ConsigneesSearchableTable } from "./_components/ConsigneesSearchableTable";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -89,83 +95,9 @@ export default async function ConsigneesPage() {
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">Total consignees</p>
         </section>
 
-        {consignees.length === 0 ? <EmptyState /> : <ConsigneesTable rows={consignees} />}
+        <ConsigneesSearchableTable rows={consignees} />
       </div>
     </main>
-  );
-}
-
-// -----------------------------------------------------------------------------
-// Components
-// -----------------------------------------------------------------------------
-
-function ConsigneesTable({ rows }: { rows: readonly Consignee[] }) {
-  return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Name</Th>
-          <Th>Phone</Th>
-          <Th>Emirate</Th>
-          <Th>CRM state</Th>
-          <Th>Address</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((c) => (
-          <tr key={c.id} className="border-b border-[color:var(--color-border-default)] last:border-b-0 transition-colors hover:bg-ivory">
-            <Td>
-              <Link href={`/consignees/${c.id}`} className="text-navy hover:underline">
-                {c.name}
-              </Link>
-            </Td>
-            <Td className="tabular-nums">{c.phone}</Td>
-            <Td>{c.emirateOrRegion}</Td>
-            <Td>
-              <CrmStateBadge state={c.crmState} />
-            </Td>
-            <Td className="max-w-xs truncate" title={c.addressLine}>
-              {c.addressLine}
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  className = "",
-  title,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  title?: string;
-}) {
-  return (
-    <td className={`py-5 align-top ${className}`} title={title}>
-      {children}
-    </td>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
-      <p className="text-base text-navy">No consignees yet.</p>
-      <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        Add your first via <code className="font-mono text-[color:var(--color-text-secondary)]">POST /api/consignees</code>.
-      </p>
-    </div>
   );
 }
 

@@ -232,7 +232,7 @@ export function OnboardConsigneeWizard() {
           />
           <FormField
             name="address_district"
-            label="District"
+            label="District / Area"
             placeholder="Al Quoz"
             required
             error={fieldErrors.address_district}

@@ -97,7 +97,7 @@ export function parseOnboardForm(formData: FormData): ParseOnboardResult {
 
   const addressDistrict = trimmed("address_district");
   if (addressDistrict.length === 0)
-    fieldErrors.address_district = "District is required.";
+    fieldErrors.address_district = "District / Area is required.";
 
   const addressEmirate = trimmed("address_emirate");
   if (addressEmirate.length === 0)
