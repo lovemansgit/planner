@@ -62,6 +62,7 @@ import type { Uuid } from "../../shared/types";
 import { requirePermission } from "../identity";
 import type { TenantStatus } from "../merchants/types";
 import { computeTargetDateInDubai } from "../task-materialization/dubai-date";
+import { enqueueTaskPushBatch } from "../task-materialization/queue";
 import { materializeSubscriptionForDateRange } from "../task-materialization/service";
 
 import {
@@ -255,7 +256,7 @@ export async function createSubscription(
   };
 
   const tenantId = ctx.tenantId;
-  const created = await withTenant(tenantId, async (tx) => {
+  const txResult = await withTenant(tenantId, async (tx) => {
     const subscription = await insertSubscription(tx, tenantId, normalised);
 
     // Day-22 PM §3.22 — synchronous materialization for the 14-day
@@ -271,15 +272,36 @@ export async function createSubscription(
       subscription.endDate !== null && subscription.endDate < horizonEnd
         ? subscription.endDate
         : horizonEnd;
-    await materializeSubscriptionForDateRange(tx, {
+    const materializeResult = await materializeSubscriptionForDateRange(tx, {
       subscriptionId: subscription.id,
       startDate: subscription.startDate,
       endDate: rangeEnd,
       requestId: ctx.requestId,
     });
 
-    return subscription;
+    return { subscription, newInsertedTaskIds: materializeResult.newInsertedTaskIds };
   });
+  const created = txResult.subscription;
+
+  // Day-22 PM §3.22 B5 — Phase-5 outbound SF push enqueue, post-commit.
+  // Mirrors the cron handler's Phase-5 posture: enqueue runs OUTSIDE
+  // the withTenant tx because already-committed task rows are
+  // durable, and a failed enqueue must NOT roll back the materialised
+  // tasks. Next-tick cron reconciliation re-discovers via Phase-1
+  // reconciliation tuples (generate-tasks/route.ts).
+  try {
+    await enqueueTaskPushBatch({
+      tenantId,
+      taskIds: txResult.newInsertedTaskIds,
+      requestId: ctx.requestId,
+    });
+  } catch (err) {
+    console.error(
+      "[createSubscription] post-commit SF push enqueue failed:",
+      err,
+    );
+    // Intentionally swallow per Phase-5 self-healing posture.
+  }
 
   await emit({
     eventType: "subscription.created",

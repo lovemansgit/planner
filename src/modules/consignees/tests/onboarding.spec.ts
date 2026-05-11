@@ -59,6 +59,13 @@ vi.mock("../../task-materialization/dubai-date", () => ({
   computeTargetDateInDubai: vi.fn().mockReturnValue("2026-05-25"),
 }));
 
+vi.mock("../../task-materialization/queue", () => ({
+  enqueueTaskPushBatch: vi.fn().mockResolvedValue({
+    enqueuedCount: 0,
+    failedChunks: 0,
+  }),
+}));
+
 import { withTenant } from "../../../shared/db";
 import { ForbiddenError, ValidationError } from "../../../shared/errors";
 import type { RequestContext } from "../../../shared/tenant-context";
@@ -67,6 +74,7 @@ import type { Permission } from "../../../shared/types";
 import { emit } from "../../audit";
 import { insertAddress } from "../../addresses";
 import { insertSubscription } from "../../subscriptions";
+import { enqueueTaskPushBatch } from "../../task-materialization/queue";
 import { materializeSubscriptionForDateRange } from "../../task-materialization/service";
 
 import { insertConsignee } from "../repository";
@@ -84,6 +92,7 @@ const mockInsertConsignee = vi.mocked(insertConsignee);
 const mockInsertAddress = vi.mocked(insertAddress);
 const mockInsertSubscription = vi.mocked(insertSubscription);
 const mockMaterialize = vi.mocked(materializeSubscriptionForDateRange);
+const mockEnqueuePush = vi.mocked(enqueueTaskPushBatch);
 
 function ctx(
   perms: readonly Permission[],
@@ -420,5 +429,90 @@ describe("createConsigneeWithSubscription", () => {
     // tx prevents commit, so neither consignee.created nor
     // subscription.created should fire.
     expect(mockEmit).not.toHaveBeenCalled();
+    // Phase-5 enqueue also lives post-commit — must not fire on a
+    // rolled-back materialization.
+    expect(mockEnqueuePush).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §3.22 B5 — Phase-5 outbound SF push enqueue, post-commit
+  // ---------------------------------------------------------------------------
+  //
+  // B1 fixed the cron-gated materialization gap. B5 fixes the parallel
+  // gap at the next layer: tasks land in DB but never push to SF
+  // because `enqueueTaskPushBatch` is only called from the cron
+  // handler. Operator-driven creates need the same post-commit
+  // enqueue. Per Phase-5 self-healing posture, the enqueue runs
+  // OUTSIDE the withTenant tx and a failure is swallowed (logged,
+  // not propagated) — next-tick cron reconciliation discovers any
+  // dropped task IDs via Phase-1 reconciliation tuples.
+
+  it("calls enqueueTaskPushBatch with the newly-materialised task IDs after tx commits", async () => {
+    mockMaterialize.mockResolvedValueOnce({
+      newInsertedTaskIds: [
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      ] as never,
+      addressResolutionFailedCount: 0,
+    });
+
+    await createConsigneeWithSubscription(
+      ctx(["consignee:create", "subscription:create"]),
+      VALID_INPUT,
+    );
+
+    expect(mockEnqueuePush).toHaveBeenCalledTimes(1);
+    const enqueueArg = mockEnqueuePush.mock.calls[0][0];
+    expect(enqueueArg.tenantId).toBe(TENANT_ID);
+    expect(enqueueArg.taskIds).toEqual([
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    ]);
+    expect(enqueueArg.requestId).toBe("test-request");
+  });
+
+  it("calls enqueueTaskPushBatch even when materialization produced zero new tasks (idempotent)", async () => {
+    // Re-runs / start-date-in-far-future cases produce empty task IDs.
+    // The enqueue is invoked anyway (it self-shortcircuits to no-op
+    // per queue.ts:104-106).
+    await createConsigneeWithSubscription(
+      ctx(["consignee:create", "subscription:create"]),
+      VALID_INPUT,
+    );
+    expect(mockEnqueuePush).toHaveBeenCalledTimes(1);
+    expect(mockEnqueuePush.mock.calls[0][0].taskIds).toEqual([]);
+  });
+
+  it("swallows enqueue failure — orchestration still resolves with consignee + subscription", async () => {
+    mockMaterialize.mockResolvedValueOnce({
+      newInsertedTaskIds: ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"] as never,
+      addressResolutionFailedCount: 0,
+    });
+    mockEnqueuePush.mockRejectedValueOnce(new Error("QSTASH_TOKEN missing"));
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await createConsigneeWithSubscription(
+        ctx(["consignee:create", "subscription:create"]),
+        VALID_INPUT,
+      );
+
+      // Phase-5 self-healing: enqueue failure must NOT propagate.
+      // Operator's commit is durable; next-tick cron reconciliation
+      // re-discovers the unpushed task IDs.
+      expect(result.consignee.id).toBe(CONSIGNEE_ID);
+      expect(result.subscription.id).toBe(SUBSCRIPTION_ID);
+
+      // Both audit emits still fire (post-commit, after the
+      // swallowed enqueue failure).
+      expect(mockEmit).toHaveBeenCalledTimes(2);
+
+      // Failure is logged via console.error for ops visibility.
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const logged = consoleErrorSpy.mock.calls[0];
+      expect(String(logged[0])).toMatch(/SF push enqueue failed/);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

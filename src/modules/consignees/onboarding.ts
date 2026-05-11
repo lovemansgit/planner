@@ -50,6 +50,7 @@ import type { AddressLabel } from "../addresses";
 import { insertSubscription } from "../subscriptions";
 import type { Subscription } from "../subscriptions";
 import { computeTargetDateInDubai } from "../task-materialization/dubai-date";
+import { enqueueTaskPushBatch } from "../task-materialization/queue";
 import { materializeSubscriptionForDateRange } from "../task-materialization/service";
 
 import { normaliseToE164 } from "./phone";
@@ -268,15 +269,44 @@ export async function createConsigneeWithSubscription(
       subscription.endDate !== null && subscription.endDate < horizonEnd
         ? subscription.endDate
         : horizonEnd;
-    await materializeSubscriptionForDateRange(tx, {
+    const materializeResult = await materializeSubscriptionForDateRange(tx, {
       subscriptionId: subscription.id,
       startDate: subscription.startDate,
       endDate: rangeEnd,
       requestId: ctx.requestId,
     });
 
-    return { consignee, subscription };
+    return {
+      consignee,
+      subscription,
+      newInsertedTaskIds: materializeResult.newInsertedTaskIds,
+    };
   });
+
+  // Day-22 PM §3.22 B5 — Phase-5 outbound SF push enqueue, post-commit.
+  // Mirrors the cron handler's Phase-5 posture (queue.ts:88-97): enqueue
+  // runs OUTSIDE the withTenant tx because already-committed task rows
+  // are durable, and a failed enqueue must NOT roll back the materialised
+  // tasks. Next-tick cron reconciliation re-discovers any tasks whose
+  // Phase-5 enqueue dropped on the floor (Phase-1 reconciliation tuples
+  // in generate-tasks/route.ts). On preview deployments where the cron
+  // never fires, the operator can manually retry via subsequent
+  // operator-driven flows; the failure mode is "saved locally; SF push
+  // pending" rather than "user-visible 5xx that hides the successful
+  // commit".
+  try {
+    await enqueueTaskPushBatch({
+      tenantId,
+      taskIds: created.newInsertedTaskIds,
+      requestId: ctx.requestId,
+    });
+  } catch (err) {
+    console.error(
+      "[createConsigneeWithSubscription] post-commit SF push enqueue failed:",
+      err,
+    );
+    // Intentionally swallow per Phase-5 self-healing posture.
+  }
 
   // Post-commit audit emits. consignee.created fires first because it
   // is the parent resource; subscription.created references the new
@@ -314,5 +344,5 @@ export async function createConsigneeWithSubscription(
     requestId: ctx.requestId,
   });
 
-  return created;
+  return { consignee: created.consignee, subscription: created.subscription };
 }
