@@ -2,7 +2,8 @@
 //
 // Server component. Composes against:
 //   - getConsignee (existing) for header card data
-//   - getConsigneeCrmHistory (NEW Day 17) for the History tab
+//   - getConsigneeTimeline (Day 22 — broadened from Day-17's
+//     getConsigneeCrmHistory to the unified §3.3.7 timeline view)
 //   - changeCrmStateAction (NEW Day 17) wired into CrmStateModal
 //
 // Tab navigation is URL-based (`?tab=overview|history`) so the page
@@ -26,9 +27,9 @@ import { notFound, redirect } from "next/navigation";
 
 import {
   type Consignee,
-  type ConsigneeCrmEvent,
+  type TimelineEvent,
   getConsignee,
-  getConsigneeCrmHistory,
+  getConsigneeTimeline,
 } from "@/modules/consignees";
 import {
   getConsigneeCalendarExceptions,
@@ -135,12 +136,14 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     : computeYearStart(today);
 
   let consignee: Consignee | null;
-  let history: readonly ConsigneeCrmEvent[] = [];
+  let history: readonly TimelineEvent[] = [];
   let calendarTasks: readonly Task[] = [];
   let calendarExceptions: readonly SubscriptionException[] = [];
   let calendarYearCounts: readonly DayBucketCount[] = [];
   let calendarAddresses: readonly ConsigneeAddressRow[] = [];
   let canChangeState = false;
+  let canEditConsignee = false;
+  let canCreateSubscription = false;
   // Day-22 / PR-B — calendar popover action permissions per brief §3.3.3
   // + §3.3.10 rule 1 ("hide what the user cannot access"). Single source
   // of truth for which popover action buttons render.
@@ -161,6 +164,16 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     if (ctx.actor.kind === "user") {
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
       canChangeState = perms.has("consignee:change_crm_state");
+      // Day-22 forms-lane CTAs.
+      // - Edit consignee gate: consignee:update only (the edit form
+      //   covers non-address scalar fields per brief v1.11 §3.1).
+      // - New subscription gate: per Day-19 §J-5 SPLIT PERMS,
+      //   /subscriptions/new requires BOTH subscription:create AND
+      //   task:create (subscription mode dispatches createSubscription;
+      //   single-task mode dispatches createTask).
+      canEditConsignee = perms.has("consignee:update");
+      canCreateSubscription =
+        perms.has("subscription:create") && perms.has("task:create");
       calendarPermissions.canSkip = perms.has("subscription:skip");
       calendarPermissions.canSkipOverride = perms.has("subscription:override_skip_rules");
       calendarPermissions.canPause = perms.has("subscription:pause");
@@ -177,8 +190,11 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     // Only fetch history if the History tab is active — defers the
     // DB roundtrip when the operator's on Overview. Same scope check
     // (consignee:read via the service fn) applies whichever tab.
+    // Day 22 / §3.3.7 — broadened from CRM-only to the unified
+    // timeline view (CRM transitions + subscription exceptions +
+    // terminal task statuses).
     if (activeTab === "history") {
-      history = await getConsigneeCrmHistory(ctx, id as Uuid);
+      history = await getConsigneeTimeline(ctx, id as Uuid);
     }
     // Only fetch calendar data when the Calendar tab is active. View
     // dispatch picks the fetch range:
@@ -282,6 +298,34 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
               <CrmStateBadge state={consignee.crmState} size="lg" />
               {canChangeState ? (
                 <CrmStateModal consigneeId={consignee.id} currentState={consignee.crmState} />
+              ) : null}
+              {canEditConsignee || canCreateSubscription ? (
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  {canEditConsignee ? (
+                    <Link
+                      href={`/consignees/${consignee.id}/edit`}
+                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                    >
+                      Edit
+                    </Link>
+                  ) : null}
+                  {canCreateSubscription ? (
+                    <>
+                      <Link
+                        href={`/subscriptions/new?consigneeId=${consignee.id}`}
+                        className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                      >
+                        New subscription
+                      </Link>
+                      <Link
+                        href={`/subscriptions/new?consigneeId=${consignee.id}&mode=single-task`}
+                        className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                      >
+                        Add ad-hoc task
+                      </Link>
+                    </>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           </div>

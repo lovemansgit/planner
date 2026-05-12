@@ -33,6 +33,7 @@ import { PodIcon } from "./_components/PodIcon";
 import { PodLightboxModal } from "./_components/PodLightboxModal";
 import { StatusIcon } from "./_components/StatusIcon";
 import { podCellState } from "./_components/pod-state";
+import { filterTasksByAwb } from "./awb-filter";
 import { TASK_STATUS_FILTERS } from "./status";
 
 interface TasksClientProps {
@@ -66,8 +67,16 @@ export function TasksClient({
   const [lightboxPhotos, setLightboxPhotos] = useState<readonly string[] | null>(
     null,
   );
+  // Day-22 §3.22 fixup — client-side AWB search filter. v1 scope:
+  // filters within the current page only (per-page server pagination
+  // unchanged). Cross-page AWB search is a Phase-2 server-side surface.
+  const [awbQuery, setAwbQuery] = useState("");
 
   const failedSet = useMemo(() => new Set(failedPushTaskIds), [failedPushTaskIds]);
+  const visibleTasks = useMemo(
+    () => filterTasksByAwb(initialTasks, awbQuery),
+    [initialTasks, awbQuery],
+  );
   const pageIds = useMemo(() => initialTasks.map((t) => t.id), [initialTasks]);
 
   function toggle(id: string) {
@@ -241,6 +250,29 @@ export function TasksClient({
         </p>
       ) : null}
 
+      <div>
+        <label htmlFor="tasks-awb-search" className="sr-only">
+          Search tasks by AWB
+        </label>
+        <input
+          id="tasks-awb-search"
+          type="search"
+          value={awbQuery}
+          onChange={(e) => setAwbQuery(e.target.value)}
+          placeholder="Search by AWB (e.g. MPL-685… or last 6 digits)"
+          inputMode="search"
+          autoComplete="off"
+          className="w-full max-w-md rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:border-navy focus:outline-none"
+        />
+        {awbQuery.trim().length > 0 ? (
+          <p className="mt-2 text-xs text-[color:var(--color-text-secondary)]">
+            {visibleTasks.length} of {initialTasks.length} task
+            {initialTasks.length === 1 ? "" : "s"} on this page matching{" "}
+            <span className="font-medium text-navy">&quot;{awbQuery.trim()}&quot;</span>
+          </p>
+        ) : null}
+      </div>
+
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="border-b border-[color:var(--color-border-strong)]">
@@ -265,7 +297,7 @@ export function TasksClient({
           </tr>
         </thead>
         <tbody>
-          {initialTasks.map((task) => (
+          {visibleTasks.map((task) => (
             <Row
               key={task.id}
               task={task}
@@ -334,7 +366,16 @@ function Row({
         {task.deliveryStartTime.slice(0, 5)} – {task.deliveryEndTime.slice(0, 5)}
       </Td>
       <Td className="font-mono text-xs tabular-nums">
-        {task.externalTrackingNumber ?? <span className="text-[color:var(--color-text-tertiary)]">—</span>}
+        {task.externalTrackingNumber !== null ? (
+          <span className="flex flex-col gap-0.5">
+            <span>{task.externalTrackingNumber}</span>
+            <span className="font-sans text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
+              <span className="text-navy">✓</span> Pushed to SuiteFleet
+            </span>
+          </span>
+        ) : (
+          <span className="text-[color:var(--color-text-tertiary)]">—</span>
+        )}
       </Td>
       <Td>
         {failed ? (

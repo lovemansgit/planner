@@ -70,7 +70,12 @@ import type {
 //     CI Postgres returns Date instances). Coerced via `toIso`.
 //   - date: string ('YYYY-MM-DD').
 //   - time: string ('HH:MM:SS').
-//   - integer[]: number[] (postgres-js binds Postgres arrays directly).
+//   - integer[]: bound via `ARRAY[${arr}]::integer[]` so the array
+//     constructor + explicit type cast produces a single array literal
+//     in the rendered SQL. A bare `${arr}` would spread as N
+//     comma-separated parameters — correct for `IN (…)` clauses, but
+//     interpreted as a record/tuple in a single-column VALUES slot,
+//     incompatible with the `integer[]` column type (Postgres 42804).
 //   - jsonb: parsed object | null (postgres-js JSON-parses jsonb columns).
 
 type SubscriptionRow = {
@@ -172,7 +177,7 @@ export async function insertSubscription(
       ${input.status ?? "active"},
       ${input.startDate},
       ${input.endDate ?? null},
-      ${input.daysOfWeek as number[]},
+      ${daysOfWeekArrayLiteral(input.daysOfWeek)},
       ${input.deliveryWindowStart},
       ${input.deliveryWindowEnd},
       ${input.deliveryAddressOverride ?? null},
@@ -216,6 +221,47 @@ export async function listSubscriptionsByTenant(
     ORDER BY created_at DESC
   `);
   return rows.map(mapSubscription);
+}
+
+// -----------------------------------------------------------------------------
+// Day-22 §3.22 Fix 1 — list subscriptions with consignee name JOIN
+// -----------------------------------------------------------------------------
+
+/**
+ * Wrapper row returned by `listSubscriptionsWithConsigneeByTenant`.
+ * Adds the consignee's display name + id as separate fields so the
+ * /subscriptions list page can render the operator-readable name
+ * instead of a truncated UUID.
+ */
+export interface SubscriptionWithConsignee {
+  readonly subscription: Subscription;
+  readonly consigneeName: string;
+}
+
+/**
+ * Day-22 §3.22 Fix 1 — JOIN subscriptions + consignees so the operator
+ * /subscriptions list shows consignee names instead of UUID
+ * shorthands. Tenant-scoped on both tables for defence-in-depth
+ * alongside RLS. Newest-first per existing convention.
+ */
+export async function listSubscriptionsWithConsigneeByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+): Promise<readonly SubscriptionWithConsignee[]> {
+  type JoinedRow = SubscriptionRow & {
+    readonly consignee_name: string;
+  };
+  const rows = await tx.execute<JoinedRow>(sqlTag`
+    SELECT s.*, c.name AS consignee_name
+    FROM subscriptions s
+    JOIN consignees c ON c.id = s.consignee_id AND c.tenant_id = s.tenant_id
+    WHERE s.tenant_id = ${tenantId}
+    ORDER BY s.created_at DESC
+  `);
+  return rows.map((row) => ({
+    subscription: mapSubscription(row),
+    consigneeName: row.consignee_name,
+  }));
 }
 
 // -----------------------------------------------------------------------------
@@ -446,13 +492,33 @@ export async function endSubscription(
 // Internal helpers
 // -----------------------------------------------------------------------------
 
+/**
+ * Render a Postgres `integer[]` array literal for the given weekday list.
+ *
+ * Why this exists (Day-22 PM regression fix): a bare `${arr}` embed in
+ * Drizzle's `sql` template wraps the spread in parentheses —
+ * `($1, $2, $3)` — which Postgres parses as a record/tuple. Bound into
+ * an `integer[]` column slot, Postgres raises 42804 datatype_mismatch.
+ *
+ * `sql.join([...], ', ')` produces a flat `$1, $2, $3` list without the
+ * surrounding parens, so wrapping it in `ARRAY[…]::integer[]` produces
+ * the valid array-constructor form. Each element binds as its own
+ * scalar param.
+ */
+function daysOfWeekArrayLiteral(days: readonly number[]): SQL {
+  return sqlTag`ARRAY[${sqlTag.join(
+    days.map((d) => sqlTag`${d}`),
+    sqlTag`, `,
+  )}]::integer[]`;
+}
+
 function buildUpdateSets(patch: UpdateSubscriptionPatch): SQL[] {
   const sets: SQL[] = [];
   if (patch.consigneeId !== undefined) sets.push(sqlTag`consignee_id = ${patch.consigneeId}`);
   if (patch.startDate !== undefined) sets.push(sqlTag`start_date = ${patch.startDate}`);
   if (patch.endDate !== undefined) sets.push(sqlTag`end_date = ${patch.endDate}`);
   if (patch.daysOfWeek !== undefined)
-    sets.push(sqlTag`days_of_week = ${patch.daysOfWeek as number[]}`);
+    sets.push(sqlTag`days_of_week = ${daysOfWeekArrayLiteral(patch.daysOfWeek)}`);
   if (patch.deliveryWindowStart !== undefined)
     sets.push(sqlTag`delivery_window_start = ${patch.deliveryWindowStart}`);
   if (patch.deliveryWindowEnd !== undefined)

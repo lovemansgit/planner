@@ -113,6 +113,27 @@ function requireValidSlug(value: string): string {
   return trimmed;
 }
 
+/**
+ * Positive-integer string per the SF resolver contract
+ * (`credentials/suitefleet-resolver.ts:108-131` parses with
+ * `parseInt(raw, 10)` + asserts > 0 + asserts `String(parsed) === raw`
+ * to reject leading zeros / non-integer numerals). The regex
+ * `^[1-9]\d*$` captures all three constraints in one pass — rejects
+ * empty, leading-zero forms (`"0588"`), bare zero (`"0"`), negatives,
+ * decimals, signs, and non-digit characters.
+ */
+const SUITEFLEET_CUSTOMER_CODE_RE = /^[1-9]\d*$/;
+
+function requireSuitefleetCustomerCode(value: string): string {
+  const trimmed = requireNonEmpty(value, "suitefleet_customer_code");
+  if (!SUITEFLEET_CUSTOMER_CODE_RE.test(trimmed)) {
+    throw new ValidationError(
+      "suitefleet_customer_code must be a positive integer (e.g. 588), no leading zeros",
+    );
+  }
+  return trimmed;
+}
+
 // -----------------------------------------------------------------------------
 // createMerchant
 // -----------------------------------------------------------------------------
@@ -156,6 +177,9 @@ export async function createMerchant(
         "pickup_address.emirate",
       ),
     },
+    suitefleetCustomerCode: requireSuitefleetCustomerCode(
+      input.suitefleetCustomerCode,
+    ),
   };
 
   let created: Merchant;
@@ -187,6 +211,10 @@ export async function createMerchant(
         district: normalised.pickupAddress.district,
         emirate: normalised.pickupAddress.emirate,
       },
+      // Day-22 §5.3 Gate 2 closure — captured at create time so the
+      // audit trail records the value as supplied (debugging forensic
+      // for SF-routing issues post-onboarding).
+      suitefleet_customer_code: normalised.suitefleetCustomerCode,
     },
     requestId: ctx.requestId,
   });

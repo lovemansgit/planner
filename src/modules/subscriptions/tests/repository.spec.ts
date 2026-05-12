@@ -23,6 +23,7 @@ import {
   findSubscriptionById,
   insertSubscription,
   listSubscriptionsByTenant,
+  listSubscriptionsWithConsigneeByTenant,
   updateSubscription,
 } from "../repository";
 import type { CreateSubscriptionInput, UpdateSubscriptionPatch } from "../types";
@@ -206,6 +207,88 @@ describe("insertSubscription", () => {
       /produced zero rows/
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §4 FIX 1 anchor — days_of_week SQL array binding
+  // ---------------------------------------------------------------------------
+  //
+  // Background: the original embedding `${input.daysOfWeek as number[]}`
+  // expanded Drizzle's array-spread inside a single VALUES column slot,
+  // producing `($6, $7, $8, $9, $10)` — Postgres parsed this as a
+  // record/tuple literal, incompatible with the `integer[]` column type
+  // (error 42804: column "days_of_week" is of type integer[] but
+  // expression is of type record). The fix wraps the array in an
+  // ARRAY[…]::integer[] constructor + cast so the rendered SQL is a
+  // valid Postgres array literal regardless of element count.
+  //
+  // These tests assert the SHAPE of the rendered SQL (not the param
+  // count, which still scales with element count under Drizzle's array
+  // spread). The shape guarantee — `ARRAY[...]::integer[]` wrapping the
+  // weekday placeholders — is what makes the binding type-compatible
+  // with the column.
+
+  describe("days_of_week SQL array binding (Day-22 PM regression guard)", () => {
+    it("renders ARRAY[…]::integer[] around the day-of-week placeholders", async () => {
+      const tx = makeStubTx([[subRowFixture()]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [1, 2, 3, 4, 5] });
+
+      const { sql } = compile(tx.execute.mock.calls[0][0]);
+      // ARRAY constructor wraps the comma-separated placeholders.
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+(\s*,\s*\$\d+)*\s*\]::integer\[\]/);
+      // Defence: the SQL must NOT have the bug shape — a bare comma list
+      // inside the VALUES tuple at the days_of_week slot without the
+      // ARRAY wrapper.
+      expect(sql).not.toMatch(/days_of_week[\s\S]*VALUES[\s\S]*\(\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*\)\s*,/);
+    });
+
+    it("binds each weekday as a separate param value (Drizzle spreads inside ARRAY constructor)", async () => {
+      const tx = makeStubTx([[subRowFixture()]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [1, 2, 3, 4, 5] });
+
+      const { params } = compile(tx.execute.mock.calls[0][0]);
+      // Each weekday integer appears as its own param value (postgres-js
+      // sees five separate scalars; Postgres assembles them via the
+      // ARRAY constructor at parse time).
+      for (const day of [1, 2, 3, 4, 5]) {
+        expect(params).toContain(day);
+      }
+    });
+
+    it("handles a 1-element weekday array (Sunday-only cadence)", async () => {
+      const tx = makeStubTx([[subRowFixture({ days_of_week: [7] })]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [7] });
+
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      // ARRAY[$N]::integer[] — 1-element form must still wrap.
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+\s*\]::integer\[\]/);
+      expect(params).toContain(7);
+    });
+
+    it("handles all 7 weekdays (daily cadence)", async () => {
+      const tx = makeStubTx([[subRowFixture({ days_of_week: [1, 2, 3, 4, 5, 6, 7] })]]);
+      await insertSubscription(tx, TENANT_ID, {
+        ...baseInput,
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      });
+
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+(\s*,\s*\$\d+){6}\s*\]::integer\[\]/);
+      for (const day of [1, 2, 3, 4, 5, 6, 7]) {
+        expect(params).toContain(day);
+      }
+    });
+
+    it("handles a non-contiguous subset (Mon/Wed/Fri)", async () => {
+      const tx = makeStubTx([[subRowFixture({ days_of_week: [1, 3, 5] })]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [1, 3, 5] });
+
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*\]::integer\[\]/);
+      expect(params).toContain(1);
+      expect(params).toContain(3);
+      expect(params).toContain(5);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -258,6 +341,43 @@ describe("listSubscriptionsByTenant", () => {
   it("returns an empty array when no rows match (tenant has no subscriptions yet)", async () => {
     const tx = makeStubTx([[]]);
     const result = await listSubscriptionsByTenant(tx, TENANT_ID);
+    expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 1 — listSubscriptionsWithConsigneeByTenant
+// ---------------------------------------------------------------------------
+
+describe("listSubscriptionsWithConsigneeByTenant", () => {
+  it("JOINs consignees + returns mapped { subscription, consigneeName } pairs newest-first", async () => {
+    const tx = makeStubTx([
+      [
+        { ...subRowFixture({ id: "row-1" }), consignee_name: "Sarah Khouri" },
+        { ...subRowFixture({ id: "row-2" }), consignee_name: "Love Mansukhani" },
+      ],
+    ]);
+
+    const result = await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
+
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM subscriptions s/);
+    expect(sql).toMatch(/JOIN consignees c/);
+    expect(sql).toMatch(/c\.tenant_id = s\.tenant_id/);
+    expect(sql).toMatch(/WHERE s\.tenant_id =/);
+    expect(sql).toMatch(/ORDER BY s\.created_at DESC/);
+    expect(params).toContain(TENANT_ID);
+
+    expect(result.length).toBe(2);
+    expect(result[0].subscription.id).toBe("row-1");
+    expect(result[0].consigneeName).toBe("Sarah Khouri");
+    expect(result[1].subscription.id).toBe("row-2");
+    expect(result[1].consigneeName).toBe("Love Mansukhani");
+  });
+
+  it("returns an empty array when the tenant has no subscriptions yet", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
     expect(result).toEqual([]);
   });
 });
@@ -348,6 +468,9 @@ describe("updateSubscription", () => {
     expect(update.sql).toMatch(/days_of_week =/);
     expect(update.sql).toMatch(/delivery_window_end =/);
     expect(update.sql).toMatch(/meal_plan_name =/);
+    // Day-22 PM §4 FIX 1 regression guard — the days_of_week column
+    // must be bound via ARRAY[…]::integer[], same as the INSERT path.
+    expect(update.sql).toMatch(/days_of_week = ARRAY\[\s*\$\d+\s*,\s*\$\d+\s*\]::integer\[\]/);
 
     expect(result?.after.consigneeId).toBe(OTHER_CONSIGNEE_ID);
     expect(result?.after.endDate).toBe("2026-12-31");

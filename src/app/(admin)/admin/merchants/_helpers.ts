@@ -123,7 +123,15 @@ export interface ParsedCreateMerchantInput {
   readonly line: string;
   readonly district: string;
   readonly emirate: string;
+  /** Positive-integer string per the SF resolver contract. */
+  readonly suitefleetCustomerCode: string;
 }
+
+/** Positive-integer string regex matching the service-layer canon
+ *  (merchants/service.ts SUITEFLEET_CUSTOMER_CODE_RE). Client-side
+ *  rejection mirrors the service check so operators get the inline
+ *  field error rather than a round-trip ValidationError on submit. */
+const CLIENT_SUITEFLEET_CUSTOMER_CODE_RE = /^[1-9]\d*$/;
 
 export type ParseCreateMerchantResult =
   | { readonly ok: true; readonly value: ParsedCreateMerchantInput }
@@ -166,11 +174,19 @@ export function parseCreateMerchantForm(formData: FormData): ParseCreateMerchant
   if (emirate.length === 0)
     fieldErrors.pickup_emirate = "Emirate is required.";
 
+  const suitefleetCustomerCode = trimmed("suitefleet_customer_code");
+  if (suitefleetCustomerCode.length === 0) {
+    fieldErrors.suitefleet_customer_code = "SuiteFleet customer code is required.";
+  } else if (!CLIENT_SUITEFLEET_CUSTOMER_CODE_RE.test(suitefleetCustomerCode)) {
+    fieldErrors.suitefleet_customer_code =
+      "Must be a positive integer (e.g. 588). No leading zeros, no spaces.";
+  }
+
   if (Object.keys(fieldErrors).length > 0) {
     return { ok: false, fieldErrors };
   }
   return {
     ok: true,
-    value: { name, slug, line, district, emirate },
+    value: { name, slug, line, district, emirate, suitefleetCustomerCode },
   };
 }

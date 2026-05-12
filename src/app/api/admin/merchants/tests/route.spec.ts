@@ -109,6 +109,7 @@ describe("POST /api/admin/merchants — happy paths", () => {
       district: "Al Quoz Industrial 1",
       emirate: "Dubai",
     },
+    suitefleet_customer_code: "588",
   });
 
   it("maps snake_case pickup_address → camelCase pickupAddress; returns 201 + tenantId", async () => {
@@ -133,6 +134,7 @@ describe("POST /api/admin/merchants — happy paths", () => {
         district: "Al Quoz Industrial 1",
         emirate: "Dubai",
       },
+      suitefleetCustomerCode: "588",
     });
     expect(ctx.requestId).toBe("req-test");
 
@@ -253,6 +255,7 @@ describe("POST /api/admin/merchants — service error → HTTP mapping", () => {
     slug: "demo-bistro",
     name: "Demo Bistro",
     pickup_address: { line: "a", district: "b", emirate: "c" },
+    suitefleet_customer_code: "588",
   });
 
   it("§A Option A LOCK — non-staff actor blocked by service-layer requirePermission (no route-level role check)", async () => {

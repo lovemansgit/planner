@@ -25,6 +25,24 @@ vi.mock("../repository", () => ({
   endSubscription: vi.fn(),
 }));
 
+vi.mock("../../task-materialization/service", () => ({
+  materializeSubscriptionForDateRange: vi.fn().mockResolvedValue({
+    newInsertedTaskIds: [],
+    addressResolutionFailedCount: 0,
+  }),
+}));
+
+vi.mock("../../task-materialization/dubai-date", () => ({
+  computeTargetDateInDubai: vi.fn().mockReturnValue("2026-05-25"),
+}));
+
+vi.mock("../../task-materialization/queue", () => ({
+  enqueueTaskPushBatch: vi.fn().mockResolvedValue({
+    enqueuedCount: 0,
+    failedChunks: 0,
+  }),
+}));
+
 import { withServiceRole, withTenant } from "../../../shared/db";
 import {
   ConflictError,
@@ -36,6 +54,9 @@ import type { RequestContext } from "../../../shared/tenant-context";
 import type { Permission } from "../../../shared/types";
 
 import { emit } from "../../audit";
+
+import { enqueueTaskPushBatch } from "../../task-materialization/queue";
+import { materializeSubscriptionForDateRange } from "../../task-materialization/service";
 
 import {
   endSubscription as endSubscriptionRow,
@@ -64,6 +85,8 @@ const mockListByTenant = vi.mocked(listSubscriptionsByTenant);
 const mockListSweepCandidates = vi.mocked(listSweepCandidates);
 const mockUpdate = vi.mocked(updateSubscriptionRow);
 const mockEnd = vi.mocked(endSubscriptionRow);
+const mockMaterialize = vi.mocked(materializeSubscriptionForDateRange);
+const mockEnqueuePush = vi.mocked(enqueueTaskPushBatch);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
@@ -121,6 +144,13 @@ beforeEach(() => {
   mockListByTenant.mockReset();
   mockUpdate.mockReset();
   mockEnd.mockReset();
+  mockMaterialize.mockReset();
+  mockMaterialize.mockResolvedValue({
+    newInsertedTaskIds: [],
+    addressResolutionFailedCount: 0,
+  });
+  mockEnqueuePush.mockReset();
+  mockEnqueuePush.mockResolvedValue({ enqueuedCount: 0, failedChunks: 0 });
   // Default: withTenant runs its callback against an opaque tx stub.
   // Tests that need specific repo behaviour set it via the repo mocks.
   mockWithTenant.mockImplementation(async (_tenantId, fn) => {
@@ -227,6 +257,90 @@ describe("createSubscription", () => {
       start_date: "2026-05-01",
       days_of_week: [1, 3, 5],
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §3.22 — synchronous materialization inside createSubscription tx
+  // ---------------------------------------------------------------------------
+
+  it("calls materializeSubscriptionForDateRange inside the tx with startDate + computed horizon", async () => {
+    mockInsert.mockResolvedValue(subFixture());
+
+    await createSubscription(ctx(["subscription:create"]), validCreateInput);
+
+    expect(mockMaterialize).toHaveBeenCalledTimes(1);
+    const args = mockMaterialize.mock.calls[0];
+    expect(args[1].subscriptionId).toBe(SUB_ID);
+    expect(args[1].startDate).toBe("2026-05-01");
+    expect(args[1].endDate).toBe("2026-05-25"); // mocked computeTargetDateInDubai
+    expect(args[1].requestId).toBe("test-request");
+  });
+
+  it("caps materialization endDate at subscription.endDate when shorter than the 14-day horizon", async () => {
+    mockInsert.mockResolvedValue(subFixture({ endDate: "2026-05-10" }));
+
+    await createSubscription(ctx(["subscription:create"]), {
+      ...validCreateInput,
+      endDate: "2026-05-10",
+    });
+
+    expect(mockMaterialize.mock.calls[0][1].endDate).toBe("2026-05-10");
+  });
+
+  it("rolls back without emitting audit when materialization throws inside the tx", async () => {
+    mockInsert.mockResolvedValue(subFixture());
+    mockMaterialize.mockRejectedValueOnce(new Error("address resolution failed"));
+
+    await expect(
+      createSubscription(ctx(["subscription:create"]), validCreateInput),
+    ).rejects.toThrow("address resolution failed");
+
+    expect(mockEmit).not.toHaveBeenCalled();
+    // Post-commit Phase-5 enqueue must not fire when the tx rolled back.
+    expect(mockEnqueuePush).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §3.22 B5 — Phase-5 outbound SF push enqueue, post-commit
+  // ---------------------------------------------------------------------------
+
+  it("calls enqueueTaskPushBatch with the newly-materialised task IDs after tx commits", async () => {
+    mockInsert.mockResolvedValue(subFixture());
+    mockMaterialize.mockResolvedValueOnce({
+      newInsertedTaskIds: ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"] as never,
+      addressResolutionFailedCount: 0,
+    });
+
+    await createSubscription(ctx(["subscription:create"]), validCreateInput);
+
+    expect(mockEnqueuePush).toHaveBeenCalledTimes(1);
+    const enqueueArg = mockEnqueuePush.mock.calls[0][0];
+    expect(enqueueArg.tenantId).toBe(TENANT_ID);
+    expect(enqueueArg.taskIds).toEqual(["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]);
+    expect(enqueueArg.requestId).toBe("test-request");
+  });
+
+  it("swallows enqueue failure — service still returns the created subscription + audit emits", async () => {
+    mockInsert.mockResolvedValue(subFixture());
+    mockMaterialize.mockResolvedValueOnce({
+      newInsertedTaskIds: ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"] as never,
+      addressResolutionFailedCount: 0,
+    });
+    mockEnqueuePush.mockRejectedValueOnce(new Error("QSTASH_TOKEN missing"));
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await createSubscription(
+        ctx(["subscription:create"]),
+        validCreateInput,
+      );
+
+      expect(result.id).toBe(SUB_ID);
+      expect(mockEmit).toHaveBeenCalledTimes(1);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });
 

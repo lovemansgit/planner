@@ -134,6 +134,7 @@ describe("createMerchant", () => {
       district: "Al Quoz Industrial 1",
       emirate: "Dubai",
     },
+    suitefleetCustomerCode: "588",
   };
 
   it("throws ForbiddenError when actor lacks merchant:create", async () => {
@@ -223,6 +224,8 @@ describe("createMerchant", () => {
         district: "Al Quoz Industrial 1",
         emirate: "Dubai",
       },
+      // Day-22 §5.3 Gate 2 closure — added at audit-metadata level.
+      suitefleet_customer_code: "588",
     });
   });
 
@@ -259,6 +262,7 @@ describe("createMerchant", () => {
         district: "  Al Quoz  ",
         emirate: "  Dubai  ",
       },
+      suitefleetCustomerCode: "588",
     });
     const insertArg = mockInsert.mock.calls[0][1];
     expect(insertArg.slug).toBe("demo-bistro");
@@ -490,6 +494,7 @@ describe("withServiceRole reason-string convention", () => {
       slug: "x",
       name: "y",
       pickupAddress: { line: "a", district: "b", emirate: "c" },
+      suitefleetCustomerCode: "588",
     });
     expect(mockWithServiceRole.mock.calls[0][0]).toBe(
       "transcorp_staff:create_merchant",
@@ -535,6 +540,7 @@ describe("withServiceRole reason-string convention", () => {
       slug: "x",
       name: "y",
       pickupAddress: { line: "a", district: "b", emirate: "c" },
+      suitefleetCustomerCode: "588",
     });
     await activateMerchant(ctx(["merchant:activate"]), TENANT_ID);
 

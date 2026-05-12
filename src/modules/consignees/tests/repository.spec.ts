@@ -25,6 +25,7 @@ import {
   insertConsignee,
   insertConsigneeCrmEvent,
   listConsigneesByTenant,
+  selectTimelineForConsignee,
   updateConsignee,
   updateConsigneeCrmState,
 } from "../repository";
@@ -434,5 +435,214 @@ describe("insertConsigneeCrmEvent", () => {
         actor: ACTOR_USER_ID,
       }),
     ).rejects.toThrow(/zero rows/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selectTimelineForConsignee — Day 22 / §3.3.7 unified timeline view
+// ---------------------------------------------------------------------------
+
+describe("selectTimelineForConsignee", () => {
+  const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
+  const TASK_ID = "44444444-4444-4444-4444-444444444444";
+
+  it("scopes SELECT to consignee_id AND tenant_id, orders newest-first, LIMIT 50 default", async () => {
+    const tx = makeStubTx([[]]);
+    await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM consignee_timeline_events/);
+    expect(sql).toMatch(/WHERE consignee_id =/);
+    expect(sql).toMatch(/AND tenant_id =/);
+    expect(sql).toMatch(/ORDER BY occurred_at DESC/);
+    expect(sql).toMatch(/LIMIT \$\d+/);
+    expect(params).toContain(TENANT_ID);
+    expect(params).toContain(CONSIGNEE_ID);
+    expect(params).toContain(50);
+  });
+
+  it("clamps the limit at 200", async () => {
+    const tx = makeStubTx([[]]);
+    await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID, { limit: 9999 });
+    const { params } = compile(tx.execute.mock.calls[0][0]);
+    expect(params).toContain(200);
+  });
+
+  it("applies the before cursor when provided", async () => {
+    const tx = makeStubTx([[]]);
+    await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID, {
+      before: "2026-05-01T00:00:00.000Z",
+    });
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/AND occurred_at < \$\d+::timestamptz/);
+    expect(params).toContain("2026-05-01T00:00:00.000Z");
+  });
+
+  it("maps a crm_state row to the crm_state TimelineEvent variant", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          event_kind: "crm_state",
+          occurred_at: "2026-05-01T10:00:00.000Z",
+          payload: {
+            from_state: "ACTIVE",
+            to_state: "ON_HOLD",
+            reason: "operator hold",
+          },
+          actor_id: ACTOR_USER_ID,
+        },
+      ],
+    ]);
+
+    const events = await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+    expect(events).toHaveLength(1);
+    const evt = events[0];
+    expect(evt.kind).toBe("crm_state");
+    if (evt.kind !== "crm_state") return;
+    expect(evt.fromState).toBe("ACTIVE");
+    expect(evt.toState).toBe("ON_HOLD");
+    expect(evt.reason).toBe("operator hold");
+    expect(evt.actor).toBe(ACTOR_USER_ID);
+    expect(evt.eventAt).toBe("2026-05-01T10:00:00.000Z");
+  });
+
+  it("maps a crm_state initial-create row (from_state = null)", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          event_kind: "crm_state",
+          occurred_at: "2026-04-30T08:00:00.000Z",
+          payload: { from_state: null, to_state: "ACTIVE", reason: null },
+          actor_id: ACTOR_USER_ID,
+        },
+      ],
+    ]);
+    const events = await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+    const evt = events[0];
+    expect(evt.kind).toBe("crm_state");
+    if (evt.kind !== "crm_state") return;
+    expect(evt.fromState).toBeNull();
+    expect(evt.toState).toBe("ACTIVE");
+  });
+
+  it("maps a subscription_exception row (pause_window with date range)", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          event_kind: "subscription_exception",
+          occurred_at: "2026-05-02T10:00:00.000Z",
+          payload: {
+            type: "pause_window",
+            subscription_id: SUBSCRIPTION_ID,
+            start_date: "2026-05-10",
+            end_date: "2026-05-17",
+            compensating_date: null,
+            reason: "operator pause",
+          },
+          actor_id: ACTOR_USER_ID,
+        },
+      ],
+    ]);
+    const evt = (await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID))[0];
+    expect(evt.kind).toBe("subscription_exception");
+    if (evt.kind !== "subscription_exception") return;
+    expect(evt.type).toBe("pause_window");
+    expect(evt.subscriptionId).toBe(SUBSCRIPTION_ID);
+    expect(evt.startDate).toBe("2026-05-10");
+    expect(evt.endDate).toBe("2026-05-17");
+    expect(evt.compensatingDate).toBeNull();
+    expect(evt.reason).toBe("operator pause");
+  });
+
+  it("maps a subscription_exception skip with compensating_date", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          event_kind: "subscription_exception",
+          occurred_at: "2026-05-02T10:00:00.000Z",
+          payload: {
+            type: "skip",
+            subscription_id: SUBSCRIPTION_ID,
+            start_date: "2026-05-18",
+            end_date: null,
+            compensating_date: "2026-06-01",
+            reason: null,
+          },
+          actor_id: ACTOR_USER_ID,
+        },
+      ],
+    ]);
+    const evt = (await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID))[0];
+    expect(evt.kind).toBe("subscription_exception");
+    if (evt.kind !== "subscription_exception") return;
+    expect(evt.type).toBe("skip");
+    expect(evt.compensatingDate).toBe("2026-06-01");
+  });
+
+  it("maps a task_status row (DELIVERED) with null actor", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          event_kind: "task_status",
+          occurred_at: "2026-05-03T10:00:00.000Z",
+          payload: {
+            task_id: TASK_ID,
+            internal_status: "DELIVERED",
+            delivery_date: "2026-05-03",
+          },
+          actor_id: null,
+        },
+      ],
+    ]);
+    const evt = (await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID))[0];
+    expect(evt.kind).toBe("task_status");
+    if (evt.kind !== "task_status") return;
+    expect(evt.taskId).toBe(TASK_ID);
+    expect(evt.internalStatus).toBe("DELIVERED");
+    expect(evt.deliveryDate).toBe("2026-05-03");
+  });
+
+  it("returns mapped events in repository order across mixed kinds", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          event_kind: "task_status",
+          occurred_at: "2026-05-03T10:00:00.000Z",
+          payload: { task_id: TASK_ID, internal_status: "FAILED", delivery_date: "2026-05-03" },
+          actor_id: null,
+        },
+        {
+          event_kind: "subscription_exception",
+          occurred_at: "2026-05-02T10:00:00.000Z",
+          payload: {
+            type: "pause_window",
+            subscription_id: SUBSCRIPTION_ID,
+            start_date: "2026-05-10",
+            end_date: "2026-05-17",
+            compensating_date: null,
+            reason: null,
+          },
+          actor_id: ACTOR_USER_ID,
+        },
+        {
+          event_kind: "crm_state",
+          occurred_at: "2026-05-01T10:00:00.000Z",
+          payload: { from_state: "ACTIVE", to_state: "HIGH_RISK", reason: null },
+          actor_id: ACTOR_USER_ID,
+        },
+      ],
+    ]);
+    const events = await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+    expect(events.map((e) => e.kind)).toEqual([
+      "task_status",
+      "subscription_exception",
+      "crm_state",
+    ]);
+  });
+
+  it("returns an empty array when the view yields zero rows", async () => {
+    const tx = makeStubTx([[]]);
+    const events = await selectTimelineForConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+    expect(events).toEqual([]);
   });
 });

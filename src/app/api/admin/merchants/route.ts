@@ -104,6 +104,11 @@ const CreateMerchantBodySchema = z.object({
   slug: z.string().min(1),
   name: z.string().min(1),
   pickup_address: PickupAddressSchema,
+  // Day-22 §5.3 Gate 2 closure — required positive-integer string.
+  // Service-layer SUITEFLEET_CUSTOMER_CODE_RE runs the stricter
+  // check (no leading zeros, no bare zero); this is the API-boundary
+  // pre-check (regex same as the helper's CLIENT_SUITEFLEET_CUSTOMER_CODE_RE).
+  suitefleet_customer_code: z.string().regex(/^[1-9]\d*$/),
 });
 
 // -----------------------------------------------------------------------------
@@ -125,6 +130,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         district: body.pickup_address.district,
         emirate: body.pickup_address.emirate,
       },
+      suitefleetCustomerCode: body.suitefleet_customer_code,
     };
 
     const result = await createMerchant(ctx, serviceInput);

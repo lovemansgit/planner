@@ -46,6 +46,9 @@ import type {
   ConsigneeCrmEvent,
   ConsigneeCrmState,
   CreateConsigneeInput,
+  SubscriptionExceptionType,
+  TaskTerminalStatus,
+  TimelineEvent,
   UpdateConsigneePatch,
 } from "./types";
 
@@ -531,4 +534,103 @@ export async function selectCrmHistoryForConsignee(
     actor: row.actor,
     occurredAt: toIso(row.occurred_at),
   }));
+}
+
+// -----------------------------------------------------------------------------
+// Day 22 / §3.3.7 — consignee_timeline_events VIEW consumer
+// -----------------------------------------------------------------------------
+//
+// Reads the chronological event projection across CRM transitions,
+// subscription exceptions, and terminal task statuses. The VIEW
+// (migration 0016 §3) is SECURITY INVOKER so RLS on the underlying
+// tables applies — the caller must be inside a `withTenant` block. The
+// explicit `tenant_id = ${tenantId}` predicate is defence in depth.
+//
+// `payload` is jsonb; postgres-js parses it to an unknown record. We
+// narrow per `event_kind` via the dispatch below; unknown kinds throw
+// (the view's UNION is closed-set; a new kind landing without code
+// support is a coding bug we want loud).
+
+interface TimelineRowBase {
+  readonly event_kind: "crm_state" | "subscription_exception" | "task_status";
+  readonly occurred_at: Date | string;
+  readonly payload: Record<string, unknown>;
+  readonly actor_id: string | null;
+}
+
+type TimelineRow = TimelineRowBase & Record<string, unknown>;
+
+/**
+ * Day 22 — SELECT the unified timeline for a single consignee from
+ * `consignee_timeline_events`, newest-first. Powers the History tab
+ * on `/consignees/[id]` per brief §3.3.7.
+ *
+ * `limit` defaults to 50 and is clamped at 200. `before` is an
+ * optional ISO timestamp cursor for paging (rows older than `before`).
+ */
+export async function selectTimelineForConsignee(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly TimelineEvent[]> {
+  const limit = Math.min(options?.limit ?? 50, 200);
+  const before = options?.before ?? null;
+
+  const rows = await tx.execute<TimelineRow>(sqlTag`
+    SELECT event_kind, occurred_at, payload, actor_id
+    FROM consignee_timeline_events
+    WHERE consignee_id = ${consigneeId}
+      AND tenant_id = ${tenantId}
+      ${before ? sqlTag`AND occurred_at < ${before}::timestamptz` : sqlTag``}
+    ORDER BY occurred_at DESC
+    LIMIT ${limit}
+  `);
+
+  return rows.map((row) => mapTimelineRow(row));
+}
+
+function mapTimelineRow(row: TimelineRow): TimelineEvent {
+  const eventAt = toIso(row.occurred_at);
+  const payload = row.payload;
+
+  switch (row.event_kind) {
+    case "crm_state":
+      return {
+        kind: "crm_state",
+        eventAt,
+        fromState: (payload.from_state as ConsigneeCrmState | null) ?? null,
+        toState: payload.to_state as ConsigneeCrmState,
+        reason: (payload.reason as string | null) ?? null,
+        actor: (row.actor_id ?? "") as Uuid,
+      };
+    case "subscription_exception":
+      return {
+        kind: "subscription_exception",
+        eventAt,
+        type: payload.type as SubscriptionExceptionType,
+        subscriptionId: payload.subscription_id as Uuid,
+        startDate: payload.start_date as string,
+        endDate: (payload.end_date as string | null) ?? null,
+        compensatingDate: (payload.compensating_date as string | null) ?? null,
+        reason: (payload.reason as string | null) ?? null,
+        actor: (row.actor_id ?? "") as Uuid,
+      };
+    case "task_status":
+      return {
+        kind: "task_status",
+        eventAt,
+        taskId: payload.task_id as Uuid,
+        internalStatus: payload.internal_status as TaskTerminalStatus,
+        deliveryDate: payload.delivery_date as string,
+      };
+    default: {
+      // Closed-set switch guard. A new event_kind from the VIEW without
+      // matching code support is a coding bug — surface loud.
+      const _exhaustive: never = row.event_kind;
+      throw new Error(
+        `selectTimelineForConsignee: unknown event_kind '${_exhaustive as string}'`,
+      );
+    }
+  }
 }
