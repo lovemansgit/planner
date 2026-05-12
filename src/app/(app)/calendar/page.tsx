@@ -35,10 +35,13 @@ import { redirect } from "next/navigation";
 
 import {
   countTasksByDayAcrossConsignees,
+  countTasksByDayForMonth,
   getCalendarFilterOptions,
   getCalendarMetrics,
   getCalendarMetricsTranscorpAdmin,
+  listTasksForDay,
   type CalendarDayCount,
+  type CalendarDayTaskRow,
   type CalendarFilters,
   type CalendarMetrics,
   type CalendarMetricsTranscorpAdmin,
@@ -49,6 +52,8 @@ import { buildRequestContext } from "@/shared/request-context";
 
 import { CalendarFilterBar } from "./_components/CalendarFilterBar";
 import { CalendarViewToggle } from "./_components/CalendarViewToggle";
+import { ConsolidatedDayView } from "./_components/ConsolidatedDayView";
+import { ConsolidatedMonthView } from "./_components/ConsolidatedMonthView";
 import { ConsolidatedWeekView } from "./_components/ConsolidatedWeekView";
 import { MetricCard } from "./_components/MetricCard";
 import type { CalendarConsolidatedView, CalendarFiltersValue } from "./_types";
@@ -140,6 +145,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   let tenantMetrics: CalendarMetrics | null = null;
   let transcorpMetrics: CalendarMetricsTranscorpAdmin | null = null;
   let weekDays: readonly CalendarDayCount[] = [];
+  let monthDays: readonly CalendarDayCount[] = [];
+  let dayTasks: readonly CalendarDayTaskRow[] = [];
   let filterOptions: Awaited<ReturnType<typeof getCalendarFilterOptions>> | null = null;
   let isTranscorpAdmin = false;
   try {
@@ -154,16 +161,25 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       // primarily for the at-a-glance fleet metrics).
       transcorpMetrics = await getCalendarMetricsTranscorpAdmin(ctx, today);
     } else {
-      const [metricsResult, optionsResult, weekResult] = await Promise.all([
-        getCalendarMetrics(ctx, today, filters),
-        getCalendarFilterOptions(ctx),
-        view === "week"
-          ? countTasksByDayAcrossConsignees(ctx, weekAnchor, filters)
-          : Promise.resolve([] as readonly CalendarDayCount[]),
-      ]);
+      const [metricsResult, optionsResult, weekResult, monthResult, dayResult] =
+        await Promise.all([
+          getCalendarMetrics(ctx, today, filters),
+          getCalendarFilterOptions(ctx),
+          view === "week"
+            ? countTasksByDayAcrossConsignees(ctx, weekAnchor, filters)
+            : Promise.resolve([] as readonly CalendarDayCount[]),
+          view === "month"
+            ? countTasksByDayForMonth(ctx, monthAnchor, filters)
+            : Promise.resolve([] as readonly CalendarDayCount[]),
+          view === "day"
+            ? listTasksForDay(ctx, dayAnchor, filters)
+            : Promise.resolve([] as readonly CalendarDayTaskRow[]),
+        ]);
       tenantMetrics = metricsResult;
       filterOptions = optionsResult;
       weekDays = weekResult;
+      monthDays = monthResult;
+      dayTasks = dayResult;
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -229,6 +245,20 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   preservedQuery={buildPreservedQuery(filterValues)}
                 />
               ) : null}
+              {view === "month" ? (
+                <MonthAnchorNav
+                  monthAnchor={monthAnchor}
+                  todayMonthAnchor={defaultMonthAnchor(today)}
+                  preservedQuery={buildPreservedQuery(filterValues)}
+                />
+              ) : null}
+              {view === "day" ? (
+                <DayAnchorNav
+                  dayAnchor={dayAnchor}
+                  today={today}
+                  preservedQuery={buildPreservedQuery(filterValues)}
+                />
+              ) : null}
             </div>
 
             <section className="mt-8">
@@ -240,9 +270,18 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   formatWeekdayLabel={formatWeekdayLabel}
                   preservedQuery={buildPreservedQuery(filterValues)}
                 />
-              ) : (
-                <PlaceholderView view={view} />
-              )}
+              ) : null}
+              {view === "month" ? (
+                <ConsolidatedMonthView
+                  monthAnchor={monthAnchor}
+                  days={monthDays}
+                  today={today}
+                  preservedQuery={buildPreservedQuery(filterValues)}
+                />
+              ) : null}
+              {view === "day" ? (
+                <ConsolidatedDayView date={dayAnchor} tasks={dayTasks} />
+              ) : null}
             </section>
           </>
         ) : null}
@@ -368,17 +407,101 @@ function WeekAnchorNav({
   );
 }
 
-function PlaceholderView({ view }: { readonly view: CalendarConsolidatedView }) {
-  const label = view === "month" ? "Month view" : "Day view";
+function MonthAnchorNav({
+  monthAnchor,
+  todayMonthAnchor,
+  preservedQuery,
+}: {
+  readonly monthAnchor: string;
+  readonly todayMonthAnchor: string;
+  readonly preservedQuery: string;
+}) {
+  const start = new Date(`${monthAnchor}T00:00:00Z`);
+  const prev = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 1, 1));
+  const next = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+  const prevIso = prev.toISOString().slice(0, 10);
+  const nextIso = next.toISOString().slice(0, 10);
+  const trail = preservedQuery ? `&${preservedQuery}` : "";
+  const thisMonthHref =
+    monthAnchor === todayMonthAnchor
+      ? `/calendar?view=month${trail}`
+      : `/calendar?view=month&month=${todayMonthAnchor}${trail}`;
   return (
-    <div className="border border-dashed border-stone-300 bg-paper px-6 py-16 text-center">
-      <p className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-        Coming soon
-      </p>
-      <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        {label} renders in a follow-up PR. Use Week view to explore today&apos;s deliveries.
-      </p>
-    </div>
+    <nav
+      aria-label="Month navigation"
+      className="flex items-center gap-3 text-xs uppercase tracking-[0.14em]"
+    >
+      <a
+        href={`/calendar?view=month&month=${prevIso}${trail}`}
+        className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+      >
+        ← Previous
+      </a>
+      <span className="text-[color:var(--color-text-tertiary)]">|</span>
+      <a
+        href={thisMonthHref}
+        className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+      >
+        This month
+      </a>
+      <span className="text-[color:var(--color-text-tertiary)]">|</span>
+      <a
+        href={`/calendar?view=month&month=${nextIso}${trail}`}
+        className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+      >
+        Next →
+      </a>
+    </nav>
+  );
+}
+
+function DayAnchorNav({
+  dayAnchor,
+  today,
+  preservedQuery,
+}: {
+  readonly dayAnchor: string;
+  readonly today: string;
+  readonly preservedQuery: string;
+}) {
+  const anchor = new Date(`${dayAnchor}T00:00:00Z`);
+  const prev = new Date(anchor);
+  prev.setUTCDate(anchor.getUTCDate() - 1);
+  const next = new Date(anchor);
+  next.setUTCDate(anchor.getUTCDate() + 1);
+  const prevIso = prev.toISOString().slice(0, 10);
+  const nextIso = next.toISOString().slice(0, 10);
+  const trail = preservedQuery ? `&${preservedQuery}` : "";
+  const todayHref =
+    dayAnchor === today
+      ? `/calendar?view=day${trail}`
+      : `/calendar?view=day&date=${today}${trail}`;
+  return (
+    <nav
+      aria-label="Day navigation"
+      className="flex items-center gap-3 text-xs uppercase tracking-[0.14em]"
+    >
+      <a
+        href={`/calendar?view=day&date=${prevIso}${trail}`}
+        className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+      >
+        ← Previous
+      </a>
+      <span className="text-[color:var(--color-text-tertiary)]">|</span>
+      <a
+        href={todayHref}
+        className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+      >
+        Today
+      </a>
+      <span className="text-[color:var(--color-text-tertiary)]">|</span>
+      <a
+        href={`/calendar?view=day&date=${nextIso}${trail}`}
+        className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+      >
+        Next →
+      </a>
+    </nav>
   );
 }
 

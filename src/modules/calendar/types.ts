@@ -12,6 +12,7 @@ export type {
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,
   CalendarDayCount,
+  CalendarDayTaskRow,
 } from "@/app/(app)/calendar/_types";
 
 /**
