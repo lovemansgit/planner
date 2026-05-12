@@ -33,6 +33,7 @@ import {
 import { SearchBar } from "@/components/SearchBar";
 import {
   type AdminConsigneeRow,
+  countAllConsignees,
   listAllConsignees,
 } from "@/modules/consignees/service";
 import { listMerchants } from "@/modules/merchants/service";
@@ -75,11 +76,13 @@ export default async function AdminConsigneesPage({
 
   let rows: readonly AdminConsigneeRow[];
   let merchants: readonly Merchant[];
+  let totalCount: number;
   try {
     const ctx = await buildRequestContext("/admin/consignees", requestId);
-    [rows, merchants] = await Promise.all([
+    [rows, merchants, totalCount] = await Promise.all([
       listAllConsignees(ctx, { merchantSlug, limit: perPage, offset, searchTerm: q }),
       listMerchants(ctx),
+      countAllConsignees(ctx, { merchantSlug, searchTerm: q }),
     ]);
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -113,6 +116,15 @@ export default async function AdminConsigneesPage({
             All consignees across the platform. Filter by merchant.
           </p>
         </header>
+
+        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
+          <p className="font-serif text-5xl font-light tabular-nums leading-none">
+            {totalCount}
+          </p>
+          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+            {merchantSlug !== undefined || q !== undefined ? "Matching consignees" : "Total consignees"}
+          </p>
+        </section>
 
         <SearchBar
           placeholder="Search by name, phone, or merchant"

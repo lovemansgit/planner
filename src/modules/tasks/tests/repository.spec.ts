@@ -15,6 +15,8 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  countAllTasksRows,
+  countTasksByTenant,
   deleteTask,
   findTaskById,
   insertTaskWithPackages,
@@ -469,6 +471,136 @@ describe("listAllTasksRows — archive filter", () => {
     await listAllTasksRows(tx);
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+  });
+});
+
+describe("listAllTasksRows — date range filter (Day-24 PM)", () => {
+  it("omits the date predicates when neither dateFrom nor dateTo is set", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).not.toMatch(/t\.delivery_date\s*>=/i);
+    expect(captured.sql).not.toMatch(/t\.delivery_date\s*<=/i);
+  });
+
+  it("adds AND t.delivery_date >= ${dateFrom}::date when dateFrom is set", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { dateFrom: "2026-05-15" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=\s*\$\d+::date/i);
+    expect(captured.params).toContain("2026-05-15");
+  });
+
+  it("adds AND t.delivery_date <= ${dateTo}::date when dateTo is set", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { dateTo: "2026-05-15" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*<=\s*\$\d+::date/i);
+    expect(captured.params).toContain("2026-05-15");
+  });
+
+  it("composes both bounds + other filters together", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, {
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-15",
+      status: "DELIVERED",
+      merchantSlug: "mpl",
+      searchTerm: "sarah",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=\s*\$\d+::date/i);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*<=\s*\$\d+::date/i);
+    expect(captured.sql).toMatch(/t\.internal_status\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/ten\.slug\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/ILIKE/i);
+    expect(captured.params).toContain("2026-05-01");
+    expect(captured.params).toContain("2026-05-15");
+    expect(captured.params).toContain("DELIVERED");
+    expect(captured.params).toContain("mpl");
+    expect(captured.params).toContain("%sarah%");
+  });
+});
+
+describe("countAllTasksRows (Day-24 PM)", () => {
+  it("emits SELECT COUNT(*)::int on the same JOIN topology as listAllTasksRows", async () => {
+    const tx = makeStubTx([[{ count: 0 }]]);
+    await countAllTasksRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT\s+COUNT\(\*\)::int\s+AS\s+count/i);
+    expect(captured.sql).toMatch(/FROM tasks t/i);
+    expect(captured.sql).toMatch(/JOIN tenants ten/i);
+    expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
+    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    expect(captured.sql).not.toMatch(/ORDER BY/i);
+    expect(captured.sql).not.toMatch(/LIMIT/i);
+  });
+
+  it("returns 0 when the result set is empty", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await countAllTasksRows(tx);
+    expect(result).toBe(0);
+  });
+
+  it("returns the parsed count value", async () => {
+    const tx = makeStubTx([[{ count: 42 }]]);
+    const result = await countAllTasksRows(tx);
+    expect(result).toBe(42);
+  });
+
+  it("composes all filter fragments (status, merchantSlug, searchTerm, dateFrom, dateTo)", async () => {
+    const tx = makeStubTx([[{ count: 7 }]]);
+    await countAllTasksRows(tx, {
+      status: "FAILED",
+      merchantSlug: "mpl",
+      searchTerm: "MPL-AWB",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-15",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.params).toContain("FAILED");
+    expect(captured.params).toContain("mpl");
+    expect(captured.params).toContain("%MPL-AWB%");
+    expect(captured.params).toContain("2026-05-01");
+    expect(captured.params).toContain("2026-05-15");
+  });
+});
+
+describe("countTasksByTenant — Day-24 PM date range extension", () => {
+  it("adds the date-range predicates when dateFrom/dateTo are set", async () => {
+    const tx = makeStubTx([[{ count: 3 }]]);
+    await countTasksByTenant(tx, TENANT_ID, {
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-15",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=\s*\$\d+::date/i);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*<=\s*\$\d+::date/i);
+    expect(captured.params).toContain("2026-05-01");
+    expect(captured.params).toContain("2026-05-15");
+  });
+
+  it("composes date range with status + searchTerm", async () => {
+    const tx = makeStubTx([[{ count: 1 }]]);
+    await countTasksByTenant(tx, TENANT_ID, {
+      dateFrom: "2026-05-15",
+      dateTo: "2026-05-15",
+      status: "DELIVERED",
+      searchTerm: "Sarah",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=/i);
+    expect(captured.sql).toMatch(/t\.internal_status\s*=/i);
+    expect(captured.sql).toMatch(/ILIKE/i);
+  });
+
+  it("returns 0 when no rows match (empty count row)", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await countTasksByTenant(tx, TENANT_ID, {
+      dateFrom: "2099-01-01",
+      dateTo: "2099-01-01",
+    });
+    expect(result).toBe(0);
   });
 });
 

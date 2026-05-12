@@ -19,6 +19,8 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  countAllConsigneesRows,
+  countConsigneesByTenantRows,
   deleteConsignee,
   findConsigneeById,
   findConsigneeForCrmUpdate,
@@ -292,6 +294,62 @@ describe("listAllConsigneesRows", () => {
       const captured = compile(tx.execute.mock.calls[0][0]);
       expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
     });
+  });
+});
+
+describe("countAllConsigneesRows (Day-24 PM)", () => {
+  it("emits SELECT COUNT(*)::int on the same JOIN topology as listAllConsigneesRows", async () => {
+    const tx = makeStubTx([[{ count: 0 }]]);
+    await countAllConsigneesRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT\s+COUNT\(\*\)::int\s+AS\s+count/i);
+    expect(captured.sql).toMatch(/FROM consignees c/i);
+    expect(captured.sql).toMatch(/JOIN tenants ten/i);
+    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    expect(captured.sql).not.toMatch(/ORDER BY/i);
+    expect(captured.sql).not.toMatch(/LIMIT/i);
+  });
+
+  it("returns 0 when no rows match", async () => {
+    const tx = makeStubTx([[]]);
+    expect(await countAllConsigneesRows(tx)).toBe(0);
+  });
+
+  it("composes merchantSlug + searchTerm filter fragments", async () => {
+    const tx = makeStubTx([[{ count: 5 }]]);
+    await countAllConsigneesRows(tx, { merchantSlug: "mpl", searchTerm: "sarah" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/ten\.slug\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/ILIKE/i);
+    expect(captured.params).toContain("mpl");
+    expect(captured.params).toContain("%sarah%");
+  });
+});
+
+describe("countConsigneesByTenantRows (Day-24 PM)", () => {
+  it("emits SELECT COUNT(*)::int with tenant predicate", async () => {
+    const tx = makeStubTx([[{ count: 0 }]]);
+    await countConsigneesByTenantRows(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT\s+COUNT\(\*\)::int\s+AS\s+count/i);
+    expect(captured.sql).toMatch(/FROM consignees/i);
+    expect(captured.sql).toMatch(/tenant_id\s*=\s*\$\d+/i);
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.sql).not.toMatch(/ORDER BY/i);
+    expect(captured.sql).not.toMatch(/LIMIT/i);
+  });
+
+  it("composes searchTerm with name + phone digit-stripping", async () => {
+    const tx = makeStubTx([[{ count: 2 }]]);
+    await countConsigneesByTenantRows(tx, TENANT_ID, { searchTerm: "+971 50 123" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/ILIKE/i);
+    expect(captured.params).toContain("%97150123%");
+  });
+
+  it("returns 0 when no rows match", async () => {
+    const tx = makeStubTx([[]]);
+    expect(await countConsigneesByTenantRows(tx, TENANT_ID, { searchTerm: "Nothing-Matches" })).toBe(0);
   });
 });
 

@@ -32,8 +32,10 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DateRangeFilter } from "@/components/DateRangeFilter";
 import { SearchBar } from "@/components/SearchBar";
 import { listUnresolvedFailedPushes } from "@/modules/failed-pushes";
+import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
 import {
   countTasks,
   listTasks,
@@ -42,6 +44,17 @@ import {
 } from "@/modules/tasks";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseDateParam(raw: string | undefined, fallback: string): string {
+  if (typeof raw !== "string" || !DATE_PATTERN.test(raw)) return fallback;
+  return raw;
+}
+
+function normaliseDateRange(from: string, to: string): { from: string; to: string } {
+  return from > to ? { from: to, to: from } : { from, to };
+}
 
 import { PageSizeDropdown } from "./page-size-dropdown";
 import { TasksClient } from "./client";
@@ -63,6 +76,8 @@ interface TasksPageProps {
     readonly page?: string;
     readonly perPage?: string;
     readonly q?: string;
+    readonly from?: string;
+    readonly to?: string;
   }>;
 }
 
@@ -75,6 +90,10 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const offset = (page - 1) * perPage;
   const query = (params.q ?? "").trim();
   const searchTerm = query.length > 0 ? query : undefined;
+  const today = computeTodayInDubai(new Date());
+  const rawFrom = parseDateParam(params.from, today);
+  const rawTo = parseDateParam(params.to, today);
+  const { from: dateFrom, to: dateTo } = normaliseDateRange(rawFrom, rawTo);
 
   let tasks: readonly Task[];
   let totalCount: number;
@@ -82,8 +101,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   try {
     const ctx = await buildRequestContext("/tasks", requestId);
     [tasks, totalCount, failedPushTaskIds] = await Promise.all([
-      listTasks(ctx, { limit: perPage, offset, status, searchTerm }),
-      countTasks(ctx, { status, searchTerm }),
+      listTasks(ctx, { limit: perPage, offset, status, searchTerm, dateFrom, dateTo }),
+      countTasks(ctx, { status, searchTerm, dateFrom, dateTo }),
       listUnresolvedFailedPushes(ctx).then(
         (rows) => new Set(rows.map((r) => r.taskId)),
       ),
@@ -130,6 +149,13 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           </div>
         </section>
 
+        <DateRangeFilter
+          today={today}
+          initialFrom={dateFrom}
+          initialTo={dateTo}
+          basePath="/tasks"
+        />
+
         <SearchBar
           label="Search tasks by AWB, consignee name or order number"
           placeholder="Search by AWB, consignee name or order #"
@@ -153,6 +179,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           status={status}
           perPage={perPage}
           query={query}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
         />
       </div>
     </main>
@@ -219,12 +247,16 @@ function Pagination({
   status,
   perPage,
   query,
+  dateFrom,
+  dateTo,
 }: {
   readonly page: number;
   readonly totalPages: number;
   readonly status: string | undefined;
   readonly perPage: number;
   readonly query: string;
+  readonly dateFrom: string;
+  readonly dateTo: string;
 }) {
   if (totalPages <= 1) return null;
   const buildHref = (p: number) => {
@@ -233,6 +265,8 @@ function Pagination({
     if (query.length > 0) params.set("q", query);
     if (perPage !== PAGE_SIZE_DEFAULT) params.set("perPage", String(perPage));
     if (p > 1) params.set("page", String(p));
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
     const qs = params.toString();
     return qs ? `/tasks?${qs}` : "/tasks";
   };

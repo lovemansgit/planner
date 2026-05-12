@@ -37,6 +37,8 @@ import type { TenantStatus } from "../merchants/types";
 
 import { normaliseToE164 } from "./phone";
 import {
+  countAllConsigneesRows,
+  countConsigneesByTenantRows,
   deleteConsignee as deleteConsigneeRow,
   findConsigneeById,
   findConsigneeForCrmUpdate,
@@ -242,6 +244,52 @@ export async function listAllConsignees(
       }
     }
     return listAllConsigneesRows(tx, filters);
+  });
+}
+
+/**
+ * Day-24 PM — cross-tenant COUNT of consignees matching the same
+ * filter set as `listAllConsignees`. Powers the hero count card on
+ * `/admin/consignees`.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `consignee:read_all`.
+ *   - ValidationError   merchantSlug filter does not resolve to an
+ *                       existing tenant.
+ */
+export async function countAllConsignees(
+  ctx: RequestContext,
+  filters: Omit<ListAllConsigneesFilters, "limit" | "offset"> = {},
+): Promise<number> {
+  requirePermission(ctx, "consignee:read_all");
+
+  return withServiceRole("transcorp_staff:count_all_consignees", async (tx) => {
+    if (filters.merchantSlug !== undefined) {
+      const rows = await tx.execute(
+        sqlTag`SELECT 1 FROM tenants WHERE slug = ${filters.merchantSlug} LIMIT 1`,
+      );
+      if (rows.length === 0) {
+        throw new ValidationError(
+          `merchantSlug filter does not resolve to an existing tenant: ${filters.merchantSlug}`,
+        );
+      }
+    }
+    return countAllConsigneesRows(tx, filters);
+  });
+}
+
+/**
+ * Day-24 PM — tenant-scoped COUNT of consignees. Powers the hero
+ * count card on tenant `/consignees`.
+ */
+export async function countConsigneesByTenant(
+  ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<number> {
+  requirePermission(ctx, "consignee:read");
+  assertTenantScoped(ctx, "consignee:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return countConsigneesByTenantRows(tx, ctx.tenantId!, opts);
   });
 }
 
