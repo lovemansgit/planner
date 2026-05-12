@@ -106,10 +106,17 @@ export async function enqueueTaskPushBatch(
     return { enqueuedCount: 0, failedChunks: 0 };
   }
 
-  const baseUrl = process.env.PUBLIC_BASE_URL;
+  // Day-22n /vercel-url-fallback — Vercel auto-injects VERCEL_URL on
+  // every deploy (preview alias on preview, prod alias on production).
+  // Used as the fallback when PUBLIC_BASE_URL is not configured for the
+  // active deploy scope, so preview deploys always have a callable
+  // callback target without requiring per-branch env-var setup.
+  const baseUrl =
+    process.env.PUBLIC_BASE_URL ??
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
   if (!baseUrl) {
     throw new Error(
-      "PUBLIC_BASE_URL env var required for Phase 5 enqueue URL construction",
+      "PUBLIC_BASE_URL or VERCEL_URL env var required for Phase 5 enqueue URL construction",
     );
   }
 
