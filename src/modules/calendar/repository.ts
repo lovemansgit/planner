@@ -133,8 +133,8 @@ type DayTaskRow = {
   district: string | null;
   crm_state: string;
   internal_status: string;
-  delivery_window_start: string;
-  delivery_window_end: string;
+  delivery_start_time: string;
+  delivery_end_time: string;
   external_tracking_number: string | null;
   subscription_id: string | null;
 } & Record<string, unknown>;
@@ -161,15 +161,15 @@ export async function listTasksForDayAcrossConsignees(
       c.district,
       c.crm_state,
       t.internal_status,
-      t.delivery_window_start,
-      t.delivery_window_end,
+      t.delivery_start_time,
+      t.delivery_end_time,
       t.external_tracking_number,
       t.subscription_id
     FROM tasks t
     JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id
     WHERE ${whereClause}
       AND t.delivery_date = ${date}
-    ORDER BY t.delivery_window_start ASC, c.name ASC
+    ORDER BY t.delivery_start_time ASC, c.name ASC
   `);
   return rows.map((row) => ({
     taskId: row.task_id,
@@ -178,8 +178,13 @@ export async function listTasksForDayAcrossConsignees(
     district: row.district,
     crmState: row.crm_state,
     status: row.internal_status,
-    deliveryWindowStart: row.delivery_window_start,
-    deliveryWindowEnd: row.delivery_window_end,
+    // Domain field names stay window-* per CalendarDayTaskRow contract;
+    // the SQL source columns are the per-task `delivery_{start,end}_time`
+    // on the `tasks` table (0006_task.sql). Conflating them with the
+    // similarly-named `delivery_window_{start,end}` on `subscriptions`
+    // (0009_subscription.sql) caused the d23 preview 42703 error.
+    deliveryWindowStart: row.delivery_start_time,
+    deliveryWindowEnd: row.delivery_end_time,
     externalTrackingNumber: row.external_tracking_number,
     subscriptionId: row.subscription_id,
   }));

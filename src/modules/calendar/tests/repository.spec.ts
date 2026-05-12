@@ -363,7 +363,7 @@ describe("listTasksForDayAcrossConsignees", () => {
     const { sql, params } = compile(tx.execute.mock.calls[0][0]);
     expect(sql).toMatch(/FROM tasks t/);
     expect(sql).toMatch(/JOIN consignees c/);
-    expect(sql).toMatch(/ORDER BY t.delivery_window_start ASC/);
+    expect(sql).toMatch(/ORDER BY t.delivery_start_time ASC/);
     expect(params).toContain(TENANT_ID);
     expect(params).toContain(DATE);
   });
@@ -384,8 +384,8 @@ describe("listTasksForDayAcrossConsignees", () => {
           district: "Dubai Marina",
           crm_state: "HIGH_RISK",
           internal_status: "FAILED",
-          delivery_window_start: "08:00:00",
-          delivery_window_end: "10:00:00",
+          delivery_start_time: "08:00:00",
+          delivery_end_time: "10:00:00",
           external_tracking_number: "AWB-001",
           subscription_id: "s1",
         },
