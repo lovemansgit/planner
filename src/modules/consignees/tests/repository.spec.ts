@@ -24,6 +24,7 @@ import {
   findConsigneeForCrmUpdate,
   insertConsignee,
   insertConsigneeCrmEvent,
+  listAllConsigneesRows,
   listConsigneesByTenant,
   selectTimelineForConsignee,
   updateConsignee,
@@ -229,6 +230,55 @@ describe("listConsigneesByTenant", () => {
       const captured = compile(tx.execute.mock.calls[0][0]);
       expect(captured.sql).toMatch(/name\s+ILIKE/i);
       expect(captured.sql).not.toMatch(/phone\s+ILIKE/i);
+    });
+  });
+});
+
+describe("listAllConsigneesRows", () => {
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllConsigneesRows(tx, {});
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/FROM consignees c/i);
+      expect(captured.sql).toMatch(/JOIN tenants ten/i);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllConsigneesRows(tx, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against consignee name + merchant name when query is non-digit", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllConsigneesRows(tx, { searchTerm: "Khouri" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/c\.name\s+ILIKE/i);
+      expect(captured.sql).toMatch(/ten\.name\s+ILIKE/i);
+      expect(captured.sql).not.toMatch(/c\.phone\s+ILIKE/i);
+      expect(captured.params).toContain("%Khouri%");
+    });
+
+    it("adds phone ILIKE with digits-stripped pattern when query has digits", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllConsigneesRows(tx, { searchTerm: "+971 50 123" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/c\.phone\s+ILIKE/i);
+      expect(captured.params).toContain("%97150123%");
+      expect(captured.params).toContain("%+971 50 123%");
+    });
+
+    it("composes searchTerm with merchantSlug (both clauses present)", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllConsigneesRows(tx, { searchTerm: "Sarah", merchantSlug: "mpl" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/ten\.slug\s*=/i);
+      expect(captured.sql).toMatch(/ILIKE/i);
+      expect(captured.params).toContain("mpl");
+      expect(captured.params).toContain("%Sarah%");
     });
   });
 });

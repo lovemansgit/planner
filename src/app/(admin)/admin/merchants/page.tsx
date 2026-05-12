@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import {
@@ -37,13 +38,23 @@ import { statusAction, statusBadgeSurface } from "./_helpers";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function MerchantsAdminPage() {
+interface MerchantsAdminPageProps {
+  readonly searchParams: Promise<{
+    readonly q?: string;
+  }>;
+}
+
+export default async function MerchantsAdminPage({
+  searchParams,
+}: MerchantsAdminPageProps) {
   const requestId = randomUUID();
+  const params = await searchParams;
+  const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
 
   let merchants: readonly Merchant[];
   try {
     const ctx = await buildRequestContext("/admin/merchants", requestId);
-    merchants = await listMerchants(ctx);
+    merchants = await listMerchants(ctx, { searchTerm: q });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/admin/merchants"));
@@ -87,11 +98,16 @@ export default async function MerchantsAdminPage() {
             {merchants.length}
           </p>
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Total merchants
+            {q !== undefined ? "Matching merchants" : "Total merchants"}
           </p>
         </section>
 
-        {merchants.length === 0 ? <EmptyState /> : <MerchantsTable rows={merchants} />}
+        <SearchBar
+          placeholder="Search by name or slug"
+          label="Search merchants by name or slug"
+        />
+
+        {merchants.length === 0 ? <EmptyState filtered={q !== undefined} /> : <MerchantsTable rows={merchants} />}
       </div>
     </main>
   );
@@ -176,12 +192,14 @@ function Td({ children, className = "" }: { children: React.ReactNode; className
   return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
-function EmptyState() {
+function EmptyState({ filtered }: { readonly filtered: boolean }) {
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
-      <p className="text-base text-navy">No merchants yet.</p>
+      <p className="text-base text-navy">
+        {filtered ? "No merchants match the search." : "No merchants yet."}
+      </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        Create your first merchant to get started.
+        {filtered ? "Clear the search to see all merchants." : "Create your first merchant to get started."}
       </p>
     </div>
   );

@@ -174,4 +174,10 @@ export interface ListMerchantsFilters {
    * rows in a no-status-filter call (rare; debugging only).
    */
   readonly excludeArchived?: boolean;
+  /**
+   * Optional case-insensitive ILIKE across `name` + `slug`. Empty /
+   * whitespace-only values collapse to no filter. Caller is responsible
+   * for trim + min-length gating at the URL boundary.
+   */
+  readonly searchTerm?: string;
 }

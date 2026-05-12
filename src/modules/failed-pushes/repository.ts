@@ -250,19 +250,39 @@ export async function markUnresolvedAsResolved(
  *
  * Tenant-scoped via WHERE clause (defence-in-depth alongside RLS).
  * Returns `[]` for tenants with no unresolved rows.
+ *
+ * Day-24: optional `searchTerm` narrows the result via case-insensitive
+ * ILIKE across the parent task's AWB (`tasks.external_tracking_number`)
+ * and the failed_pushes UUID `task_id::text`. The INNER JOIN to `tasks`
+ * is structurally safe — `failed_pushes.task_id REFERENCES tasks(id)
+ * ON DELETE CASCADE` (0008_failed_pushes.sql:140) plus a BEFORE-INSERT
+ * trigger (failed_pushes_assert_tenant_match, 0008:211) make orphan
+ * failed_pushes impossible. INNER vs LEFT JOIN return the same set.
  */
 export async function listUnresolvedByTenant(
   tx: DbTx,
   tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly FailedPush[]> {
+  const searchFilter = buildFailedPushSearchFilter(opts.searchTerm);
   const rows = await tx.execute<FailedPushRow>(sqlTag`
-    SELECT *
-    FROM failed_pushes
-    WHERE tenant_id = ${tenantId}
-      AND resolved_at IS NULL
-    ORDER BY last_attempted_at DESC
+    SELECT fp.*
+    FROM failed_pushes fp
+    INNER JOIN tasks t ON t.id = fp.task_id
+    WHERE fp.tenant_id = ${tenantId}
+      AND fp.resolved_at IS NULL
+      ${searchFilter}
+    ORDER BY fp.last_attempted_at DESC
   `);
   return rows.map(mapRow);
+}
+
+function buildFailedPushSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const pattern = `%${trimmed}%`;
+  return sqlTag`AND (t.external_tracking_number ILIKE ${pattern} OR fp.task_id::text ILIKE ${pattern})`;
 }
 
 /**

@@ -214,10 +214,10 @@ describe("updateMerchantStatus", () => {
 });
 
 describe("listMerchants", () => {
-  it("default (no filter) excludes archived rows via WHERE status != 'archived'", async () => {
-    // Day-18 cleanup default. The /admin/merchants list page calls
-    // listMerchants(ctx) with no filter and depends on archived rows
-    // being hidden by default (excludeArchived defaults true). Asserts
+  it("default (no filter) excludes archived rows via composed AND status != 'archived'", async () => {
+    // Day-18 cleanup default; Day-24 composable refactor. The /admin/merchants
+    // list page calls listMerchants(ctx) with no filter and depends on archived
+    // rows being hidden by default (excludeArchived defaults true). Asserts
     // the SQL surface that delivers that contract.
     const tx = makeStubTx([
       [
@@ -232,22 +232,20 @@ describe("listMerchants", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/SELECT \* FROM tenants/i);
     expect(captured.sql).toMatch(/order by\s+created_at\s+desc/i);
-    // Day-18 — must contain the "exclude archived" filter on the
-    // default code path. Use a precise inequality match so a future
-    // refactor that drops the filter trips the test.
-    expect(captured.sql).toMatch(/where\s+status\s*!=\s*'archived'/i);
+    // Day-24 — composable form: WHERE 1 = 1 AND status != 'archived'.
+    expect(captured.sql).toMatch(/status\s*!=\s*'archived'/i);
     // ...and must NOT have a status-equality filter (that's the
     // explicit-status branch, which this case shouldn't hit).
-    expect(captured.sql).not.toMatch(/where\s+status\s*=\s*\$/i);
+    expect(captured.sql).not.toMatch(/status\s*=\s*\$\d+/i);
     expect(result).toHaveLength(2);
     expect(result[0].slug).toBe("first");
   });
 
-  it("adds WHERE status = $1 when explicit status filter supplied", async () => {
+  it("adds AND status = $1 when explicit status filter supplied", async () => {
     const tx = makeStubTx([[rowFixture({ status: "active" })]]);
     await listMerchants(tx, { status: "active" });
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/where\s+status\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/status\s*=\s*\$\d+/i);
     expect(captured.params).toContain("active");
   });
 
@@ -266,16 +264,16 @@ describe("listMerchants", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     // Explicit status filter wins; the SQL is the equality form,
     // NOT the inequality default-exclude form.
-    expect(captured.sql).toMatch(/where\s+status\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/status\s*=\s*\$\d+/i);
     expect(captured.sql).not.toMatch(/!=\s*'archived'/i);
     expect(captured.params).toContain("archived");
     expect(result).toHaveLength(1);
     expect(result[0].status).toBe("archived");
   });
 
-  it("excludeArchived: false bypasses the default-exclude (no WHERE clause)", async () => {
+  it("excludeArchived: false bypasses the default-exclude (no status predicate)", async () => {
     // Debug/forensic posture: caller wants every row including
-    // archived. Repository drops the WHERE clause entirely.
+    // archived. Composable refactor: no status SQL fragment is added.
     const tx = makeStubTx([
       [
         rowFixture({ id: "t-1", slug: "live", status: "active" }),
@@ -285,7 +283,8 @@ describe("listMerchants", () => {
     const result = await listMerchants(tx, { excludeArchived: false });
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/SELECT \* FROM tenants/i);
-    expect(captured.sql).not.toMatch(/where\s+status/i);
+    expect(captured.sql).not.toMatch(/status\s*!=/i);
+    expect(captured.sql).not.toMatch(/status\s*=\s*\$\d+/i);
     expect(result).toHaveLength(2);
   });
 
@@ -297,7 +296,7 @@ describe("listMerchants", () => {
     const tx = makeStubTx([[rowFixture({ status: "archived" })]]);
     await listMerchants(tx, { status: "archived", excludeArchived: true });
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/where\s+status\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/status\s*=\s*\$\d+/i);
     expect(captured.sql).not.toMatch(/!=\s*'archived'/i);
     expect(captured.params).toContain("archived");
   });
@@ -306,7 +305,41 @@ describe("listMerchants", () => {
     const tx = makeStubTx([[]]);
     await listMerchants(tx, { excludeArchived: true });
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/where\s+status\s*!=\s*'archived'/i);
+    expect(captured.sql).toMatch(/status\s*!=\s*'archived'/i);
+  });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, {});
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against name + slug when searchTerm is set", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, { searchTerm: "demo" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/name\s+ILIKE/i);
+      expect(captured.sql).toMatch(/slug\s+ILIKE/i);
+      expect(captured.params).toContain("%demo%");
+    });
+
+    it("composes searchTerm with the default excludeArchived filter (both clauses present)", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, { searchTerm: "demo" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/status\s*!=\s*'archived'/i);
+      expect(captured.sql).toMatch(/ILIKE/i);
+      expect(captured.params).toContain("%demo%");
+    });
   });
 });
 

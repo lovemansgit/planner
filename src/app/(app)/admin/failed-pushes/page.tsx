@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 
 import { redirect } from "next/navigation";
 
+import { SearchBar } from "@/components/SearchBar";
 import {
   listUnresolvedFailedPushes,
   type FailedPush,
@@ -35,13 +36,23 @@ import { FailedPushesAdmin } from "./client";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function FailedPushesAdminPage() {
+interface FailedPushesAdminPageProps {
+  readonly searchParams: Promise<{
+    readonly q?: string;
+  }>;
+}
+
+export default async function FailedPushesAdminPage({
+  searchParams,
+}: FailedPushesAdminPageProps) {
   const requestId = randomUUID();
+  const params = await searchParams;
+  const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
 
   let rows: readonly FailedPush[];
   try {
     const ctx = await buildRequestContext("/admin/failed-pushes", requestId);
-    rows = await listUnresolvedFailedPushes(ctx);
+    rows = await listUnresolvedFailedPushes(ctx, { searchTerm: q });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/admin/failed-pushes"));
@@ -68,25 +79,32 @@ export default async function FailedPushesAdminPage() {
 
         <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Unresolved rows
+            {q !== undefined ? "Matching unresolved rows" : "Unresolved rows"}
           </p>
           <p className="mt-4 font-serif text-5xl font-light tabular-nums leading-none">
             {rows.length}
           </p>
         </section>
 
-        {rows.length === 0 ? <EmptyState /> : <FailedPushesAdmin initialRows={rows} />}
+        <SearchBar
+          placeholder="Search by AWB or task ID"
+          label="Search failed pushes by AWB or task ID"
+        />
+
+        {rows.length === 0 ? <EmptyState filtered={q !== undefined} /> : <FailedPushesAdmin initialRows={rows} />}
       </div>
     </main>
   );
 }
 
-function EmptyState() {
+function EmptyState({ filtered }: { readonly filtered: boolean }) {
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
-      <p className="text-base text-navy">No unresolved failed pushes.</p>
+      <p className="text-base text-navy">
+        {filtered ? "No failed pushes match the search." : "No unresolved failed pushes."}
+      </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        New failures land here automatically when the cron writes a DLQ row.
+        {filtered ? "Clear the search to see all unresolved rows." : "New failures land here automatically when the cron writes a DLQ row."}
       </p>
     </div>
   );
