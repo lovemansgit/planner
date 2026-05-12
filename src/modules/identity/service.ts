@@ -443,12 +443,16 @@ async function runCreateRoleAssignment(
   }
   const roleId = roleRows[0].id;
 
+  // Day-24 schema-drift hotfix: role_assignments has `assigned_at`
+  // (not `created_at` — see supabase/migrations/0001_identity.sql:76).
+  // Tautological-update pattern lets ON CONFLICT still return the
+  // existing row's id without mutating any meaningful column.
   type AssignmentIdRow = { id: string } & Record<string, unknown>;
   const rows = await tx.execute<AssignmentIdRow>(sqlTag`
     INSERT INTO role_assignments (user_id, role_id, tenant_id)
     VALUES (${input.userId}, ${roleId}, ${input.tenantId})
     ON CONFLICT (user_id, role_id, tenant_id) DO UPDATE
-      SET created_at = role_assignments.created_at
+      SET assigned_at = role_assignments.assigned_at
     RETURNING id
   `);
   return { assignmentId: rows[0].id as Uuid };

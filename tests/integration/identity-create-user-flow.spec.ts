@@ -221,6 +221,30 @@ describe("identity create-user flow — integration", () => {
         }),
       ).rejects.toThrow(/not assignable/i);
     });
+
+    it("is idempotent on (user_id, role_id, tenant_id) — re-issue returns the same id (Day-24 schema-drift hotfix regression pin)", async () => {
+      // Regression pin for the Day-24 PR #259 hotfix. The original
+      // ON CONFLICT clause wrote `SET created_at =
+      // role_assignments.created_at` but the table has `assigned_at`
+      // (not `created_at` — see migration 0001_identity.sql:76).
+      // Postgres raised 42703 errorMissingColumn and every form
+      // submit 500'd. Re-issuing the same assignment exercises the
+      // ON CONFLICT path end-to-end; if column-name drift re-
+      // surfaces, this assertion fails with the same Postgres error
+      // at integration tier before merge.
+      const ctx = transcorpStaffCtx();
+      const first = await createRoleAssignment(ctx, {
+        userId: AUTH_USER_B as Uuid,
+        roleSlug: "tenant-admin",
+        tenantId: TENANT_B as Uuid,
+      });
+      const second = await createRoleAssignment(ctx, {
+        userId: AUTH_USER_B as Uuid,
+        roleSlug: "tenant-admin",
+        tenantId: TENANT_B as Uuid,
+      });
+      expect(second.assignmentId).toBe(first.assignmentId);
+    });
   });
 
   // -------------------------------------------------------------------------

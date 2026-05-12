@@ -1,10 +1,24 @@
 // Day-24 — /admin/users/new server-rendered shell.
 //
-// Loads the tenant list (Transcorp tenant + active merchants) and
-// hands it to the client-side UserCreateForm. Form's role dropdown
-// re-renders depending on which tenant is selected (transcorp vs
-// merchant) — that branching lives on the client; server's only job
-// is to load the tenant options + permission-gate the page.
+// Loads the tenant list (Transcorp tenant + every non-archived
+// merchant — active AND provisioning, so freshly-onboarded merchants
+// that need their first admin user appear in the dropdown without an
+// activation round-trip) and hands it to the client-side
+// UserCreateForm. Form's role dropdown re-renders depending on which
+// tenant is selected (transcorp vs merchant) — that branching lives
+// on the client; server's only job is to load the tenant options +
+// permission-gate the page.
+//
+// Day-24 hotfix: `listMerchants` already returns the Transcorp
+// tenant alongside merchants (per the registered followup at
+// memory/followup_admin_merchant_list_filter_internal_tenant.md —
+// there's no is_internal flag yet). The previous build also fetched
+// it explicitly via a separate query, duplicating "Transcorp" in the
+// dropdown. Now: single fetch via listMerchants, then classify each
+// row by slug to set `kind`. Provisioning tenants are kept (Demo
+// Bistro lands as `provisioning` post-onboarding before activation;
+// without including it the new-user form blocks the "create merchant,
+// then create their admin user" workflow).
 
 import { randomUUID } from "node:crypto";
 
@@ -17,13 +31,13 @@ import {
   UnauthorizedError,
 } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
-import { withServiceRole } from "@/shared/db";
-import { sql as sqlTag } from "drizzle-orm";
 
 import { UserCreateForm } from "./_components/UserCreateForm";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+const TRANSCORP_TENANT_SLUG = "transcorp";
 
 interface TenantOption {
   readonly id: string;
@@ -41,19 +55,30 @@ export default async function AdminUsersNewPage() {
     if (ctx.actor.kind !== "user" || !ctx.actor.permissions.has("merchant:read_all")) {
       throw new ForbiddenError("/admin/users/new requires merchant:read_all");
     }
-    const merchants = await listMerchants(ctx);
-    const transcorpTenant = await fetchTranscorpTenant();
-    tenantOptions = [
-      ...(transcorpTenant ? [transcorpTenant] : []),
-      ...merchants
-        .filter((m) => m.status === "active" || m.status === "provisioning")
-        .map((m) => ({
-          id: m.tenantId,
-          slug: m.slug,
-          name: m.name,
-          kind: "merchant" as const,
-        })),
-    ];
+    const allTenants = await listMerchants(ctx);
+    // Keep every non-archived tenant — listMerchants's default
+    // already excludes archived. Filter only `inactive` (operators
+    // shouldn't provision new users for a sunset merchant); keep
+    // active + provisioning + suspended. Classification: the lone
+    // 'transcorp' slug is the internal tenant, everything else is a
+    // merchant.
+    tenantOptions = allTenants
+      .filter((t) => t.status !== "inactive")
+      .map<TenantOption>((t) => ({
+        id: t.tenantId,
+        slug: t.slug,
+        name: t.name,
+        kind: t.slug === TRANSCORP_TENANT_SLUG ? "transcorp" : "merchant",
+      }))
+      // Transcorp first so the role dropdown defaults to a
+      // transcorp-sysadmin assignment when the form loads (most
+      // common operator path is Transcorp-sysadmin onboarding more
+      // Transcorp staff).
+      .sort((a, b) => {
+        if (a.kind === "transcorp" && b.kind !== "transcorp") return -1;
+        if (b.kind === "transcorp" && a.kind !== "transcorp") return 1;
+        return a.name.localeCompare(b.name, "en-GB");
+      });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/admin/users/new"));
@@ -85,18 +110,6 @@ export default async function AdminUsersNewPage() {
       </div>
     </main>
   );
-}
-
-async function fetchTranscorpTenant(): Promise<TenantOption | null> {
-  return withServiceRole("transcorp_staff:list_internal_tenant", async (tx) => {
-    type Row = { id: string; slug: string; name: string } & Record<string, unknown>;
-    const rows = await tx.execute<Row>(sqlTag`
-      SELECT id, slug, name FROM tenants WHERE slug = 'transcorp' LIMIT 1
-    `);
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return { id: row.id, slug: row.slug, name: row.name, kind: "transcorp" };
-  });
 }
 
 function SystemNotInitialised() {
