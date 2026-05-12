@@ -99,6 +99,7 @@ import { isCutOffElapsedForDate } from "../task-materialization/dubai-date";
 import type { TenantStatus } from "../merchants/types";
 
 import {
+  countAllTasksRows,
   countTasksByConsigneeAndDayBucket,
   countTasksByTenant,
   type DayBucketCount,
@@ -726,18 +727,53 @@ export async function getConsigneeTaskCountByDayBucket(
  * Day 11 / P5 — count tenant tasks (optionally filtered by status).
  * Pairs with listTasks for paginated views; the UI surfaces total +
  * page count without re-listing every row.
+ *
+ * Day-24 PM: extended with `dateFrom`/`dateTo` (inclusive
+ * `delivery_date` bounds) for the tenant `/tasks` hero count card.
  */
 export async function countTasks(
   ctx: RequestContext,
   opts: {
     readonly status?: TaskInternalStatus;
     readonly searchTerm?: string;
+    readonly dateFrom?: string;
+    readonly dateTo?: string;
   } = {},
 ): Promise<number> {
   requirePermission(ctx, "task:read");
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return countTasksByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day-24 PM — cross-tenant COUNT of tasks matching the same filter
+ * set as `listAllTasks`. Powers the hero count card on `/admin/tasks`.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `task:read_all`.
+ *   - ValidationError   merchantSlug filter does not resolve to an
+ *                       existing tenant.
+ */
+export async function countAllTasks(
+  ctx: RequestContext,
+  filters: Omit<ListAllTasksFilters, "limit" | "offset"> = {},
+): Promise<number> {
+  requirePermission(ctx, "task:read_all");
+
+  return withServiceRole("transcorp_staff:count_all_tasks", async (tx) => {
+    if (filters.merchantSlug !== undefined) {
+      const rows = await tx.execute(
+        sqlTag`SELECT 1 FROM tenants WHERE slug = ${filters.merchantSlug} LIMIT 1`,
+      );
+      if (rows.length === 0) {
+        throw new ValidationError(
+          `merchantSlug filter does not resolve to an existing tenant: ${filters.merchantSlug}`,
+        );
+      }
+    }
+    return countAllTasksRows(tx, filters);
   });
 }
 

@@ -20,7 +20,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { SearchBar } from "@/components/SearchBar";
-import { listConsignees, type Consignee } from "@/modules/consignees";
+import { countConsigneesByTenant, listConsignees, type Consignee } from "@/modules/consignees";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
@@ -42,10 +42,15 @@ export default async function ConsigneesPage({ searchParams }: ConsigneesPagePro
   const query = (params.q ?? "").trim();
 
   let consignees: readonly Consignee[];
+  let totalCount: number;
   let canOnboard = false;
   try {
     const ctx = await buildRequestContext("/consignees", requestId);
-    consignees = await listConsignees(ctx, query.length > 0 ? { searchTerm: query } : {});
+    const listOpts = query.length > 0 ? { searchTerm: query } : {};
+    [consignees, totalCount] = await Promise.all([
+      listConsignees(ctx, listOpts),
+      countConsigneesByTenant(ctx, listOpts),
+    ]);
     if (ctx.actor.kind === "user") {
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
       canOnboard = perms.has("consignee:create") && perms.has("subscription:create");
@@ -85,7 +90,7 @@ export default async function ConsigneesPage({ searchParams }: ConsigneesPagePro
 
         <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
           <p className="font-serif text-5xl font-light tabular-nums leading-none">
-            {consignees.length}
+            {totalCount}
           </p>
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             {query.length > 0 ? `Matching "${query}"` : "Total consignees"}

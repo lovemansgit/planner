@@ -316,6 +316,54 @@ function buildAdminConsigneeSearchFilter(searchTerm: string | undefined) {
 }
 
 /**
+ * Day-24 PM: cross-tenant COUNT of consignees matching the same
+ * filter set as `listAllConsigneesRows`. Powers the hero count card
+ * on /admin/consignees. Drops ORDER BY + LIMIT/OFFSET; returns a
+ * single integer.
+ */
+export async function countAllConsigneesRows(
+  tx: DbTx,
+  filters: Omit<ListAllConsigneesFilters, "limit" | "offset"> = {},
+): Promise<number> {
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+  const searchFilter = buildAdminConsigneeSearchFilter(filters.searchTerm);
+
+  const rows = await tx.execute<{ count: number }>(sqlTag`
+    SELECT COUNT(*)::int AS count
+    FROM consignees c
+    JOIN tenants ten ON ten.id = c.tenant_id
+    WHERE 1 = 1
+      AND ten.status != 'archived'
+      ${merchantFilter}
+      ${searchFilter}
+  `);
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Day-24 PM: tenant-scoped COUNT of consignees matching `searchTerm`.
+ * Powers the hero count card on tenant `/consignees`. Tenant-scoped
+ * via explicit predicate + RLS (caller wraps in `withTenant`).
+ */
+export async function countConsigneesByTenantRows(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<number> {
+  const searchFilter = buildConsigneeSearchFilter(opts.searchTerm);
+  const rows = await tx.execute<{ count: number }>(sqlTag`
+    SELECT COUNT(*)::int AS count
+    FROM consignees
+    WHERE tenant_id = ${tenantId}
+      ${searchFilter}
+  `);
+  return rows[0]?.count ?? 0;
+}
+
+/**
  * UPDATE selected fields on one consignee, scoped to `tenantId` for
  * defence in depth alongside RLS. Only fields present on `patch` are
  * written; others are left untouched. `tenant_id`, `id`, and

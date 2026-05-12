@@ -20,6 +20,7 @@ export type {
 
 export {
   changeConsigneeCrmState,
+  countConsigneesByTenant,
   createConsignee,
   getConsignee,
   getConsigneeCrmHistory,

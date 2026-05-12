@@ -38,13 +38,37 @@ import {
   parsePerPageParam,
   parseStatusParam,
 } from "@/app/(app)/tasks/status";
+import { DateRangeFilter } from "@/components/DateRangeFilter";
 import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
+import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
 import {
   type AdminTaskRow,
+  countAllTasks,
   listAllTasks,
 } from "@/modules/tasks/service";
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Day-24 PM — page-boundary date param parser. Returns the parsed
+ * YYYY-MM-DD string if valid; falls back to the provided default
+ * otherwise (used for both individual bounds + the from > to swap).
+ */
+function parseDateParam(raw: string | undefined, fallback: string): string {
+  if (typeof raw !== "string" || !DATE_PATTERN.test(raw)) return fallback;
+  return raw;
+}
+
+/**
+ * Day-24 PM — defensive swap when caller provides from > to. The
+ * brief flagged this edge case; we swap rather than error so a
+ * malformed URL still renders a valid page.
+ */
+function normaliseDateRange(from: string, to: string): { from: string; to: string } {
+  return from > to ? { from: to, to: from } : { from, to };
+}
 import {
   ForbiddenError,
   NoTenantConfiguredError,
@@ -67,6 +91,8 @@ interface AdminTasksPageProps {
     readonly page?: string;
     readonly perPage?: string;
     readonly q?: string;
+    readonly from?: string;
+    readonly to?: string;
   }>;
 }
 
@@ -79,14 +105,20 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
   const perPage = parsePerPageParam(params.perPage);
   const offset = (page - 1) * perPage;
   const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
+  const today = computeTodayInDubai(new Date());
+  const rawFrom = parseDateParam(params.from, today);
+  const rawTo = parseDateParam(params.to, today);
+  const { from: dateFrom, to: dateTo } = normaliseDateRange(rawFrom, rawTo);
 
   let rows: readonly AdminTaskRow[];
   let merchants: readonly Merchant[];
+  let totalCount: number;
   try {
     const ctx = await buildRequestContext("/admin/tasks", requestId);
-    [rows, merchants] = await Promise.all([
-      listAllTasks(ctx, { merchantSlug, status, limit: perPage, offset, searchTerm: q }),
+    [rows, merchants, totalCount] = await Promise.all([
+      listAllTasks(ctx, { merchantSlug, status, limit: perPage, offset, searchTerm: q, dateFrom, dateTo }),
       listMerchants(ctx),
+      countAllTasks(ctx, { merchantSlug, status, searchTerm: q, dateFrom, dateTo }),
     ]);
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -117,9 +149,25 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">Tasks</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-            All tasks across the platform. Filter by merchant or status.
+            All tasks across the platform. Filter by date range, merchant, or status.
           </p>
         </header>
+
+        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
+          <p className="font-serif text-5xl font-light tabular-nums leading-none">
+            {totalCount}
+          </p>
+          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+            {status !== undefined || merchantSlug !== undefined || q !== undefined ? "Matching tasks" : "Total tasks"}
+          </p>
+        </section>
+
+        <DateRangeFilter
+          today={today}
+          initialFrom={dateFrom}
+          initialTo={dateTo}
+          basePath="/admin/tasks"
+        />
 
         <SearchBar
           placeholder="Search by AWB, consignee, or merchant"
@@ -139,6 +187,8 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           merchantSlug={merchantSlug}
           perPage={perPage}
           q={q}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
         />
 
         {rows.length === 0 ? <EmptyState filtered={status !== undefined || merchantSlug !== undefined || q !== undefined} /> : <AdminTasksTable rows={rows} />}
@@ -150,6 +200,8 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           status={status}
           perPage={perPage}
           q={q}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
         />
       </div>
     </main>
@@ -161,23 +213,27 @@ function StatusFilterBar({
   merchantSlug,
   perPage,
   q,
+  dateFrom,
+  dateTo,
 }: {
   readonly activeStatus: string | undefined;
   readonly merchantSlug: string | undefined;
   readonly perPage: number;
   readonly q: string | undefined;
+  readonly dateFrom: string;
+  readonly dateTo: string;
 }) {
   return (
     <nav aria-label="Status filter" className="mb-8 flex flex-wrap items-center gap-2">
       <FilterPill
-        href={buildAdminTasksHref({ merchantSlug, perPage, status: undefined, q })}
+        href={buildAdminTasksHref({ merchantSlug, perPage, status: undefined, q, dateFrom, dateTo })}
         active={activeStatus === undefined}
         label="All"
       />
       {TASK_STATUS_FILTERS.map((s) => (
         <FilterPill
           key={s.value}
-          href={buildAdminTasksHref({ merchantSlug, perPage, status: s.value, q })}
+          href={buildAdminTasksHref({ merchantSlug, perPage, status: s.value, q, dateFrom, dateTo })}
           active={activeStatus === s.value}
           label={s.label}
         />
@@ -213,12 +269,16 @@ function buildAdminTasksHref({
   status,
   page,
   q,
+  dateFrom,
+  dateTo,
 }: {
   readonly merchantSlug: string | undefined;
   readonly perPage: number;
   readonly status: string | undefined;
   readonly page?: number;
   readonly q?: string;
+  readonly dateFrom: string;
+  readonly dateTo: string;
 }): string {
   const params = new URLSearchParams();
   if (merchantSlug) params.set("merchant", merchantSlug);
@@ -226,6 +286,8 @@ function buildAdminTasksHref({
   if (perPage !== PAGE_SIZE_DEFAULT) params.set("perPage", String(perPage));
   if (page !== undefined && page > 1) params.set("page", String(page));
   if (q) params.set("q", q);
+  if (dateFrom) params.set("from", dateFrom);
+  if (dateTo) params.set("to", dateTo);
   const qs = params.toString();
   return qs ? `/admin/tasks?${qs}` : "/admin/tasks";
 }
@@ -297,6 +359,8 @@ function Pagination({
   status,
   perPage,
   q,
+  dateFrom,
+  dateTo,
 }: {
   readonly page: number;
   readonly hasNext: boolean;
@@ -304,6 +368,8 @@ function Pagination({
   readonly status: string | undefined;
   readonly perPage: number;
   readonly q: string | undefined;
+  readonly dateFrom: string;
+  readonly dateTo: string;
 }) {
   if (page === 1 && !hasNext) return null;
   return (
@@ -317,7 +383,7 @@ function Pagination({
       <div className="flex gap-3">
         {page > 1 ? (
           <Link
-            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page - 1, q })}
+            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page - 1, q, dateFrom, dateTo })}
             className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
           >
             ← Previous
@@ -329,7 +395,7 @@ function Pagination({
         )}
         {hasNext ? (
           <Link
-            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page + 1, q })}
+            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page + 1, q, dateFrom, dateTo })}
             className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
           >
             Next →

@@ -137,16 +137,19 @@ export function visibleLandingCards(
 // -----------------------------------------------------------------------------
 
 export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
-  { label: "Merchants", path: "/admin/merchants", permission: "merchant:read_all" },
-  { label: "Tasks", path: "/admin/tasks", permission: "task:read_all" },
-  { label: "Consignees", path: "/admin/consignees", permission: "consignee:read_all" },
-  { label: "Subscriptions", path: "/admin/subscriptions", permission: "subscription:read_all" },
   // Calendar lives on a dedicated /admin/calendar route so the
   // Transcorp variant renders under the (admin)/ shell + AdminTopNav.
   // The tenant /calendar route keeps the tenant variant + tenant nav
   // shell. Previously this entry pointed to /calendar which dropped
-  // Transcorp staff into the tenant nav (Day-24 dry-run bug).
+  // Transcorp staff into the tenant nav (Day-24 dry-run bug, fixed
+  // PR #257). Day-24 PM reorder puts Calendar first to match the
+  // tenant NAV_ITEMS ordering — operator mental model is "calendar is
+  // the home view, lists are drill-downs."
   { label: "Calendar", path: "/admin/calendar", permission: "task:read_all" },
+  { label: "Merchants", path: "/admin/merchants", permission: "merchant:read_all" },
+  { label: "Tasks", path: "/admin/tasks", permission: "task:read_all" },
+  { label: "Consignees", path: "/admin/consignees", permission: "consignee:read_all" },
+  { label: "Subscriptions", path: "/admin/subscriptions", permission: "subscription:read_all" },
 ] as const;
 
 /**

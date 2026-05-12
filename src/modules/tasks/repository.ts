@@ -515,6 +515,13 @@ export interface ListTasksOpts {
    * strings are treated as no filter.
    */
   readonly searchTerm?: string;
+  /**
+   * Day-24 PM: inclusive `delivery_date` lower bound (YYYY-MM-DD).
+   * Caller (tenant /tasks page boundary) ensures dateFrom ≤ dateTo.
+   */
+  readonly dateFrom?: string;
+  /** Inclusive `delivery_date` upper bound (YYYY-MM-DD). */
+  readonly dateTo?: string;
 }
 
 /**
@@ -566,7 +573,7 @@ export async function listTasksByTenant(
   tenantId: Uuid,
   opts: ListTasksOpts = {},
 ): Promise<readonly Task[]> {
-  const { limit, offset = 0, status, searchTerm } = opts;
+  const { limit, offset = 0, status, searchTerm, dateFrom, dateTo } = opts;
   const statusFilter = status
     ? sqlTag`AND t.internal_status = ${status}`
     : sqlTag``;
@@ -574,6 +581,8 @@ export async function listTasksByTenant(
   const consigneeJoin = needsConsigneeJoin(searchTerm)
     ? sqlTag`LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id`
     : sqlTag``;
+  const dateFromFilter = buildDateFromFilter(dateFrom);
+  const dateToFilter = buildDateToFilter(dateTo);
   const limitClause = limit !== undefined ? sqlTag`LIMIT ${limit}` : sqlTag``;
   const offsetClause = offset > 0 ? sqlTag`OFFSET ${offset}` : sqlTag``;
   const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
@@ -592,12 +601,15 @@ export async function listTasksByTenant(
     WHERE t.tenant_id = ${tenantId}
       ${statusFilter}
       ${searchFilter}
+      ${dateFromFilter}
+      ${dateToFilter}
     ORDER BY t.created_at DESC
     ${limitClause}
     ${offsetClause}
   `);
   return rows.map(mapTaskWithPackages);
 }
+
 
 function needsConsigneeJoin(searchTerm: string | undefined): boolean {
   if (!searchTerm) return false;
@@ -675,6 +687,15 @@ export interface ListAllTasksFilters {
   readonly offset?: number;
   readonly status?: TaskInternalStatus;
   readonly searchTerm?: string;
+  /**
+   * Day-24 PM: inclusive `delivery_date` lower bound (YYYY-MM-DD). When
+   * set, SQL adds `AND t.delivery_date >= ${dateFrom}::date`. Caller is
+   * responsible for ensuring dateFrom ≤ dateTo at the page boundary —
+   * the helper does not swap or validate ordering.
+   */
+  readonly dateFrom?: string;
+  /** Inclusive `delivery_date` upper bound (YYYY-MM-DD). */
+  readonly dateTo?: string;
 }
 
 /**
@@ -729,6 +750,8 @@ export async function listAllTasksRows(
       ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
       : sqlTag``;
   const searchFilter = buildAdminTaskSearchFilter(filters.searchTerm);
+  const dateFromFilter = buildDateFromFilter(filters.dateFrom);
+  const dateToFilter = buildDateToFilter(filters.dateTo);
 
   const rows = await tx.execute<AdminTaskJoinRow>(sqlTag`
     SELECT
@@ -745,6 +768,8 @@ export async function listAllTasksRows(
       ${statusFilter}
       ${merchantFilter}
       ${searchFilter}
+      ${dateFromFilter}
+      ${dateToFilter}
     ORDER BY t.delivery_date DESC, t.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
@@ -766,6 +791,66 @@ function buildAdminTaskSearchFilter(searchTerm: string | undefined) {
   if (trimmed.length === 0) return sqlTag``;
   const pattern = `%${trimmed}%`;
   return sqlTag`AND (t.external_tracking_number ILIKE ${pattern} OR c.name ILIKE ${pattern} OR ten.name ILIKE ${pattern})`;
+}
+
+/**
+ * Day-24 PM: shared `delivery_date >=` SQL fragment. Empty string or
+ * undefined collapses to no filter. Used by both `listAllTasksRows`
+ * + `countAllTasksRows` (admin) and `listTasksByTenant` +
+ * `countTasksByTenantRows` (tenant).
+ */
+function buildDateFromFilter(dateFrom: string | undefined) {
+  if (!dateFrom) return sqlTag``;
+  return sqlTag`AND t.delivery_date >= ${dateFrom}::date`;
+}
+
+/** Shared `delivery_date <=` fragment. See buildDateFromFilter. */
+function buildDateToFilter(dateTo: string | undefined) {
+  if (!dateTo) return sqlTag``;
+  return sqlTag`AND t.delivery_date <= ${dateTo}::date`;
+}
+
+/**
+ * Day-24 PM: cross-tenant COUNT of tasks matching the same filter set
+ * as `listAllTasksRows`. Same JOIN topology + composable filter
+ * fragments — drops ORDER BY + LIMIT/OFFSET. Returns a single integer
+ * for the hero count card on /admin/tasks.
+ *
+ * The `LEFT JOIN consignees` is preserved even when no `searchTerm` is
+ * set, because the LEFT JOIN cannot multiply rows (each task has at
+ * most one consignee). If a task has a NULL consignee_id, the LEFT
+ * JOIN produces one row with NULL `c.*`; INNER JOIN would have dropped
+ * it. Same posture as `listAllTasksRows`.
+ */
+export async function countAllTasksRows(
+  tx: DbTx,
+  filters: Omit<ListAllTasksFilters, "limit" | "offset"> = {},
+): Promise<number> {
+  const statusFilter = filters.status
+    ? sqlTag`AND t.internal_status = ${filters.status}`
+    : sqlTag``;
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+  const searchFilter = buildAdminTaskSearchFilter(filters.searchTerm);
+  const dateFromFilter = buildDateFromFilter(filters.dateFrom);
+  const dateToFilter = buildDateToFilter(filters.dateTo);
+
+  const rows = await tx.execute<{ count: number }>(sqlTag`
+    SELECT COUNT(*)::int AS count
+    FROM tasks t
+    JOIN tenants ten ON ten.id = t.tenant_id
+    LEFT JOIN consignees c ON c.id = t.consignee_id
+    WHERE 1 = 1
+      AND ten.status != 'archived'
+      ${statusFilter}
+      ${merchantFilter}
+      ${searchFilter}
+      ${dateFromFilter}
+      ${dateToFilter}
+  `);
+  return rows[0]?.count ?? 0;
 }
 
 /**
@@ -863,6 +948,10 @@ export async function countTasksByConsigneeAndDayBucket(
  * status filter as listTasksByTenant. Used by the operator UI to
  * render total counts + total page count without a second pass over
  * every row.
+ *
+ * Day-24 PM: extended with `dateFrom`/`dateTo` (inclusive
+ * `delivery_date` bounds) to power the tenant `/tasks` hero count
+ * card alongside the new DateRangeFilter UI.
  */
 export async function countTasksByTenant(
   tx: DbTx,
@@ -870,9 +959,11 @@ export async function countTasksByTenant(
   opts: {
     readonly status?: TaskInternalStatus;
     readonly searchTerm?: string;
+    readonly dateFrom?: string;
+    readonly dateTo?: string;
   } = {},
 ): Promise<number> {
-  const { status, searchTerm } = opts;
+  const { status, searchTerm, dateFrom, dateTo } = opts;
   const statusFilter = status
     ? sqlTag`AND t.internal_status = ${status}`
     : sqlTag``;
@@ -880,6 +971,8 @@ export async function countTasksByTenant(
   const consigneeJoin = needsConsigneeJoin(searchTerm)
     ? sqlTag`LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id`
     : sqlTag``;
+  const dateFromFilter = buildDateFromFilter(dateFrom);
+  const dateToFilter = buildDateToFilter(dateTo);
   type Row = { count: string | number };
   const rows = await tx.execute<Row>(sqlTag`
     SELECT COUNT(*)::int AS count FROM tasks t
@@ -887,6 +980,8 @@ export async function countTasksByTenant(
     WHERE t.tenant_id = ${tenantId}
       ${statusFilter}
       ${searchFilter}
+      ${dateFromFilter}
+      ${dateToFilter}
   `);
   const raw = rows[0]?.count ?? 0;
   return typeof raw === "string" ? Number.parseInt(raw, 10) : raw;
