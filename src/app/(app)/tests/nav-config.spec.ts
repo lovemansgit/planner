@@ -176,6 +176,16 @@ describe("visibleAdminNavItems", () => {
   it("empty permission set hides every admin nav item", () => {
     expect(visibleAdminNavItems(NONE)).toHaveLength(0);
   });
+
+  it("Calendar entry points to /admin/calendar (not tenant /calendar)", () => {
+    // Day-24 regression pin: dry-run surfaced that Calendar routed to
+    // /calendar (tenant shell), dropping Transcorp staff into the
+    // tenant nav. Calendar must stay on /admin/calendar so the
+    // (admin)/ layout renders.
+    const calendar = ADMIN_NAV_ITEMS.find((i) => i.label === "Calendar");
+    expect(calendar).toBeDefined();
+    expect(calendar?.path).toBe("/admin/calendar");
+  });
 });
 
 describe("catalogue drift guard", () => {
