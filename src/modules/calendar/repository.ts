@@ -1,29 +1,24 @@
-// Day-22n PR-C-A — Calendar repository (data-access layer) for the
-// consolidated `/calendar` cross-consignee view per brief §3.3.4.
+// Day-22n PR-C-A + Day-23n polish — Calendar repository (data-access
+// layer) for the consolidated `/calendar` cross-consignee view per
+// brief §3.3.4.
 //
-// Three queries:
-//   - countTasksGroupedByDay: per-day total + has_high_risk flag for a
-//     week range. Drives the WeekView aggregate counts.
-//   - selectTopTasksPerDay: up to 3 tasks per day (ordered by
-//     delivery_start_time ASC), joined to consignees for the
-//     consigneeName + crm_state isHighRisk derivation. Drives the
-//     WeekView preview-pane rows per reviewer Q1 Option (b).
-//   - computeMetrics: single round-trip returning the five
-//     metric-card values. Brand-canon "today" anchored to Asia/Dubai
-//     calendar date (computed at the service-layer caller and passed
-//     as `today`).
+// Day-23n changes:
+//   - selectTopTasksPerDay + its types removed; day-cell click-through
+//     replaces the in-cell preview.
+//   - timeWindowFilter removed; `window` URL filter dropped.
+//   - Added computeTranscorpAdminMetrics — cross-tenant aggregate
+//     metric variant for transcorp-sysadmin actor on /calendar.
 //
-// Filter contract (CalendarFilters):
-//   - q          ILIKE on consignees.name
-//   - crm        consignees.crm_state = $crm
-//   - district   consignees.district  = $district
-//   - window     delivery_start_time range mapped from canonical key
-//   - status     tasks.internal_status = $status
+// Tenant-scoped queries:
+//   - countTasksGroupedByDay: per-day total + has_high_risk flag for
+//     a week range.
+//   - computeMetrics: tenant-scoped 5-metric snapshot.
+//   - listDistinct{Districts,CrmStates,TaskStatuses}: filter dropdown
+//     source data.
 //
-// Tenant scope: every query carries an explicit
-// `AND t.tenant_id = ${tenantId}` predicate alongside RLS — same
-// value, same result, but self-describing in pg_stat (matches the
-// task-repository defence-in-depth convention).
+// Cross-tenant queries (caller wraps in withServiceRole):
+//   - computeTranscorpAdminMetrics: 5 cross-tenant counters in one
+//     round-trip. RLS bypassed; transcorp-sysadmin only.
 
 import { sql as sqlTag, type SQL } from "drizzle-orm";
 
@@ -34,7 +29,7 @@ import type {
   CalendarDayCount,
   CalendarFilters,
   CalendarMetrics,
-  CalendarTopTaskForDay,
+  CalendarMetricsTranscorpAdmin,
 } from "./types";
 import type { TaskInternalStatus } from "../tasks/types";
 import type { ConsigneeCrmState } from "../consignees/types";
@@ -44,27 +39,9 @@ import type { ConsigneeCrmState } from "../consignees/types";
 // -----------------------------------------------------------------------------
 
 /**
- * Canonical time-window key → SQL fragment that constrains
- * `t.delivery_start_time` to the matching half-open range. Empty /
- * undefined / unknown keys yield `TRUE` so the WHERE clause is a no-op.
- */
-function timeWindowFilter(windowKey: string | undefined): SQL {
-  switch (windowKey) {
-    case "morning":
-      return sqlTag`t.delivery_start_time >= '06:00:00' AND t.delivery_start_time < '12:00:00'`;
-    case "afternoon":
-      return sqlTag`t.delivery_start_time >= '12:00:00' AND t.delivery_start_time < '17:00:00'`;
-    case "evening":
-      return sqlTag`t.delivery_start_time >= '17:00:00' AND t.delivery_start_time < '22:00:00'`;
-    default:
-      return sqlTag`TRUE`;
-  }
-}
-
-/**
- * Build the composite WHERE-fragment shared by the per-day and
- * top-tasks queries. Each filter contributes one AND-joined clause;
- * empty values short-circuit to `TRUE`. Always anchored on
+ * Build the composite WHERE-fragment shared by tenant-scoped queries.
+ * Each filter contributes one AND-joined clause; empty values
+ * short-circuit to `TRUE`. Always anchored on
  * `t.tenant_id = ${tenantId}` so the predicate is self-describing.
  */
 function buildFilterClause(tenantId: Uuid, filters: CalendarFilters): SQL {
@@ -78,7 +55,6 @@ function buildFilterClause(tenantId: Uuid, filters: CalendarFilters): SQL {
   const districtClause = filters.district
     ? sqlTag`c.district = ${filters.district}`
     : sqlTag`TRUE`;
-  const windowClause = timeWindowFilter(filters.window);
   const statusClause = filters.status
     ? sqlTag`t.internal_status = ${filters.status}`
     : sqlTag`TRUE`;
@@ -87,7 +63,6 @@ function buildFilterClause(tenantId: Uuid, filters: CalendarFilters): SQL {
     AND ${qClause}
     AND ${crmClause}
     AND ${districtClause}
-    AND ${windowClause}
     AND ${statusClause}
   `;
 }
@@ -147,83 +122,7 @@ export async function countTasksGroupedByDay(
 }
 
 // -----------------------------------------------------------------------------
-// Top-3 tasks per day
-// -----------------------------------------------------------------------------
-
-type TopTaskRow = {
-  delivery_date: Date | string;
-  task_id: string;
-  consignee_id: string;
-  consignee_name: string;
-  delivery_start_time: string;
-  internal_status: TaskInternalStatus;
-  crm_state: ConsigneeCrmState;
-} & Record<string, unknown>;
-
-/**
- * Select up to 3 tasks per delivery_date across the inclusive
- * [weekStart, weekEnd] window, ordered by delivery_start_time ASC,
- * for the WeekView preview pane. Implemented via a window function
- * (`ROW_NUMBER() OVER (PARTITION BY delivery_date ORDER BY
- * delivery_start_time)`) inside a subquery so the outer query stays
- * a single SELECT and the planner can use the existing
- * (tenant_id, delivery_date) index.
- *
- * Returns rows grouped/keyed by delivery_date at the service layer;
- * this fn returns the flat row set with `delivery_date` per row.
- */
-export async function selectTopTasksPerDay(
-  tx: DbTx,
-  tenantId: Uuid,
-  weekStart: string,
-  weekEnd: string,
-  filters: CalendarFilters,
-): Promise<readonly (CalendarTopTaskForDay & { deliveryDate: string })[]> {
-  const whereClause = buildFilterClause(tenantId, filters);
-  const rows = await tx.execute<TopTaskRow>(sqlTag`
-    SELECT delivery_date,
-           task_id,
-           consignee_id,
-           consignee_name,
-           delivery_start_time,
-           internal_status,
-           crm_state
-    FROM (
-      SELECT
-        t.delivery_date,
-        t.id AS task_id,
-        t.consignee_id,
-        c.name AS consignee_name,
-        t.delivery_start_time,
-        t.internal_status,
-        c.crm_state,
-        ROW_NUMBER() OVER (
-          PARTITION BY t.delivery_date
-          ORDER BY t.delivery_start_time ASC, t.id ASC
-        ) AS rn
-      FROM tasks t
-      JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id
-      WHERE ${whereClause}
-        AND t.delivery_date >= ${weekStart}
-        AND t.delivery_date <= ${weekEnd}
-    ) ranked
-    WHERE rn <= 3
-    ORDER BY delivery_date ASC, delivery_start_time ASC
-  `);
-  return rows.map((row) => ({
-    deliveryDate: isoDateOf(row.delivery_date),
-    taskId: row.task_id,
-    consigneeId: row.consignee_id,
-    consigneeName: row.consignee_name,
-    // Trim seconds — UI shows "HH:MM" only.
-    deliveryWindowStart: row.delivery_start_time.slice(0, 5),
-    status: row.internal_status,
-    isHighRisk: row.crm_state === "HIGH_RISK",
-  }));
-}
-
-// -----------------------------------------------------------------------------
-// Metric snapshot
+// Tenant-scoped metric snapshot
 // -----------------------------------------------------------------------------
 
 type MetricsRow = {
@@ -235,26 +134,8 @@ type MetricsRow = {
 } & Record<string, unknown>;
 
 /**
- * Compute the five header metric-card values in a single round-trip.
- *
- * Status mapping (TaskInternalStatus is the source of truth, not the
- * brief's hypothetical names):
- *   - todayDeliveriesScheduled: delivery_date = today AND
- *       internal_status IN ('CREATED','ASSIGNED','IN_TRANSIT','ON_HOLD')
- *     — anything not yet in a terminal state.
- *   - deliveredToday:           delivery_date = today AND
- *       internal_status = 'DELIVERED'
- *   - outForDelivery:           internal_status = 'IN_TRANSIT'
- *     (closest analogue to "out for delivery"; not date-scoped because
- *      a task may be in transit on a date earlier or later than today)
- *   - failedAtRisk:             COUNT(DISTINCT consignee_id) across
- *     (tasks FAILED in last 7 days) UNION (consignees HIGH_RISK)
- *   - activeConsignees:         consignees.crm_state IN ('ACTIVE','HIGH_RISK')
- *
- * Filters apply to the four task-scoped metrics; activeConsignees is
- * always the merchant-wide CRM-state COUNT (per reviewer brief — the
- * metric reflects the merchant's book of business, not the filtered
- * view of today).
+ * Compute the five header metric-card values in a single round-trip
+ * for tenant-scoped actors.
  */
 export async function computeMetrics(
   tx: DbTx,
@@ -315,6 +196,64 @@ export async function computeMetrics(
     deliveredToday: row ? Number(row.delivered_today) : 0,
     outForDelivery: row ? Number(row.out_for_delivery) : 0,
     failedAtRisk: row ? Number(row.failed_at_risk) : 0,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Day-23n — Transcorp admin cross-tenant metric snapshot
+// -----------------------------------------------------------------------------
+
+type TranscorpAdminMetricsRow = {
+  active_merchants: string | number;
+  total_deliveries_today: string | number;
+  delivered_today: string | number;
+  in_transit: string | number;
+  failed_last_7_days: string | number;
+} & Record<string, unknown>;
+
+/**
+ * Cross-tenant metric snapshot for the Transcorp admin variant of
+ * the `/calendar` header. Caller wraps in `withServiceRole` — RLS is
+ * bypassed by design; only `task:read_all`-bearing actors reach this
+ * path. No tenant-scoped WHERE predicate; aggregates span every
+ * merchant.
+ */
+export async function computeTranscorpAdminMetrics(
+  tx: DbTx,
+  today: string,
+): Promise<CalendarMetricsTranscorpAdmin> {
+  const rows = await tx.execute<TranscorpAdminMetricsRow>(sqlTag`
+    SELECT
+      (
+        SELECT COUNT(*) FROM tenants
+        WHERE status = 'active'
+      ) AS active_merchants,
+      (
+        SELECT COUNT(*) FROM tasks
+        WHERE delivery_date = ${today}
+      ) AS total_deliveries_today,
+      (
+        SELECT COUNT(*) FROM tasks
+        WHERE delivery_date = ${today}
+          AND internal_status = 'DELIVERED'
+      ) AS delivered_today,
+      (
+        SELECT COUNT(*) FROM tasks
+        WHERE internal_status = 'IN_TRANSIT'
+      ) AS in_transit,
+      (
+        SELECT COUNT(*) FROM tasks
+        WHERE internal_status = 'FAILED'
+          AND delivery_date >= (${today}::date - INTERVAL '7 days')
+      ) AS failed_last_7_days
+  `);
+  const row = rows[0];
+  return {
+    activeMerchants: row ? Number(row.active_merchants) : 0,
+    totalDeliveriesToday: row ? Number(row.total_deliveries_today) : 0,
+    deliveredToday: row ? Number(row.delivered_today) : 0,
+    inTransit: row ? Number(row.in_transit) : 0,
+    failedLast7Days: row ? Number(row.failed_last_7_days) : 0,
   };
 }
 
@@ -392,36 +331,19 @@ export async function listDistinctTaskStatuses(
 // -----------------------------------------------------------------------------
 
 /**
- * Compose a 7-day CalendarDayCount[] from the per-day count rows + the
- * top-task rows. Missing days fill with `{ total: 0, hasHighRisk:
- * false, topTasks: [] }`. Top-task rows are grouped by deliveryDate
- * (no re-sort; the SQL already orders by delivery_start_time ASC).
- *
- * Exported for direct service-layer use AND for unit-test coverage —
- * the join logic is independent of the SQL round-trip.
+ * Compose a 7-day CalendarDayCount[] from the per-day count rows.
+ * Missing days fill with `{ total: 0, hasHighRisk: false }`. Pure
+ * helper, no I/O — exported for direct service-layer use AND for
+ * unit-test coverage.
  */
 export function buildWeekDays(
   weekStart: string,
   weekEnd: string,
   perDayCounts: readonly { date: string; total: number; hasHighRisk: boolean }[],
-  topTaskRows: readonly (CalendarTopTaskForDay & { deliveryDate: string })[],
 ): readonly CalendarDayCount[] {
   const countsByDate = new Map<string, { total: number; hasHighRisk: boolean }>();
   for (const row of perDayCounts) {
     countsByDate.set(row.date, { total: row.total, hasHighRisk: row.hasHighRisk });
-  }
-  const topsByDate = new Map<string, CalendarTopTaskForDay[]>();
-  for (const row of topTaskRows) {
-    const list = topsByDate.get(row.deliveryDate) ?? [];
-    list.push({
-      taskId: row.taskId,
-      consigneeId: row.consigneeId,
-      consigneeName: row.consigneeName,
-      deliveryWindowStart: row.deliveryWindowStart,
-      status: row.status,
-      isHighRisk: row.isHighRisk,
-    });
-    topsByDate.set(row.deliveryDate, list);
   }
   const days: CalendarDayCount[] = [];
   let cursor = weekStart;
@@ -431,7 +353,6 @@ export function buildWeekDays(
       date: cursor,
       total: count?.total ?? 0,
       hasHighRisk: count?.hasHighRisk ?? false,
-      topTasks: topsByDate.get(cursor) ?? [],
     });
     // Increment cursor by one day using UTC date math.
     const next = new Date(`${cursor}T00:00:00Z`);

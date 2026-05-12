@@ -1,10 +1,11 @@
-// Day-22n PR-C-B — CalendarFilterBar (client component).
+// Day-22n PR-C-B + Day-23n polish — CalendarFilterBar (client component).
 //
-// Five-filter bar atop the consolidated `/calendar` view per brief
+// Four-filter bar atop the consolidated `/calendar` view per brief
 // §3.3.4: search by consignee name/phone + CRM state + area/district
-// + time window + task status. URL-state precedent mirrored from
-// /tasks (per reviewer OQ-3 ruling: no shared-primitive extraction
-// tonight; build inline). Each filter change pushes a new URL via
+// + task status. Day-23n polish dropped the time-window dropdown
+// (no consumer in the post-narrowing UX). URL-state precedent
+// mirrored from /tasks (per reviewer OQ-3 ruling: no shared-primitive
+// extraction; build inline). Each filter change pushes a new URL via
 // useRouter().push so the operator can share / bookmark a filtered
 // view; non-filter params (view, week/month/date anchors, etc.) are
 // preserved across writes.
@@ -34,11 +35,10 @@ export interface CalendarFilterBarProps {
   readonly initialValues: CalendarFiltersValue;
   readonly crmOptions: readonly CalendarFilterOption[];
   readonly districtOptions: readonly CalendarFilterOption[];
-  readonly timeWindowOptions: readonly CalendarFilterOption[];
   readonly statusOptions: readonly CalendarFilterOption[];
 }
 
-const FILTER_KEYS = ["q", "crm", "district", "window", "status"] as const;
+const FILTER_KEYS = ["q", "crm", "district", "status"] as const;
 
 /**
  * Build the next /calendar URL from the current search-params plus a
@@ -69,7 +69,6 @@ export function CalendarFilterBar({
   initialValues,
   crmOptions,
   districtOptions,
-  timeWindowOptions,
   statusOptions,
 }: CalendarFilterBarProps) {
   const router = useRouter();
@@ -89,7 +88,6 @@ export function CalendarFilterBar({
       q: baseParams.get("q") ?? "",
       crm: baseParams.get("crm") ?? "",
       district: baseParams.get("district") ?? "",
-      window: baseParams.get("window") ?? "",
       status: baseParams.get("status") ?? "",
     };
     const merged = { ...current, ...next };
@@ -136,13 +134,6 @@ export function CalendarFilterBar({
         value={initialValues.district}
         options={districtOptions}
         onChange={(event) => onSelectChange("district", event)}
-      />
-      <FilterSelect
-        ariaLabel="Time window"
-        placeholder="All windows"
-        value={initialValues.window}
-        options={timeWindowOptions}
-        onChange={(event) => onSelectChange("window", event)}
       />
       <FilterSelect
         ariaLabel="Task status"

@@ -9,7 +9,7 @@ import type { CalendarFiltersValue } from "../../_types";
 import { buildCalendarFiltersUrl } from "../CalendarFilterBar";
 
 function emptyFilters(): CalendarFiltersValue {
-  return { q: "", crm: "", district: "", window: "", status: "" };
+  return { q: "", crm: "", district: "", status: "" };
 }
 
 describe("buildCalendarFiltersUrl", () => {
@@ -28,7 +28,6 @@ describe("buildCalendarFiltersUrl", () => {
     expect(url).toContain("q=sarah");
     expect(url).toContain("crm=HIGH_RISK");
     expect(url).not.toContain("district=");
-    expect(url).not.toContain("window=");
     expect(url).not.toContain("status=");
   });
 
@@ -64,19 +63,18 @@ describe("buildCalendarFiltersUrl", () => {
     expect(url).toContain("status=FAILED");
   });
 
-  it("handles all five filter keys simultaneously", () => {
+  it("handles all four filter keys simultaneously (Day-23n: window dropped)", () => {
     const url = buildCalendarFiltersUrl(new URLSearchParams(), {
       q: "khouri",
       crm: "HIGH_RISK",
       district: "DXB-MARINA",
-      window: "MORNING",
       status: "FAILED",
     });
     expect(url).toContain("q=khouri");
     expect(url).toContain("crm=HIGH_RISK");
     expect(url).toContain("district=DXB-MARINA");
-    expect(url).toContain("window=MORNING");
     expect(url).toContain("status=FAILED");
+    expect(url).not.toContain("window=");
   });
 
   it("URL-encodes special characters in filter values", () => {
