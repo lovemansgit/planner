@@ -232,3 +232,54 @@ Onboarding doc review (`aqib.a` × 5 comments) and operational decisions:
 - §3.3.3 calendar views PR-A (PR #223, merged `3989b51`) — Session B Day-20 PM lane: legend chips + AddressIndicator (home/office/other) + projectDayDisplayStatus render-time projection + skip-no-task render path + FINDING-3 fix-up (CrmStateModal trigger button shrinks to badge dimensions); ride-along includes `addressLabel` field on Task type via LEFT JOIN to addresses(id) projection.
 - login page brand polish (PR #224, OPEN at EOD filing) — Transcorp logo + atmospheric accent T1; closes UX-FINDING-4. Expected merge before Day-21 morning batched promote.
 - [Day 20 EOD handoff](handoffs/day-20-eod.md) — canonical Day-20 → Day-21 reviewer handoff covering 5 PRs (4 merged + 1 in-flight) — Phase 1 backend foundation + §3.3.3 calendar views PR-A + SF outbound endpoints doc-verified — plus Day-21 carry-forwards led by morning batched Vercel promote, Session A SF outbound adapter lane (~14 hr; CONCERN B PII strip + Q2 sandbox probe), Session B PR-A2 month+year views + UX-FINDING-5 ride-along, Session B PR-B popover actions per locked DECISION-5.
+
+## Day 21 (11 May 2026)
+
+- Phase 1 SF outbound adapter (Session A) — SF outbound `update`/`cancel`/`bulk` adapter shipped, Q2 sandbox probe resolved. Session A's primary Day-21 deliverable.
+- §3.3.3 calendar PR-A2 (Session B) — month + year views + view-toggle. Closes the 3-PR sequence opened at Day-20 PR #221.
+- §3.3.3 calendar PR-B popover actions (Session B) — 7 popover actions wired beyond skip-default. Brand-canon styling per DECISION-5.
+- [Day 21 EOD handoff](handoffs/day-21-eod.md) — canonical Day-21 record.
+
+## Day 22 (11 May 2026)
+
+- Brief v1.10 amendment — Sarah Khouri demo-persona pre-seed reconciliation (PR #232). Locks the demo-day persona state: `crm_state='ACTIVE'` pre-demo + ≥2 FAILED deliveries already on the calendar; HIGH_RISK flip is the live demo theater action during Chapter 5.
+- Brief v1.11 amendment — single-address MVP. Demo cuts the multi-address-per-consignee complication out of MVP scope.
+- Forms UI primitives library (PR #233) — Phase 1 reusable form components (`FormField`, validation, error rendering) at `src/components/forms/`. Foundation for the Day-22 forms-CRUD work and beyond.
+- Service-layer publisher + outbound enqueue (PR #231) — Phase 1 SF outbound integration plumbing.
+- [Day 21 EOD handoff (filed Day-22 AM)](handoffs/day-21-eod.md) — Day-22 reads Day-21 EOD on session start.
+- [Day 22 PM EOD handoff](handoffs/day-22-pm-eod-session-a.md) — canonical Day-22 record.
+
+### Phase 1 forms-CRUD bundle (Day-22)
+
+- PR #237 — §3.3.3 calendar popover actions 2-8 (skip-default + 6 more); seven actions live behind the DayActionPopover entry-point.
+- PR #238 — Phase 1 consignee + subscription forms CRUD; client-component wizard + tenant-side search bars on `/consignees` + `/subscriptions` + `/tasks` via `?q=` URL state.
+
+## Day 23 (12 May 2026)
+
+- [PR #244](https://github.com/lovemansgit/planner/pull/244) — Preflight Gate 8 v1.10 alignment + `scripts/README.md` (Session B AM)
+- [PR #246](https://github.com/lovemansgit/planner/pull/246) — `VERCEL_URL` fallback for callback base URL (Session A AM)
+- [PR #247](https://github.com/lovemansgit/planner/pull/247) — `/calendar` polish + Transcorp admin variant metrics (Session A PM)
+- [PR #248](https://github.com/lovemansgit/planner/pull/248) — Consignee Subscription tab + wizard success Toast (Session B PM); first reusable confirmation banner; ships `Toast.tsx` primitive
+- [PR #249](https://github.com/lovemansgit/planner/pull/249) — Transcorp fleet panels: Top merchants today + Per-merchant breakdown (Session A PM)
+- [PR #250](https://github.com/lovemansgit/planner/pull/250) — `/calendar` month + day views (Session B PM). **Surfaced schema-drift bug class:** `tasks.delivery_start_time/end_time` confused with `subscriptions.delivery_window_start/end` (different tables, same conceptual fields). Caught at preview-walk time, NOT in CI. Fix-up commit `3abfef5` landed the column-name correction + new integration-test pattern at [`tests/integration/calendar-day-view.spec.ts`](tests/integration/calendar-day-view.spec.ts).
+- [PR #251](https://github.com/lovemansgit/planner/pull/251) — Tenant search bars on `/consignees`/`/subscriptions`/`/tasks` + Transcorp fleet bar chart (Session A late PM). Ships shared `<SearchBar>` primitive at `src/components/SearchBar.tsx`.
+- [Day-23 EOD handoff](handoffs/day-23-eod.md) — canonical Day-23 record. **§F discipline lesson logged:** every new SQL path with non-trivial column shape needs an integration spec following `tests/integration/calendar-day-view.spec.ts` (mocked `tx.execute` cannot catch column-name drift).
+- [Day-23 Session A final handoff](handoffs/day-23-pm-session-a-final-handoff.md) + [Session B handoff](handoffs/day-23-pm-session-b-handoff.md) — per-session sign-off briefs covering carry-forwards to Day-24.
+
+## Day 24 (12 May 2026)
+
+Demo distance T-2 (internal CAIO May 15) / T-5 (external prospect May 18) at sign-off.
+
+- [PR #252](https://github.com/lovemansgit/planner/pull/252) — `scripts/verify-demo-seed.mjs` 5-assertion smoke verifier for demo invariants (Session A AM)
+- [PR #253](https://github.com/lovemansgit/planner/pull/253) — Verifier fix-ups: invert Demo Bistro pre-existence assertion (Demo Bistro is live-created on stage Chapter 2 per brief §5.3) + AWB column/literal fix (`tasks.external_tracking_number` not `external_id`; prefix-count over literal) (Session A AM)
+- [PR #254](https://github.com/lovemansgit/planner/pull/254) — Transcorp admin search bars on 4 admin pages (consumes Session A's `<SearchBar>` from PR #251) + bundled `ADMIN_NAV_ITEMS` Calendar entry gated on `task:read_all`. Surfaced + remediated `assigned_at` vs `created_at` schema-drift on a separate integration spec (Day-23 §F discipline working) (Session B AM)
+- [PR #255](https://github.com/lovemansgit/planner/pull/255) — Hide archived tenants from `/admin/*` list rows. One-line `AND ten.status != 'archived'` predicate on each of the 3 cross-tenant admin SELECTs; closes the leak vector before the bulk 110-tenant CI-leak archive Day-24 PM (Session A early PM)
+- [PR #256](https://github.com/lovemansgit/planner/pull/256) — Admin top-nav `gap-12` between "· Admin" badge + first nav link. T1 cosmetic visible on every Transcorp admin page (Session B early PM)
+- [PR #257](https://github.com/lovemansgit/planner/pull/257) — Dedicated `/admin/calendar` route under `(admin)/` shell. Supersedes the PR #254 nav entry that pointed at `/calendar` (dropped Transcorp staff into the tenant shell + tenant nav). **Discipline lesson #2 logged:** cross-route-group nav entries need shell verification, not just route existence (Session A PM)
+- [PR #258](https://github.com/lovemansgit/planner/pull/258) — Admin + tenant totals cards + DateRangeFilter quick-pick dropdown + ADMIN_NAV_ITEMS reorder (Calendar first). Bundle of 7 changes. **Amended mid-PR per §3.6 hold:** original 5-pill row replaced by Datadog/Stripe-style quick-pick dropdown with 4 backward + 3 forward presets + "Custom range…". Ships shared `<DateRangeFilter>` primitive at `src/components/DateRangeFilter.tsx` with 5 exported pure helpers + 34 pure-fn spec cases (Session B PM)
+- [PR #259](https://github.com/lovemansgit/planner/pull/259) — `/admin/users` + `/admin/users/new`. Full `createUser` (Supabase Auth admin SDK) + `createRoleAssignment` (mirror `users` table + `role_assignments`) flow. Cross-tenant escalation gate. **Surfaced schema-drift instance #2:** `role_assignments.assigned_at` doesn't exist — column is `created_at`. Fix landed in-PR with integration spec (Session A late PM)
+- [PR #260](https://github.com/lovemansgit/planner/pull/260) — `/admin/users` disable + enable. Paired login-block / restore via `supabase.auth.admin.updateUserById` ban_duration toggle. Self-disable guard. Mirror table `disabled_at` field flipped synchronously (Session A EOD)
+- [Followup · Team Management UI](followup_team_management_ui.md) — **updated Day-24** to mark what landed (PRs #259 + #260: create + disable + enable + cross-tenant escalation gate) and what's still deferred to Phase 1.5 / post-pilot (delete-user UI, bulk operations, email invites, edit-user, role-change, tenant-team-management, resend/revoke invites).
+- [Day-24 EOD handoff](handoffs/day-24-eod.md) — canonical Day-24 record. Production HEAD `3255621` on `dpl_2M7HDHrt9zAAFajiFVP7CXkY2uVn`. Database state: 110 archived tenants + 4 test users deleted via SQL editor cleanup. Demo Bistro pre-demo blocker: webhook URL needs Aqib registration on SF side before May 15. Spec doc v1 drafted (15 slides, screenshots pending Playwright walkthrough).
+- [Session A Day-25 AM bootstrap](handoffs/bootstrap-session-a-day-25-am.md) — Day-25 expected lane: defect patching from Love's dry-run walkthrough + warm standby for Playwright walkthrough script support.
+- [Session B Day-25 AM bootstrap](handoffs/bootstrap-session-b-day-25-am.md) — Day-25 expected lane: Playwright walkthrough script (likely B's lane) + defect patching.
