@@ -356,6 +356,7 @@ export async function listAllSubscriptionsRows(
     FROM subscriptions s
     JOIN tenants ten ON ten.id = s.tenant_id
     WHERE 1 = 1
+      AND ten.status != 'archived'
       ${merchantFilter}
     ORDER BY s.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
