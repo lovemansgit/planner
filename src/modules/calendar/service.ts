@@ -32,10 +32,12 @@ import {
   listDistinctDistricts,
   listDistinctTaskStatuses,
   listPerMerchantBreakdown,
+  listTasksForDayAcrossConsignees,
   listTopMerchantsTodayWithTaskCount,
 } from "./repository";
 import type {
   CalendarDayCount,
+  CalendarDayTaskRow,
   CalendarFilters,
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,
@@ -64,6 +66,36 @@ export function computeWeekWindow(weekStart: string): { start: string; end: stri
   return {
     start: weekStart,
     end: end.toISOString().slice(0, 10),
+  };
+}
+
+/**
+ * Day-23 PM — Compute the inclusive [gridStart, gridEnd] window for a
+ * month-grid view. Returns Monday of the week containing the 1st of
+ * the month through Sunday of the week containing the last day of
+ * the month. Always 28, 35, or 42 days. Pure helper — exported for
+ * spec coverage.
+ *
+ * `monthAnchor` must be the first day of a month (YYYY-MM-01);
+ * passing any other day is treated as the first of that month
+ * (i.e., the month is resolved from year + month components).
+ */
+export function computeMonthGridWindow(monthAnchor: string): { start: string; end: string } {
+  const anchor = new Date(`${monthAnchor}T00:00:00Z`);
+  const monthStart = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1));
+  // Walk back to Monday (ISO weekday 1) of monthStart's week.
+  const monthStartIsoDay = monthStart.getUTCDay() === 0 ? 7 : monthStart.getUTCDay();
+  const gridStart = new Date(monthStart);
+  gridStart.setUTCDate(monthStart.getUTCDate() - (monthStartIsoDay - 1));
+  // Last day of month: day 0 of the following month.
+  const monthEnd = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0));
+  // Walk forward to Sunday (ISO weekday 7) of monthEnd's week.
+  const monthEndIsoDay = monthEnd.getUTCDay() === 0 ? 7 : monthEnd.getUTCDay();
+  const gridEnd = new Date(monthEnd);
+  gridEnd.setUTCDate(monthEnd.getUTCDate() + (7 - monthEndIsoDay));
+  return {
+    start: gridStart.toISOString().slice(0, 10),
+    end: gridEnd.toISOString().slice(0, 10),
   };
 }
 
@@ -127,6 +159,55 @@ export async function getCalendarMetricsTranscorpAdmin(
   requirePermission(ctx, "task:read_all");
   return withServiceRole("transcorp_staff:calendar_metrics", async (tx) => {
     return computeTranscorpAdminMetrics(tx, today);
+  });
+}
+
+/**
+ * Day-23 PM — Per-day aggregate over the calendar grid containing
+ * `monthAnchor` (Monday of week-of-1st → Sunday of week-of-last-day).
+ * Returns 28, 35, or 42 entries depending on month length and weekday
+ * alignment. Underneath, calls `countTasksGroupedByDay` (range-agnostic)
+ * + `buildWeekDays` (also range-agnostic — fills missing days with
+ * zero counts).
+ */
+export async function countTasksByDayForMonth(
+  ctx: RequestContext,
+  monthAnchor: string,
+  filters: CalendarFilters = {},
+): Promise<readonly CalendarDayCount[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "calendar:month-view");
+  const { start, end } = computeMonthGridWindow(monthAnchor);
+  return withTenant(ctx.tenantId, async (tx) => {
+    const perDayCounts = await countTasksGroupedByDay(
+      tx,
+      ctx.tenantId,
+      start,
+      end,
+      filters,
+    );
+    // buildWeekDays is range-agnostic — iterates start→end with
+    // `cursor <= end` so a 28-42 day month grid works the same as the
+    // 7-day week range.
+    return buildWeekDays(start, end, perDayCounts);
+  });
+}
+
+/**
+ * Day-23 PM — All tasks for the given `date` across every consignee in
+ * the tenant, JOINed with consignee.name/district/crm_state so the
+ * day-view list can render those columns without per-row fetches.
+ * Ordered by delivery window then consignee name.
+ */
+export async function listTasksForDay(
+  ctx: RequestContext,
+  date: string,
+  filters: CalendarFilters = {},
+): Promise<readonly CalendarDayTaskRow[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "calendar:day-view");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listTasksForDayAcrossConsignees(tx, ctx.tenantId, date, filters);
   });
 }
 

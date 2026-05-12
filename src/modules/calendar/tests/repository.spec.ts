@@ -20,6 +20,7 @@ import {
   listDistinctDistricts,
   listDistinctTaskStatuses,
   listPerMerchantBreakdown,
+  listTasksForDayAcrossConsignees,
   listTopMerchantsTodayWithTaskCount,
 } from "../repository";
 import type { CalendarFilters } from "../types";
@@ -455,5 +456,81 @@ describe("buildWeekDays", () => {
     );
     expect(days.find((d) => d.date === "2026-05-15")?.hasHighRisk).toBe(true);
     expect(days.find((d) => d.date === "2026-05-14")?.hasHighRisk).toBe(false);
+  });
+
+  it("works for a 42-day month-grid range (range-agnostic, reused by month view)", () => {
+    // Month-grid range for May 2026: Mon 27-Apr → Sun 7-Jun (42 days).
+    const days = buildWeekDays("2026-04-27", "2026-06-07", []);
+    expect(days).toHaveLength(42);
+    expect(days[0].date).toBe("2026-04-27");
+    expect(days[41].date).toBe("2026-06-07");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-23 PM — listTasksForDayAcrossConsignees
+// ---------------------------------------------------------------------------
+
+describe("listTasksForDayAcrossConsignees", () => {
+  const DATE = "2026-05-15";
+
+  it("issues a JOIN query bound to tenant + date predicates", async () => {
+    const tx = makeStubTx([[]]);
+    await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM tasks t/);
+    expect(sql).toMatch(/JOIN consignees c/);
+    expect(sql).toMatch(/ORDER BY t.delivery_start_time ASC/);
+    expect(params).toContain(TENANT_ID);
+    expect(params).toContain(DATE);
+  });
+
+  it("returns empty array for a day with no matching tasks", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
+    expect(result).toEqual([]);
+  });
+
+  it("maps DB row columns to the CalendarDayTaskRow camelCase shape", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          task_id: "t1",
+          consignee_id: "c1",
+          consignee_name: "Sarah Khouri",
+          district: "Dubai Marina",
+          crm_state: "HIGH_RISK",
+          internal_status: "FAILED",
+          delivery_start_time: "08:00:00",
+          delivery_end_time: "10:00:00",
+          external_tracking_number: "AWB-001",
+          subscription_id: "s1",
+        },
+      ],
+    ]);
+    const rows = await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      taskId: "t1",
+      consigneeId: "c1",
+      consigneeName: "Sarah Khouri",
+      district: "Dubai Marina",
+      crmState: "HIGH_RISK",
+      status: "FAILED",
+      deliveryWindowStart: "08:00:00",
+      deliveryWindowEnd: "10:00:00",
+      externalTrackingNumber: "AWB-001",
+      subscriptionId: "s1",
+    });
+  });
+
+  it("applies filter predicates (crm, status) into the WHERE bound params", async () => {
+    const tx = makeStubTx([[]]);
+    const filters: CalendarFilters = { crm: "HIGH_RISK", status: "FAILED" };
+    await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, filters);
+    const { params } = compile(tx.execute.mock.calls[0][0]);
+    expect(params).toContain("HIGH_RISK");
+    expect(params).toContain("FAILED");
   });
 });

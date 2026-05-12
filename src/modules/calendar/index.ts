@@ -2,13 +2,16 @@
 // module barrel.
 
 export {
+  computeMonthGridWindow,
   computeWeekWindow,
   countTasksByDayAcrossConsignees,
+  countTasksByDayForMonth,
   getCalendarFilterOptions,
   getCalendarMetrics,
   getCalendarMetricsTranscorpAdmin,
   getPerMerchantBreakdown,
   getTopMerchantsToday,
+  listTasksForDay,
 } from "./service";
 
 export type { CalendarFilterOptions } from "./service";
@@ -17,6 +20,7 @@ export { buildWeekDays } from "./repository";
 
 export type {
   CalendarDayCount,
+  CalendarDayTaskRow,
   CalendarFilters,
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,

@@ -22,6 +22,7 @@ vi.mock("../repository", () => ({
   listDistinctDistricts: vi.fn(),
   listDistinctTaskStatuses: vi.fn(),
   listPerMerchantBreakdown: vi.fn(),
+  listTasksForDayAcrossConsignees: vi.fn(),
   listTopMerchantsTodayWithTaskCount: vi.fn(),
 }));
 
@@ -39,16 +40,20 @@ import {
   listDistinctDistricts,
   listDistinctTaskStatuses,
   listPerMerchantBreakdown,
+  listTasksForDayAcrossConsignees,
   listTopMerchantsTodayWithTaskCount,
 } from "../repository";
 import {
+  computeMonthGridWindow,
   computeWeekWindow,
   countTasksByDayAcrossConsignees,
+  countTasksByDayForMonth,
   getCalendarFilterOptions,
   getCalendarMetrics,
   getCalendarMetricsTranscorpAdmin,
   getPerMerchantBreakdown,
   getTopMerchantsToday,
+  listTasksForDay,
 } from "../service";
 
 const mockWithTenant = vi.mocked(withTenant);
@@ -60,6 +65,7 @@ const mockComputeTranscorpAdminMetrics = vi.mocked(computeTranscorpAdminMetrics)
 const mockListDistinctDistricts = vi.mocked(listDistinctDistricts);
 const mockListDistinctCrmStates = vi.mocked(listDistinctCrmStates);
 const mockListDistinctTaskStatuses = vi.mocked(listDistinctTaskStatuses);
+const mockListTasksForDayAcrossConsignees = vi.mocked(listTasksForDayAcrossConsignees);
 const mockListTopMerchantsToday = vi.mocked(listTopMerchantsTodayWithTaskCount);
 const mockListPerMerchantBreakdown = vi.mocked(listPerMerchantBreakdown);
 
@@ -312,6 +318,43 @@ describe("getCalendarFilterOptions", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Day-23 PM — computeMonthGridWindow
+// ---------------------------------------------------------------------------
+
+describe("computeMonthGridWindow", () => {
+  it("returns Mon-of-week-of-1st through Sun-of-week-of-last for May 2026 (35 days)", () => {
+    // May 2026: Fri 2026-05-01 → Sun 2026-05-31.
+    // Grid Mon: 2026-04-27. Grid Sun: 2026-05-31 (already Sunday).
+    const { start, end } = computeMonthGridWindow("2026-05-01");
+    expect(start).toBe("2026-04-27");
+    expect(end).toBe("2026-05-31");
+  });
+
+  it("returns 28 days when month starts on Monday and ends on Sunday (Feb 2026)", () => {
+    // 2026-02-01 is a Sunday actually — let me use a known case.
+    // 2027-02-01 is Monday; 2027-02-28 is Sunday → exactly 28 days.
+    const { start, end } = computeMonthGridWindow("2027-02-01");
+    expect(start).toBe("2027-02-01");
+    expect(end).toBe("2027-02-28");
+  });
+
+  it("returns 42 days when month requires 6 week-rows (May 2027)", () => {
+    // 2027-05-01 is Saturday; month ends 2027-05-31 (Monday).
+    // Grid Mon: 2027-04-26. Grid Sun: 2027-06-06.
+    const { start, end } = computeMonthGridWindow("2027-05-01");
+    expect(start).toBe("2027-04-26");
+    expect(end).toBe("2027-06-06");
+  });
+
+  it("normalises an arbitrary day-of-month input to the same month grid", () => {
+    // Passing 2026-05-15 should resolve to the May 2026 grid.
+    const fromMid = computeMonthGridWindow("2026-05-15");
+    const fromFirst = computeMonthGridWindow("2026-05-01");
+    expect(fromMid).toEqual(fromFirst);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getTopMerchantsToday (Day-23n fleet panels)
 // ---------------------------------------------------------------------------
 
@@ -351,6 +394,101 @@ describe("getTopMerchantsToday", () => {
     const ctx = userCtx(["task:read_all"]);
     await getTopMerchantsToday(ctx, "2026-05-12");
     expect(mockListTopMerchantsToday.mock.calls[0][2]).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-23 PM — countTasksByDayForMonth
+// ---------------------------------------------------------------------------
+
+describe("countTasksByDayForMonth", () => {
+  const MONTH_ANCHOR = "2026-05-01";
+
+  it("throws ForbiddenError when actor lacks task:read", async () => {
+    const ctx = userCtx([]);
+    await expect(countTasksByDayForMonth(ctx, MONTH_ANCHOR, {})).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+
+  it("throws ValidationError when tenant context is missing", async () => {
+    const ctx = userCtx(["task:read"], null);
+    await expect(countTasksByDayForMonth(ctx, MONTH_ANCHOR, {})).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+  });
+
+  it("invokes withTenant + repo countTasksGroupedByDay + buildWeekDays over the month grid", async () => {
+    const ctx = userCtx(["task:read"]);
+    mockCountTasksGroupedByDay.mockResolvedValue([]);
+    mockBuildWeekDays.mockReturnValue([]);
+    await countTasksByDayForMonth(ctx, MONTH_ANCHOR, {});
+    expect(mockWithTenant).toHaveBeenCalledOnce();
+    expect(mockCountTasksGroupedByDay).toHaveBeenCalledOnce();
+    expect(mockBuildWeekDays).toHaveBeenCalledOnce();
+    // Verify the grid window passed to buildWeekDays matches May 2026.
+    const buildArgs = mockBuildWeekDays.mock.calls[0];
+    expect(buildArgs[0]).toBe("2026-04-27");
+    expect(buildArgs[1]).toBe("2026-05-31");
+  });
+
+  it("passes the filter set through to the repository", async () => {
+    const ctx = userCtx(["task:read"]);
+    mockCountTasksGroupedByDay.mockResolvedValue([]);
+    mockBuildWeekDays.mockReturnValue([]);
+    const filters = { q: "khouri", crm: "HIGH_RISK" };
+    await countTasksByDayForMonth(ctx, MONTH_ANCHOR, filters);
+    expect(mockCountTasksGroupedByDay).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      "2026-04-27",
+      "2026-05-31",
+      filters,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-23 PM — listTasksForDay
+// ---------------------------------------------------------------------------
+
+describe("listTasksForDay", () => {
+  const DATE = "2026-05-15";
+
+  it("throws ForbiddenError when actor lacks task:read", async () => {
+    const ctx = userCtx([]);
+    await expect(listTasksForDay(ctx, DATE, {})).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws ValidationError when tenant context is missing", async () => {
+    const ctx = userCtx(["task:read"], null);
+    await expect(listTasksForDay(ctx, DATE, {})).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("invokes withTenant + repo listTasksForDayAcrossConsignees with date + tenant", async () => {
+    const ctx = userCtx(["task:read"]);
+    mockListTasksForDayAcrossConsignees.mockResolvedValue([]);
+    await listTasksForDay(ctx, DATE, {});
+    expect(mockWithTenant).toHaveBeenCalledOnce();
+    expect(mockListTasksForDayAcrossConsignees).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      DATE,
+      {},
+    );
+  });
+
+  it("passes filters through to the repository", async () => {
+    const ctx = userCtx(["task:read"]);
+    mockListTasksForDayAcrossConsignees.mockResolvedValue([]);
+    const filters = { status: "FAILED" };
+    await listTasksForDay(ctx, DATE, filters);
+    expect(mockListTasksForDayAcrossConsignees).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      DATE,
+      filters,
+    );
   });
 });
 

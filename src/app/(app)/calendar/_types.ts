@@ -93,3 +93,22 @@ export interface CalendarFiltersValue {
   readonly district: string;
   readonly status: string;
 }
+
+/**
+ * Day-23 PM — Single-task row returned by the day-view fetch.
+ * Joined with the consignee surface so the day-view list can render
+ * consignee name + district + crm_state without per-row lookups.
+ * Used by ConsolidatedDayView.
+ */
+export interface CalendarDayTaskRow {
+  readonly taskId: string;
+  readonly consigneeId: string;
+  readonly consigneeName: string;
+  readonly district: string | null;
+  readonly crmState: string;
+  readonly status: string;
+  readonly deliveryWindowStart: string;
+  readonly deliveryWindowEnd: string;
+  readonly externalTrackingNumber: string | null;
+  readonly subscriptionId: string | null;
+}

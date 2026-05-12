@@ -27,6 +27,7 @@ import type { Uuid } from "@/shared/types";
 
 import type {
   CalendarDayCount,
+  CalendarDayTaskRow,
   CalendarFilters,
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,
@@ -120,6 +121,74 @@ export async function countTasksGroupedByDay(
     date: isoDateOf(row.delivery_date),
     total: Number(row.total),
     hasHighRisk: Boolean(row.has_high_risk),
+  }));
+}
+
+// -----------------------------------------------------------------------------
+// Day-23 PM — Day-view task list (cross-consignee)
+// -----------------------------------------------------------------------------
+
+type DayTaskRow = {
+  task_id: string;
+  consignee_id: string;
+  consignee_name: string;
+  district: string | null;
+  crm_state: string;
+  internal_status: string;
+  delivery_start_time: string;
+  delivery_end_time: string;
+  external_tracking_number: string | null;
+  subscription_id: string | null;
+} & Record<string, unknown>;
+
+/**
+ * List every task for the given `date`, JOINed with the consignee
+ * surface so the day-view can render names + districts + crm_state
+ * without per-row lookups. Tenant-scoped; same filter clause as the
+ * grouped-by-day count. Ordered by delivery window then consignee
+ * name so morning windows surface first.
+ */
+export async function listTasksForDayAcrossConsignees(
+  tx: DbTx,
+  tenantId: Uuid,
+  date: string,
+  filters: CalendarFilters,
+): Promise<readonly CalendarDayTaskRow[]> {
+  const whereClause = buildFilterClause(tenantId, filters);
+  const rows = await tx.execute<DayTaskRow>(sqlTag`
+    SELECT
+      t.id AS task_id,
+      t.consignee_id,
+      c.name AS consignee_name,
+      c.district,
+      c.crm_state,
+      t.internal_status,
+      t.delivery_start_time,
+      t.delivery_end_time,
+      t.external_tracking_number,
+      t.subscription_id
+    FROM tasks t
+    JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id
+    WHERE ${whereClause}
+      AND t.delivery_date = ${date}
+    ORDER BY t.delivery_start_time ASC, c.name ASC
+  `);
+  return rows.map((row) => ({
+    taskId: row.task_id,
+    consigneeId: row.consignee_id,
+    consigneeName: row.consignee_name,
+    district: row.district,
+    crmState: row.crm_state,
+    status: row.internal_status,
+    // Domain field names stay window-* per CalendarDayTaskRow contract;
+    // the SQL source columns are the per-task `delivery_{start,end}_time`
+    // on the `tasks` table (0006_task.sql). Conflating them with the
+    // similarly-named `delivery_window_{start,end}` on `subscriptions`
+    // (0009_subscription.sql) caused the d23 preview 42703 error.
+    deliveryWindowStart: row.delivery_start_time,
+    deliveryWindowEnd: row.delivery_end_time,
+    externalTrackingNumber: row.external_tracking_number,
+    subscriptionId: row.subscription_id,
   }));
 }
 
