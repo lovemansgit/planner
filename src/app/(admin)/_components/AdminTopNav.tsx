@@ -34,7 +34,7 @@ export function AdminTopNav({ items, userIdentity }: AdminTopNavProps) {
       aria-label="Primary admin"
       className="border-b border-[color:var(--color-border-strong)] bg-surface-primary"
     >
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-12 py-6">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-12 px-12 py-6">
         <Link
           href="/admin/merchants"
           className="flex items-center gap-3 transition-opacity duration-150 hover:opacity-80"
