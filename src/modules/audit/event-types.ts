@@ -149,6 +149,32 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "email — captured before the row went away.",
     systemOnly: false,
   },
+  // Day-24 — login-blocked / login-restored audit pair, paired with the
+  // /admin/users disable + enable surfaces. `user.disabled` writes
+  // disabled_at on the public.users mirror AND sets ban_duration on
+  // auth.users so the user cannot sign in until enabled. `user.enabled`
+  // is the symmetric undo. Distinct from `user.deleted` (which removes
+  // the row entirely) and `user.updated` (display-name / general field
+  // changes); these two are the typed events for the disable/enable
+  // lifecycle so audit queries can filter directly.
+  "user.disabled": {
+    id: "user.disabled",
+    resource: "user",
+    action: "disabled",
+    description:
+      "A user's login was blocked. Sets disabled_at on the public.users mirror and ban_duration on auth.users. Reversible via user.enabled.",
+    metadataNotes: "email; reason (optional free text supplied at the disable surface).",
+    systemOnly: false,
+  },
+  "user.enabled": {
+    id: "user.enabled",
+    resource: "user",
+    action: "enabled",
+    description:
+      "A previously-disabled user's login was restored. Clears disabled_at on the public.users mirror and ban_duration on auth.users.",
+    metadataNotes: "email.",
+    systemOnly: false,
+  },
   // Day 10 — login surface. Two events for a single auth path; the
   // success event is user-attributed (actor.kind='user' on the freshly
   // resolved user), the failure event is system-attributed

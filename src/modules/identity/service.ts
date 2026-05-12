@@ -39,6 +39,8 @@ import type { Uuid } from "../../shared/types";
 import {
   AuthAdminError,
   createOrFetchAuthUser as defaultCreateOrFetchAuthUser,
+  disableAuthUser as defaultDisableAuthUser,
+  enableAuthUser as defaultEnableAuthUser,
 } from "./auth-admin";
 import { requirePermission } from "./require-permission";
 import { ROLES, type BuiltInRoleSlug } from "./roles";
@@ -467,6 +469,8 @@ export interface AdminUserRow {
   readonly tenantName: string;
   readonly roleSlugs: readonly string[];
   readonly createdAt: string;
+  /** ISO timestamp when login was blocked; null when the user is enabled. */
+  readonly disabledAt: string | null;
 }
 
 export interface ListAllUsersOpts {
@@ -508,6 +512,7 @@ export async function listAllUsers(
       tenant_name: string;
       role_slugs: string[] | null;
       created_at: Date | string;
+      disabled_at: Date | string | null;
     } & Record<string, unknown>;
     const rows = await tx.execute<Row>(sqlTag`
       SELECT
@@ -518,6 +523,7 @@ export async function listAllUsers(
         t.slug         AS tenant_slug,
         t.name         AS tenant_name,
         u.created_at   AS created_at,
+        u.disabled_at  AS disabled_at,
         COALESCE(
           (
             SELECT array_agg(r.slug ORDER BY r.slug ASC)
@@ -546,6 +552,251 @@ export async function listAllUsers(
         r.created_at instanceof Date
           ? r.created_at.toISOString()
           : String(r.created_at),
+      disabledAt:
+        r.disabled_at === null || r.disabled_at === undefined
+          ? null
+          : r.disabled_at instanceof Date
+            ? r.disabled_at.toISOString()
+            : String(r.disabled_at),
     }));
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Day-24 — disableUser + enableUser (paired login-block / restore)
+// -----------------------------------------------------------------------------
+
+/**
+ * Pure-Postgres mirror UPDATE setting `disabled_at = now()`. Exported
+ * for integration-test coverage per Day-23 §F (real-Postgres pin of
+ * the SQL shape). Caller wraps in a transaction.
+ *
+ * Idempotent — if `disabled_at` is already set, the UPDATE rewrites
+ * it with a fresh `now()` value, but the visible "is this user
+ * disabled?" semantic doesn't change. No-op observers (audit, UI)
+ * use the boolean `disabled_at IS NOT NULL` rather than the
+ * timestamp value.
+ */
+export async function disableUserInDb(
+  tx: DbTx,
+  params: { readonly authUserId: string },
+): Promise<void> {
+  await tx.execute(sqlTag`
+    UPDATE users SET disabled_at = now(), updated_at = now()
+    WHERE id = ${params.authUserId}
+  `);
+}
+
+/**
+ * Pure-Postgres mirror UPDATE clearing `disabled_at`. Exported for
+ * integration-test coverage. Idempotent.
+ */
+export async function enableUserInDb(
+  tx: DbTx,
+  params: { readonly authUserId: string },
+): Promise<void> {
+  await tx.execute(sqlTag`
+    UPDATE users SET disabled_at = NULL, updated_at = now()
+    WHERE id = ${params.authUserId}
+  `);
+}
+
+export interface DisableUserInput {
+  readonly userId: Uuid;
+  readonly reason?: string;
+}
+
+export interface DisableUserResult {
+  readonly userId: Uuid;
+  /** True when this call moved the user from enabled → disabled;
+   *  false when the user was already disabled (idempotent no-op). */
+  readonly transitioned: boolean;
+}
+
+/**
+ * Block a user from signing in. Two-part operation:
+ *   - `auth.users.ban_duration = '876000h'` via the admin SDK
+ *   - `public.users.disabled_at = now()` via the mirror UPDATE
+ *
+ * Permission gate: `user:update`. Cross-tenant writes require
+ * `merchant:read_all` (Transcorp-staff marker) per the #259 precedent.
+ *
+ * Self-disable is blocked at the service layer — an operator who
+ * disabled their own account would lock themselves out mid-session
+ * with no in-app recovery path. The block raises ConflictError so
+ * the form surfaces a clear message rather than silently succeeding.
+ *
+ * C-21 enforcement for disable is deferred to Phase 1.5 — disable is
+ * a reversible operation (the paired `enableUser` restores access),
+ * so the "last tenant-admin" invariant violated by a disable can be
+ * undone without data loss.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `user:update` or attempts a
+ *                       cross-tenant write without `merchant:read_all`.
+ *   - ConflictError     self-disable, or auth admin SDK errors.
+ *   - NotFoundError     user not found.
+ */
+export async function disableUser(
+  ctx: RequestContext,
+  input: DisableUserInput,
+  deps: {
+    readonly disableAuthUser?: typeof defaultDisableAuthUser;
+  } = {},
+): Promise<DisableUserResult> {
+  requirePermission(ctx, "user:update");
+
+  if (ctx.actor.kind === "user" && ctx.actor.userId === input.userId) {
+    throw new ConflictError(
+      "cannot disable your own account — ask another sysadmin to do it",
+    );
+  }
+
+  const target = await fetchUserForDisableEnable(input.userId);
+  if (target === null) {
+    throw new NotFoundError(`user not found: ${input.userId}`);
+  }
+  assertCanWriteToTenant(ctx, target.tenantId);
+
+  const alreadyDisabled = target.disabledAt !== null;
+  const disableAuth = deps.disableAuthUser ?? defaultDisableAuthUser;
+  try {
+    await disableAuth(input.userId);
+  } catch (err) {
+    if (err instanceof AuthAdminError) {
+      throw new ConflictError(err.message);
+    }
+    throw err;
+  }
+
+  const isCrossTenant = ctx.tenantId !== target.tenantId;
+  const writer = (tx: DbTx) =>
+    disableUserInDb(tx, { authUserId: input.userId });
+  if (isCrossTenant) {
+    await withServiceRole("transcorp_staff:disable_user", writer);
+  } else {
+    await withTenant(target.tenantId, writer);
+  }
+
+  await emit({
+    eventType: "user.disabled",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: target.tenantId,
+    resourceType: "user",
+    resourceId: input.userId,
+    metadata: {
+      email: target.email,
+      reason: input.reason?.trim() ?? null,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return { userId: input.userId, transitioned: !alreadyDisabled };
+}
+
+export interface EnableUserInput {
+  readonly userId: Uuid;
+}
+
+export interface EnableUserResult {
+  readonly userId: Uuid;
+  /** True when this call moved the user from disabled → enabled;
+   *  false when the user was already enabled (idempotent no-op). */
+  readonly transitioned: boolean;
+}
+
+/**
+ * Restore a previously-disabled user's login. Symmetric to
+ * `disableUser`. Permission gate, cross-tenant gate, idempotency,
+ * and audit-emit posture match the disable surface.
+ *
+ * Self-enable is not blocked — a Transcorp sysadmin clearing the ban
+ * on their own auth row is an edge case (typically they'd be locked
+ * out and unable to reach this surface), but if reachable it's not
+ * a footgun.
+ */
+export async function enableUser(
+  ctx: RequestContext,
+  input: EnableUserInput,
+  deps: {
+    readonly enableAuthUser?: typeof defaultEnableAuthUser;
+  } = {},
+): Promise<EnableUserResult> {
+  requirePermission(ctx, "user:update");
+
+  const target = await fetchUserForDisableEnable(input.userId);
+  if (target === null) {
+    throw new NotFoundError(`user not found: ${input.userId}`);
+  }
+  assertCanWriteToTenant(ctx, target.tenantId);
+
+  const alreadyEnabled = target.disabledAt === null;
+  const enableAuth = deps.enableAuthUser ?? defaultEnableAuthUser;
+  try {
+    await enableAuth(input.userId);
+  } catch (err) {
+    if (err instanceof AuthAdminError) {
+      throw new ConflictError(err.message);
+    }
+    throw err;
+  }
+
+  const isCrossTenant = ctx.tenantId !== target.tenantId;
+  const writer = (tx: DbTx) =>
+    enableUserInDb(tx, { authUserId: input.userId });
+  if (isCrossTenant) {
+    await withServiceRole("transcorp_staff:enable_user", writer);
+  } else {
+    await withTenant(target.tenantId, writer);
+  }
+
+  await emit({
+    eventType: "user.enabled",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: target.tenantId,
+    resourceType: "user",
+    resourceId: input.userId,
+    metadata: { email: target.email },
+    requestId: ctx.requestId,
+  });
+
+  return { userId: input.userId, transitioned: !alreadyEnabled };
+}
+
+/**
+ * Cross-tenant SELECT of the metadata needed by disable/enable —
+ * tenantId (for the cross-tenant gate) + email (for audit metadata)
+ * + disabled_at (for the transitioned-flag computation). Read-only;
+ * uses `withServiceRole` so the cross-tenant lookup isn't hidden by
+ * RLS before the actor's permission gate is checked.
+ */
+async function fetchUserForDisableEnable(userId: Uuid): Promise<{
+  readonly tenantId: Uuid;
+  readonly email: string;
+  readonly disabledAt: string | null;
+} | null> {
+  return withServiceRole("identity:fetch_user_for_disable", async (tx) => {
+    type Row = {
+      tenant_id: string;
+      email: string;
+      disabled_at: Date | string | null;
+    } & Record<string, unknown>;
+    const rows = await tx.execute<Row>(sqlTag`
+      SELECT tenant_id, email, disabled_at FROM users WHERE id = ${userId}
+    `);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      tenantId: row.tenant_id as Uuid,
+      email: row.email,
+      disabledAt:
+        row.disabled_at === null || row.disabled_at === undefined
+          ? null
+          : row.disabled_at instanceof Date
+            ? row.disabled_at.toISOString()
+            : String(row.disabled_at),
+    };
   });
 }
