@@ -8,9 +8,10 @@
 // Day-24 AM brief.
 //
 // Five assertions:
-//   1. Demo Bistro tenant exists with suitefleet_customer_code
-//      populated (non-null, non-empty). Proves the live-created
-//      Demo Bistro tenant landed cleanly during dry-run setup.
+//   1. Demo Bistro slug 'demo-bistro' is ABSENT pre-demo. Proves
+//      the slug is free for the Chapter-2 Transcorp-staff onboarding
+//      narrative (Demo Bistro is created LIVE on stage; if it
+//      already exists, the live-create step collides with 409).
 //   2. Fatima Al Mansouri consignee exists with ≥2 addresses
 //      (Home + Office) and per-weekday rotation rule rows present.
 //      Proves brief §5.2 Q9-Q10 address-rotation storyline data.
@@ -19,9 +20,11 @@
 //      status='FAILED' across the last 14 days. Proves the demo-
 //      theater pre-condition: live HIGH_RISK flip is the on-stage
 //      action, not a pre-seed invariant.
-//   4. AWB MPL-64596425 present on tasks.external_id. Proves the
-//      SF push pipeline produced real data end-to-end during the
-//      Day-23 SF push verification probe.
+//   4. ≥1 task has an MPL-prefix AWB on external_tracking_number.
+//      Proves the SF push pipeline produced real data end-to-end
+//      for the MPL merchant. (Was a hardcoded fixture AWB pre-Day-24
+//      — relaxed to prefix match so the assertion stays green as
+//      the cron generates new pushes day over day.)
 //   5. tasks table has ≥1 row with pod_photos IS NOT NULL. Proves
 //      the inbound webhook → POD-extraction path landed real data
 //      (brief §5.3 Gate 5).
@@ -38,7 +41,7 @@
 
 import postgres from "postgres";
 
-const AWB_DEMO_FIXTURE = "MPL-64596425";
+const AWB_PREFIX = "MPL-";
 
 function need(name) {
   const v = process.env[name];
@@ -57,27 +60,26 @@ function nowIso() {
 // Assertions. Each returns { passed: boolean, detail: string }.
 // ---------------------------------------------------------------------------
 
-async function assertDemoBistroWithCustomerCode(sql) {
+async function assertDemoBistroSlugAbsentPreDemo(sql) {
+  // Brief §5.3 Chapter 2 — Demo Bistro is onboarded LIVE on stage
+  // by the Transcorp-staff actor. If the slug 'demo-bistro' already
+  // exists pre-demo, the live-create step collides with a 409 and
+  // the chapter falls flat. Smoke-time invariant is therefore the
+  // INVERSE of the demo-time state: pre-demo absent, post-demo
+  // present (post-demo state is not this verifier's concern).
   const rows = await sql`
-    SELECT id, slug, name, status, suitefleet_customer_code
+    SELECT id, slug, status
     FROM tenants
-    WHERE slug ILIKE '%bistro%'
+    WHERE slug = 'demo-bistro'
   `;
-  if (rows.length === 0) {
-    return { passed: false, detail: "no Demo Bistro tenant found (slug ILIKE '%bistro%')" };
-  }
-  const t = rows[0];
-  const code = t.suitefleet_customer_code;
-  if (code === null || code === "") {
+  if (rows.length > 0) {
+    const t = rows[0];
     return {
       passed: false,
-      detail: `Demo Bistro tenant ${t.slug} found (id=${t.id.slice(0, 8)}...) but suitefleet_customer_code is ${code === null ? "NULL" : "empty"}`,
+      detail: `slug 'demo-bistro' already present (id=${t.id.slice(0, 8)}..., status=${t.status}) — Chapter-2 live-create will collide with 409`,
     };
   }
-  return {
-    passed: true,
-    detail: `tenant ${t.slug} (id=${t.id.slice(0, 8)}...) suitefleet_customer_code=${code} status=${t.status}`,
-  };
+  return { passed: true, detail: "slug 'demo-bistro' is absent — free for Chapter-2 live-create" };
 }
 
 async function assertFatimaAddressesAndRotation(sql) {
@@ -167,23 +169,29 @@ async function assertSarahActivePreDemoWithFailedTasks(sql) {
   };
 }
 
-async function assertDemoAwbPresent(sql) {
+async function assertMplPrefixAwbPresent(sql) {
+  // AWBs land on tasks.external_tracking_number (NOT tasks.external_id
+  // — that column holds SF's numeric internal task ID). MPL- prefix
+  // is the AWB shape SuiteFleet mints for the meal-plan merchant. A
+  // green count proves the SF push pipeline produced real data end-
+  // to-end for MPL without locking the assertion to a specific AWB
+  // that goes stale day over day as the cron generates new tasks.
+  const pattern = `${AWB_PREFIX}%`;
   const rows = await sql`
-    SELECT id, external_id, customer_order_number
+    SELECT count(*)::int AS n
     FROM tasks
-    WHERE external_id = ${AWB_DEMO_FIXTURE}
-    LIMIT 1
+    WHERE external_tracking_number LIKE ${pattern}
   `;
-  if (rows.length === 0) {
+  const n = rows[0].n;
+  if (n < 1) {
     return {
       passed: false,
-      detail: `no task with external_id = '${AWB_DEMO_FIXTURE}' (SF push pipeline did not produce expected fixture AWB)`,
+      detail: `no tasks with external_tracking_number LIKE '${pattern}' — SF push pipeline produced no MPL-prefix AWBs`,
     };
   }
-  const t = rows[0];
   return {
     passed: true,
-    detail: `task ${t.id.slice(0, 8)}... carries external_id=${AWB_DEMO_FIXTURE} (customer_order_number=${t.customer_order_number})`,
+    detail: `${n} tasks carry an ${AWB_PREFIX}-prefix AWB on external_tracking_number`,
   };
 }
 
@@ -214,10 +222,10 @@ async function main() {
   const sql = postgres(dbUrl, { max: 1, prepare: false });
 
   const assertions = [
-    { label: "1. Demo Bistro tenant + suitefleet_customer_code", run: () => assertDemoBistroWithCustomerCode(sql) },
+    { label: "1. 'demo-bistro' slug absent pre-demo", run: () => assertDemoBistroSlugAbsentPreDemo(sql) },
     { label: "2. Fatima ≥2 addresses + rotation rules", run: () => assertFatimaAddressesAndRotation(sql) },
     { label: "3. Sarah ACTIVE pre-demo + ≥2 FAILED tasks last 14d", run: () => assertSarahActivePreDemoWithFailedTasks(sql) },
-    { label: `4. AWB ${AWB_DEMO_FIXTURE} on tasks.external_id`, run: () => assertDemoAwbPresent(sql) },
+    { label: `4. ≥1 task with ${AWB_PREFIX}-prefix AWB on external_tracking_number`, run: () => assertMplPrefixAwbPresent(sql) },
     { label: "5. ≥1 task with pod_photos populated", run: () => assertAtLeastOneTaskWithPodPhotos(sql) },
   ];
 
