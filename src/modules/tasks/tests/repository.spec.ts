@@ -314,6 +314,44 @@ describe("listTasksByTenant", () => {
     expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/i);
     expect(captured.params).toContain(TENANT_ID);
   });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause and consignee join when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID);
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+      expect(captured.sql).not.toMatch(/JOIN consignees/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against AWB, customer_order_number, and consignee name with a LEFT JOIN", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "MPL-645" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
+      expect(captured.sql).toMatch(/external_tracking_number\s+ILIKE/i);
+      expect(captured.sql).toMatch(/customer_order_number\s+ILIKE/i);
+      expect(captured.sql).toMatch(/c\.name\s+ILIKE/i);
+      expect(captured.params).toContain("%MPL-645%");
+    });
+
+    it("composes searchTerm with the status filter (both clauses present)", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "Sarah", status: "DELIVERED" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/internal_status\s*=\s*\$/i);
+      expect(captured.sql).toMatch(/ILIKE/i);
+      expect(captured.params).toContain("DELIVERED");
+      expect(captured.params).toContain("%Sarah%");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

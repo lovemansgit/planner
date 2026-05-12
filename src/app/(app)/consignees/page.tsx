@@ -5,52 +5,47 @@
 //
 //   migration (0004) → repository (C-2) → service + audit (C-3)
 //   → buildRequestContext (Day 10) → server-rendered HTML (this file)
-//   → ConsigneesSearchableTable client wrapper (Day-22 fixup)
+//   → ConsigneesTable (server) + SearchBar (client) — Day-24
 //
 // Auth: UnauthorizedError redirects to /login.
 //
-// Transcorp design language:
-//   - Background: var(--color-surface-primary) (warm off-white #FAF8F4)
-//   - Foreground: var(--color-navy) (#252d60)
-//   - 0.5px hairline borders, no shadows
-//   - Sentence case throughout
-//   - Hero numeral for the headline count
-//   - Generous whitespace (px-12 py-16, mb-12, etc.)
-//
-// Day-22 fixup per PR #238 §3.22:
-//   - Onboard CTA in header (gated on consignee:create +
-//     subscription:create)
-//   - Client-side search by name / phone via
-//     ConsigneesSearchableTable wrapper
-//   - Inline ConsigneesTable / Th / Td / EmptyState helpers moved
-//     into the client component (single source of truth)
+// Day-24 search: ?q= URL param threaded into listConsignees as
+// searchTerm; ILIKE runs server-side against name + digit-stripped
+// phone. Replaces the Day-22 client-side filter so /tasks,
+// /subscriptions, and /consignees share the same URL-state contract.
 
 import { randomUUID } from "node:crypto";
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { SearchBar } from "@/components/SearchBar";
 import { listConsignees, type Consignee } from "@/modules/consignees";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
 
-import { ConsigneesSearchableTable } from "./_components/ConsigneesSearchableTable";
+import { ConsigneesTable } from "./_components/ConsigneesTable";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function ConsigneesPage() {
+interface ConsigneesPageProps {
+  readonly searchParams: Promise<{
+    readonly q?: string;
+  }>;
+}
+
+export default async function ConsigneesPage({ searchParams }: ConsigneesPageProps) {
   const requestId = randomUUID();
+  const params = await searchParams;
+  const query = (params.q ?? "").trim();
 
   let consignees: readonly Consignee[];
   let canOnboard = false;
   try {
     const ctx = await buildRequestContext("/consignees", requestId);
-    consignees = await listConsignees(ctx);
-    // Onboard CTA gating per Day-19 §J-5: createConsigneeWithSubscription
-    // requires both consignee:create AND subscription:create. Hide the
-    // CTA when either is missing (no greyed-out state; brief §3.3.10 r1).
+    consignees = await listConsignees(ctx, query.length > 0 ? { searchTerm: query } : {});
     if (ctx.actor.kind === "user") {
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
       canOnboard = perms.has("consignee:create") && perms.has("subscription:create");
@@ -92,10 +87,17 @@ export default async function ConsigneesPage() {
           <p className="font-serif text-5xl font-light tabular-nums leading-none">
             {consignees.length}
           </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">Total consignees</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+            {query.length > 0 ? `Matching "${query}"` : "Total consignees"}
+          </p>
         </section>
 
-        <ConsigneesSearchableTable rows={consignees} />
+        <SearchBar
+          label="Search consignees by name or phone"
+          placeholder="Search by name or phone"
+        />
+
+        <ConsigneesTable rows={consignees} query={query} />
       </div>
     </main>
   );

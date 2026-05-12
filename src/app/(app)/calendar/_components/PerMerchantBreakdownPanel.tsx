@@ -1,86 +1,110 @@
-// Day-23n fleet panels — "Per-merchant breakdown" panel for the
-// Transcorp admin variant of /calendar (client component for sort
-// state).
+// Day-24 fleet panels — "Per-merchant breakdown" as a horizontal
+// bar chart. Replaces the Day-23n sortable table per Love's PR #249
+// feedback ("scales beyond ~10 merchants, table version doesn't").
 //
-// One row per active merchant. Five columns: merchant name, total
-// today, delivered today, in transit, failed last 7 days. Click any
-// column header to sort by that column; clicking the active column
-// header toggles direction. Default sort: total today DESC.
+// One row per active merchant, sorted DESC by total tasks today.
+// Each row is a Link to `/admin/tasks?merchantSlug=<slug>` for drill-
+// through. The bar shows three stacked segments — delivered (navy),
+// in transit (stone-400), and scheduled-remaining (stone-200) —
+// scaled so the widest merchant is the full row width and shorter
+// merchants render proportionally narrower. The 7-day failed count
+// is surfaced as a separate red badge on the right when non-zero;
+// it isn't part of the today bar because the time windows differ.
 //
-// Each merchant row is a Link to /admin/tasks?merchantSlug=<slug>
-// for drill-through. Brand-canon: hairline border-stone-200, no
-// shadow, navy header, stone-100 hover, sentence case, tabular-nums
-// on numeric columns.
+// Native title attribute carries exact counts per segment for hover
+// inspection. The whole row is a single click target — bar segments
+// are visual only, not separately interactive.
 //
-// Pure-logic extraction: `sortRows(rows, sortKey, sortDir)` exposed
-// for spec coverage per the codebase's no-render-test convention.
-
-"use client";
+// Brand-canon: hairline stone-200 borders, no shadow, navy/stone
+// tones, sentence case. Pure component — `computeMerchantBarSegments`
+// is exported below for spec coverage per the codebase's no-render
+// convention.
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
 
 import type { CalendarPerMerchantBreakdownRow } from "../_types";
 
-export type PerMerchantSortKey =
-  | "tenantName"
-  | "totalToday"
-  | "deliveredToday"
-  | "inTransit"
-  | "failedLast7Days";
+export interface MerchantBarSegment {
+  readonly tenantId: string;
+  readonly tenantName: string;
+  readonly tenantSlug: string;
+  readonly totalToday: number;
+  readonly deliveredToday: number;
+  readonly inTransit: number;
+  readonly failedLast7Days: number;
+  /** Bar width as a percentage of the widest merchant's bar (0-100). */
+  readonly totalPct: number;
+  /** Delivered segment as a percentage of this row's bar (0-100). */
+  readonly deliveredPct: number;
+  /** In-transit segment as a percentage of this row's bar (0-100). */
+  readonly inTransitPct: number;
+  /** Scheduled-remaining segment as a percentage of this row's bar. */
+  readonly remainingPct: number;
+}
 
-export type SortDirection = "asc" | "desc";
+/**
+ * Pure derivation: turn raw breakdown rows into bar-chart-ready
+ * segments, sorted DESC by totalToday.
+ *
+ *   - `totalPct` scales the bar's width across the row container, so
+ *     the merchant with the most tasks today renders at 100% and
+ *     smaller merchants render proportionally.
+ *   - Segment percentages (delivered / inTransit / remaining) split
+ *     each merchant's bar into the three operationally-meaningful
+ *     buckets. Remaining = totalToday - delivered - inTransit, floored
+ *     at zero to defend against count drift between the FILTER
+ *     aggregates and the COUNT total.
+ *   - When maxTotal === 0 every bar collapses to 0% width, but rows
+ *     still render so the operator can see "X merchants, none active
+ *     today".
+ */
+export function computeMerchantBarSegments(
+  rows: readonly CalendarPerMerchantBreakdownRow[],
+): readonly MerchantBarSegment[] {
+  const maxTotal = rows.reduce((m, r) => Math.max(m, r.totalToday), 0);
+  const sorted = rows.slice().sort((a, b) => b.totalToday - a.totalToday);
+  return sorted.map((row) => {
+    const totalPct = maxTotal > 0 ? (row.totalToday / maxTotal) * 100 : 0;
+    if (row.totalToday === 0) {
+      return {
+        tenantId: row.tenantId,
+        tenantName: row.tenantName,
+        tenantSlug: row.tenantSlug,
+        totalToday: row.totalToday,
+        deliveredToday: row.deliveredToday,
+        inTransit: row.inTransit,
+        failedLast7Days: row.failedLast7Days,
+        totalPct,
+        deliveredPct: 0,
+        inTransitPct: 0,
+        remainingPct: 0,
+      };
+    }
+    const deliveredPct = (row.deliveredToday / row.totalToday) * 100;
+    const inTransitPct = (row.inTransit / row.totalToday) * 100;
+    const remainingPct = Math.max(0, 100 - deliveredPct - inTransitPct);
+    return {
+      tenantId: row.tenantId,
+      tenantName: row.tenantName,
+      tenantSlug: row.tenantSlug,
+      totalToday: row.totalToday,
+      deliveredToday: row.deliveredToday,
+      inTransit: row.inTransit,
+      failedLast7Days: row.failedLast7Days,
+      totalPct,
+      deliveredPct,
+      inTransitPct,
+      remainingPct,
+    };
+  });
+}
 
 export interface PerMerchantBreakdownPanelProps {
   readonly rows: readonly CalendarPerMerchantBreakdownRow[];
 }
 
-/**
- * Pure sort helper. Returns a new array; does not mutate the input.
- * Numeric columns compare numerically; tenantName compares via
- * locale-aware string compare.
- */
-export function sortRows(
-  rows: readonly CalendarPerMerchantBreakdownRow[],
-  sortKey: PerMerchantSortKey,
-  sortDir: SortDirection,
-): readonly CalendarPerMerchantBreakdownRow[] {
-  const copy = rows.slice();
-  copy.sort((a, b) => {
-    if (sortKey === "tenantName") {
-      const cmp = a.tenantName.localeCompare(b.tenantName, "en-GB");
-      return sortDir === "asc" ? cmp : -cmp;
-    }
-    const aVal = a[sortKey];
-    const bVal = b[sortKey];
-    const cmp = aVal - bVal;
-    return sortDir === "asc" ? cmp : -cmp;
-  });
-  return copy;
-}
-
-const COLUMNS: readonly { key: PerMerchantSortKey; label: string; align: "left" | "right" }[] = [
-  { key: "tenantName", label: "Merchant", align: "left" },
-  { key: "totalToday", label: "Total today", align: "right" },
-  { key: "deliveredToday", label: "Delivered", align: "right" },
-  { key: "inTransit", label: "In transit", align: "right" },
-  { key: "failedLast7Days", label: "Failed (7d)", align: "right" },
-];
-
 export function PerMerchantBreakdownPanel({ rows }: PerMerchantBreakdownPanelProps) {
-  const [sortKey, setSortKey] = useState<PerMerchantSortKey>("totalToday");
-  const [sortDir, setSortDir] = useState<SortDirection>("desc");
-
-  const sortedRows = useMemo(() => sortRows(rows, sortKey, sortDir), [rows, sortKey, sortDir]);
-
-  function onHeaderClick(key: PerMerchantSortKey) {
-    if (key === sortKey) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
-    } else {
-      setSortKey(key);
-      setSortDir(key === "tenantName" ? "asc" : "desc");
-    }
-  }
+  const segments = computeMerchantBarSegments(rows);
 
   return (
     <section
@@ -92,87 +116,107 @@ export function PerMerchantBreakdownPanel({ rows }: PerMerchantBreakdownPanelPro
           Per-merchant breakdown
         </h2>
         <p className="mt-1 text-xs text-[color:var(--color-text-secondary)]">
-          Active merchants only. Click any column header to sort.
+          Active merchants only. Bars scaled to today&apos;s busiest merchant.
         </p>
+        <Legend />
       </header>
-      {sortedRows.length === 0 ? (
+      {segments.length === 0 ? (
         <p className="px-4 py-12 text-center text-sm text-[color:var(--color-text-secondary)]">
           No active merchants configured.
         </p>
       ) : (
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-stone-200 bg-surface-primary">
-              {COLUMNS.map((col) => {
-                const isActive = col.key === sortKey;
-                const arrow = isActive ? (sortDir === "asc" ? "↑" : "↓") : "";
-                return (
-                  <th
-                    key={col.key}
-                    scope="col"
-                    aria-sort={
-                      isActive
-                        ? sortDir === "asc"
-                          ? "ascending"
-                          : "descending"
-                        : "none"
-                    }
-                    className={`${col.align === "right" ? "text-right" : "text-left"} px-4 py-3`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onHeaderClick(col.key)}
-                      className="inline-flex items-baseline gap-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out hover:text-navy"
-                    >
-                      <span>{col.label}</span>
-                      <span className="text-navy" aria-hidden="true">
-                        {arrow}
-                      </span>
-                    </button>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedRows.map((row, idx) => {
-              const tint = idx % 2 === 1 ? "bg-stone-100/40" : "bg-paper";
-              return (
-                <tr
-                  key={row.tenantId}
-                  data-tenant-slug={row.tenantSlug}
-                  className={`${tint} border-b border-stone-200 transition-colors duration-[120ms] ease-out hover:bg-stone-100`}
-                >
-                  <td className="px-4 py-3">
-                    <Link
-                      href={`/admin/tasks?merchantSlug=${encodeURIComponent(row.tenantSlug)}`}
-                      className="text-navy underline decoration-stone-300 underline-offset-4 hover:decoration-navy"
-                    >
-                      {row.tenantName}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums text-navy">
-                    {row.totalToday}
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums text-navy">
-                    {row.deliveredToday}
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums text-navy">
-                    {row.inTransit}
-                  </td>
-                  <td
-                    className={`px-4 py-3 text-right tabular-nums ${
-                      row.failedLast7Days > 0 ? "text-red font-medium" : "text-navy"
-                    }`}
-                  >
-                    {row.failedLast7Days}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <ul role="list" className="divide-y divide-stone-200">
+          {segments.map((seg) => (
+            <li key={seg.tenantId}>
+              <BarRow segment={seg} />
+            </li>
+          ))}
+        </ul>
       )}
     </section>
+  );
+}
+
+function Legend() {
+  return (
+    <ul
+      aria-label="Bar segment legend"
+      className="mt-3 flex flex-wrap items-center gap-4 text-[10px] uppercase tracking-[0.12em] text-[color:var(--color-text-secondary)]"
+    >
+      <li className="flex items-center gap-1.5">
+        <span aria-hidden className="h-2 w-3 bg-navy" />
+        Delivered
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span aria-hidden className="h-2 w-3 bg-stone-400" />
+        In transit
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span aria-hidden className="h-2 w-3 bg-stone-200" />
+        Scheduled
+      </li>
+    </ul>
+  );
+}
+
+function BarRow({ segment }: { readonly segment: MerchantBarSegment }) {
+  const scheduledCount = Math.max(
+    0,
+    segment.totalToday - segment.deliveredToday - segment.inTransit,
+  );
+  const tooltipParts = [
+    `Delivered ${segment.deliveredToday}`,
+    `In transit ${segment.inTransit}`,
+    `Scheduled ${scheduledCount}`,
+  ];
+  if (segment.failedLast7Days > 0) {
+    tooltipParts.push(`Failed last 7d ${segment.failedLast7Days}`);
+  }
+  const tooltip = tooltipParts.join(" · ");
+
+  const deliveredWidth = (segment.deliveredPct * segment.totalPct) / 100;
+  const inTransitWidth = (segment.inTransitPct * segment.totalPct) / 100;
+
+  return (
+    <Link
+      href={`/admin/tasks?merchantSlug=${encodeURIComponent(segment.tenantSlug)}`}
+      data-tenant-slug={segment.tenantSlug}
+      title={tooltip}
+      className="block px-4 py-4 transition-colors duration-[120ms] ease-out hover:bg-stone-100"
+    >
+      <div className="flex items-center gap-4">
+        <span className="w-40 shrink-0 truncate text-sm font-medium text-navy">
+          {segment.tenantName}
+        </span>
+        <div className="relative h-3 flex-1 bg-stone-100" aria-hidden>
+          <div
+            className="absolute inset-y-0 left-0 bg-stone-200"
+            style={{ width: `${segment.totalPct}%` }}
+          />
+          <div
+            className="absolute inset-y-0 left-0 bg-navy"
+            style={{ width: `${deliveredWidth}%` }}
+          />
+          <div
+            className="absolute inset-y-0 bg-stone-400"
+            style={{
+              left: `${deliveredWidth}%`,
+              width: `${inTransitWidth}%`,
+            }}
+          />
+        </div>
+        <span className="w-12 shrink-0 text-right text-sm tabular-nums text-navy">
+          {segment.totalToday}
+        </span>
+        {segment.failedLast7Days > 0 ? (
+          <span className="inline-flex shrink-0 items-center gap-1 border border-red/30 bg-red/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-red">
+            <span aria-hidden>⚠</span>
+            {segment.failedLast7Days} failed/7d
+          </span>
+        ) : (
+          <span className="w-24 shrink-0" aria-hidden />
+        )}
+      </div>
+    </Link>
   );
 }

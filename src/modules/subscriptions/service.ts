@@ -397,11 +397,12 @@ export async function listSubscriptionsByConsignee(
  */
 export async function listSubscriptionsWithConsignee(
   ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly SubscriptionWithConsignee[]> {
   requirePermission(ctx, "subscription:read");
   assertTenantScoped(ctx, "subscription:read");
   return withTenant(ctx.tenantId, async (tx) => {
-    return listSubscriptionsWithConsigneeByTenant(tx, ctx.tenantId!);
+    return listSubscriptionsWithConsigneeByTenant(tx, ctx.tenantId!, opts);
   });
 }
 

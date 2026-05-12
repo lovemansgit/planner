@@ -197,12 +197,19 @@ export async function getConsignee(ctx: RequestContext, id: Uuid): Promise<Consi
 
 /**
  * List every consignee in the actor's tenant, newest first.
+ *
+ * Optional `searchTerm` filters via case-insensitive ILIKE on the
+ * consignee name and digit-stripped phone — see
+ * `listConsigneesByTenant` in repository.ts for the semantics.
  */
-export async function listConsignees(ctx: RequestContext): Promise<readonly Consignee[]> {
+export async function listConsignees(
+  ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly Consignee[]> {
   requirePermission(ctx, "consignee:read");
   assertTenantScoped(ctx, "consignee:read");
   return withTenant(ctx.tenantId, async (tx) => {
-    return listConsigneesByTenant(tx, ctx.tenantId!);
+    return listConsigneesByTenant(tx, ctx.tenantId!, opts);
   });
 }
 
