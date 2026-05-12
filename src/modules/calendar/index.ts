@@ -1,4 +1,5 @@
-// Day-22n PR-C-A + Day-23n polish — Calendar module barrel.
+// Day-22n PR-C-A + Day-23n polish + Day-23n fleet panels — Calendar
+// module barrel.
 
 export {
   computeMonthGridWindow,
@@ -8,6 +9,8 @@ export {
   getCalendarFilterOptions,
   getCalendarMetrics,
   getCalendarMetricsTranscorpAdmin,
+  getPerMerchantBreakdown,
+  getTopMerchantsToday,
   listTasksForDay,
 } from "./service";
 
@@ -21,4 +24,6 @@ export type {
   CalendarFilters,
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,
+  CalendarPerMerchantBreakdownRow,
+  CalendarTopMerchantToday,
 } from "./types";

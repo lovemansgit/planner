@@ -21,7 +21,9 @@ vi.mock("../repository", () => ({
   listDistinctCrmStates: vi.fn(),
   listDistinctDistricts: vi.fn(),
   listDistinctTaskStatuses: vi.fn(),
+  listPerMerchantBreakdown: vi.fn(),
   listTasksForDayAcrossConsignees: vi.fn(),
+  listTopMerchantsTodayWithTaskCount: vi.fn(),
 }));
 
 import { withServiceRole, withTenant } from "../../../shared/db";
@@ -37,7 +39,9 @@ import {
   listDistinctCrmStates,
   listDistinctDistricts,
   listDistinctTaskStatuses,
+  listPerMerchantBreakdown,
   listTasksForDayAcrossConsignees,
+  listTopMerchantsTodayWithTaskCount,
 } from "../repository";
 import {
   computeMonthGridWindow,
@@ -47,6 +51,8 @@ import {
   getCalendarFilterOptions,
   getCalendarMetrics,
   getCalendarMetricsTranscorpAdmin,
+  getPerMerchantBreakdown,
+  getTopMerchantsToday,
   listTasksForDay,
 } from "../service";
 
@@ -60,6 +66,8 @@ const mockListDistinctDistricts = vi.mocked(listDistinctDistricts);
 const mockListDistinctCrmStates = vi.mocked(listDistinctCrmStates);
 const mockListDistinctTaskStatuses = vi.mocked(listDistinctTaskStatuses);
 const mockListTasksForDayAcrossConsignees = vi.mocked(listTasksForDayAcrossConsignees);
+const mockListTopMerchantsToday = vi.mocked(listTopMerchantsTodayWithTaskCount);
+const mockListPerMerchantBreakdown = vi.mocked(listPerMerchantBreakdown);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
@@ -104,6 +112,8 @@ beforeEach(() => {
   mockListDistinctDistricts.mockResolvedValue([]);
   mockListDistinctCrmStates.mockResolvedValue([]);
   mockListDistinctTaskStatuses.mockResolvedValue([]);
+  mockListTopMerchantsToday.mockResolvedValue([]);
+  mockListPerMerchantBreakdown.mockResolvedValue([]);
 });
 
 // ---------------------------------------------------------------------------
@@ -345,6 +355,49 @@ describe("computeMonthGridWindow", () => {
 });
 
 // ---------------------------------------------------------------------------
+// getTopMerchantsToday (Day-23n fleet panels)
+// ---------------------------------------------------------------------------
+
+describe("getTopMerchantsToday", () => {
+  it("throws ForbiddenError when actor lacks task:read_all", async () => {
+    const ctx = userCtx(["task:read"]);
+    await expect(
+      getTopMerchantsToday(ctx, "2026-05-12"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("runs under withServiceRole — never withTenant", async () => {
+    const ctx = userCtx(["task:read_all"]);
+    await getTopMerchantsToday(ctx, "2026-05-12");
+    expect(mockWithServiceRole).toHaveBeenCalledOnce();
+    expect(mockWithServiceRole.mock.calls[0][0]).toBe(
+      "transcorp_staff:fleet_panels",
+    );
+    expect(mockWithTenant).not.toHaveBeenCalled();
+  });
+
+  it("calls the repo with today + limit and returns the rows verbatim", async () => {
+    const ctx = userCtx(["task:read_all"]);
+    mockListTopMerchantsToday.mockResolvedValue([
+      { tenantId: "t1", tenantName: "MPL", tenantSlug: "mpl", taskCount: 42 },
+    ]);
+    const rows = await getTopMerchantsToday(ctx, "2026-05-12", 5);
+    expect(mockListTopMerchantsToday).toHaveBeenCalledOnce();
+    expect(mockListTopMerchantsToday.mock.calls[0][1]).toBe("2026-05-12");
+    expect(mockListTopMerchantsToday.mock.calls[0][2]).toBe(5);
+    expect(rows).toEqual([
+      { tenantId: "t1", tenantName: "MPL", tenantSlug: "mpl", taskCount: 42 },
+    ]);
+  });
+
+  it("defaults limit to 10 when caller omits", async () => {
+    const ctx = userCtx(["task:read_all"]);
+    await getTopMerchantsToday(ctx, "2026-05-12");
+    expect(mockListTopMerchantsToday.mock.calls[0][2]).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Day-23 PM — countTasksByDayForMonth
 // ---------------------------------------------------------------------------
 
@@ -436,5 +489,49 @@ describe("listTasksForDay", () => {
       DATE,
       filters,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getPerMerchantBreakdown (Day-23n fleet panels)
+// ---------------------------------------------------------------------------
+
+describe("getPerMerchantBreakdown", () => {
+  it("throws ForbiddenError when actor lacks task:read_all", async () => {
+    const ctx = userCtx(["task:read"]);
+    await expect(
+      getPerMerchantBreakdown(ctx, "2026-05-12"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("runs under withServiceRole — never withTenant", async () => {
+    const ctx = userCtx(["task:read_all"]);
+    await getPerMerchantBreakdown(ctx, "2026-05-12");
+    expect(mockWithServiceRole).toHaveBeenCalledOnce();
+    expect(mockWithServiceRole.mock.calls[0][0]).toBe(
+      "transcorp_staff:fleet_panels",
+    );
+    expect(mockWithTenant).not.toHaveBeenCalled();
+  });
+
+  it("calls the repo with today and returns the rows verbatim", async () => {
+    const ctx = userCtx(["task:read_all"]);
+    mockListPerMerchantBreakdown.mockResolvedValue([
+      {
+        tenantId: "t1",
+        tenantName: "MPL",
+        tenantSlug: "mpl",
+        totalToday: 42,
+        deliveredToday: 10,
+        inTransit: 5,
+        failedLast7Days: 2,
+      },
+    ]);
+    const rows = await getPerMerchantBreakdown(ctx, "2026-05-12");
+    expect(mockListPerMerchantBreakdown).toHaveBeenCalledOnce();
+    expect(mockListPerMerchantBreakdown.mock.calls[0][1]).toBe("2026-05-12");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tenantSlug).toBe("mpl");
+    expect(rows[0].failedLast7Days).toBe(2);
   });
 });

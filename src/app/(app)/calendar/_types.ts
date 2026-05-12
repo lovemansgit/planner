@@ -40,6 +40,32 @@ export interface CalendarMetricsTranscorpAdmin {
 }
 
 /**
+ * Day-23n fleet panels — single row in the "Top merchants today"
+ * panel. Sorted by `taskCount` DESC at the SQL layer.
+ */
+export interface CalendarTopMerchantToday {
+  readonly tenantId: string;
+  readonly tenantName: string;
+  readonly tenantSlug: string;
+  readonly taskCount: number;
+}
+
+/**
+ * Day-23n fleet panels — single row in the "Per-merchant breakdown"
+ * panel. One row per active tenant; column counts come from FILTER
+ * aggregates in a single round-trip.
+ */
+export interface CalendarPerMerchantBreakdownRow {
+  readonly tenantId: string;
+  readonly tenantName: string;
+  readonly tenantSlug: string;
+  readonly totalToday: number;
+  readonly deliveredToday: number;
+  readonly inTransit: number;
+  readonly failedLast7Days: number;
+}
+
+/**
  * Per-day aggregate row used by week / month / day grids. Day-23n —
  * stripped to total + hasHighRisk only (the top-task preview slice
  * has been removed in favour of click-through day cells).

@@ -39,12 +39,16 @@ import {
   getCalendarFilterOptions,
   getCalendarMetrics,
   getCalendarMetricsTranscorpAdmin,
+  getPerMerchantBreakdown,
+  getTopMerchantsToday,
   listTasksForDay,
   type CalendarDayCount,
   type CalendarDayTaskRow,
   type CalendarFilters,
   type CalendarMetrics,
   type CalendarMetricsTranscorpAdmin,
+  type CalendarPerMerchantBreakdownRow,
+  type CalendarTopMerchantToday,
 } from "@/modules/calendar";
 import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
@@ -56,6 +60,8 @@ import { ConsolidatedDayView } from "./_components/ConsolidatedDayView";
 import { ConsolidatedMonthView } from "./_components/ConsolidatedMonthView";
 import { ConsolidatedWeekView } from "./_components/ConsolidatedWeekView";
 import { MetricCard } from "./_components/MetricCard";
+import { PerMerchantBreakdownPanel } from "./_components/PerMerchantBreakdownPanel";
+import { TopMerchantsTodayPanel } from "./_components/TopMerchantsTodayPanel";
 import type { CalendarConsolidatedView, CalendarFiltersValue } from "./_types";
 import { computeWeekStart } from "../consignees/[id]/_components/calendar-dates";
 
@@ -144,6 +150,8 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
 
   let tenantMetrics: CalendarMetrics | null = null;
   let transcorpMetrics: CalendarMetricsTranscorpAdmin | null = null;
+  let topMerchants: readonly CalendarTopMerchantToday[] = [];
+  let perMerchantBreakdown: readonly CalendarPerMerchantBreakdownRow[] = [];
   let weekDays: readonly CalendarDayCount[] = [];
   let monthDays: readonly CalendarDayCount[] = [];
   let dayTasks: readonly CalendarDayTaskRow[] = [];
@@ -155,11 +163,18 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       ctx.actor.kind === "user" && ctx.actor.permissions.has("task:read_all");
 
     if (isTranscorpAdmin) {
-      // Transcorp admin variant — cross-tenant metrics only; the
-      // WeekView / filter bar stay tenant-scoped so this branch
-      // intentionally skips them (Transcorp admin lands on /calendar
-      // primarily for the at-a-glance fleet metrics).
-      transcorpMetrics = await getCalendarMetricsTranscorpAdmin(ctx, today);
+      // Transcorp admin variant — cross-tenant metric snapshot +
+      // fleet panels. WeekView / filter bar stay tenant-scoped and
+      // are skipped here (Transcorp admin lands on /calendar for the
+      // at-a-glance fleet picture).
+      const [metricsResult, topMerchantsResult, breakdownResult] = await Promise.all([
+        getCalendarMetricsTranscorpAdmin(ctx, today),
+        getTopMerchantsToday(ctx, today),
+        getPerMerchantBreakdown(ctx, today),
+      ]);
+      transcorpMetrics = metricsResult;
+      topMerchants = topMerchantsResult;
+      perMerchantBreakdown = breakdownResult;
     } else {
       const [metricsResult, optionsResult, weekResult, monthResult, dayResult] =
         await Promise.all([
@@ -218,6 +233,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           <TranscorpAdminMetricsRow metrics={transcorpMetrics} />
         ) : tenantMetrics ? (
           <TenantMetricsRow metrics={tenantMetrics} />
+        ) : null}
+
+        {isTranscorpAdmin ? (
+          <>
+            <TopMerchantsTodayPanel merchants={topMerchants} />
+            <PerMerchantBreakdownPanel rows={perMerchantBreakdown} />
+          </>
         ) : null}
 
         {!isTranscorpAdmin && filterOptions ? (
