@@ -508,6 +508,13 @@ export interface ListTasksOpts {
   readonly limit?: number;
   readonly offset?: number;
   readonly status?: TaskInternalStatus;
+  /**
+   * Optional case-insensitive substring match against the AWB
+   * (`external_tracking_number`), the operator-set `customer_order_number`,
+   * or the consignee name (LEFT JOIN consignees). Empty/whitespace-only
+   * strings are treated as no filter.
+   */
+  readonly searchTerm?: string;
 }
 
 /**
@@ -559,9 +566,13 @@ export async function listTasksByTenant(
   tenantId: Uuid,
   opts: ListTasksOpts = {},
 ): Promise<readonly Task[]> {
-  const { limit, offset = 0, status } = opts;
+  const { limit, offset = 0, status, searchTerm } = opts;
   const statusFilter = status
     ? sqlTag`AND t.internal_status = ${status}`
+    : sqlTag``;
+  const searchFilter = buildTaskSearchFilter(searchTerm);
+  const consigneeJoin = needsConsigneeJoin(searchTerm)
+    ? sqlTag`LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id`
     : sqlTag``;
   const limitClause = limit !== undefined ? sqlTag`LIMIT ${limit}` : sqlTag``;
   const offsetClause = offset > 0 ? sqlTag`OFFSET ${offset}` : sqlTag``;
@@ -577,13 +588,32 @@ export async function listTasksByTenant(
         '[]'::json
       ) AS packages
     FROM tasks t
+    ${consigneeJoin}
     WHERE t.tenant_id = ${tenantId}
       ${statusFilter}
+      ${searchFilter}
     ORDER BY t.created_at DESC
     ${limitClause}
     ${offsetClause}
   `);
   return rows.map(mapTaskWithPackages);
+}
+
+function needsConsigneeJoin(searchTerm: string | undefined): boolean {
+  if (!searchTerm) return false;
+  return searchTerm.trim().length > 0;
+}
+
+function buildTaskSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const pattern = `%${trimmed}%`;
+  return sqlTag`AND (
+    t.external_tracking_number ILIKE ${pattern}
+    OR t.customer_order_number ILIKE ${pattern}
+    OR c.name ILIKE ${pattern}
+  )`;
 }
 
 // -----------------------------------------------------------------------------
@@ -819,17 +849,26 @@ export async function countTasksByConsigneeAndDayBucket(
 export async function countTasksByTenant(
   tx: DbTx,
   tenantId: Uuid,
-  opts: { readonly status?: TaskInternalStatus } = {},
+  opts: {
+    readonly status?: TaskInternalStatus;
+    readonly searchTerm?: string;
+  } = {},
 ): Promise<number> {
-  const { status } = opts;
+  const { status, searchTerm } = opts;
   const statusFilter = status
-    ? sqlTag`AND internal_status = ${status}`
+    ? sqlTag`AND t.internal_status = ${status}`
+    : sqlTag``;
+  const searchFilter = buildTaskSearchFilter(searchTerm);
+  const consigneeJoin = needsConsigneeJoin(searchTerm)
+    ? sqlTag`LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id`
     : sqlTag``;
   type Row = { count: string | number };
   const rows = await tx.execute<Row>(sqlTag`
-    SELECT COUNT(*)::int AS count FROM tasks
-    WHERE tenant_id = ${tenantId}
+    SELECT COUNT(*)::int AS count FROM tasks t
+    ${consigneeJoin}
+    WHERE t.tenant_id = ${tenantId}
       ${statusFilter}
+      ${searchFilter}
   `);
   const raw = rows[0]?.count ?? 0;
   return typeof raw === "string" ? Number.parseInt(raw, 10) : raw;

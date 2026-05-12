@@ -191,6 +191,46 @@ describe("listConsigneesByTenant", () => {
     expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/);
     expect(captured.params).toContain(TENANT_ID);
   });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listConsigneesByTenant(tx, TENANT_ID);
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listConsigneesByTenant(tx, TENANT_ID, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("adds an ILIKE clause on name when searchTerm is non-empty", async () => {
+      const tx = makeStubTx([[]]);
+      await listConsigneesByTenant(tx, TENANT_ID, { searchTerm: "Sarah" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/name\s+ILIKE/i);
+      expect(captured.params).toContain("%Sarah%");
+    });
+
+    it("adds a phone ILIKE clause with digit-stripped pattern when query contains digits", async () => {
+      const tx = makeStubTx([[]]);
+      await listConsigneesByTenant(tx, TENANT_ID, { searchTerm: "+971 50 123" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/phone\s+ILIKE/i);
+      expect(captured.params).toContain("%97150123%");
+    });
+
+    it("falls back to name-only ILIKE when the query has no digits", async () => {
+      const tx = makeStubTx([[]]);
+      await listConsigneesByTenant(tx, TENANT_ID, { searchTerm: "Khouri" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/name\s+ILIKE/i);
+      expect(captured.sql).not.toMatch(/phone\s+ILIKE/i);
+    });
+  });
 });
 
 describe("updateConsignee", () => {

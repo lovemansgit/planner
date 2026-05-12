@@ -729,7 +729,10 @@ export async function getConsigneeTaskCountByDayBucket(
  */
 export async function countTasks(
   ctx: RequestContext,
-  opts: { readonly status?: TaskInternalStatus } = {},
+  opts: {
+    readonly status?: TaskInternalStatus;
+    readonly searchTerm?: string;
+  } = {},
 ): Promise<number> {
   requirePermission(ctx, "task:read");
   assertTenantScoped(ctx, "task:read");

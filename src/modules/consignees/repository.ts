@@ -183,17 +183,38 @@ export async function findConsigneeById(tx: DbTx, id: Uuid): Promise<Consignee |
  * SELECT every consignee for `tenantId`, newest first. The tenant
  * filter is explicit alongside RLS — same value, same result, but
  * the WHERE clause makes the query self-describing in logs and pg_stat.
+ *
+ * Optional `searchTerm` narrows the result set with case-insensitive
+ * ILIKE against `name`, and against `phone` after stripping non-digits
+ * from the query (so operators can paste either E.164 `+971501234567`
+ * or local format `050 123 4567` and match the same row).
  */
 export async function listConsigneesByTenant(
   tx: DbTx,
-  tenantId: Uuid
+  tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly Consignee[]> {
+  const searchFilter = buildConsigneeSearchFilter(opts.searchTerm);
   const rows = await tx.execute<ConsigneeRow>(sqlTag`
     SELECT * FROM consignees
     WHERE tenant_id = ${tenantId}
+      ${searchFilter}
     ORDER BY created_at DESC
   `);
   return rows.map(mapRow);
+}
+
+function buildConsigneeSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const phoneDigits = trimmed.replace(/\D/g, "");
+  const namePattern = `%${trimmed}%`;
+  if (phoneDigits.length > 0) {
+    const phonePattern = `%${phoneDigits}%`;
+    return sqlTag`AND (name ILIKE ${namePattern} OR phone ILIKE ${phonePattern})`;
+  }
+  return sqlTag`AND name ILIKE ${namePattern}`;
 }
 
 // -----------------------------------------------------------------------------

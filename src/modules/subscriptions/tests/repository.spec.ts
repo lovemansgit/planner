@@ -427,6 +427,31 @@ describe("listSubscriptionsWithConsigneeByTenant", () => {
     const result = await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
     expect(result).toEqual([]);
   });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
+      const { sql } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID, { searchTerm: "   " });
+      const { sql } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against consignee name AND subscription external_ref when searchTerm is non-empty", async () => {
+      const tx = makeStubTx([[]]);
+      await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID, { searchTerm: "ACME-001" });
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).toMatch(/c\.name\s+ILIKE/i);
+      expect(sql).toMatch(/s\.external_ref\s+ILIKE/i);
+      expect(params).toContain("%ACME-001%");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

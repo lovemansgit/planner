@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { SearchBar } from "@/components/SearchBar";
 import { listUnresolvedFailedPushes } from "@/modules/failed-pushes";
 import {
   countTasks,
@@ -61,6 +62,7 @@ interface TasksPageProps {
     readonly status?: string;
     readonly page?: string;
     readonly perPage?: string;
+    readonly q?: string;
   }>;
 }
 
@@ -71,6 +73,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const page = parsePageParam(params.page);
   const perPage = parsePerPageParam(params.perPage);
   const offset = (page - 1) * perPage;
+  const query = (params.q ?? "").trim();
+  const searchTerm = query.length > 0 ? query : undefined;
 
   let tasks: readonly Task[];
   let totalCount: number;
@@ -78,8 +82,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   try {
     const ctx = await buildRequestContext("/tasks", requestId);
     [tasks, totalCount, failedPushTaskIds] = await Promise.all([
-      listTasks(ctx, { limit: perPage, offset, status }),
-      countTasks(ctx, { status }),
+      listTasks(ctx, { limit: perPage, offset, status, searchTerm }),
+      countTasks(ctx, { status, searchTerm }),
       listUnresolvedFailedPushes(ctx).then(
         (rows) => new Set(rows.map((r) => r.taskId)),
       ),
@@ -116,7 +120,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           <p className="font-serif text-5xl font-light tabular-nums leading-none">{totalCount}</p>
           <div className="flex items-center gap-6">
             <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              {status ? `Showing ${status.toLowerCase().replace("_", " ")} only` : "Total tasks"}
+              {buildCountLabel(status, query)}
             </p>
             <PageSizeDropdown
               value={perPage}
@@ -126,8 +130,13 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           </div>
         </section>
 
+        <SearchBar
+          label="Search tasks by AWB, consignee name or order number"
+          placeholder="Search by AWB, consignee name or order #"
+        />
+
         {tasks.length === 0 ? (
-          <EmptyState filtered={status !== undefined} />
+          <EmptyState filtered={status !== undefined || query.length > 0} query={query} />
         ) : (
           <TasksClient
             initialTasks={tasks}
@@ -138,7 +147,13 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           />
         )}
 
-        <Pagination page={page} totalPages={totalPages} status={status} perPage={perPage} />
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          status={status}
+          perPage={perPage}
+          query={query}
+        />
       </div>
     </main>
   );
@@ -162,6 +177,19 @@ function StatusFilterBar({
       ))}
     </nav>
   );
+}
+
+function buildCountLabel(status: string | undefined, query: string): string {
+  if (query.length > 0 && status) {
+    return `${status.toLowerCase().replace("_", " ")} matching "${query}"`;
+  }
+  if (query.length > 0) {
+    return `Matching "${query}"`;
+  }
+  if (status) {
+    return `Showing ${status.toLowerCase().replace("_", " ")} only`;
+  }
+  return "Total tasks";
 }
 
 function FilterPill({
@@ -190,19 +218,19 @@ function Pagination({
   totalPages,
   status,
   perPage,
+  query,
 }: {
   readonly page: number;
   readonly totalPages: number;
   readonly status: string | undefined;
   readonly perPage: number;
+  readonly query: string;
 }) {
   if (totalPages <= 1) return null;
   const buildHref = (p: number) => {
     const params = new URLSearchParams();
     if (status) params.set("status", status);
-    // Persist non-default perPage so paging doesn't drop the operator
-    // back to 50 mid-batch. Default omitted from URL to keep the
-    // bookmark-friendly /tasks form clean.
+    if (query.length > 0) params.set("q", query);
     if (perPage !== PAGE_SIZE_DEFAULT) params.set("perPage", String(perPage));
     if (p > 1) params.set("page", String(p));
     const qs = params.toString();
@@ -246,11 +274,21 @@ function Pagination({
   );
 }
 
-function EmptyState({ filtered }: { readonly filtered: boolean }) {
+function EmptyState({
+  filtered,
+  query,
+}: {
+  readonly filtered: boolean;
+  readonly query: string;
+}) {
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
       <p className="text-base text-navy">
-        {filtered ? "No tasks match this filter." : "No tasks yet."}
+        {query.length > 0
+          ? `No tasks match "${query}".`
+          : filtered
+            ? "No tasks match this filter."
+            : "No tasks yet."}
       </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
         {filtered

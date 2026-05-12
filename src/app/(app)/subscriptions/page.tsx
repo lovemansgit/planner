@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { SearchBar } from "@/components/SearchBar";
 import {
   listSubscriptionsWithConsignee,
   type SubscriptionWithConsignee,
@@ -37,18 +38,25 @@ import type { Permission } from "@/shared/types";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function SubscriptionsPage() {
+interface SubscriptionsPageProps {
+  readonly searchParams: Promise<{
+    readonly q?: string;
+  }>;
+}
+
+export default async function SubscriptionsPage({ searchParams }: SubscriptionsPageProps) {
   const requestId = randomUUID();
+  const params = await searchParams;
+  const query = (params.q ?? "").trim();
 
   let subscriptions: readonly SubscriptionWithConsignee[];
   let canCreate = false;
   try {
     const ctx = await buildRequestContext("/subscriptions", requestId);
-    subscriptions = await listSubscriptionsWithConsignee(ctx);
-    // /subscriptions/new gates on BOTH subscription:create AND
-    // task:create per Day-19 §J-5 SPLIT PERMS (single-task mode
-    // dispatches createTask; subscription mode dispatches
-    // createSubscription).
+    subscriptions = await listSubscriptionsWithConsignee(
+      ctx,
+      query.length > 0 ? { searchTerm: query } : {},
+    );
     if (ctx.actor.kind === "user") {
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
       canCreate = perms.has("subscription:create") && perms.has("task:create");
@@ -88,15 +96,20 @@ export default async function SubscriptionsPage() {
 
         <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Total subscriptions
+            {query.length > 0 ? `Matching "${query}"` : "Total subscriptions"}
           </p>
           <p className="mt-4 font-serif text-7xl font-light tabular-nums leading-none">
             {subscriptions.length}
           </p>
         </section>
 
+        <SearchBar
+          label="Search subscriptions by consignee name or order number"
+          placeholder="Search by consignee name or order #"
+        />
+
         {subscriptions.length === 0 ? (
-          <EmptyState />
+          <EmptyState query={query} />
         ) : (
           <SubscriptionsTable rows={subscriptions} />
         )}
@@ -192,7 +205,19 @@ function StatusBadge({ status }: { status: Subscription["status"] }) {
   }
 }
 
-function EmptyState() {
+function EmptyState({ query }: { readonly query: string }) {
+  if (query.length > 0) {
+    return (
+      <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
+        <p className="text-base text-navy">
+          No subscriptions match &quot;{query}&quot;.
+        </p>
+        <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
+          Try searching by consignee name or order number.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
       <p className="text-base text-navy">No subscriptions yet.</p>

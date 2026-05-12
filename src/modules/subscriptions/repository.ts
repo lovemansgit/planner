@@ -268,21 +268,32 @@ export interface SubscriptionWithConsignee {
 export async function listSubscriptionsWithConsigneeByTenant(
   tx: DbTx,
   tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly SubscriptionWithConsignee[]> {
   type JoinedRow = SubscriptionRow & {
     readonly consignee_name: string;
   };
+  const searchFilter = buildSubscriptionSearchFilter(opts.searchTerm);
   const rows = await tx.execute<JoinedRow>(sqlTag`
     SELECT s.*, c.name AS consignee_name
     FROM subscriptions s
     JOIN consignees c ON c.id = s.consignee_id AND c.tenant_id = s.tenant_id
     WHERE s.tenant_id = ${tenantId}
+      ${searchFilter}
     ORDER BY s.created_at DESC
   `);
   return rows.map((row) => ({
     subscription: mapSubscription(row),
     consigneeName: row.consignee_name,
   }));
+}
+
+function buildSubscriptionSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const pattern = `%${trimmed}%`;
+  return sqlTag`AND (c.name ILIKE ${pattern} OR s.external_ref ILIKE ${pattern})`;
 }
 
 // -----------------------------------------------------------------------------
