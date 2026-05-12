@@ -79,6 +79,7 @@ afterEach(() => {
   delete process.env.QSTASH_TOKEN;
   delete process.env.PUBLIC_BASE_URL;
   delete process.env.QSTASH_FLOW_CONTROL_KEY;
+  delete process.env.VERCEL_URL;
 });
 
 describe("enqueueCancelTask — single message wire shape", () => {
@@ -246,10 +247,36 @@ describe("missing env vars surface fatal errors", () => {
     );
   });
 
-  it("throws if PUBLIC_BASE_URL is missing", async () => {
+  it("throws if PUBLIC_BASE_URL AND VERCEL_URL are both missing", async () => {
     delete process.env.PUBLIC_BASE_URL;
+    delete process.env.VERCEL_URL;
     await expect(enqueueCancelTask(SAMPLE_CANCEL_PAYLOAD)).rejects.toThrow(
-      /PUBLIC_BASE_URL env var required/,
+      /PUBLIC_BASE_URL or VERCEL_URL env var required/,
+    );
+  });
+
+  // Day-22n /vercel-url-fallback — preview-deploy fallback coverage.
+  it("falls back to https://VERCEL_URL when PUBLIC_BASE_URL is missing", async () => {
+    delete process.env.PUBLIC_BASE_URL;
+    process.env.VERCEL_URL = "planner-git-feature-branch.vercel.app";
+    await enqueueCancelTask(SAMPLE_CANCEL_PAYLOAD);
+    expect(mockPublishJSON).toHaveBeenCalledTimes(1);
+    const args = mockPublishJSON.mock.calls[0][0];
+    expect(args.url).toBe(
+      "https://planner-git-feature-branch.vercel.app/api/queue/cancel-task",
+    );
+    expect(args.failureCallback).toBe(
+      "https://planner-git-feature-branch.vercel.app/api/queue/cancel-task-failed",
+    );
+  });
+
+  it("PUBLIC_BASE_URL wins over VERCEL_URL when both set", async () => {
+    process.env.PUBLIC_BASE_URL = "https://operator-override.example.com";
+    process.env.VERCEL_URL = "planner-git-some-branch.vercel.app";
+    await enqueueCancelTask(SAMPLE_CANCEL_PAYLOAD);
+    const args = mockPublishJSON.mock.calls[0][0];
+    expect(args.url).toBe(
+      "https://operator-override.example.com/api/queue/cancel-task",
     );
   });
 

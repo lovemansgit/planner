@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.10
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match).
+**Version:** v1.11
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match); v1.11 amendment filed Day 22 (11 May 2026) AM — single-address MVP for the `/consignees/new` 3-step wizard (multi-address + per-weekday rotation deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`).
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -59,7 +59,7 @@ The Planner is a **meal-plan CRM for merchants**. Merchants use it to manage the
 
 ### 2.2 Six core merchant-operator workflows
 
-1. **Onboard a consignee** — capture subscriber details, primary + alternative addresses, per-weekday address rotation, set delivery rules. System materializes tasks from rules going forward (rolling 14-day horizon, see §3.1.5).
+1. **Onboard a consignee** — capture subscriber details, single primary delivery address, set delivery rules. System materializes tasks from rules going forward (rolling 14-day horizon, see §3.1.5). v1.11 amendment: multi-address (alternative addresses + per-weekday rotation) deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`; the schema (migration 0014) is multi-address-ready but the v1 UI ships single-address only.
 2. **View subscriber base** — list all consignees with CRM state badges; drill into individual consignee detail showing their subscription as a calendar (week/month/year toggle).
 3. **View today's operations** — consolidated merchant calendar showing all consignees' deliveries for the day/week, filterable by status/area/time window.
 4. **Handle exceptions** — skip a delivery (with automatic tail-end reinsertion per §3.1.6), pause/resume a subscription with bounded duration, change address one-off or forward-going.
@@ -424,37 +424,35 @@ Engineers reference SF v2.0 docs at `suitefleet.readme.io` for exact paths/paylo
 
 #### 3.3.1 Consignee onboarding wizard (`/consignees/new`)
 
-**Four-step wizard** (per BRD §8.1 + Claude Code Brief §4.6):
+**Three-step wizard** (per BRD §8.1 + Claude Code Brief §4.6, with v1.11 amendment narrowing the multi-address scope):
 
 **Step 1 — Identity:**
 - Full name (required)
 - Primary phone (required, validated format per country)
-- Alternative phone (optional)
+- Alternative phone — **Phase 2** (single phone for v1)
 - Email (optional, recommended for notifications)
 - Merchant internal consignee ID — **Phase 2** (deferred per Day-12 decision)
 
-**Step 2 — Addresses:**
-- Primary address: line, building/villa, district, emirate, lat/lng (smart geotag)
+**Step 2 — Single primary delivery address (v1.11 amendment):**
 - Address label (Home / Office / Other)
-- Alternative address (optional, same structure)
-- District default: most-recently-used district for operator session (empty on first onboarding)
+- Address line (building / villa / unit, street)
+- District
+- Emirate
+- Lat / lng — **Phase 2** (smart geotag; v1 captures address text only)
+- **Alternative addresses + per-weekday rotation deferred to Phase 2** per `memory/followup_multi_address_rotation_phase_2.md`. The schema (migration 0014) is multi-address-ready; v1 ships single primary so the UI lane stays in budget.
 
 **Step 3 — Subscription:**
 - Plan name (free text for MVP; configurable selectable list Phase 2)
 - Start date (default today)
-- End date OR duration (8 weeks computes end_date)
-- Days of week (clickable Mon–Sun pills)
-- Default delivery time window (start time, end time)
-- **Address rotation** (per-weekday address mapping shown as tiles): Mon→[Home/Office], Tue→[...], etc. Defaults all to Primary; operator overrides per weekday for rotation.
-- Consignee CRM state (default `ACTIVE`; operator can set initial state if onboarding a known high-risk subscriber)
+- End date (optional; leaving empty = open-ended)
+- Days of week (clickable Mon–Sun pills via the WeekdaySelector primitive)
+- Default delivery time window (start time, end time, ≥30 minutes)
+- Internal notes (operator-only)
+- Address rotation tile — **Phase 2** (single primary fallback per migration 0014's COALESCE pattern handles per-day routing in v1)
 
-**Step 4 — Schedule rules:**
-- Cut-off time (read-only display of merchant default; configurable Phase 2)
-- Maximum skips per subscription (default unlimited; configurable Phase 2)
-- Blackout dates (read-only merchant default; per-consignee custom Phase 2)
-- Notes / loyalty tier — **Phase 2** (deferred per Day-12 decision)
+**On final submit:** creates consignee + single primary address (`is_primary=true`) + subscription in a single `withTenant` transaction via the `createConsigneeWithSubscription` orchestration (`src/modules/consignees/onboarding.ts`). Zero rotation rows are written; the materialization CTE's COALESCE final-fallback (`task-materialization/cte-builder.ts:182-187`) routes every materialised task to the primary address. Redirect to `/consignees/[id]` calendar view.
 
-**On final submit:** creates consignee + addresses + subscription + address rotations in single transaction. Redirect to `/consignees/[id]` calendar view.
+**Schedule rules** (cut-off time, maximum skips, blackout dates, loyalty tier) — **Phase 2** (the v1 wizard relies on merchant defaults and the existing 18:00 Dubai cut-off convention).
 
 #### 3.3.2 Consignee list view (`/consignees`)
 
@@ -976,6 +974,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.8 | 8 May 2026 (Day 18, post-A2-plan-PR) | Two amendments folded with the A2 webhook-handler 3-layer plan-PR. **§3.1.10 webhook payload format corrected** — original `?sf-format=object` (single-event JSON) was empirically wrong; SF sends JSON arrays per Day-7 capture and receiver/parser enforce array shape ([route.ts:146](../../src/app/api/webhooks/suitefleet/%5BtenantId%5D/route.ts#L146); [webhook-parser.ts:149](../../src/modules/integration/providers/suitefleet/webhook-parser.ts#L149)). New text describes batched array shape + dedup UNIQUE collapsing retries. **§5.3 Gate 5 reworded** to bind to the concrete column landed by the A2 plan-PR: `tasks.pod_photos IS NOT NULL` rather than free-text "POD photo URL." §3.3.8 cache-from-webhook commitment unchanged — POD remains the canonical example. Filed in `memory/plans/day-18-a2-webhook-handler-3-layer.md` §7. |
 | v1.9 | 9 May 2026 (Day 19, post-A2-smoke-PASS) | §2.3 expansion to two Transcorp-staff workflows — adds the Phase 1.5 admin cross-tenant operational read surface (`/admin/tasks` / `/admin/consignees` / `/admin/subscriptions` with merchant-filter dropdown; backed by `task:read_all` / `consignee:read_all` / `subscription:read_all` systemOnly perms granted to the `transcorp-sysadmin` role). Read-only — no action capability. v1.6 if cross-tenant action capability is needed. Filed inline at §2.3 + §1.7 amendment; no separate decision memo — Phase 1.5 lane already shipped, brief catches up. |
 | v1.10 | 10 May 2026 (Day 21, evening, post Session B Day-21 data-check) | **Sarah Khouri demo-persona pre-seed reconciliation.** §5.1 Step 5 narrative ("drill into Sarah → consignee timeline shows pattern of failed deliveries → click Change CRM state → mark High Risk") implies a **live-flip during the demo**. §5.2 (pre-seeded HIGH_RISK) and §5.3 Gate 8 (HIGH_RISK + ≥2 failures) implied a **pre-seed HIGH_RISK** state. Internal contradiction surfaced during Day-21 overnight prep when Session A's data-check found Sarah at `crm_state=ACTIVE` with 3 FAILED deliveries (May 2/5/7 2026) — empirical state matches the §5.1 live-flip narrative, NOT the §5.2/§5.3 pre-seed assumption. **Resolution: §5.1 wins.** §5.2 amended to "Sarah Khouri pre-configured with ACTIVE CRM state and ≥2 FAILED deliveries to enable HIGH_RISK transition during demo." §5.3 Gate 8 amended to "Sarah Khouri has ≥2 FAILED deliveries in history; CRM state=ACTIVE pre-demo." No data changes required — current sandbox state already matches the new pre-demo invariant. Filed at `memory/decision_brief_v1_10_amendment_sarah_khouri_pre_seed.md`. |
+| v1.11 | 11 May 2026 (Day 22, AM) | **Single-address MVP for `/consignees/new` wizard (Day-22 forms lane scope ruling).** Discovery surfaced two service-layer gaps: (a) no `createAddress` service fn in `src/` — addresses are insert-side only via the seed scripts; (b) no `createConsigneeWithSubscription` orchestration — existing `createConsignee` + `createSubscription` each open their own `withTenant` tx, breaking the brief §3.3.1 "single transaction" final-submit requirement. Reviewer ruled bundle A2 + B1: wizard collapses 4 steps → 3, single primary address per consignee for v1, multi-address + per-weekday rotation deferred to Phase 2. New orchestration `createConsigneeWithSubscription` at `src/modules/consignees/onboarding.ts` opens ONE `withTenant` tx + inlines all 3 writes atomically. Brief §1 (line 62) + §3.3.1 amended; §3.3.1 wizard text rewritten in full. Phase-2 surface area filed at `memory/followup_multi_address_rotation_phase_2.md`. Filed at `memory/decision_brief_v1_11_amendment_single_address_mvp.md`; landed as a ride-along T1 commit in the Day-22 forms lane Sub-PR #1. **PR-#238 §3.6 ratification clarification (within v1.11 scope):** `/consignees/[id]/edit` excludes ALL address fields (including the legacy inline scalar columns `addressLine`/`district`/`emirateOrRegion`) — editing inline-only would silently desync display from routing. See decision memo §3.1 for rationale. |
 
 ---
 
@@ -991,4 +990,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.10.**
+**End of v1.11.**

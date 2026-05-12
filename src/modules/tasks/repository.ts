@@ -587,6 +587,46 @@ export async function listTasksByTenant(
 }
 
 // -----------------------------------------------------------------------------
+// Day-22 §3.22 Fix 2 — list tasks for a single subscription
+// -----------------------------------------------------------------------------
+
+/**
+ * SELECT all tasks attached to one subscription, ordered by
+ * delivery_date ASC. Tenant-scoped via the explicit predicate +
+ * RLS. Default limit 30 (clamped to 200 — anything more belongs on
+ * the full /tasks list).
+ *
+ * Powers the "Tasks" panel on /subscriptions/[id] per PR #238 §3.22
+ * Fix 2.
+ */
+export async function listTasksBySubscription(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  limit = 30,
+): Promise<readonly Task[]> {
+  const safeLimit = Math.min(Math.max(limit, 1), 200);
+  const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
+    SELECT
+      t.*,
+      COALESCE(
+        (
+          SELECT json_agg(tp.* ORDER BY tp.position ASC)
+          FROM task_packages tp
+          WHERE tp.task_id = t.id
+        ),
+        '[]'::json
+      ) AS packages
+    FROM tasks t
+    WHERE t.tenant_id = ${tenantId}
+      AND t.subscription_id = ${subscriptionId}
+    ORDER BY t.delivery_date ASC
+    LIMIT ${safeLimit}
+  `);
+  return rows.map(mapTaskWithPackages);
+}
+
+// -----------------------------------------------------------------------------
 // Day 19 / Phase 1.5 — cross-tenant admin list
 // -----------------------------------------------------------------------------
 

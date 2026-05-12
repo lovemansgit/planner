@@ -29,6 +29,7 @@ vi.mock("../repository", () => ({
   insertTaskWithPackages: vi.fn(),
   findTaskById: vi.fn(),
   listTasksByTenant: vi.fn(),
+  listTasksBySubscription: vi.fn(),
   listAllTaskIdsByTenant: vi.fn(),
   updateTask: vi.fn(),
   listVisibleTaskIds: vi.fn(),
@@ -82,11 +83,13 @@ import {
   findTaskById,
   insertTaskWithPackages,
   listAllTaskIdsByTenant,
+  listTasksBySubscription,
   listTasksByTenant,
   listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
 } from "../repository";
 import {
+  addNoteToDriver,
   BulkValidationError,
   bulkCancelTasks,
   bulkCreateTasks,
@@ -94,6 +97,8 @@ import {
   cancelTask,
   createTask,
   getTask,
+  getTasksForSubscription,
+  getTaskTimeline,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,
@@ -115,6 +120,7 @@ const mockEmit = vi.mocked(emit);
 const mockInsert = vi.mocked(insertTaskWithPackages);
 const mockFindById = vi.mocked(findTaskById);
 const mockListByTenant = vi.mocked(listTasksByTenant);
+const mockListBySubscription = vi.mocked(listTasksBySubscription);
 const mockListAllTaskIdsByTenant = vi.mocked(listAllTaskIdsByTenant);
 const mockUpdate = vi.mocked(updateTaskRow);
 const mockListVisibleTaskExternalIds = vi.mocked(listVisibleTaskExternalIds);
@@ -270,6 +276,69 @@ describe("createTask", () => {
     expect(emitArg.tenantId).toBe(TENANT_ID);
     expect(emitArg.resourceId).toBe(TASK_ID);
     expect(result.id).toBe(TASK_ID);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §3.22 — createdVia preservation + composite invariant
+  // ---------------------------------------------------------------------------
+  //
+  // Before fixup: validateCreateTaskInput dropped `createdVia` from its
+  // normalised output, so the repository fell back to SQL default
+  // 'subscription'. The composite CHECK `tasks_creation_source_invariant`
+  // then fired at INSERT time when `subscriptionId` was undefined
+  // (single-task / manual_admin paths). Operator saw "Unexpected error
+  // mid-batch". These tests anchor:
+  //   1. createdVia=manual_admin reaches the repository (no SQL-default
+  //      regression)
+  //   2. validator catches `subscription` + no subscriptionId pre-DB so
+  //      Postgres never sees the CHECK violation
+
+  it("preserves createdVia='manual_admin' through validation (was previously stripped)", async () => {
+    const ctx = systemCtx();
+    mockInsert.mockResolvedValue(taskFixture({ createdVia: "manual_admin" }));
+
+    await createTask(ctx, { ...baseInput, createdVia: "manual_admin" });
+
+    expect(mockInsert).toHaveBeenCalledOnce();
+    // Inspect the (tx, tenantId, input) call — input is arg[2].
+    const repoInput = mockInsert.mock.calls[0][2] as CreateTaskInput;
+    expect(repoInput.createdVia).toBe("manual_admin");
+  });
+
+  it("rejects createdVia='subscription' with no subscriptionId via ValidationError (pre-DB CHECK guard)", async () => {
+    const ctx = systemCtx();
+    await expect(
+      createTask(ctx, { ...baseInput, createdVia: "subscription" }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects createdVia='manual_admin' WITH a subscriptionId via ValidationError (composite invariant inverse)", async () => {
+    const ctx = systemCtx();
+    await expect(
+      createTask(ctx, {
+        ...baseInput,
+        createdVia: "manual_admin",
+        subscriptionId: "33333333-3333-3333-3333-333333333333" as never,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("preserves createdVia='subscription' WHEN subscriptionId is provided (happy path through validator)", async () => {
+    const ctx = systemCtx();
+    mockInsert.mockResolvedValue(taskFixture({ createdVia: "subscription" }));
+
+    await createTask(ctx, {
+      ...baseInput,
+      createdVia: "subscription",
+      subscriptionId: "33333333-3333-3333-3333-333333333333" as never,
+    });
+
+    expect(mockInsert).toHaveBeenCalledOnce();
+    const repoInput = mockInsert.mock.calls[0][2] as CreateTaskInput;
+    expect(repoInput.createdVia).toBe("subscription");
+    expect(repoInput.subscriptionId).toBe("33333333-3333-3333-3333-333333333333");
   });
 });
 
@@ -902,6 +971,193 @@ describe("cancelTask — single-task cancel + outbound enqueue", () => {
   });
 });
 
+// -----------------------------------------------------------------------------
+// addNoteToDriver — Day-22 / PR-B (popover action 7)
+// -----------------------------------------------------------------------------
+
+describe("addNoteToDriver — Day-22 / PR-B", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) => fn({} as never));
+  });
+
+  it("rejects user without task:add_note with ForbiddenError", async () => {
+    await expect(
+      addNoteToDriver(userCtx([]), TASK_ID as never, "Gate code 4521"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("rejects empty note (after trim) with ValidationError", async () => {
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "   "),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it("rejects over-length note (>1000 chars) with ValidationError", async () => {
+    const longNote = "x".repeat(1001);
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, longNote),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello"),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects past-cutoff delivery_date with ValidationError", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ deliveryDate: "2020-01-01" }),
+    );
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello"),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("happy path: UPDATE notes + audit task.note_added with previous/new lengths", async () => {
+    const before = taskFixture({
+      deliveryDate: "2099-05-01",
+      notes: "old text",
+    });
+    const after = { ...before, notes: "Gate code 4521" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    const result = await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "  Gate code 4521  ",
+    );
+
+    expect(result.notes).toBe("Gate code 4521");
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      TASK_ID,
+      { notes: "Gate code 4521" },
+    );
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("task.note_added");
+    expect(emitArg.metadata?.previous_notes_length).toBe("old text".length);
+    expect(emitArg.metadata?.new_notes_length).toBe("Gate code 4521".length);
+    // Note text MUST NOT appear in metadata (PII discipline).
+    expect(JSON.stringify(emitArg.metadata)).not.toContain("Gate code");
+  });
+
+  it("previous_notes_length is 0 when notes column was null", async () => {
+    const before = taskFixture({ deliveryDate: "2099-05-01", notes: null });
+    const after = { ...before, notes: "first note" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "first note",
+    );
+
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit.mock.calls[0][0].metadata?.previous_notes_length).toBe(0);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getTaskTimeline — Day-22 / PR-B (popover action 8)
+// -----------------------------------------------------------------------------
+
+describe("getTaskTimeline — Day-22 / PR-B", () => {
+  let mockExecute: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecute = vi.fn();
+    // tx needs an execute method for the inline webhook_events SELECT.
+    // findTaskById remains a repo mock; only the webhook query goes
+    // through tx.execute directly.
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: mockExecute } as never),
+    );
+  });
+
+  it("rejects user without task:view_timeline with ForbiddenError", async () => {
+    await expect(
+      getTaskTimeline(userCtx([]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getTaskTimeline(userCtx(["task:view_timeline"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("returns only the TASK_CREATED entry when task has no externalTrackingNumber", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ externalTrackingNumber: null, createdAt: FIXED_NOW }),
+    );
+
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.taskId).toBe(TASK_ID);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].action).toBe("TASK_CREATED");
+    expect(result.entries[0].source).toBe("task_created");
+    expect(result.entries[0].timestamp).toBe(FIXED_NOW);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("merges TASK_CREATED + webhook_events entries in chronological order", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({
+        externalTrackingNumber: "MPL-72915243",
+        createdAt: "2026-05-01T08:00:00.000Z",
+      }),
+    );
+    mockExecute.mockResolvedValueOnce([
+      {
+        action: "TASK_STATUS_UPDATED_TO_ASSIGNED",
+        event_timestamp: "2026-05-01T09:00:00.000Z",
+      },
+      {
+        action: "TASK_STATUS_UPDATED_TO_DELIVERED",
+        event_timestamp: "2026-05-01T12:00:00.000Z",
+      },
+    ]);
+
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries).toHaveLength(3);
+    expect(result.entries[0].action).toBe("TASK_CREATED");
+    expect(result.entries[0].source).toBe("task_created");
+    expect(result.entries[1].action).toBe("TASK_STATUS_UPDATED_TO_ASSIGNED");
+    expect(result.entries[1].source).toBe("webhook");
+    expect(result.entries[2].action).toBe("TASK_STATUS_UPDATED_TO_DELIVERED");
+    expect(result.entries[2].source).toBe("webhook");
+  });
+
+  it("emits no audit event (R-4 read-not-audited convention)", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ externalTrackingNumber: null }),
+    );
+    await getTaskTimeline(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
 describe("bulkCancelTasks — transactional cancel + fan-out enqueue", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1138,5 +1394,81 @@ describe("updateTaskAndPushOutbound — wrapper around updateTask + enqueue", ()
       }),
     ).rejects.toBeInstanceOf(ValidationError);
     expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 2 — getTasksForSubscription
+// ---------------------------------------------------------------------------
+
+describe("getTasksForSubscription", () => {
+  const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
+
+  beforeEach(() => {
+    mockListBySubscription.mockReset();
+    mockWithTenant.mockReset();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      (fn as (tx: unknown) => Promise<unknown>)({}),
+    );
+  });
+
+  it("throws ForbiddenError when actor lacks task:read", async () => {
+    await expect(
+      getTasksForSubscription(userCtx([]), SUBSCRIPTION_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockListBySubscription).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when ctx has no tenantId", async () => {
+    await expect(
+      getTasksForSubscription(userCtx(["task:read"], null), SUBSCRIPTION_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockListBySubscription).not.toHaveBeenCalled();
+  });
+
+  it("forwards subscriptionId + default limit 30 to the repository", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+
+    expect(mockListBySubscription).toHaveBeenCalledTimes(1);
+    const args = mockListBySubscription.mock.calls[0];
+    // (tx, tenantId, subscriptionId, limit)
+    expect(args[1]).toBe(TENANT_ID);
+    expect(args[2]).toBe(SUBSCRIPTION_ID);
+    expect(args[3]).toBe(30);
+  });
+
+  it("forwards a custom limit through to the repository", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never, 50);
+    expect(mockListBySubscription.mock.calls[0][3]).toBe(50);
+  });
+
+  it("runs inside withTenant scoped to ctx.tenantId", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+
+    expect(mockWithTenant).toHaveBeenCalledTimes(1);
+    expect(mockWithTenant.mock.calls[0][0]).toBe(TENANT_ID);
+  });
+
+  it("returns rows from the repository unchanged (no further filtering)", async () => {
+    const rows = [
+      taskFixture({ id: "row-1" as never, deliveryDate: "2026-05-12" }),
+      taskFixture({ id: "row-2" as never, deliveryDate: "2026-05-13" }),
+    ];
+    mockListBySubscription.mockResolvedValueOnce(rows as never);
+    const result = await getTasksForSubscription(
+      userCtx(["task:read"]),
+      SUBSCRIPTION_ID as never,
+    );
+    expect(result).toBe(rows);
+  });
+
+  it("does NOT emit an audit event (read path is not audited per R-4)", async () => {
+    mockEmit.mockClear();
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });

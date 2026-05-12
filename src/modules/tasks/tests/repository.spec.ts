@@ -19,6 +19,7 @@ import {
   findTaskById,
   insertTaskWithPackages,
   listAllTaskIdsByTenant,
+  listTasksBySubscription,
   listTasksByTenant,
   updateTask,
 } from "../repository";
@@ -312,6 +313,55 @@ describe("listTasksByTenant", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/i);
     expect(captured.params).toContain(TENANT_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 2 — listTasksBySubscription
+// ---------------------------------------------------------------------------
+
+describe("listTasksBySubscription", () => {
+  const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
+
+  it("scopes SELECT to (tenant_id, subscription_id), ORDER BY delivery_date ASC, LIMIT 30 default", async () => {
+    const tx = makeStubTx([[]]);
+    await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID);
+
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/FROM tasks t/i);
+    expect(captured.sql).toMatch(/t\.tenant_id\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/t\.subscription_id\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/ORDER BY t\.delivery_date ASC/i);
+    expect(captured.sql).toMatch(/LIMIT \$/i);
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.params).toContain(SUBSCRIPTION_ID);
+    expect(captured.params).toContain(30);
+  });
+
+  it("clamps the limit at 200", async () => {
+    const tx = makeStubTx([[]]);
+    await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID, 9999);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.params).toContain(200);
+  });
+
+  it("returns mapped rows in input order (delivery_date ASC at the SQL layer)", async () => {
+    const tx = makeStubTx([
+      [
+        taskRowWithPackagesFixture([], { id: "row-1", delivery_date: "2026-05-12" }),
+        taskRowWithPackagesFixture([], { id: "row-2", delivery_date: "2026-05-13" }),
+      ],
+    ]);
+    const result = await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID);
+    expect(result).toHaveLength(2);
+    expect(result[0].deliveryDate).toBe("2026-05-12");
+    expect(result[1].deliveryDate).toBe("2026-05-13");
+  });
+
+  it("returns an empty array when the subscription has no materialised tasks yet", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID);
+    expect(result).toEqual([]);
   });
 });
 

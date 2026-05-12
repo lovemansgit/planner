@@ -12,6 +12,9 @@ export type {
   ConsigneeCrmEvent,
   ConsigneeCrmState,
   CreateConsigneeInput,
+  SubscriptionExceptionType,
+  TaskTerminalStatus,
+  TimelineEvent,
   UpdateConsigneePatch,
 } from "./types";
 
@@ -20,9 +23,17 @@ export {
   createConsignee,
   getConsignee,
   getConsigneeCrmHistory,
+  getConsigneeTimeline,
   listConsignees,
   updateConsignee,
   deleteConsignee,
 } from "./service";
+
+export type {
+  CreateConsigneeWithSubscriptionInput,
+  CreateConsigneeWithSubscriptionResult,
+} from "./onboarding";
+
+export { createConsigneeWithSubscription } from "./onboarding";
 
 export { ALLOWED_TRANSITIONS, canTransition } from "./transitions";

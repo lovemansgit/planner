@@ -141,6 +141,7 @@ describe("parseCreateMerchantForm", () => {
         pickup_line: "Building 4, Sheikh Zayed Road",
         pickup_district: "Al Quoz",
         pickup_emirate: "Dubai",
+        suitefleet_customer_code: "588",
       }),
     );
     expect(result.ok).toBe(true);
@@ -150,6 +151,7 @@ describe("parseCreateMerchantForm", () => {
       expect(result.value.line).toBe("Building 4, Sheikh Zayed Road");
       expect(result.value.district).toBe("Al Quoz");
       expect(result.value.emirate).toBe("Dubai");
+      expect(result.value.suitefleetCustomerCode).toBe("588");
     }
   });
 
@@ -213,10 +215,117 @@ describe("parseCreateMerchantForm", () => {
         pickup_line: "x",
         pickup_district: "x",
         pickup_emirate: "x",
+        suitefleet_customer_code: "588",
       }),
     );
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.slug).toBe("demo-bistro");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 §5.3 Gate 2 closure — SF customer code field validation
+  // ---------------------------------------------------------------------------
+
+  it("rejects missing suitefleet_customer_code with field error", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickup_line: "x",
+        pickup_district: "x",
+        pickup_emirate: "x",
+        // suitefleet_customer_code intentionally omitted
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.suitefleet_customer_code).toMatch(/required/i);
+    }
+  });
+
+  it("rejects empty / whitespace suitefleet_customer_code", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickup_line: "x",
+        pickup_district: "x",
+        pickup_emirate: "x",
+        suitefleet_customer_code: "   ",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.suitefleet_customer_code).toMatch(/required/i);
+    }
+  });
+
+  it("rejects non-numeric suitefleet_customer_code", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickup_line: "x",
+        pickup_district: "x",
+        pickup_emirate: "x",
+        suitefleet_customer_code: "abc",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.suitefleet_customer_code).toMatch(/positive integer/i);
+    }
+  });
+
+  it("rejects suitefleet_customer_code with leading zero", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickup_line: "x",
+        pickup_district: "x",
+        pickup_emirate: "x",
+        suitefleet_customer_code: "0588",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.suitefleet_customer_code).toMatch(/positive integer/i);
+    }
+  });
+
+  it("rejects bare zero suitefleet_customer_code", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickup_line: "x",
+        pickup_district: "x",
+        pickup_emirate: "x",
+        suitefleet_customer_code: "0",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.suitefleet_customer_code).toMatch(/positive integer/i);
+    }
+  });
+
+  it("accepts valid suitefleet_customer_code (positive integer)", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickup_line: "x",
+        pickup_district: "x",
+        pickup_emirate: "x",
+        suitefleet_customer_code: "588",
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.suitefleetCustomerCode).toBe("588");
+    }
   });
 
   it("treats whitespace-only fields as missing", () => {

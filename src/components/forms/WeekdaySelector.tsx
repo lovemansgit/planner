@@ -18,6 +18,22 @@
 // Default-uncontrolled — caller passes `defaultSelected`. Server-side
 // FormData submission carries the selected day strings; the action
 // re-validates via parseSelectedWeekdays.
+//
+// CSS-driven selected state — Day-22 fixup per PR #238 §3.22:
+//   The initial implementation computed isSelected at React render
+//   time and chose the className statically. That broke perceived
+//   interactivity — clicking a label toggled the underlying checkbox
+//   natively (HTML behaviour, label htmlFor link), but the className
+//   stayed frozen at its render-time value because there's no client
+//   state to re-render against (this is a server component).
+//   Operators saw no visual feedback on click and abandoned.
+//   Fix: switched to Tailwind's `has-[:checked]:` selector so the
+//   visible chip styles react to the descendant <input>'s :checked
+//   state directly via CSS. No JS state involved; the visual stays in
+//   sync with the actual checkbox state regardless of how it got
+//   toggled (label click, form reset, programmatic .checked = true,
+//   etc.). Requires browser support for :has() — Chrome 105+,
+//   Safari 15.4+, Firefox 121+ (all 2022-2023; safe for v1 demo).
 
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 
@@ -79,11 +95,7 @@ export function WeekdaySelector({
             <label
               key={day.key}
               htmlFor={checkboxId}
-              className={
-                isSelected
-                  ? "inline-flex min-w-[44px] cursor-pointer items-center justify-center rounded-sm border border-navy bg-navy px-2 py-1 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-colors duration-[120ms] ease-out has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
-                  : "inline-flex min-w-[44px] cursor-pointer items-center justify-center rounded-sm border border-stone-200 bg-paper px-2 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
-              }
+              className="inline-flex min-w-[44px] cursor-pointer items-center justify-center rounded-sm border border-stone-200 bg-paper px-2 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory has-[:checked]:border-navy has-[:checked]:bg-navy has-[:checked]:text-paper has-[:checked]:hover:bg-navy has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
             >
               <input
                 id={checkboxId}

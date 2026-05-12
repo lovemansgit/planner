@@ -61,6 +61,9 @@ import type { Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
 import type { TenantStatus } from "../merchants/types";
+import { computeTargetDateInDubai } from "../task-materialization/dubai-date";
+import { enqueueTaskPushBatch } from "../task-materialization/queue";
+import { materializeSubscriptionForDateRange } from "../task-materialization/service";
 
 import {
   endSubscription as endSubscriptionRow,
@@ -69,10 +72,14 @@ import {
   type ListAllSubscriptionsFilters,
   listAllSubscriptionsRows,
   listSubscriptionsByTenant,
+  listSubscriptionsWithConsigneeByTenant,
+  type SubscriptionWithConsignee,
   listSweepCandidates,
   pauseSubscription as pauseSubscriptionRow,
   updateSubscription as updateSubscriptionRow,
 } from "./repository";
+
+export type { SubscriptionWithConsignee } from "./repository";
 
 export type { ListAllSubscriptionsFilters } from "./repository";
 
@@ -253,9 +260,64 @@ export async function createSubscription(
   };
 
   const tenantId = ctx.tenantId;
-  const created = await withTenant(tenantId, async (tx) => {
-    return insertSubscription(tx, tenantId, normalised);
+  const txResult = await withTenant(tenantId, async (tx) => {
+    const subscription = await insertSubscription(tx, tenantId, normalised);
+
+    // Day-22 PM §3.22 — synchronous materialization for the 14-day
+    // rolling horizon. Operators see tasks immediately on submit
+    // rather than waiting until the next 12:00 UTC cron tick (and
+    // the cron doesn't fire on Vercel preview deployments at all).
+    // Same withTenant tx as the INSERT so a materialization throw
+    // rolls back the subscription — no orphan state. The daily cron
+    // remains the horizon-extender that materialises newly-eligible
+    // dates as the rolling window advances.
+    const horizonEnd = computeTargetDateInDubai(new Date());
+    const rangeEnd =
+      subscription.endDate !== null && subscription.endDate < horizonEnd
+        ? subscription.endDate
+        : horizonEnd;
+    const materializeResult = await materializeSubscriptionForDateRange(tx, {
+      subscriptionId: subscription.id,
+      startDate: subscription.startDate,
+      endDate: rangeEnd,
+      requestId: ctx.requestId,
+    });
+
+    return { subscription, newInsertedTaskIds: materializeResult.newInsertedTaskIds };
   });
+  const created = txResult.subscription;
+
+  // Day-22 PM §3.22 B5 — Phase-5 outbound SF push enqueue, post-commit.
+  // Mirrors the cron handler's Phase-5 posture: enqueue runs OUTSIDE
+  // the withTenant tx because already-committed task rows are
+  // durable, and a failed enqueue must NOT roll back the materialised
+  // tasks. Next-tick cron reconciliation re-discovers via Phase-1
+  // reconciliation tuples (generate-tasks/route.ts).
+  console.info("[createSubscription] enqueueing SF push attempt", {
+    tenantId,
+    subscriptionId: created.id,
+    taskCount: txResult.newInsertedTaskIds.length,
+    requestId: ctx.requestId,
+  });
+  try {
+    await enqueueTaskPushBatch({
+      tenantId,
+      taskIds: txResult.newInsertedTaskIds,
+      requestId: ctx.requestId,
+    });
+    console.info("[createSubscription] enqueueTaskPushBatch succeeded", {
+      tenantId,
+      subscriptionId: created.id,
+      taskCount: txResult.newInsertedTaskIds.length,
+      requestId: ctx.requestId,
+    });
+  } catch (err) {
+    console.error(
+      "[createSubscription] post-commit SF push enqueue failed:",
+      err,
+    );
+    // Intentionally swallow per Phase-5 self-healing posture.
+  }
 
   await emit({
     eventType: "subscription.created",
@@ -306,6 +368,22 @@ export async function listSubscriptions(
   assertTenantScoped(ctx, "subscription:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listSubscriptionsByTenant(tx, ctx.tenantId!);
+  });
+}
+
+/**
+ * Day-22 §3.22 Fix 1 — List subscriptions JOINed with their
+ * consignee's display name. Used by the operator /subscriptions
+ * list page so rows render the consignee name instead of a UUID
+ * shorthand. Same permission gate as listSubscriptions.
+ */
+export async function listSubscriptionsWithConsignee(
+  ctx: RequestContext,
+): Promise<readonly SubscriptionWithConsignee[]> {
+  requirePermission(ctx, "subscription:read");
+  assertTenantScoped(ctx, "subscription:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listSubscriptionsWithConsigneeByTenant(tx, ctx.tenantId!);
   });
 }
 

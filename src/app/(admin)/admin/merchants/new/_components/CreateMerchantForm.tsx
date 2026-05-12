@@ -115,6 +115,25 @@ export function CreateMerchantForm() {
           />
         </fieldset>
 
+        <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
+          <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+            SuiteFleet routing
+          </legend>
+          <p className="text-xs text-[color:var(--color-text-secondary)]">
+            Required to route tasks to SuiteFleet outbound (per brief §5.3 Gate 2). Missing or
+            invalid codes fail-close the cron push for this tenant.
+          </p>
+
+          <Field
+            label="SuiteFleet customer code"
+            name="suitefleet_customer_code"
+            placeholder="000"
+            hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
+            error={fieldErrors.suitefleet_customer_code}
+            required
+          />
+        </fieldset>
+
         <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-strong)] pt-8">
           <Link
             href="/admin/merchants"

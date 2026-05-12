@@ -22,6 +22,7 @@
 import Link from "next/link";
 
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
+import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 import type { Task } from "@/modules/tasks/types";
 
 import {
@@ -39,7 +40,7 @@ import {
   DAY_DISPLAY_VISUALS,
   projectDayDisplayStatus,
 } from "./DayDisplayStatus";
-import { DayActionPopover } from "./DayActionPopover";
+import { DayActionPopover, type CalendarActionPermissions } from "./DayActionPopover";
 
 export interface CalendarMonthViewProps {
   readonly consigneeId: string;
@@ -58,8 +59,10 @@ export interface CalendarMonthViewProps {
    * existing tasks per DECISION-2 (ii) projection.
    */
   readonly exceptions: readonly SubscriptionException[];
-  /** Whether the actor has subscription:skip permission. */
-  readonly canSkip: boolean;
+  /** Day-22 / PR-B — actor's calendar-action permissions. Drives popover button visibility per brief §3.3.10 rule 1. */
+  readonly permissions: CalendarActionPermissions;
+  /** Day-22 / PR-B — consignee's addresses for the popover address-override actions (4 + 5). */
+  readonly availableAddresses: readonly ConsigneeAddressRow[];
 }
 
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -69,7 +72,8 @@ export function CalendarMonthView({
   monthStart,
   tasks,
   exceptions,
-  canSkip,
+  permissions,
+  availableAddresses,
 }: CalendarMonthViewProps) {
   const monthEnd = computeMonthEnd(new Date(`${monthStart}T00:00:00Z`));
   const gridStart = computeMonthGridStart(monthStart);
@@ -188,7 +192,8 @@ export function CalendarMonthView({
                           internalStatus={task.internalStatus}
                           statusLabel={visual.label}
                           statusClasses={visual.classes}
-                          canSkip={canSkip}
+                          permissions={permissions}
+                          availableAddresses={availableAddresses}
                           addressLabel={null}
                         />
                       </li>

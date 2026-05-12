@@ -53,16 +53,44 @@ export function isActiveNavPath(currentPath: string, item: NavItem): boolean {
 
 /**
  * Landing-page card spec. Mirrors the workflow-shortcut design from
- * the P4 plan §3 — two card destinations gated independently.
+ * the P4 plan §3.
+ *
+ * `permission` is the primary gate. `extraPermissions` (added Day-22
+ * §3.3.9 completion) lists additional perms an operator must ALSO
+ * hold — used for the Onboard card, whose underlying wizard creates
+ * both consignee + subscription rows and so demands both create
+ * permissions to be operationally meaningful.
  */
 export interface LandingCard {
   readonly label: string;
   readonly path: string;
   readonly description: string;
   readonly permission: PermissionId;
+  readonly extraPermissions?: ReadonlyArray<PermissionId>;
 }
 
 export const LANDING_CARDS: readonly LandingCard[] = [
+  {
+    label: "Onboard new consignee",
+    path: "/consignees/new",
+    description: "Start a new merchant subscriber with one wizard.",
+    permission: "consignee:create",
+    extraPermissions: ["subscription:create"],
+  },
+  {
+    label: "Subscriber base",
+    path: "/consignees",
+    description: "Search and manage all consignees.",
+    permission: "consignee:read",
+  },
+  {
+    // Day-23 /calendar route lands tomorrow per brief §3.3.4. Card
+    // structure landed today; route follows.
+    label: "Today's deliveries",
+    path: "/calendar",
+    description: "Consolidated operations view across all consignees.",
+    permission: "task:read",
+  },
   {
     label: "Today's tasks",
     path: "/tasks",
@@ -80,7 +108,15 @@ export const LANDING_CARDS: readonly LandingCard[] = [
 export function visibleLandingCards(
   permissions: ReadonlySet<Permission>,
 ): readonly LandingCard[] {
-  return LANDING_CARDS.filter((card) => permissions.has(card.permission));
+  return LANDING_CARDS.filter((card) => {
+    if (!permissions.has(card.permission)) return false;
+    if (card.extraPermissions) {
+      for (const extra of card.extraPermissions) {
+        if (!permissions.has(extra)) return false;
+      }
+    }
+    return true;
+  });
 }
 
 // -----------------------------------------------------------------------------

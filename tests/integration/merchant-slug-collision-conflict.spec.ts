@@ -74,6 +74,7 @@ describe("Day-19 T2 — createMerchant slug-collision throws ConflictError", () 
           district: "Test District",
           emirate: "Dubai",
         },
+        suitefleetCustomerCode: "588",
       }),
     ).rejects.toBeInstanceOf(ConflictError);
   });

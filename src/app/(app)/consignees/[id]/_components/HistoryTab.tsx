@@ -1,27 +1,25 @@
-// Day 17 / Session A — CRM history tab (server component).
+// Day 22 / §3.3.7 — consignee unified timeline (server component).
 //
-// Reads consignee_crm_events newest-first via the new
-// getConsigneeCrmHistory service fn. Renders a chronological list:
-// from-state → to-state badges with arrow, reason text, actor uuid
-// (display-name resolution is Phase 2 — first iteration shows the
-// uuid prefix as an actor anchor), and occurred_at timestamp.
+// Reads consignee_timeline_events via getConsigneeTimeline. The view
+// UNIONs three event kinds — CRM state transitions, subscription
+// exceptions (skip / pause / address overrides), and terminal task
+// statuses (DELIVERED / FAILED / SKIPPED / CANCELED). Rendered
+// chronologically newest-first.
 //
-// Initial-create rows (`from_state IS NULL`) render as "Created as
-// {to_state}" per CRM plan §3.3 initial-create handling — distinct
-// from "Transitioned from null to X" because null-from is the
-// onboarding event, not a transition.
+// Replaces the Day-17 CRM-only History tab (getConsigneeCrmHistory).
+// The CRM transition rows preserve the original badge → arrow → badge
+// treatment; new event kinds get their own kind-specific copy with the
+// same hairline-bordered, sentence-cased visual posture.
 //
-// Pagination: server-side LIMIT 50 (default in selectCrmHistoryForConsignee).
-// "Load more" deferred to Phase 2 if pilot operator data exceeds the
-// initial page size; current cap is the seeded ~5 events per consignee
-// max in the demo dataset.
+// Pagination: server-side LIMIT 50 (default in selectTimelineForConsignee).
+// "Load more" deferred to Phase 2 if pilot data exceeds the page size.
 
-import type { ConsigneeCrmEvent } from "@/modules/consignees";
+import type { TimelineEvent } from "@/modules/consignees";
 
 import { CrmStateBadge } from "./CrmStateBadge";
 
 interface HistoryTabProps {
-  readonly events: readonly ConsigneeCrmEvent[];
+  readonly events: readonly TimelineEvent[];
 }
 
 export function HistoryTab({ events }: HistoryTabProps) {
@@ -29,7 +27,7 @@ export function HistoryTab({ events }: HistoryTabProps) {
     return (
       <div className="border-t border-stone-200 py-12 text-center">
         <p className="text-sm text-[color:var(--color-text-secondary)]">
-          No CRM state changes recorded for this consignee.
+          No events recorded for this consignee yet.
         </p>
       </div>
     );
@@ -37,39 +35,23 @@ export function HistoryTab({ events }: HistoryTabProps) {
 
   return (
     <ol className="border-t border-stone-200">
-      {events.map((event) => (
+      {events.map((event, idx) => (
         <li
-          key={event.id}
+          key={`${event.kind}-${event.eventAt}-${idx}`}
           className="flex flex-col gap-2 border-b border-stone-200 py-4 sm:flex-row sm:items-start sm:justify-between"
         >
           <div className="flex-1">
-            <div className="flex items-center gap-2 text-sm">
-              {event.fromState === null ? (
-                <>
-                  <span className="text-[color:var(--color-text-secondary)]">Created as</span>
-                  <CrmStateBadge state={event.toState} />
-                </>
-              ) : (
-                <>
-                  <CrmStateBadge state={event.fromState} />
-                  <span className="text-[color:var(--color-text-tertiary)]">→</span>
-                  <CrmStateBadge state={event.toState} />
-                </>
-              )}
-            </div>
-            {event.reason ? (
-              <p className="mt-2 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
-                {event.reason}
-              </p>
-            ) : null}
+            <TimelineEventBody event={event} />
           </div>
           <div className="text-right text-xs text-[color:var(--color-text-tertiary)]">
-            <p className="font-mono tabular-nums">
-              {formatTimestamp(event.occurredAt)}
-            </p>
-            <p className="mt-0.5 truncate" title={event.actor}>
-              {actorAnchor(event.actor)}
-            </p>
+            <p className="font-mono tabular-nums">{formatTimestamp(event.eventAt)}</p>
+            {"actor" in event && event.actor ? (
+              <p className="mt-0.5 truncate" title={event.actor}>
+                {actorAnchor(event.actor)}
+              </p>
+            ) : (
+              <p className="mt-0.5 italic">system</p>
+            )}
           </div>
         </li>
       ))}
@@ -77,16 +59,105 @@ export function HistoryTab({ events }: HistoryTabProps) {
   );
 }
 
+function TimelineEventBody({ event }: { readonly event: TimelineEvent }) {
+  switch (event.kind) {
+    case "crm_state":
+      return (
+        <>
+          <div className="flex items-center gap-2 text-sm">
+            {event.fromState === null ? (
+              <>
+                <span className="text-[color:var(--color-text-secondary)]">Created as</span>
+                <CrmStateBadge state={event.toState} />
+              </>
+            ) : (
+              <>
+                <CrmStateBadge state={event.fromState} />
+                <span className="text-[color:var(--color-text-tertiary)]">→</span>
+                <CrmStateBadge state={event.toState} />
+              </>
+            )}
+          </div>
+          {event.reason ? (
+            <p className="mt-2 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
+              {event.reason}
+            </p>
+          ) : null}
+        </>
+      );
+
+    case "subscription_exception": {
+      const summary = formatSubscriptionException(event);
+      return (
+        <>
+          <p className="text-sm text-navy">{summary}</p>
+          {event.reason ? (
+            <p className="mt-2 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
+              {event.reason}
+            </p>
+          ) : null}
+        </>
+      );
+    }
+
+    case "task_status":
+      return (
+        <p className="text-sm text-navy">
+          Delivery on{" "}
+          <span className="font-mono tabular-nums">{event.deliveryDate}</span>{" "}
+          <span className="text-[color:var(--color-text-tertiary)]">→</span>{" "}
+          <span className={taskStatusToneClass(event.internalStatus)}>{event.internalStatus}</span>
+        </p>
+      );
+  }
+}
+
+function formatSubscriptionException(event: Extract<TimelineEvent, { kind: "subscription_exception" }>): string {
+  const start = event.startDate;
+  const end = event.endDate;
+  const comp = event.compensatingDate;
+  switch (event.type) {
+    case "pause_window":
+      return end
+        ? `Subscription paused ${start} to ${end}`
+        : `Subscription paused from ${start}`;
+    case "skip":
+      return comp
+        ? `Skip applied for ${start}; compensating date ${comp}`
+        : `Skip applied for ${start}`;
+    case "address_override_one_off":
+      return `One-off address override on ${start}`;
+    case "address_override_forward":
+      return end
+        ? `Forward address override from ${start} to ${end}`
+        : `Forward address override from ${start}`;
+    case "append_without_skip":
+      return `Compensating delivery appended on ${start}`;
+  }
+}
+
+function taskStatusToneClass(status: Extract<TimelineEvent, { kind: "task_status" }>["internalStatus"]): string {
+  switch (status) {
+    case "DELIVERED":
+      return "text-green font-medium";
+    case "FAILED":
+      return "text-red font-medium";
+    case "SKIPPED":
+      return "text-[color:var(--color-text-secondary)] font-medium";
+    case "CANCELED":
+      return "text-[color:var(--color-text-tertiary)] font-medium";
+  }
+}
+
 /** First 8 chars of the actor uuid; placeholder for Phase 2 display-name lookup. */
 function actorAnchor(actorUuid: string): string {
   return actorUuid.slice(0, 8);
 }
 
-/** ISO timestamp → "Mon DD, HH:MM" in operator's UTC framing. */
+/** ISO timestamp → "YYYY-MM-DD HH:MM" UTC. */
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  // YYYY-MM-DD HH:MM (UTC) — terse + tabular-friendly.
   const date = d.toISOString().slice(0, 10);
   const time = d.toISOString().slice(11, 16);
   return `${date} ${time}`;

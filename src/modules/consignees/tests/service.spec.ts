@@ -21,6 +21,8 @@ vi.mock("../repository", () => ({
   findConsigneeForCrmUpdate: vi.fn(),
   insertConsigneeCrmEvent: vi.fn(),
   listConsigneesByTenant: vi.fn(),
+  selectCrmHistoryForConsignee: vi.fn(),
+  selectTimelineForConsignee: vi.fn(),
   updateConsignee: vi.fn(),
   updateConsigneeCrmState: vi.fn(),
   deleteConsignee: vi.fn(),
@@ -45,6 +47,7 @@ import {
   insertConsignee,
   insertConsigneeCrmEvent,
   listConsigneesByTenant,
+  selectTimelineForConsignee,
   updateConsignee as updateConsigneeRow,
   updateConsigneeCrmState,
 } from "../repository";
@@ -53,10 +56,11 @@ import {
   createConsignee,
   deleteConsignee,
   getConsignee,
+  getConsigneeTimeline,
   listConsignees,
   updateConsignee,
 } from "../service";
-import type { Consignee, ConsigneeCrmEvent } from "../types";
+import type { Consignee, ConsigneeCrmEvent, TimelineEvent } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
 const mockEmit = vi.mocked(emit);
@@ -68,6 +72,7 @@ const mockListByTenant = vi.mocked(listConsigneesByTenant);
 const mockUpdate = vi.mocked(updateConsigneeRow);
 const mockUpdateCrmState = vi.mocked(updateConsigneeCrmState);
 const mockDelete = vi.mocked(deleteConsigneeRow);
+const mockSelectTimeline = vi.mocked(selectTimelineForConsignee);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
@@ -703,5 +708,130 @@ describe("changeConsigneeCrmState", () => {
     });
 
     expect(mockInsertCrmEvent.mock.calls[0][1].actor).toBe(ACTOR_USER_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getConsigneeTimeline — Day 22 / §3.3.7 unified timeline reader
+// ---------------------------------------------------------------------------
+
+describe("getConsigneeTimeline", () => {
+  const PERM: Permission = "consignee:read";
+
+  beforeEach(() => {
+    mockSelectTimeline.mockReset();
+    mockWithTenant.mockReset();
+    // Default: run the inner callback with a dummy tx and return its value.
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      (fn as (tx: unknown) => Promise<unknown>)({}),
+    );
+  });
+
+  function crmStateEvent(
+    overrides: Partial<Extract<TimelineEvent, { kind: "crm_state" }>> = {},
+  ): TimelineEvent {
+    return {
+      kind: "crm_state",
+      eventAt: "2026-05-01T10:00:00.000Z",
+      fromState: "ACTIVE",
+      toState: "ON_HOLD",
+      reason: "operator hold",
+      actor: ACTOR_USER_ID,
+      ...overrides,
+    };
+  }
+  function exceptionEvent(
+    overrides: Partial<Extract<TimelineEvent, { kind: "subscription_exception" }>> = {},
+  ): TimelineEvent {
+    return {
+      kind: "subscription_exception",
+      eventAt: "2026-05-02T10:00:00.000Z",
+      type: "pause_window",
+      subscriptionId: "33333333-3333-3333-3333-333333333333",
+      startDate: "2026-05-10",
+      endDate: "2026-05-17",
+      compensatingDate: null,
+      reason: "operator pause",
+      actor: ACTOR_USER_ID,
+      ...overrides,
+    };
+  }
+  function taskEvent(
+    overrides: Partial<Extract<TimelineEvent, { kind: "task_status" }>> = {},
+  ): TimelineEvent {
+    return {
+      kind: "task_status",
+      eventAt: "2026-05-03T10:00:00.000Z",
+      taskId: "44444444-4444-4444-4444-444444444444",
+      internalStatus: "DELIVERED",
+      deliveryDate: "2026-05-03",
+      ...overrides,
+    };
+  }
+
+  it("throws ForbiddenError when the actor lacks consignee:read", async () => {
+    await expect(getConsigneeTimeline(ctx([]), CONSIGNEE_ID)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+    expect(mockSelectTimeline).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when ctx has no tenantId", async () => {
+    await expect(
+      getConsigneeTimeline(ctx([PERM], null), CONSIGNEE_ID),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockSelectTimeline).not.toHaveBeenCalled();
+  });
+
+  it("returns mapped TimelineEvent rows from the repository (all 3 kinds)", async () => {
+    const fixture: readonly TimelineEvent[] = [
+      taskEvent(),
+      exceptionEvent(),
+      crmStateEvent(),
+    ];
+    mockSelectTimeline.mockResolvedValue(fixture);
+
+    const result = await getConsigneeTimeline(ctx([PERM]), CONSIGNEE_ID);
+    expect(result.length).toBe(3);
+    expect(result[0].kind).toBe("task_status");
+    expect(result[1].kind).toBe("subscription_exception");
+    expect(result[2].kind).toBe("crm_state");
+  });
+
+  it("forwards limit + before options to the repository fn", async () => {
+    mockSelectTimeline.mockResolvedValue([]);
+
+    await getConsigneeTimeline(ctx([PERM]), CONSIGNEE_ID, {
+      limit: 25,
+      before: "2026-05-01T00:00:00.000Z",
+    });
+
+    expect(mockSelectTimeline).toHaveBeenCalledTimes(1);
+    const args = mockSelectTimeline.mock.calls[0];
+    // (tx, tenantId, consigneeId, options)
+    expect(args[1]).toBe(TENANT_ID);
+    expect(args[2]).toBe(CONSIGNEE_ID);
+    expect(args[3]).toEqual({ limit: 25, before: "2026-05-01T00:00:00.000Z" });
+  });
+
+  it("runs inside withTenant scoped to ctx.tenantId (tenant isolation)", async () => {
+    mockSelectTimeline.mockResolvedValue([]);
+
+    await getConsigneeTimeline(ctx([PERM]), CONSIGNEE_ID);
+
+    expect(mockWithTenant).toHaveBeenCalledTimes(1);
+    expect(mockWithTenant.mock.calls[0][0]).toBe(TENANT_ID);
+  });
+
+  it("returns an empty array when the consignee has no events yet", async () => {
+    mockSelectTimeline.mockResolvedValue([]);
+    const result = await getConsigneeTimeline(ctx([PERM]), CONSIGNEE_ID);
+    expect(result).toEqual([]);
+  });
+
+  it("does NOT emit an audit event (read path is not audited per R-4)", async () => {
+    mockSelectTimeline.mockResolvedValue([crmStateEvent()]);
+    await getConsigneeTimeline(ctx([PERM]), CONSIGNEE_ID);
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });

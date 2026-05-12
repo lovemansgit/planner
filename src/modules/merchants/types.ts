@@ -100,15 +100,27 @@ export interface Merchant {
 
 /**
  * createMerchant input. `pickup_address` is nested at the service
- * boundary; the repository flattens it before INSERT. All four sub-
- * fields are required and non-empty (validated at service entry);
- * the brief v1.3 §3.1.1 specifies non-null at create time and the
- * NOT NULL promotion is queued for Phase 2 once data is clean.
+ * boundary; the repository flattens it before INSERT. All sub-fields
+ * are required and non-empty (validated at service entry); the brief
+ * v1.3 §3.1.1 specifies non-null at create time and the NOT NULL
+ * promotion is queued for Phase 2 once data is clean.
+ *
+ * `suitefleetCustomerCode` (Day-22 §5.3 Gate 2 closure per PR #238):
+ * REQUIRED positive integer string assigned by Transcorp's SF vendor
+ * contact. Persists to `tenants.suitefleet_customer_code` (the column
+ * the SF outbound resolver at credentials/suitefleet-resolver.ts:91
+ * reads to route per-tenant pushes). Before this field landed, new
+ * merchants got null and SF outbound push fail-closed for them
+ * (operationally surfaced as the cron's per-tenant skip + audit
+ * event); the demo storyline at brief §5.3 Gate 2 requires the new
+ * merchant to push to SF, so this gap is closed at the operator
+ * surface.
  */
 export interface CreateMerchantInput {
   readonly name: string;
   readonly slug: string;
   readonly pickupAddress: PickupAddress;
+  readonly suitefleetCustomerCode: string;
 }
 
 /**

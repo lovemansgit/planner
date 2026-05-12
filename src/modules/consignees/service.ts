@@ -46,6 +46,7 @@ import {
   listAllConsigneesRows,
   listConsigneesByTenant,
   selectCrmHistoryForConsignee,
+  selectTimelineForConsignee,
   updateConsignee as updateConsigneeRow,
   updateConsigneeCrmState,
 } from "./repository";
@@ -74,6 +75,7 @@ import type {
   Consignee,
   ConsigneeCrmEvent,
   CreateConsigneeInput,
+  TimelineEvent,
   UpdateConsigneePatch,
 } from "./types";
 
@@ -594,5 +596,45 @@ export async function getConsigneeCrmHistory(
 
   return await withTenant(tenantId, async (tx) => {
     return await selectCrmHistoryForConsignee(tx, tenantId, consigneeId, options);
+  });
+}
+
+
+// -----------------------------------------------------------------------------
+// getConsigneeTimeline (Day 22 — brief §3.3.7 unified timeline)
+// -----------------------------------------------------------------------------
+//
+// Read-side companion to changeConsigneeCrmState + the
+// subscription-exceptions + task lifecycle services. Powers the
+// History tab on /consignees/[id] per brief §3.3.7. Returns
+// chronological events newest-first across the three projections
+// the consignee_timeline_events VIEW UNIONs:
+//
+//   - crm_state              (consignee_crm_events)
+//   - subscription_exception (subscription_exceptions JOIN subscriptions)
+//   - task_status            (terminal task statuses: DELIVERED /
+//                             FAILED / SKIPPED / CANCELED)
+//
+// Permission: consignee:read — same gate as getConsigneeCrmHistory,
+// because timeline events are consignee-scoped facts derived from
+// already-readable tables. No separate consignee:read_timeline perm.
+//
+// No audit emit — read-only fetch. RLS (via the view's
+// security_invoker = true posture) + the explicit tenant_id predicate
+// in the repository fn are the security envelope.
+
+export async function getConsigneeTimeline(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly TimelineEvent[]> {
+  requirePermission(ctx, "consignee:read");
+  if (ctx.tenantId === null) {
+    throw new ValidationError("getConsigneeTimeline requires a tenant context");
+  }
+  const tenantId = ctx.tenantId;
+
+  return await withTenant(tenantId, async (tx) => {
+    return await selectTimelineForConsignee(tx, tenantId, consigneeId, options);
   });
 }

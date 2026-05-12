@@ -382,6 +382,105 @@ describe("task:print_labels permission (Day 8 / D8-6)", () => {
   });
 });
 
+describe("subscription:override_skip_rules permission (Day 13 / T3 part 1 + Day-22 D1 reuse)", () => {
+  // Pins the role-distribution for `subscription:override_skip_rules`. Brief
+  // §3.1.3 reserves the perm to Tenant Admin + Ops Manager — CS Agent gets
+  // the default `subscription:skip` but NOT the override variants
+  // (move-to-date / skip-without-append / append-without-skip).
+  //
+  // Day-22 / PR-B D1 ruling reuses this perm for popover action 6
+  // (cancel-no-append) via the existing `skipWithoutAppend=true` path on
+  // addSubscriptionException — NOT a new perm. This catalogue invariant is
+  // the regression guard against accidental cs-agent grant for that action.
+  // The service-layer deny path is exercised by
+  // src/modules/subscription-exceptions/tests/service.spec.ts (lines 254,
+  // 294, 883 — appendWithoutSkip + skip-with-target_date_override +
+  // skip-without-append all refuse actors missing this perm).
+  //
+  // If a future PR adds CS Agent's explicit `subscription:override_skip_rules`
+  // entry, this test breaks and forces a conscious decision about widening
+  // CS Agent's surface to operationally-destructive skip-override flows.
+
+  it("registers subscription:override_skip_rules in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["subscription:override_skip_rules"]).toBeDefined();
+    expect(PERMISSIONS["subscription:override_skip_rules"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly", () => {
+    expect(PERMISSIONS["subscription:override_skip_rules"].resource).toBe("subscription");
+    expect(PERMISSIONS["subscription:override_skip_rules"].action).toBe("override_skip_rules");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("subscription:override_skip_rules")).toBe(true);
+  });
+
+  it("Ops Manager holds it (permsFor('subscription') auto-pickup)", () => {
+    expect(ROLES["ops-manager"].permissions.has("subscription:override_skip_rules")).toBe(true);
+  });
+
+  it("CS Agent does NOT hold subscription:override_skip_rules (D1 brief-spec-first reuse for action 6 cancel-no-append)", () => {
+    expect(ROLES["cs-agent"].permissions.has("subscription:override_skip_rules")).toBe(false);
+  });
+});
+
+describe("task:add_note permission (Day-22 / PR-B, action 7)", () => {
+  // Pins the routine customer-service-facing posture for driver-note
+  // appends. Per D2 ruling: cs-agent + ops-manager hold it; ops-manager
+  // via permsFor('task') auto-pickup, cs-agent via explicit-list
+  // addition (cs-agent's task perms are hand-rolled).
+
+  it("registers task:add_note in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["task:add_note"]).toBeDefined();
+    expect(PERMISSIONS["task:add_note"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly (resource=task)", () => {
+    expect(PERMISSIONS["task:add_note"].resource).toBe("task");
+    expect(PERMISSIONS["task:add_note"].action).toBe("add_note");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("task:add_note")).toBe(true);
+  });
+
+  it("Ops Manager holds it (permsFor('task') auto-pickup)", () => {
+    expect(ROLES["ops-manager"].permissions.has("task:add_note")).toBe(true);
+  });
+
+  it("CS Agent holds it (explicit-list addition — routine CS-facing surface)", () => {
+    expect(ROLES["cs-agent"].permissions.has("task:add_note")).toBe(true);
+  });
+});
+
+describe("task:view_timeline permission (Day-22 / PR-B, action 8)", () => {
+  // Pins the read-only timeline drawer perm. Per D3 ruling: cs-agent +
+  // ops-manager hold it; read-only with no mutation, no audit emit per
+  // R-4 read-not-audited convention.
+
+  it("registers task:view_timeline in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["task:view_timeline"]).toBeDefined();
+    expect(PERMISSIONS["task:view_timeline"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly (resource=task)", () => {
+    expect(PERMISSIONS["task:view_timeline"].resource).toBe("task");
+    expect(PERMISSIONS["task:view_timeline"].action).toBe("view_timeline");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    expect(ROLES[TENANT_ADMIN_ROLE_SLUG].permissions.has("task:view_timeline")).toBe(true);
+  });
+
+  it("Ops Manager holds it (permsFor('task') auto-pickup)", () => {
+    expect(ROLES["ops-manager"].permissions.has("task:view_timeline")).toBe(true);
+  });
+
+  it("CS Agent holds it (explicit-list addition — read-only investigation surface)", () => {
+    expect(ROLES["cs-agent"].permissions.has("task:view_timeline")).toBe(true);
+  });
+});
+
 describe("webhook_config:read permission (Day 9 / P4a)", () => {
   // Pins the auto-pickup behaviour for the new webhook-configuration
   // page read permission. /admin/webhook-config is admin-tier

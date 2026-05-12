@@ -456,6 +456,33 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: false,
   },
 
+  // Day-22 / PR-B — calendar popover action 7. Dedicated event for
+  // operator-driven driver-note appends. Distinct from task.updated
+  // (which carries changed_fields[] for the generic 16-field patch)
+  // because note-add is a semantically-distinct customer-facing
+  // operation that benefits from high-signal audit queries
+  // ("show me every note added in the last 24h"). Mirrors the
+  // subscription.exception.created precedent — a typed event per
+  // operator workflow rather than a generic updated catch-all.
+  //
+  // No corresponding `task.note_viewed` event — per R-4 read-not-
+  // audited convention, reads don't emit. The companion task:view_timeline
+  // perm (action 8 / D3 ruling) gates a read-only surface with no audit.
+  //
+  // Note text itself is NOT in metadata to avoid PII leak into the audit
+  // log; the durable text is in tasks.notes and is read-accessible to
+  // anyone with task:read.
+  "task.note_added": {
+    id: "task.note_added",
+    resource: "task",
+    action: "note_added",
+    description:
+      "Day-22 / PR-B. An operator appended a driver-facing note to a task via the consignee detail calendar popover (action 7). Distinct from task.updated (generic 16-field patch) — note-add is a single-purpose customer-service-facing workflow that benefits from a typed event for high-signal audit queries. Subject to the 18:00 Dubai cut-off the day before delivery (mirrors task:update cutoff semantics).",
+    metadataNotes:
+      "task_id (uuid), previous_notes_length (int — length of tasks.notes before append, 0 when null), new_notes_length (int — length of tasks.notes after append).",
+    systemOnly: false,
+  },
+
   // Day 8 / D8-5 — manual DLQ retry from /admin/failed-pushes. Operator-
   // driven: a Tenant Admin clicks the retry button on the admin UI;
   // the route handler authorizes via `failed_pushes:retry`, then a

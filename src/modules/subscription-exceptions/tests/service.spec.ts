@@ -47,6 +47,7 @@ import type { Uuid } from "@/shared/types";
 import {
   addSubscriptionException,
   appendWithoutSkip,
+  getRecentExceptionsForSubscription,
 } from "../service";
 import type { AddSubscriptionExceptionInput } from "../types";
 
@@ -1010,5 +1011,93 @@ describe("addSubscriptionException — open-ended subscription (end_date IS NULL
         { now: NOW },
       ),
     ).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+// ===========================================================================
+// getRecentExceptionsForSubscription — Day 22 / §3.3.5 reader
+// ===========================================================================
+
+describe("getRecentExceptionsForSubscription", () => {
+  beforeEach(() => {
+    mockExecute.mockReset();
+  });
+
+  function exceptionRow(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: "00000000-0000-0000-0000-000000000ce1",
+      subscription_id: SUBSCRIPTION_ID,
+      tenant_id: TENANT_ID,
+      type: "skip",
+      start_date: "2026-05-18",
+      end_date: null,
+      target_date_override: null,
+      skip_without_append: false,
+      reason: null,
+      address_override_id: null,
+      compensating_date: "2026-06-01",
+      correlation_id: "00000000-0000-0000-0000-000000000c01",
+      idempotency_key: "00000000-0000-0000-0000-000000000c02",
+      created_by: USER_ID,
+      created_at: "2026-05-11T12:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("throws ForbiddenError when actor lacks subscription:read", async () => {
+    await expect(
+      getRecentExceptionsForSubscription(ctxWith([]), SUBSCRIPTION_ID),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("returns mapped exceptions newest-first (descending by created_at)", async () => {
+    mockExecute.mockResolvedValueOnce([
+      exceptionRow({ id: "row-2", created_at: "2026-05-11T12:00:00.000Z" }),
+      exceptionRow({ id: "row-1", created_at: "2026-05-10T08:00:00.000Z" }),
+    ]);
+
+    const result = await getRecentExceptionsForSubscription(
+      ctxWith(["subscription:read"]),
+      SUBSCRIPTION_ID,
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toBe("row-2");
+    expect(result[1].id).toBe("row-1");
+  });
+
+  it("scopes the SQL to (tenant_id, subscription_id) with ORDER BY created_at DESC + LIMIT 10 by default", async () => {
+    mockExecute.mockResolvedValueOnce([]);
+
+    await getRecentExceptionsForSubscription(
+      ctxWith(["subscription:read"]),
+      SUBSCRIPTION_ID,
+    );
+
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    // mockExecute is invoked with the drizzle SQL object — we cannot
+    // string-equal it, but the count + return-empty path proves the
+    // service plumbed through. SQL-shape (tenant + sub predicates,
+    // ORDER, LIMIT clamp) is anchored in the repository unit test.
+  });
+
+  it("returns an empty array when the subscription has no exception rows yet", async () => {
+    mockExecute.mockResolvedValueOnce([]);
+    const result = await getRecentExceptionsForSubscription(
+      ctxWith(["subscription:read"]),
+      SUBSCRIPTION_ID,
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("does not emit an audit event (read path is not audited per R-4)", async () => {
+    mockExecute.mockResolvedValueOnce([exceptionRow()]);
+    mockEmit.mockClear();
+    await getRecentExceptionsForSubscription(
+      ctxWith(["subscription:read"]),
+      SUBSCRIPTION_ID,
+    );
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });

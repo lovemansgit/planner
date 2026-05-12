@@ -137,6 +137,7 @@ export async function createMerchantAction(
         district: parsed.value.district,
         emirate: parsed.value.emirate,
       },
+      suitefleetCustomerCode: parsed.value.suitefleetCustomerCode,
     });
     revalidatePath("/admin/merchants", "page");
     return { kind: "created", tenantId: result.tenantId };

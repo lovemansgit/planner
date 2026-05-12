@@ -162,6 +162,15 @@ const ROLES_DRAFT = {
       "subscription:change_address_one_off",
       "subscription:change_address_forward",
       "consignee:change_crm_state",
+      // Day-22 / PR-B — calendar popover actions 7 + 8. Both are
+      // customer-service-facing routine surfaces with no destructive
+      // cascade: add-note appends free-text on tasks.notes (D2 ruling),
+      // view-timeline is read-only over webhook_events (D3 ruling).
+      // Explicit add because CS Agent's task perms are hand-rolled
+      // (line 138 above); permsFor("task") auto-pickup applies to Ops
+      // Manager but not CS Agent.
+      "task:add_note",
+      "task:view_timeline",
     ]),
   },
 

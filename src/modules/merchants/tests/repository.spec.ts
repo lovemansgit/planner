@@ -72,6 +72,7 @@ describe("insertMerchant", () => {
         district: "Al Quoz Industrial 1",
         emirate: "Dubai",
       },
+      suitefleetCustomerCode: "588",
     });
 
     expect(tx.execute).toHaveBeenCalledOnce();
@@ -110,6 +111,7 @@ describe("insertMerchant", () => {
       slug: "x",
       name: "y",
       pickupAddress: { line: "a", district: "b", emirate: "c" },
+      suitefleetCustomerCode: "588",
     });
 
     const captured = compile(tx.execute.mock.calls[0][0]);
@@ -131,6 +133,7 @@ describe("insertMerchant", () => {
         slug: "x",
         name: "y",
         pickupAddress: { line: "a", district: "b", emirate: "c" },
+        suitefleetCustomerCode: "588",
       }),
     ).rejects.toThrow(/zero rows/);
   });

@@ -76,7 +76,7 @@ import {
 import { logger } from "../../shared/logger";
 import { captureException } from "../../shared/sentry-capture";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
-import type { Uuid } from "../../shared/types";
+import type { IsoTimestamp, Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
 
@@ -109,6 +109,7 @@ import {
   listAllTasksRows,
   type ListTasksOpts,
   listTasksByConsigneeAndDateRange,
+  listTasksBySubscription,
   listTasksByTenant,
   listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
@@ -296,6 +297,33 @@ function validateCreateTaskInput(
     }
   });
 
+  // Composite invariant pre-check, mirroring migration 0010's
+  // `tasks_creation_source_invariant` CHECK:
+  //   created_via = 'subscription' iff subscription_id IS NOT NULL.
+  // Catching this at the validator surfaces a typed ValidationError
+  // instead of letting Postgres throw 23514 from inside the
+  // withServiceRole tx (which propagates as a raw Error and reads
+  // as "Unexpected error mid-batch" to the operator).
+  //
+  // Day-22 PM §3.22 final-blocker fixup — previously the validator
+  // stripped `createdVia` from the normalised output (see below),
+  // masking the issue until the CHECK fired at INSERT time.
+  if (input.createdVia === "subscription" && input.subscriptionId === undefined) {
+    push(
+      "createdVia",
+      "createdVia 'subscription' requires a non-null subscriptionId (composite CHECK tasks_creation_source_invariant)",
+    );
+  } else if (
+    input.createdVia !== undefined &&
+    input.createdVia !== "subscription" &&
+    input.subscriptionId !== undefined
+  ) {
+    push(
+      "createdVia",
+      `createdVia '${input.createdVia}' requires subscriptionId to be null (composite CHECK tasks_creation_source_invariant)`,
+    );
+  }
+
   if (failures.length > 0) {
     return { ok: false, failures };
   }
@@ -305,6 +333,13 @@ function validateCreateTaskInput(
     normalised: {
       consigneeId,
       subscriptionId: input.subscriptionId,
+      // Day-22 PM §3.22 final-blocker fixup — propagate `createdVia`
+      // through validation so it reaches the repository's INSERT.
+      // Previously stripped, causing the SQL DEFAULT 'subscription'
+      // to take effect and the composite CHECK to fire when callers
+      // (e.g. /subscriptions/new single-task mode) omitted
+      // subscriptionId.
+      createdVia: input.createdVia,
       customerOrderNumber,
       referenceNumber: optionalTrim(input.referenceNumber),
       internalStatus: input.internalStatus,
@@ -566,6 +601,28 @@ export async function listTasks(
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listTasksByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day-22 §3.22 Fix 2 — list tasks attached to a single subscription,
+ * ordered by delivery_date ASC (chronological — newest deliveries at
+ * the bottom of the operator's eye-line, matching the calendar's
+ * forward-in-time scan). Powers the "Tasks" panel on
+ * /subscriptions/[id]. Default limit 30; clamp at 200 in the
+ * repository.
+ *
+ * Permission: task:read. Read path — no audit emit per R-4.
+ */
+export async function getTasksForSubscription(
+  ctx: RequestContext,
+  subscriptionId: Uuid,
+  limit = 30,
+): Promise<readonly Task[]> {
+  requirePermission(ctx, "task:read");
+  assertTenantScoped(ctx, "task:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listTasksBySubscription(tx, ctx.tenantId!, subscriptionId, limit);
   });
 }
 
@@ -1094,6 +1151,190 @@ export async function cancelTask(ctx: RequestContext, taskId: Uuid): Promise<Tas
   }
 
   return result.row;
+}
+
+
+// =============================================================================
+// addNoteToDriver — Day-22 / PR-B (calendar popover action 7)
+// =============================================================================
+//
+// Operator appends a driver-facing instruction note to a task. Semantically
+// distinct from the generic `updateTask` patch (which carries 16 fields and
+// emits the catch-all `task.updated` event) — note-add is a single-purpose
+// customer-service workflow that benefits from a dedicated event
+// (`task.note_added`) so audit queries can isolate note activity from the
+// generic patch stream. Mirrors the subscription.exception.created precedent:
+// typed event per operator workflow, not a generic update catch-all.
+//
+// Semantics — REPLACE, not append. v1 single instruction per delivery; the
+// audit log carries `previous_notes_length` for forensic reconstruction of
+// edit history if needed. Multi-operator attribution / merge semantics
+// deferred to v2 if product demands.
+//
+// Cutoff guard mirrors `updateTask` (and `cancelTask`): refuse note-add past
+// the 18:00 Dubai cut-off the day before delivery — once SF has been notified
+// of a task's delivery date, the driver may already be looking at the order,
+// and a late note may not reach them.
+//
+// Note text is NOT in the audit metadata (PII / customer-data leak risk);
+// the durable text lives on `tasks.notes` and is reachable via `task:read`.
+// Operators investigating "what did X say?" go to the task row, not the
+// audit log.
+//
+// Throws:
+//   ForbiddenError    — actor lacks `task:add_note`
+//   ValidationError   — tenant unscoped, note empty after trim, note > 1000
+//                       chars, cutoff elapsed
+//   NotFoundError     — task not found / RLS-hidden cross-tenant
+
+const ADD_NOTE_MAX_LENGTH = 1000;
+
+export async function addNoteToDriver(
+  ctx: RequestContext,
+  taskId: Uuid,
+  note: string,
+): Promise<Task> {
+  requirePermission(ctx, "task:add_note");
+  assertTenantScoped(ctx, "task:add_note");
+
+  const trimmed = note.trim();
+  if (trimmed.length === 0) {
+    throw new ValidationError("driver note must be non-empty after trim");
+  }
+  if (trimmed.length > ADD_NOTE_MAX_LENGTH) {
+    throw new ValidationError(
+      `driver note exceeds maximum length (${trimmed.length} > ${ADD_NOTE_MAX_LENGTH} chars)`,
+    );
+  }
+
+  const tenantId = ctx.tenantId as Uuid;
+  const now = new Date();
+
+  const result = await withTenant(tenantId, async (tx) => {
+    const before = await findTaskById(tx, taskId);
+    if (!before) {
+      throw new NotFoundError(`task not found: ${taskId}`);
+    }
+
+    if (isCutOffElapsedForDate(now, before.deliveryDate)) {
+      throw new ValidationError(
+        `task delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before; cannot add driver note`,
+      );
+    }
+
+    const previousNotesLength = before.notes !== null ? before.notes.length : 0;
+    const updated = await updateTaskRow(tx, tenantId, taskId, {
+      notes: trimmed,
+    });
+    if (!updated) {
+      throw new NotFoundError(`task not found: ${taskId}`);
+    }
+    return { row: updated, previousNotesLength };
+  });
+
+  await emit({
+    eventType: "task.note_added",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "task",
+    resourceId: taskId,
+    metadata: {
+      task_id: taskId,
+      previous_notes_length: result.previousNotesLength,
+      new_notes_length: trimmed.length,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return result.row;
+}
+
+
+// =============================================================================
+// getTaskTimeline — Day-22 / PR-B (calendar popover action 8)
+// =============================================================================
+//
+// Reads the full state-transition timeline for a single task per brief §3.3.6:
+// creation event + all webhook-driven status changes / edit-applies / POD
+// receipts. Sourced from local DB cached webhook_events per brief §3.3.8
+// cache-from-webhook architectural commitment (no live SF fetch).
+//
+// Per R-4 read-not-audited convention: no audit emit on view. The permission
+// gate `task:view_timeline` still runs.
+//
+// Webhook events join via the task's external_tracking_number (AWB) ↔
+// webhook_events.suitefleet_task_id. Tasks not yet pushed to SF (null AWB)
+// have a single timeline entry: the creation event from tasks.created_at.
+//
+// Throws:
+//   ForbiddenError    — actor lacks `task:view_timeline`
+//   ValidationError   — tenant unscoped
+//   NotFoundError     — task not found / RLS-hidden cross-tenant
+
+export type TaskTimelineEntrySource = "task_created" | "webhook";
+
+export interface TaskTimelineEntry {
+  /** ISO 8601 with timezone. For source='task_created', mirrors tasks.created_at; for source='webhook', mirrors webhook_events.event_timestamp. */
+  readonly timestamp: IsoTimestamp;
+  /** SF action code (e.g. 'TASK_STATUS_UPDATED_TO_DELIVERED') for source='webhook'; literal 'TASK_CREATED' for source='task_created'. UI maps this to human-readable copy. */
+  readonly action: string;
+  readonly source: TaskTimelineEntrySource;
+}
+
+export interface TaskTimeline {
+  readonly taskId: Uuid;
+  /** Entries in chronological (oldest-first) order. */
+  readonly entries: readonly TaskTimelineEntry[];
+}
+
+type WebhookEventRow = {
+  action: string;
+  event_timestamp: string;
+} & Record<string, unknown>;
+
+export async function getTaskTimeline(
+  ctx: RequestContext,
+  taskId: Uuid,
+): Promise<TaskTimeline> {
+  requirePermission(ctx, "task:view_timeline");
+  assertTenantScoped(ctx, "task:view_timeline");
+
+  const tenantId = ctx.tenantId as Uuid;
+
+  return await withTenant(tenantId, async (tx) => {
+    const task = await findTaskById(tx, taskId);
+    if (!task) {
+      throw new NotFoundError(`task not found: ${taskId}`);
+    }
+
+    const entries: TaskTimelineEntry[] = [
+      {
+        timestamp: task.createdAt,
+        action: "TASK_CREATED",
+        source: "task_created",
+      },
+    ];
+
+    if (task.externalTrackingNumber !== null) {
+      const webhookRows = await tx.execute<WebhookEventRow>(sqlTag`
+        SELECT action, event_timestamp::text AS event_timestamp
+        FROM webhook_events
+        WHERE tenant_id = ${tenantId}
+          AND suitefleet_task_id = ${task.externalTrackingNumber}
+        ORDER BY event_timestamp ASC
+      `);
+      for (const row of webhookRows) {
+        entries.push({
+          timestamp: row.event_timestamp as IsoTimestamp,
+          action: row.action,
+          source: "webhook",
+        });
+      }
+    }
+
+    return { taskId, entries };
+  });
 }
 
 

@@ -23,6 +23,7 @@ import type { Uuid } from "@/shared/types";
 
 import type {
   AddressOwnershipRow,
+  ConsigneeAddressRow,
   CurrentRotationRow,
   IsoWeekday,
   RotationEntry,
@@ -90,6 +91,51 @@ export async function findAddressForConsignee(
     label: row.label as "home" | "office" | "other",
     isPrimary: row.is_primary,
   };
+}
+
+// -----------------------------------------------------------------------------
+// listAddressesForConsignee — picker source for popover override actions
+// -----------------------------------------------------------------------------
+
+/**
+ * Day-22 / PR-B. Lists every address belonging to `consigneeId` within
+ * `tenantId`, ordered with the primary first then by label/created_at
+ * ascending. Consumed by the consignee detail page server component
+ * to populate the calendar popover's address picker (actions 4 + 5).
+ *
+ * Read posture: no permission gate at the repo layer; the caller (page
+ * server component) is already gated on `consignee:read` via the
+ * preceding `getConsignee` call. RLS scopes by tenant; the explicit
+ * `tenant_id = $1` predicate is defence-in-depth.
+ */
+export async function listAddressesForConsignee(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+): Promise<readonly ConsigneeAddressRow[]> {
+  type Row = {
+    id: string;
+    label: string;
+    is_primary: boolean;
+    line: string;
+    district: string;
+  } & Record<string, unknown>;
+
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id, label, is_primary, line, district
+    FROM addresses
+    WHERE consignee_id = ${consigneeId}
+      AND tenant_id = ${tenantId}
+    ORDER BY is_primary DESC, label ASC, created_at ASC
+  `);
+
+  return rows.map((row) => ({
+    id: row.id as Uuid,
+    label: row.label as "home" | "office" | "other",
+    isPrimary: row.is_primary,
+    line: row.line,
+    district: row.district,
+  }));
 }
 
 // -----------------------------------------------------------------------------
