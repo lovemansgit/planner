@@ -25,6 +25,9 @@ import {
   listAllUsers,
   type AdminUserRow,
 } from "@/modules/identity/service";
+
+import { UserDisableModal } from "./_components/UserDisableModal";
+import { UserEnableButton } from "./_components/UserEnableButton";
 import {
   ForbiddenError,
   NoTenantConfiguredError,
@@ -143,7 +146,11 @@ function AdminUsersTable({ rows }: { rows: readonly AdminUserRow[] }) {
           <Th>Full name</Th>
           <Th>Tenant</Th>
           <Th>Role</Th>
+          <Th>Status</Th>
           <Th>Created</Th>
+          <Th>
+            <span className="sr-only">Actions</span>
+          </Th>
         </tr>
       </thead>
       <tbody>
@@ -156,35 +163,74 @@ function AdminUsersTable({ rows }: { rows: readonly AdminUserRow[] }) {
 }
 
 function Row({ row }: { row: AdminUserRow }) {
+  const disabled = row.disabledAt !== null;
+  // Muted styling for disabled rows so the sysadmin sees at a glance
+  // which accounts are blocked. Hairline border + reduced opacity on
+  // text-bearing cells keeps the row legible without making it look
+  // like an error state.
+  const rowTone = disabled
+    ? "border-b border-[color:var(--color-border-default)] last:border-b-0 bg-stone-100/40"
+    : "border-b border-[color:var(--color-border-default)] last:border-b-0";
+  const cellTone = disabled ? "text-[color:var(--color-text-tertiary)]" : "text-navy";
+
   return (
-    <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
+    <tr className={rowTone}>
       <Td>
-        <span className="text-navy">{row.email}</span>
+        <span className={cellTone}>{row.email}</span>
       </Td>
       <Td>
         {row.displayName ? (
-          <span className="text-navy">{row.displayName}</span>
+          <span className={cellTone}>{row.displayName}</span>
         ) : (
           <span className="text-[color:var(--color-text-tertiary)]">—</span>
         )}
       </Td>
       <Td>
-        <span className="font-medium text-navy">{row.tenantName}</span>
+        <span className={`font-medium ${disabled ? "text-[color:var(--color-text-tertiary)]" : "text-navy"}`}>
+          {row.tenantName}
+        </span>
         <span className="ml-2 font-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
           {row.tenantSlug}
         </span>
       </Td>
       <Td>
         {row.roleSlugs.length > 0 ? (
-          <span className="text-navy">{row.roleSlugs.join(", ")}</span>
+          <span className={cellTone}>{row.roleSlugs.join(", ")}</span>
         ) : (
           <span className="text-[color:var(--color-text-tertiary)]">—</span>
         )}
       </Td>
+      <Td>
+        <StatusBadge disabled={disabled} />
+      </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
         {row.createdAt.slice(0, 10)}
       </Td>
+      <Td className="text-right">
+        {disabled ? (
+          <UserEnableButton userId={row.userId} />
+        ) : (
+          <UserDisableModal userId={row.userId} email={row.email} />
+        )}
+      </Td>
     </tr>
+  );
+}
+
+function StatusBadge({ disabled }: { readonly disabled: boolean }) {
+  if (disabled) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[color:var(--color-text-tertiary)]" />
+        Disabled
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-green">
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-green" />
+      Active
+    </span>
   );
 }
 

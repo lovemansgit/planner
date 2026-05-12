@@ -119,6 +119,42 @@ function isAlreadyExistsError(error: { readonly message?: string }): boolean {
   );
 }
 
+/**
+ * Disable a Supabase Auth user — sets `ban_duration: '876000h'` (100
+ * years per the SDK's longest-practical example at
+ * GoTrueAdminApi.d.ts:561). The user cannot sign in until
+ * `enableAuthUser` is called. Idempotent — re-disabling an already-
+ * banned user is a no-op on Supabase's side.
+ */
+export async function disableAuthUser(authUserId: string): Promise<void> {
+  const client = adminClient();
+  const { error } = await client.auth.admin.updateUserById(authUserId, {
+    ban_duration: "876000h",
+  });
+  if (error) {
+    throw new AuthAdminError(
+      `auth.admin.updateUserById disable failed: ${error.message}`,
+    );
+  }
+}
+
+/**
+ * Re-enable a previously-disabled Supabase Auth user — clears the
+ * ban via `ban_duration: 'none'`. Idempotent — calling on a non-
+ * banned user is a no-op on Supabase's side.
+ */
+export async function enableAuthUser(authUserId: string): Promise<void> {
+  const client = adminClient();
+  const { error } = await client.auth.admin.updateUserById(authUserId, {
+    ban_duration: "none",
+  });
+  if (error) {
+    throw new AuthAdminError(
+      `auth.admin.updateUserById enable failed: ${error.message}`,
+    );
+  }
+}
+
 export class AuthAdminError extends Error {
   constructor(message: string) {
     super(message);
