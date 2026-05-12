@@ -223,6 +223,27 @@ export async function listSubscriptionsByTenant(
   return rows.map(mapSubscription);
 }
 
+/**
+ * Day-23 §3.3.2 — SELECT every subscription for `consigneeId` within
+ * `tenantId`, newest first. Drives the consignee-detail Subscription
+ * tab (replaces the PlaceholderTab that shipped at Day-17). Tenant
+ * predicate is explicit alongside RLS for defence-in-depth and
+ * legibility, matching `listAddressesForConsignee` precedent.
+ */
+export async function listSubscriptionsByConsignee(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+): Promise<readonly Subscription[]> {
+  const rows = await tx.execute<SubscriptionRow>(sqlTag`
+    SELECT * FROM subscriptions
+    WHERE tenant_id = ${tenantId}
+      AND consignee_id = ${consigneeId}
+    ORDER BY created_at DESC
+  `);
+  return rows.map(mapSubscription);
+}
+
 // -----------------------------------------------------------------------------
 // Day-22 §3.22 Fix 1 — list subscriptions with consignee name JOIN
 // -----------------------------------------------------------------------------

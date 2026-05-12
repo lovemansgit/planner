@@ -33,6 +33,7 @@ import {
 } from "@/modules/consignees";
 import {
   getConsigneeCalendarExceptions,
+  getRecentExceptionsForSubscription,
   type SubscriptionException,
 } from "@/modules/subscription-exceptions";
 import {
@@ -40,11 +41,18 @@ import {
   listConsigneeAddresses,
 } from "@/modules/subscription-addresses";
 import {
+  listSubscriptionsByConsignee,
+  type Subscription,
+} from "@/modules/subscriptions";
+import {
   type DayBucketCount,
   getConsigneeTaskCountByDayBucket,
   getConsigneeTasksForDateRange,
+  getTasksForSubscription,
 } from "@/modules/tasks";
 import type { Task } from "@/modules/tasks/types";
+
+import { Toast } from "@/components/Toast";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
@@ -70,6 +78,10 @@ import { CalendarYearView } from "./_components/CalendarYearView";
 import { CrmStateBadge, CRM_STATE_LABELS } from "./_components/CrmStateBadge";
 import { CrmStateModal } from "./_components/CrmStateModal";
 import { HistoryTab } from "./_components/HistoryTab";
+import {
+  type SubscriptionDetailGroup,
+  SubscriptionTab,
+} from "./_components/SubscriptionTab";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -87,6 +99,7 @@ interface PageProps {
     readonly week?: string;
     readonly month?: string;
     readonly year?: string;
+    readonly created?: string;
   }>;
 }
 
@@ -108,6 +121,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     week: weekParam,
     month: monthParam,
     year: yearParam,
+    created: createdParam,
   } = await searchParams;
   const activeTab: TabName = (VALID_TABS as readonly string[]).includes(tabParam ?? "")
     ? (tabParam as TabName)
@@ -141,6 +155,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let calendarExceptions: readonly SubscriptionException[] = [];
   let calendarYearCounts: readonly DayBucketCount[] = [];
   let calendarAddresses: readonly ConsigneeAddressRow[] = [];
+  let subscriptionGroups: readonly SubscriptionDetailGroup[] = [];
   let canChangeState = false;
   let canEditConsignee = false;
   let canCreateSubscription = false;
@@ -195,6 +210,26 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     // terminal task statuses).
     if (activeTab === "history") {
       history = await getConsigneeTimeline(ctx, id as Uuid);
+    }
+    // Day-23 §3.3.2 — fetch subscriptions + per-subscription tasks +
+    // recent exceptions for the Subscription tab. Mirrors the
+    // /subscriptions/[id] page's parallel fetch pattern: one round-trip
+    // per subscription's tasks + exceptions, all coordinated under one
+    // Promise.all so N subscriptions stay below 2 round-trip generations.
+    if (activeTab === "subscription") {
+      const subs: readonly Subscription[] = await listSubscriptionsByConsignee(
+        ctx,
+        id as Uuid,
+      );
+      subscriptionGroups = await Promise.all(
+        subs.map(async (subscription) => {
+          const [tasks, exceptions] = await Promise.all([
+            getTasksForSubscription(ctx, subscription.id as Uuid, 30),
+            getRecentExceptionsForSubscription(ctx, subscription.id as Uuid, 10),
+          ]);
+          return { subscription, tasks, exceptions };
+        }),
+      );
     }
     // Only fetch calendar data when the Calendar tab is active. View
     // dispatch picks the fetch range:
@@ -256,6 +291,9 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy">
+      {createdParam ? (
+        <Toast message="Subscription created successfully" paramKey="created" />
+      ) : null}
       <div className="mx-auto max-w-5xl px-12 py-12">
         <Link
           href="/consignees"
@@ -336,7 +374,16 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
         <section className="mt-8">
           {activeTab === "overview" ? <OverviewTab consignee={consignee} /> : null}
           {activeTab === "history" ? <HistoryTab events={history} /> : null}
-          {activeTab === "subscription" ? <PlaceholderTab label="Subscription" /> : null}
+          {activeTab === "subscription" ? (
+            <SubscriptionTab
+              groups={subscriptionGroups}
+              consigneeId={consignee.id}
+              consigneeName={consignee.name}
+              addressLine={consignee.addressLine}
+              district={consignee.district}
+              emirate={consignee.emirateOrRegion}
+            />
+          ) : null}
           {activeTab === "calendar" ? (
             <div>
               <div className="mb-4 flex justify-end">
@@ -463,16 +510,6 @@ function OverviewTab({ consignee }: { consignee: Consignee }) {
           </div>
         </dl>
       </section>
-    </div>
-  );
-}
-
-function PlaceholderTab({ label }: { label: string }) {
-  return (
-    <div className="border-t border-stone-200 py-12 text-center">
-      <p className="text-sm text-[color:var(--color-text-secondary)]">
-        {label} — coming in Day-17 next PRs.
-      </p>
     </div>
   );
 }

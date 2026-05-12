@@ -22,6 +22,7 @@ import {
   endSubscription,
   findSubscriptionById,
   insertSubscription,
+  listSubscriptionsByConsignee,
   listSubscriptionsByTenant,
   listSubscriptionsWithConsigneeByTenant,
   updateSubscription,
@@ -342,6 +343,52 @@ describe("listSubscriptionsByTenant", () => {
     const tx = makeStubTx([[]]);
     const result = await listSubscriptionsByTenant(tx, TENANT_ID);
     expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-23 §3.3.2 — listSubscriptionsByConsignee
+// ---------------------------------------------------------------------------
+
+describe("listSubscriptionsByConsignee", () => {
+  it("scopes the SELECT to tenant_id AND consignee_id, newest first", async () => {
+    const tx = makeStubTx([
+      [
+        subRowFixture({ id: "row-1", consignee_id: CONSIGNEE_ID }),
+        subRowFixture({ id: "row-2", consignee_id: CONSIGNEE_ID }),
+      ],
+    ]);
+    const result = await listSubscriptionsByConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/WHERE tenant_id =/);
+    expect(sql).toMatch(/AND consignee_id =/);
+    expect(sql).toMatch(/ORDER BY created_at DESC/);
+    expect(params).toContain(TENANT_ID);
+    expect(params).toContain(CONSIGNEE_ID);
+
+    expect(result.length).toBe(2);
+    expect(result[0].id).toBe("row-1");
+    expect(result[1].id).toBe("row-2");
+  });
+
+  it("returns an empty array when the consignee has no subscriptions yet", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listSubscriptionsByConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+    expect(result).toEqual([]);
+  });
+
+  it("does not surface rows belonging to a different consignee (predicate carries)", async () => {
+    // The repository binds the consigneeId param into the WHERE; the
+    // SQL string assertion above verifies the predicate is present, and
+    // the mock returns only what would survive the filter. This test
+    // double-checks that the bound consigneeId — not a hardcoded one —
+    // is what actually goes to the driver.
+    const tx = makeStubTx([[]]);
+    await listSubscriptionsByConsignee(tx, TENANT_ID, OTHER_CONSIGNEE_ID);
+    const { params } = compile(tx.execute.mock.calls[0][0]);
+    expect(params).toContain(OTHER_CONSIGNEE_ID);
+    expect(params).not.toContain(CONSIGNEE_ID);
   });
 });
 

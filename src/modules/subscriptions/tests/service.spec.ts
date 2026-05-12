@@ -19,6 +19,7 @@ vi.mock("../../audit", () => ({
 vi.mock("../repository", () => ({
   insertSubscription: vi.fn(),
   findSubscriptionById: vi.fn(),
+  listSubscriptionsByConsignee: vi.fn(),
   listSubscriptionsByTenant: vi.fn(),
   listSweepCandidates: vi.fn(),
   updateSubscription: vi.fn(),
@@ -62,6 +63,7 @@ import {
   endSubscription as endSubscriptionRow,
   findSubscriptionById,
   insertSubscription,
+  listSubscriptionsByConsignee as listSubscriptionsByConsigneeRow,
   listSubscriptionsByTenant,
   listSweepCandidates,
   updateSubscription as updateSubscriptionRow,
@@ -71,6 +73,7 @@ import {
   endSubscription,
   getSubscription,
   listSubscriptions,
+  listSubscriptionsByConsignee,
   sweepEndedSubscriptions,
   updateSubscription,
 } from "../service";
@@ -82,6 +85,7 @@ const mockEmit = vi.mocked(emit);
 const mockInsert = vi.mocked(insertSubscription);
 const mockFindById = vi.mocked(findSubscriptionById);
 const mockListByTenant = vi.mocked(listSubscriptionsByTenant);
+const mockListByConsignee = vi.mocked(listSubscriptionsByConsigneeRow);
 const mockListSweepCandidates = vi.mocked(listSweepCandidates);
 const mockUpdate = vi.mocked(updateSubscriptionRow);
 const mockEnd = vi.mocked(endSubscriptionRow);
@@ -391,6 +395,57 @@ describe("listSubscriptions", () => {
     const result = await listSubscriptions(ctx(["subscription:read"]));
     expect(result).toEqual(rows);
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Day-23 §3.3.2 — listSubscriptionsByConsignee
+// -----------------------------------------------------------------------------
+
+describe("listSubscriptionsByConsignee", () => {
+  it("throws ForbiddenError when actor lacks subscription:read", async () => {
+    await expect(
+      listSubscriptionsByConsignee(ctx([]), CONSIGNEE_ID),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws ValidationError when ctx.tenantId is null", async () => {
+    await expect(
+      listSubscriptionsByConsignee(ctx(["subscription:read"], null), CONSIGNEE_ID),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("returns rows from the repository, no audit emit (R-4 read-not-audited)", async () => {
+    const rows = [
+      subFixture({ id: "row-1", consigneeId: CONSIGNEE_ID }),
+      subFixture({ id: "row-2", consigneeId: CONSIGNEE_ID }),
+    ];
+    mockListByConsignee.mockResolvedValue(rows);
+    const result = await listSubscriptionsByConsignee(
+      ctx(["subscription:read"]),
+      CONSIGNEE_ID,
+    );
+    expect(result).toEqual(rows);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("passes consigneeId through to the repository fn", async () => {
+    mockListByConsignee.mockResolvedValue([]);
+    await listSubscriptionsByConsignee(ctx(["subscription:read"]), CONSIGNEE_ID);
+    expect(mockListByConsignee).toHaveBeenCalledWith(
+      expect.anything(), // tx
+      TENANT_ID,
+      CONSIGNEE_ID,
+    );
+  });
+
+  it("returns empty array when the consignee has zero subscriptions", async () => {
+    mockListByConsignee.mockResolvedValue([]);
+    const result = await listSubscriptionsByConsignee(
+      ctx(["subscription:read"]),
+      CONSIGNEE_ID,
+    );
+    expect(result).toEqual([]);
   });
 });
 

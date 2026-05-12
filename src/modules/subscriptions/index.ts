@@ -25,6 +25,7 @@ export {
   endSubscription,
   getSubscription,
   listSubscriptions,
+  listSubscriptionsByConsignee,
   listSubscriptionsWithConsignee,
   pauseSubscription,
   resumeSubscription,
