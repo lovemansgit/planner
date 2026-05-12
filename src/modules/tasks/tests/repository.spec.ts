@@ -19,6 +19,7 @@ import {
   findTaskById,
   insertTaskWithPackages,
   listAllTaskIdsByTenant,
+  listAllTasksRows,
   listTasksBySubscription,
   listTasksByTenant,
   updateTask,
@@ -349,6 +350,62 @@ describe("listTasksByTenant", () => {
       expect(captured.sql).toMatch(/internal_status\s*=\s*\$/i);
       expect(captured.sql).toMatch(/ILIKE/i);
       expect(captured.params).toContain("DELIVERED");
+      expect(captured.params).toContain("%Sarah%");
+    });
+  });
+});
+
+describe("listAllTasksRows", () => {
+  it("base SELECT joins tenants + consignees with no extra filters when filters are empty", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, {});
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/FROM tasks t/i);
+    expect(captured.sql).toMatch(/JOIN tenants ten/i);
+    expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
+    expect(captured.sql).not.toMatch(/ILIKE/i);
+    expect(captured.sql).not.toMatch(/internal_status\s*=/i);
+    expect(captured.sql).not.toMatch(/ten\.slug\s*=/i);
+  });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, {});
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against AWB, consignee name, and merchant name when searchTerm is set", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, { searchTerm: "MPL-645" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/t\.external_tracking_number\s+ILIKE/i);
+      expect(captured.sql).toMatch(/c\.name\s+ILIKE/i);
+      expect(captured.sql).toMatch(/ten\.name\s+ILIKE/i);
+      expect(captured.params).toContain("%MPL-645%");
+    });
+
+    it("composes searchTerm with status + merchantSlug (all clauses present)", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, {
+        searchTerm: "Sarah",
+        status: "DELIVERED",
+        merchantSlug: "mpl",
+      });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/t\.internal_status\s*=/i);
+      expect(captured.sql).toMatch(/ten\.slug\s*=/i);
+      expect(captured.sql).toMatch(/ILIKE/i);
+      expect(captured.params).toContain("DELIVERED");
+      expect(captured.params).toContain("mpl");
       expect(captured.params).toContain("%Sarah%");
     });
   });

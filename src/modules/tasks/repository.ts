@@ -663,12 +663,18 @@ export async function listTasksBySubscription(
 /**
  * Filters for listAllTasksRows. Same shape as ListTasksOpts plus an
  * optional merchantSlug for narrowing to a single tenant's rows.
+ *
+ * `searchTerm` runs a case-insensitive ILIKE across the joined task +
+ * consignee + merchant surface (AWB, consignee name, merchant name).
+ * Trim + min-length is the caller's responsibility; the helper here
+ * collapses empty/whitespace to the no-filter SQL fragment.
  */
 export interface ListAllTasksFilters {
   readonly merchantSlug?: string;
   readonly limit?: number;
   readonly offset?: number;
   readonly status?: TaskInternalStatus;
+  readonly searchTerm?: string;
 }
 
 /**
@@ -722,6 +728,7 @@ export async function listAllTasksRows(
     filters.merchantSlug !== undefined
       ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
       : sqlTag``;
+  const searchFilter = buildAdminTaskSearchFilter(filters.searchTerm);
 
   const rows = await tx.execute<AdminTaskJoinRow>(sqlTag`
     SELECT
@@ -732,9 +739,11 @@ export async function listAllTasksRows(
       ten.status AS merchant_status
     FROM tasks t
     JOIN tenants ten ON ten.id = t.tenant_id
+    LEFT JOIN consignees c ON c.id = t.consignee_id
     WHERE 1 = 1
       ${statusFilter}
       ${merchantFilter}
+      ${searchFilter}
     ORDER BY t.delivery_date DESC, t.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
@@ -748,6 +757,14 @@ export async function listAllTasksRows(
       status: row.merchant_status,
     },
   }));
+}
+
+function buildAdminTaskSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const pattern = `%${trimmed}%`;
+  return sqlTag`AND (t.external_tracking_number ILIKE ${pattern} OR c.name ILIKE ${pattern} OR ten.name ILIKE ${pattern})`;
 }
 
 /**

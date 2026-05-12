@@ -30,6 +30,7 @@ import {
   parsePageParam,
   parsePerPageParam,
 } from "@/app/(app)/tasks/status";
+import { SearchBar } from "@/components/SearchBar";
 import {
   type AdminConsigneeRow,
   listAllConsignees,
@@ -54,6 +55,7 @@ interface AdminConsigneesPageProps {
     readonly merchant?: string;
     readonly page?: string;
     readonly perPage?: string;
+    readonly q?: string;
   }>;
 }
 
@@ -69,13 +71,14 @@ export default async function AdminConsigneesPage({
   const page = parsePageParam(params.page);
   const perPage = parsePerPageParam(params.perPage);
   const offset = (page - 1) * perPage;
+  const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
 
   let rows: readonly AdminConsigneeRow[];
   let merchants: readonly Merchant[];
   try {
     const ctx = await buildRequestContext("/admin/consignees", requestId);
     [rows, merchants] = await Promise.all([
-      listAllConsignees(ctx, { merchantSlug, limit: perPage, offset }),
+      listAllConsignees(ctx, { merchantSlug, limit: perPage, offset, searchTerm: q }),
       listMerchants(ctx),
     ]);
   } catch (err) {
@@ -111,6 +114,11 @@ export default async function AdminConsigneesPage({
           </p>
         </header>
 
+        <SearchBar
+          placeholder="Search by name, phone, or merchant"
+          label="Search consignees by name, phone, or merchant"
+        />
+
         <div className="mb-8 flex flex-wrap items-end gap-6">
           <MerchantFilterDropdown
             merchants={dropdownMerchants}
@@ -120,7 +128,7 @@ export default async function AdminConsigneesPage({
         </div>
 
         {rows.length === 0 ? (
-          <EmptyState filtered={merchantSlug !== undefined} />
+          <EmptyState filtered={merchantSlug !== undefined || q !== undefined} />
         ) : (
           <ConsigneesTable rows={rows} />
         )}
@@ -130,6 +138,7 @@ export default async function AdminConsigneesPage({
           hasNext={hasNext}
           merchantSlug={merchantSlug}
           perPage={perPage}
+          q={q}
         />
       </div>
     </main>
@@ -187,11 +196,13 @@ function Pagination({
   hasNext,
   merchantSlug,
   perPage,
+  q,
 }: {
   readonly page: number;
   readonly hasNext: boolean;
   readonly merchantSlug: string | undefined;
   readonly perPage: number;
+  readonly q: string | undefined;
 }) {
   if (page === 1 && !hasNext) return null;
   return (
@@ -205,7 +216,7 @@ function Pagination({
       <div className="flex gap-3">
         {page > 1 ? (
           <Link
-            href={buildAdminConsigneesHref({ merchantSlug, perPage, page: page - 1 })}
+            href={buildAdminConsigneesHref({ merchantSlug, perPage, page: page - 1, q })}
             className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
           >
             ← Previous
@@ -217,7 +228,7 @@ function Pagination({
         )}
         {hasNext ? (
           <Link
-            href={buildAdminConsigneesHref({ merchantSlug, perPage, page: page + 1 })}
+            href={buildAdminConsigneesHref({ merchantSlug, perPage, page: page + 1, q })}
             className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
           >
             Next →
@@ -236,15 +247,18 @@ function buildAdminConsigneesHref({
   merchantSlug,
   perPage,
   page,
+  q,
 }: {
   readonly merchantSlug: string | undefined;
   readonly perPage: number;
   readonly page: number;
+  readonly q: string | undefined;
 }): string {
   const params = new URLSearchParams();
   if (merchantSlug) params.set("merchant", merchantSlug);
   if (perPage !== PAGE_SIZE_DEFAULT) params.set("perPage", String(perPage));
   if (page > 1) params.set("page", String(page));
+  if (q) params.set("q", q);
   const qs = params.toString();
   return qs ? `/admin/consignees?${qs}` : "/admin/consignees";
 }
@@ -265,10 +279,10 @@ function EmptyState({ filtered }: { readonly filtered: boolean }) {
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
       <p className="text-base text-navy">
-        {filtered ? "No consignees match the merchant filter." : "No consignees on this page."}
+        {filtered ? "No consignees match the current filters." : "No consignees on this page."}
       </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        {filtered ? "Reset to All merchants to see everything." : "Try a previous page."}
+        {filtered ? "Clear the search or merchant filter to see everything." : "Try a previous page."}
       </p>
     </div>
   );

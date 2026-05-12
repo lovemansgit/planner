@@ -472,6 +472,13 @@ describe("listMerchants", () => {
     expect(mockListRows.mock.calls[0][1]).toEqual({ status: "active" });
   });
 
+  it("forwards the optional searchTerm filter to the repository", async () => {
+    mockListRows.mockResolvedValue([]);
+    await listMerchants(ctx([PERM]), { searchTerm: "demo" });
+    expect(mockListRows).toHaveBeenCalledOnce();
+    expect(mockListRows.mock.calls[0][1]).toEqual({ searchTerm: "demo" });
+  });
+
   it("returns an empty array when no rows match", async () => {
     mockListRows.mockResolvedValue([]);
     expect(await listMerchants(ctx([PERM]))).toEqual([]);

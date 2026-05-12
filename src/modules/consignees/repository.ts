@@ -225,11 +225,17 @@ function buildConsigneeSearchFilter(searchTerm: string | undefined) {
  * Filters for listAllConsigneesRows. Optional merchantSlug narrows
  * to a single tenant; limit/offset for pagination (defaults applied
  * at fn body — default 50, max 500 per merged plan scope item 8).
+ *
+ * `searchTerm` runs case-insensitive ILIKE across consignee name +
+ * phone (digits-stripped — mirrors `buildConsigneeSearchFilter` above)
+ * + merchant name. Caller is responsible for trim + min-length; the
+ * helper collapses empty/whitespace to the no-filter SQL fragment.
  */
 export interface ListAllConsigneesFilters {
   readonly merchantSlug?: string;
   readonly limit?: number;
   readonly offset?: number;
+  readonly searchTerm?: string;
 }
 
 type AdminConsigneeJoinRow = ConsigneeRow & {
@@ -266,6 +272,7 @@ export async function listAllConsigneesRows(
     filters.merchantSlug !== undefined
       ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
       : sqlTag``;
+  const searchFilter = buildAdminConsigneeSearchFilter(filters.searchTerm);
 
   const rows = await tx.execute<AdminConsigneeJoinRow>(sqlTag`
     SELECT
@@ -278,6 +285,7 @@ export async function listAllConsigneesRows(
     JOIN tenants ten ON ten.id = c.tenant_id
     WHERE 1 = 1
       ${merchantFilter}
+      ${searchFilter}
     ORDER BY c.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
@@ -291,6 +299,19 @@ export async function listAllConsigneesRows(
       status: row.merchant_status,
     },
   }));
+}
+
+function buildAdminConsigneeSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const namePattern = `%${trimmed}%`;
+  const phoneDigits = trimmed.replace(/\D/g, "");
+  if (phoneDigits.length > 0) {
+    const phonePattern = `%${phoneDigits}%`;
+    return sqlTag`AND (c.name ILIKE ${namePattern} OR c.phone ILIKE ${phonePattern} OR ten.name ILIKE ${namePattern})`;
+  }
+  return sqlTag`AND (c.name ILIKE ${namePattern} OR ten.name ILIKE ${namePattern})`;
 }
 
 /**

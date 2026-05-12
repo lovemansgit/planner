@@ -239,34 +239,38 @@ export async function updateMerchantStatus(
  *                                     (default; demo-hygiene).
  *     - `excludeArchived: false`    → no filter; all rows including
  *                                     archived (debug only).
+ *
+ * Day-24: composable filter refactor. Status + archive + search are
+ * each independent SQL fragments composed into a single SELECT — was
+ * three forked branches per Day-18, now one statement.
  */
 export async function listMerchants(
   tx: DbTx,
   filters: ListMerchantsFilters = {},
 ): Promise<readonly Merchant[]> {
   const excludeArchived = filters.excludeArchived ?? true;
-  let rows: readonly TenantRow[];
-  if (filters.status !== undefined) {
-    // Explicit status filter wins; excludeArchived ignored. The
-    // forensic `?status=archived` path lands here.
-    rows = await tx.execute<TenantRow>(sqlTag`
-      SELECT * FROM tenants
-      WHERE status = ${filters.status}
-      ORDER BY created_at DESC
-    `);
-  } else if (excludeArchived) {
-    // Default: hide archived rows from the admin list page.
-    rows = await tx.execute<TenantRow>(sqlTag`
-      SELECT * FROM tenants
-      WHERE status != 'archived'
-      ORDER BY created_at DESC
-    `);
-  } else {
-    // excludeArchived === false; return everything.
-    rows = await tx.execute<TenantRow>(sqlTag`
-      SELECT * FROM tenants
-      ORDER BY created_at DESC
-    `);
-  }
+  const statusFilter =
+    filters.status !== undefined
+      ? sqlTag`AND status = ${filters.status}`
+      : excludeArchived
+        ? sqlTag`AND status != 'archived'`
+        : sqlTag``;
+  const searchFilter = buildMerchantSearchFilter(filters.searchTerm);
+
+  const rows = await tx.execute<TenantRow>(sqlTag`
+    SELECT * FROM tenants
+    WHERE 1 = 1
+      ${statusFilter}
+      ${searchFilter}
+    ORDER BY created_at DESC
+  `);
   return rows.map(mapRow);
+}
+
+function buildMerchantSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const pattern = `%${trimmed}%`;
+  return sqlTag`AND (name ILIKE ${pattern} OR slug ILIKE ${pattern})`;
 }

@@ -347,11 +347,12 @@ export async function recordFailedPushAttempt(
  */
 export async function listUnresolvedFailedPushes(
   ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly FailedPush[]> {
   requirePermission(ctx, "failed_pushes:retry");
   assertTenantScoped(ctx, "failed_pushes:list");
   const tenantId = ctx.tenantId;
-  return withTenant(tenantId, async (tx) => listUnresolvedByTenant(tx, tenantId));
+  return withTenant(tenantId, async (tx) => listUnresolvedByTenant(tx, tenantId, opts));
 }
 
 // =============================================================================

@@ -38,6 +38,7 @@ import {
   parsePerPageParam,
   parseStatusParam,
 } from "@/app/(app)/tasks/status";
+import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import {
@@ -65,6 +66,7 @@ interface AdminTasksPageProps {
     readonly status?: string;
     readonly page?: string;
     readonly perPage?: string;
+    readonly q?: string;
   }>;
 }
 
@@ -76,13 +78,14 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
   const page = parsePageParam(params.page);
   const perPage = parsePerPageParam(params.perPage);
   const offset = (page - 1) * perPage;
+  const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
 
   let rows: readonly AdminTaskRow[];
   let merchants: readonly Merchant[];
   try {
     const ctx = await buildRequestContext("/admin/tasks", requestId);
     [rows, merchants] = await Promise.all([
-      listAllTasks(ctx, { merchantSlug, status, limit: perPage, offset }),
+      listAllTasks(ctx, { merchantSlug, status, limit: perPage, offset, searchTerm: q }),
       listMerchants(ctx),
     ]);
   } catch (err) {
@@ -118,6 +121,11 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           </p>
         </header>
 
+        <SearchBar
+          placeholder="Search by AWB, consignee, or merchant"
+          label="Search tasks by AWB, consignee, or merchant"
+        />
+
         <div className="mb-8 flex flex-wrap items-end gap-6">
           <MerchantFilterDropdown
             merchants={dropdownMerchants}
@@ -130,9 +138,10 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           activeStatus={status}
           merchantSlug={merchantSlug}
           perPage={perPage}
+          q={q}
         />
 
-        {rows.length === 0 ? <EmptyState filtered={status !== undefined || merchantSlug !== undefined} /> : <AdminTasksTable rows={rows} />}
+        {rows.length === 0 ? <EmptyState filtered={status !== undefined || merchantSlug !== undefined || q !== undefined} /> : <AdminTasksTable rows={rows} />}
 
         <Pagination
           page={page}
@@ -140,6 +149,7 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           merchantSlug={merchantSlug}
           status={status}
           perPage={perPage}
+          q={q}
         />
       </div>
     </main>
@@ -150,22 +160,24 @@ function StatusFilterBar({
   activeStatus,
   merchantSlug,
   perPage,
+  q,
 }: {
   readonly activeStatus: string | undefined;
   readonly merchantSlug: string | undefined;
   readonly perPage: number;
+  readonly q: string | undefined;
 }) {
   return (
     <nav aria-label="Status filter" className="mb-8 flex flex-wrap items-center gap-2">
       <FilterPill
-        href={buildAdminTasksHref({ merchantSlug, perPage, status: undefined })}
+        href={buildAdminTasksHref({ merchantSlug, perPage, status: undefined, q })}
         active={activeStatus === undefined}
         label="All"
       />
       {TASK_STATUS_FILTERS.map((s) => (
         <FilterPill
           key={s.value}
-          href={buildAdminTasksHref({ merchantSlug, perPage, status: s.value })}
+          href={buildAdminTasksHref({ merchantSlug, perPage, status: s.value, q })}
           active={activeStatus === s.value}
           label={s.label}
         />
@@ -200,17 +212,20 @@ function buildAdminTasksHref({
   perPage,
   status,
   page,
+  q,
 }: {
   readonly merchantSlug: string | undefined;
   readonly perPage: number;
   readonly status: string | undefined;
   readonly page?: number;
+  readonly q?: string;
 }): string {
   const params = new URLSearchParams();
   if (merchantSlug) params.set("merchant", merchantSlug);
   if (status) params.set("status", status);
   if (perPage !== PAGE_SIZE_DEFAULT) params.set("perPage", String(perPage));
   if (page !== undefined && page > 1) params.set("page", String(page));
+  if (q) params.set("q", q);
   const qs = params.toString();
   return qs ? `/admin/tasks?${qs}` : "/admin/tasks";
 }
@@ -281,12 +296,14 @@ function Pagination({
   merchantSlug,
   status,
   perPage,
+  q,
 }: {
   readonly page: number;
   readonly hasNext: boolean;
   readonly merchantSlug: string | undefined;
   readonly status: string | undefined;
   readonly perPage: number;
+  readonly q: string | undefined;
 }) {
   if (page === 1 && !hasNext) return null;
   return (
@@ -300,7 +317,7 @@ function Pagination({
       <div className="flex gap-3">
         {page > 1 ? (
           <Link
-            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page - 1 })}
+            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page - 1, q })}
             className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
           >
             ← Previous
@@ -312,7 +329,7 @@ function Pagination({
         )}
         {hasNext ? (
           <Link
-            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page + 1 })}
+            href={buildAdminTasksHref({ merchantSlug, perPage, status, page: page + 1, q })}
             className="text-xs uppercase tracking-[0.2em] text-navy hover:opacity-80"
           >
             Next →
@@ -346,7 +363,7 @@ function EmptyState({ filtered }: { readonly filtered: boolean }) {
         {filtered ? "No tasks match the current filters." : "No tasks on this page."}
       </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        {filtered ? "Adjust the merchant or status filter." : "Try a previous page."}
+        {filtered ? "Adjust the search, merchant, or status filter." : "Try a previous page."}
       </p>
     </div>
   );
