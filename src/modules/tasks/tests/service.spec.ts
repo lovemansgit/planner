@@ -87,6 +87,7 @@ import {
   updateTask as updateTaskRow,
 } from "../repository";
 import {
+  addNoteToDriver,
   BulkValidationError,
   bulkCancelTasks,
   bulkCreateTasks,
@@ -94,6 +95,7 @@ import {
   cancelTask,
   createTask,
   getTask,
+  getTaskTimeline,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,
@@ -899,6 +901,193 @@ describe("cancelTask — single-task cancel + outbound enqueue", () => {
     await expect(
       cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
     ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// addNoteToDriver — Day-22 / PR-B (popover action 7)
+// -----------------------------------------------------------------------------
+
+describe("addNoteToDriver — Day-22 / PR-B", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) => fn({} as never));
+  });
+
+  it("rejects user without task:add_note with ForbiddenError", async () => {
+    await expect(
+      addNoteToDriver(userCtx([]), TASK_ID as never, "Gate code 4521"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("rejects empty note (after trim) with ValidationError", async () => {
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "   "),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it("rejects over-length note (>1000 chars) with ValidationError", async () => {
+    const longNote = "x".repeat(1001);
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, longNote),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello"),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects past-cutoff delivery_date with ValidationError", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ deliveryDate: "2020-01-01" }),
+    );
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello"),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("happy path: UPDATE notes + audit task.note_added with previous/new lengths", async () => {
+    const before = taskFixture({
+      deliveryDate: "2099-05-01",
+      notes: "old text",
+    });
+    const after = { ...before, notes: "Gate code 4521" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    const result = await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "  Gate code 4521  ",
+    );
+
+    expect(result.notes).toBe("Gate code 4521");
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      TASK_ID,
+      { notes: "Gate code 4521" },
+    );
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("task.note_added");
+    expect(emitArg.metadata?.previous_notes_length).toBe("old text".length);
+    expect(emitArg.metadata?.new_notes_length).toBe("Gate code 4521".length);
+    // Note text MUST NOT appear in metadata (PII discipline).
+    expect(JSON.stringify(emitArg.metadata)).not.toContain("Gate code");
+  });
+
+  it("previous_notes_length is 0 when notes column was null", async () => {
+    const before = taskFixture({ deliveryDate: "2099-05-01", notes: null });
+    const after = { ...before, notes: "first note" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "first note",
+    );
+
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit.mock.calls[0][0].metadata?.previous_notes_length).toBe(0);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getTaskTimeline — Day-22 / PR-B (popover action 8)
+// -----------------------------------------------------------------------------
+
+describe("getTaskTimeline — Day-22 / PR-B", () => {
+  let mockExecute: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecute = vi.fn();
+    // tx needs an execute method for the inline webhook_events SELECT.
+    // findTaskById remains a repo mock; only the webhook query goes
+    // through tx.execute directly.
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: mockExecute } as never),
+    );
+  });
+
+  it("rejects user without task:view_timeline with ForbiddenError", async () => {
+    await expect(
+      getTaskTimeline(userCtx([]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getTaskTimeline(userCtx(["task:view_timeline"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("returns only the TASK_CREATED entry when task has no externalTrackingNumber", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ externalTrackingNumber: null, createdAt: FIXED_NOW }),
+    );
+
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.taskId).toBe(TASK_ID);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].action).toBe("TASK_CREATED");
+    expect(result.entries[0].source).toBe("task_created");
+    expect(result.entries[0].timestamp).toBe(FIXED_NOW);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("merges TASK_CREATED + webhook_events entries in chronological order", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({
+        externalTrackingNumber: "MPL-72915243",
+        createdAt: "2026-05-01T08:00:00.000Z",
+      }),
+    );
+    mockExecute.mockResolvedValueOnce([
+      {
+        action: "TASK_STATUS_UPDATED_TO_ASSIGNED",
+        event_timestamp: "2026-05-01T09:00:00.000Z",
+      },
+      {
+        action: "TASK_STATUS_UPDATED_TO_DELIVERED",
+        event_timestamp: "2026-05-01T12:00:00.000Z",
+      },
+    ]);
+
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries).toHaveLength(3);
+    expect(result.entries[0].action).toBe("TASK_CREATED");
+    expect(result.entries[0].source).toBe("task_created");
+    expect(result.entries[1].action).toBe("TASK_STATUS_UPDATED_TO_ASSIGNED");
+    expect(result.entries[1].source).toBe("webhook");
+    expect(result.entries[2].action).toBe("TASK_STATUS_UPDATED_TO_DELIVERED");
+    expect(result.entries[2].source).toBe("webhook");
+  });
+
+  it("emits no audit event (R-4 read-not-audited convention)", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ externalTrackingNumber: null }),
+    );
+    await getTaskTimeline(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });
 

@@ -35,6 +35,10 @@ import {
   type SubscriptionException,
 } from "@/modules/subscription-exceptions";
 import {
+  type ConsigneeAddressRow,
+  listConsigneeAddresses,
+} from "@/modules/subscription-addresses";
+import {
   type DayBucketCount,
   getConsigneeTaskCountByDayBucket,
   getConsigneeTasksForDateRange,
@@ -135,8 +139,20 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let calendarTasks: readonly Task[] = [];
   let calendarExceptions: readonly SubscriptionException[] = [];
   let calendarYearCounts: readonly DayBucketCount[] = [];
+  let calendarAddresses: readonly ConsigneeAddressRow[] = [];
   let canChangeState = false;
-  let canSkip = false;
+  // Day-22 / PR-B — calendar popover action permissions per brief §3.3.3
+  // + §3.3.10 rule 1 ("hide what the user cannot access"). Single source
+  // of truth for which popover action buttons render.
+  const calendarPermissions = {
+    canSkip: false,
+    canSkipOverride: false,
+    canPause: false,
+    canChangeAddressOneOff: false,
+    canChangeAddressForward: false,
+    canAddNote: false,
+    canViewTimeline: false,
+  };
   try {
     const ctx = await buildRequestContext(`/consignees/${id}`, requestId);
     consignee = await getConsignee(ctx, id as Uuid);
@@ -145,7 +161,17 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     if (ctx.actor.kind === "user") {
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
       canChangeState = perms.has("consignee:change_crm_state");
-      canSkip = perms.has("subscription:skip");
+      calendarPermissions.canSkip = perms.has("subscription:skip");
+      calendarPermissions.canSkipOverride = perms.has("subscription:override_skip_rules");
+      calendarPermissions.canPause = perms.has("subscription:pause");
+      calendarPermissions.canChangeAddressOneOff = perms.has(
+        "subscription:change_address_one_off",
+      );
+      calendarPermissions.canChangeAddressForward = perms.has(
+        "subscription:change_address_forward",
+      );
+      calendarPermissions.canAddNote = perms.has("task:add_note");
+      calendarPermissions.canViewTimeline = perms.has("task:view_timeline");
     }
 
     // Only fetch history if the History tab is active — defers the
@@ -163,20 +189,37 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     // Exceptions overlap the same window so DayDisplayStatus projection
     // (DECISION-2 ii) drives consistent legend semantics across views.
     if (activeTab === "calendar") {
+      // Day-22 / PR-B — fetch consignee addresses for the calendar popover
+      // address-override actions (4 + 5). Only fetched when the operator
+      // has at least one of the address perms; otherwise the address-
+      // selector branches in DayActionPopover are unreachable and the
+      // round-trip is wasted.
+      const needsAddresses =
+        calendarPermissions.canChangeAddressOneOff ||
+        calendarPermissions.canChangeAddressForward;
+
       if (activeView === "week") {
         const weekEnd = addDays(weekStart, 6);
-        [calendarTasks, calendarExceptions] = await Promise.all([
+        const [tasks, exceptions, addresses] = await Promise.all([
           getConsigneeTasksForDateRange(ctx, id as Uuid, weekStart, weekEnd),
           getConsigneeCalendarExceptions(ctx, id as Uuid, weekStart, weekEnd),
+          needsAddresses ? listConsigneeAddresses(ctx, id as Uuid) : Promise.resolve([]),
         ]);
+        calendarTasks = tasks;
+        calendarExceptions = exceptions;
+        calendarAddresses = addresses;
       } else if (activeView === "month") {
         const monthEnd = computeMonthEnd(new Date(`${monthStart}T00:00:00Z`));
         const gridStart = computeMonthGridStart(monthStart);
         const gridEnd = computeMonthGridEnd(monthEnd);
-        [calendarTasks, calendarExceptions] = await Promise.all([
+        const [tasks, exceptions, addresses] = await Promise.all([
           getConsigneeTasksForDateRange(ctx, id as Uuid, gridStart, gridEnd),
           getConsigneeCalendarExceptions(ctx, id as Uuid, gridStart, gridEnd),
+          needsAddresses ? listConsigneeAddresses(ctx, id as Uuid) : Promise.resolve([]),
         ]);
+        calendarTasks = tasks;
+        calendarExceptions = exceptions;
+        calendarAddresses = addresses;
       } else {
         const yearEnd = computeYearEnd(new Date(`${yearStart}T00:00:00Z`));
         [calendarYearCounts, calendarExceptions] = await Promise.all([
@@ -267,7 +310,8 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                   weekStart={weekStart}
                   tasks={calendarTasks}
                   exceptions={calendarExceptions}
-                  canSkip={canSkip}
+                  permissions={calendarPermissions}
+                  availableAddresses={calendarAddresses}
                 />
               ) : null}
               {activeView === "month" ? (
@@ -276,7 +320,8 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                   monthStart={monthStart}
                   tasks={calendarTasks}
                   exceptions={calendarExceptions}
-                  canSkip={canSkip}
+                  permissions={calendarPermissions}
+                  availableAddresses={calendarAddresses}
                 />
               ) : null}
               {activeView === "year" ? (

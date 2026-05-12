@@ -92,6 +92,21 @@ export interface AddressOwnershipRow {
 }
 
 /**
+ * Day-22 / PR-B. Row shape returned by `listAddressesForConsignee` —
+ * the picker source for calendar popover address-override actions
+ * (brief §3.3.3 actions 4 + 5). Carries the human-readable line +
+ * district so the popover can render "Home — 12 Sheikh Zayed Road,
+ * Downtown Dubai" without a second fetch.
+ */
+export interface ConsigneeAddressRow {
+  readonly id: Uuid;
+  readonly label: "home" | "office" | "other";
+  readonly isPrimary: boolean;
+  readonly line: string;
+  readonly district: string;
+}
+
+/**
  * Subscription projection used by the rotation flow's FOR UPDATE
  * lookup. Includes consigneeId + status — the two fields the rotation
  * service needs (the shared helper validates by consignee_id; the
