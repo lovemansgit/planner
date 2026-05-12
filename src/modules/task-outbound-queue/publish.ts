@@ -82,10 +82,17 @@ function getQStashClient(): Client {
 }
 
 function getBaseUrl(): string {
-  const baseUrl = process.env.PUBLIC_BASE_URL;
+  // Day-22n /vercel-url-fallback — Vercel auto-injects VERCEL_URL on
+  // every deploy (preview alias on preview, prod alias on production).
+  // Used as the fallback when PUBLIC_BASE_URL is not configured for the
+  // active deploy scope. Mirrors the same pattern in
+  // src/modules/task-materialization/queue.ts:109.
+  const baseUrl =
+    process.env.PUBLIC_BASE_URL ??
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
   if (!baseUrl) {
     throw new Error(
-      "PUBLIC_BASE_URL env var required for task-outbound-queue publisher",
+      "PUBLIC_BASE_URL or VERCEL_URL env var required for task-outbound-queue publisher",
     );
   }
   return baseUrl;
