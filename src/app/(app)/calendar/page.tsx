@@ -1,27 +1,33 @@
 // /calendar — consolidated cross-consignee merchant calendar view
-// (brief §3.3.4). Day-22n PR-C-A § §2.3.
+// (brief §3.3.4). Day-22n PR-C-A + Day-23n polish.
 //
 // Server component. Renders five header metric cards + filter bar +
-// view toggle + ConsolidatedWeekView. The week view is the only one
-// shipped tonight per reviewer OQ-1 ruling — month + day views are
-// Day-23 PM scope and render a "coming soon" placeholder.
+// view toggle + ConsolidatedWeekView. Month + day views render a
+// placeholder (Day-23 follow-on scope).
 //
-// URL state (read at the page boundary, threaded through to children
+// Day-23n polish:
+//   - WeekView day cells now click through to /calendar?view=day&date=<iso>;
+//     inline top-3 task preview rows removed.
+//   - Time-of-day URL filter (`window`) dropped — no consumer.
+//   - Transcorp admin actor (carries `task:read_all`) sees a
+//     cross-tenant metric variant instead of the tenant-scoped one.
+//
+// URL state (read at the page boundary, threaded through children
 // without intermediate parsing):
-//   view   week | month | day        (default: week)
-//   week   ISO YYYY-MM-DD Monday    (default: current week's Monday
-//                                    in Asia/Dubai)
-//   month  ISO YYYY-MM-01           (default: current month start)
-//   date   ISO YYYY-MM-DD           (default: today in Dubai)
+//   view   week | month | day      (default: week)
+//   week   ISO YYYY-MM-DD Monday  (default: current week's Monday in Asia/Dubai)
+//   month  ISO YYYY-MM-01         (default: current month start)
+//   date   ISO YYYY-MM-DD         (default: today in Dubai)
 //   q      consignee name/phone substring
 //   crm    CRM-state filter (exact match)
 //   district address district filter (exact match)
-//   window canonical key (morning|afternoon|evening)
 //   status task internal_status filter (exact match)
 //
-// Permission boundary: `task:read`. Auth flow matches /tasks/page.tsx
-// — UnauthorizedError → /login redirect; NoTenantConfiguredError →
-// SystemNotInitialised; everything else propagates.
+// Permission boundary: `task:read`. Transcorp admin variant requires
+// `task:read_all` (only transcorp-sysadmin carries it). Auth flow
+// matches /tasks/page.tsx — UnauthorizedError → /login redirect;
+// NoTenantConfiguredError → SystemNotInitialised; everything else
+// propagates.
 
 import { randomUUID } from "node:crypto";
 
@@ -31,15 +37,17 @@ import {
   countTasksByDayAcrossConsignees,
   getCalendarFilterOptions,
   getCalendarMetrics,
+  getCalendarMetricsTranscorpAdmin,
   type CalendarDayCount,
   type CalendarFilters,
   type CalendarMetrics,
+  type CalendarMetricsTranscorpAdmin,
 } from "@/modules/calendar";
 import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
-import { CalendarFilterBar, type CalendarFilterOption } from "./_components/CalendarFilterBar";
+import { CalendarFilterBar } from "./_components/CalendarFilterBar";
 import { CalendarViewToggle } from "./_components/CalendarViewToggle";
 import { ConsolidatedWeekView } from "./_components/ConsolidatedWeekView";
 import { MetricCard } from "./_components/MetricCard";
@@ -58,16 +66,9 @@ interface CalendarPageProps {
     readonly q?: string;
     readonly crm?: string;
     readonly district?: string;
-    readonly window?: string;
     readonly status?: string;
   }>;
 }
-
-const TIME_WINDOW_OPTIONS: readonly CalendarFilterOption[] = [
-  { value: "morning", label: "Morning · 06:00 – 12:00" },
-  { value: "afternoon", label: "Afternoon · 12:00 – 17:00" },
-  { value: "evening", label: "Evening · 17:00 – 22:00" },
-];
 
 function parseView(raw: string | undefined): CalendarConsolidatedView {
   if (raw === "month" || raw === "day") return raw;
@@ -91,7 +92,6 @@ function buildPreservedQuery(filters: CalendarFiltersValue): string {
   if (filters.q) params.set("q", filters.q);
   if (filters.crm) params.set("crm", filters.crm);
   if (filters.district) params.set("district", filters.district);
-  if (filters.window) params.set("window", filters.window);
   if (filters.status) params.set("status", filters.status);
   return params.toString();
 }
@@ -101,7 +101,6 @@ function toFilters(value: CalendarFiltersValue): CalendarFilters {
     q: value.q || undefined,
     crm: value.crm || undefined,
     district: value.district || undefined,
-    window: value.window || undefined,
     status: value.status || undefined,
   };
 }
@@ -134,26 +133,38 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     q: params.q ?? "",
     crm: params.crm ?? "",
     district: params.district ?? "",
-    window: params.window ?? "",
     status: params.status ?? "",
   };
   const filters = toFilters(filterValues);
 
-  let metrics: CalendarMetrics;
+  let tenantMetrics: CalendarMetrics | null = null;
+  let transcorpMetrics: CalendarMetricsTranscorpAdmin | null = null;
   let weekDays: readonly CalendarDayCount[] = [];
-  let filterOptions: Awaited<ReturnType<typeof getCalendarFilterOptions>>;
+  let filterOptions: Awaited<ReturnType<typeof getCalendarFilterOptions>> | null = null;
+  let isTranscorpAdmin = false;
   try {
     const ctx = await buildRequestContext("/calendar", requestId);
-    const [metricsResult, optionsResult, weekResult] = await Promise.all([
-      getCalendarMetrics(ctx, today, filters),
-      getCalendarFilterOptions(ctx),
-      view === "week"
-        ? countTasksByDayAcrossConsignees(ctx, weekAnchor, filters)
-        : Promise.resolve([] as readonly CalendarDayCount[]),
-    ]);
-    metrics = metricsResult;
-    filterOptions = optionsResult;
-    weekDays = weekResult;
+    isTranscorpAdmin =
+      ctx.actor.kind === "user" && ctx.actor.permissions.has("task:read_all");
+
+    if (isTranscorpAdmin) {
+      // Transcorp admin variant — cross-tenant metrics only; the
+      // WeekView / filter bar stay tenant-scoped so this branch
+      // intentionally skips them (Transcorp admin lands on /calendar
+      // primarily for the at-a-glance fleet metrics).
+      transcorpMetrics = await getCalendarMetricsTranscorpAdmin(ctx, today);
+    } else {
+      const [metricsResult, optionsResult, weekResult] = await Promise.all([
+        getCalendarMetrics(ctx, today, filters),
+        getCalendarFilterOptions(ctx),
+        view === "week"
+          ? countTasksByDayAcrossConsignees(ctx, weekAnchor, filters)
+          : Promise.resolve([] as readonly CalendarDayCount[]),
+      ]);
+      tenantMetrics = metricsResult;
+      filterOptions = optionsResult;
+      weekDays = weekResult;
+    }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/calendar"));
@@ -163,19 +174,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     }
     throw err;
   }
-
-  const crmOptions: readonly CalendarFilterOption[] = filterOptions.crmStates.map((s) => ({
-    value: s,
-    label: s,
-  }));
-  const districtOptions: readonly CalendarFilterOption[] = filterOptions.districts.map((d) => ({
-    value: d,
-    label: d,
-  }));
-  const statusOptions: readonly CalendarFilterOption[] = filterOptions.statuses.map((s) => ({
-    value: s,
-    label: s,
-  }));
 
   const todayHeader = new Date(`${today}T00:00:00Z`).toLocaleDateString("en-GB", {
     weekday: "long",
@@ -192,79 +190,140 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription planner
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">All deliveries</h1>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight">
+            {isTranscorpAdmin ? "Fleet overview" : "All deliveries"}
+          </h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             {todayHeader}
           </p>
         </header>
 
-        <section
-          aria-label="Metrics"
-          className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
-        >
-          <MetricCard
-            label="Active consignees"
-            value={metrics.activeConsignees}
-            context="Currently in your book of business"
-          />
-          <MetricCard
-            label="Today's deliveries"
-            value={metrics.todayDeliveriesScheduled}
-            context="Scheduled and not yet final"
-          />
-          <MetricCard
-            label="Delivered today"
-            value={metrics.deliveredToday}
-            context="Completed deliveries"
-          />
-          <MetricCard
-            label="Out for delivery"
-            value={metrics.outForDelivery}
-            context="In transit right now"
-          />
-          <MetricCard
-            label="Failed and at-risk"
-            value={metrics.failedAtRisk}
-            tone="risk"
-            context="Last 7 days + high-risk consignees"
-          />
-        </section>
+        {isTranscorpAdmin && transcorpMetrics ? (
+          <TranscorpAdminMetricsRow metrics={transcorpMetrics} />
+        ) : tenantMetrics ? (
+          <TenantMetricsRow metrics={tenantMetrics} />
+        ) : null}
 
-        <CalendarFilterBar
-          initialValues={filterValues}
-          crmOptions={crmOptions}
-          districtOptions={districtOptions}
-          timeWindowOptions={TIME_WINDOW_OPTIONS}
-          statusOptions={statusOptions}
-        />
-
-        <div className="mt-6 flex items-center justify-between">
-          <CalendarViewToggle
-            activeView={view}
-            weekAnchor={weekAnchor}
-            monthAnchor={monthAnchor}
-            dayAnchor={dayAnchor}
-            preservedQuery={buildPreservedQuery(filterValues)}
+        {!isTranscorpAdmin && filterOptions ? (
+          <CalendarFilterBar
+            initialValues={filterValues}
+            crmOptions={filterOptions.crmStates.map((s) => ({ value: s, label: s }))}
+            districtOptions={filterOptions.districts.map((d) => ({ value: d, label: d }))}
+            statusOptions={filterOptions.statuses.map((s) => ({ value: s, label: s }))}
           />
-          {view === "week" ? (
-            <WeekAnchorNav weekAnchor={weekAnchor} preservedQuery={buildPreservedQuery(filterValues)} />
-          ) : null}
-        </div>
+        ) : null}
 
-        <section className="mt-8">
-          {view === "week" ? (
-            <ConsolidatedWeekView
-              weekStart={weekAnchor}
-              days={weekDays}
-              today={today}
-              formatWeekdayLabel={formatWeekdayLabel}
-            />
-          ) : (
-            <PlaceholderView view={view} />
-          )}
-        </section>
+        {!isTranscorpAdmin ? (
+          <>
+            <div className="mt-6 flex items-center justify-between">
+              <CalendarViewToggle
+                activeView={view}
+                weekAnchor={weekAnchor}
+                monthAnchor={monthAnchor}
+                dayAnchor={dayAnchor}
+                preservedQuery={buildPreservedQuery(filterValues)}
+              />
+              {view === "week" ? (
+                <WeekAnchorNav
+                  weekAnchor={weekAnchor}
+                  preservedQuery={buildPreservedQuery(filterValues)}
+                />
+              ) : null}
+            </div>
+
+            <section className="mt-8">
+              {view === "week" ? (
+                <ConsolidatedWeekView
+                  weekStart={weekAnchor}
+                  days={weekDays}
+                  today={today}
+                  formatWeekdayLabel={formatWeekdayLabel}
+                  preservedQuery={buildPreservedQuery(filterValues)}
+                />
+              ) : (
+                <PlaceholderView view={view} />
+              )}
+            </section>
+          </>
+        ) : null}
       </div>
     </main>
+  );
+}
+
+function TenantMetricsRow({ metrics }: { readonly metrics: CalendarMetrics }) {
+  return (
+    <section
+      aria-label="Metrics"
+      className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
+    >
+      <MetricCard
+        label="Active consignees"
+        value={metrics.activeConsignees}
+        context="Currently in your book of business"
+      />
+      <MetricCard
+        label="Today's deliveries"
+        value={metrics.todayDeliveriesScheduled}
+        context="Scheduled and not yet final"
+      />
+      <MetricCard
+        label="Delivered today"
+        value={metrics.deliveredToday}
+        context="Completed deliveries"
+      />
+      <MetricCard
+        label="Out for delivery"
+        value={metrics.outForDelivery}
+        context="In transit right now"
+      />
+      <MetricCard
+        label="Failed and at-risk"
+        value={metrics.failedAtRisk}
+        tone="risk"
+        context="Last 7 days + high-risk consignees"
+      />
+    </section>
+  );
+}
+
+function TranscorpAdminMetricsRow({
+  metrics,
+}: {
+  readonly metrics: CalendarMetricsTranscorpAdmin;
+}) {
+  return (
+    <section
+      aria-label="Fleet metrics"
+      className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
+    >
+      <MetricCard
+        label="Active merchants"
+        value={metrics.activeMerchants}
+        context="Tenants in active status"
+      />
+      <MetricCard
+        label="Total deliveries today"
+        value={metrics.totalDeliveriesToday}
+        context="All tenants combined"
+      />
+      <MetricCard
+        label="Delivered today"
+        value={metrics.deliveredToday}
+        context="Completed across all tenants"
+      />
+      <MetricCard
+        label="In transit"
+        value={metrics.inTransit}
+        context="On the road right now"
+      />
+      <MetricCard
+        label="Failed"
+        value={metrics.failedLast7Days}
+        tone="risk"
+        context="Last 7 days, all tenants"
+      />
+    </section>
   );
 }
 
@@ -314,11 +373,10 @@ function PlaceholderView({ view }: { readonly view: CalendarConsolidatedView }) 
   return (
     <div className="border border-dashed border-stone-300 bg-paper px-6 py-16 text-center">
       <p className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-        Coming Day-23
+        Coming soon
       </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        {label} renders in the next /calendar PR. Use Week view to explore the consolidated
-        deliveries today.
+        {label} renders in a follow-up PR. Use Week view to explore today&apos;s deliveries.
       </p>
     </div>
   );

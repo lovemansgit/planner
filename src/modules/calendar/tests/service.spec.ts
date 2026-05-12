@@ -1,28 +1,29 @@
-// Day-22n PR-C-A — Calendar service-layer unit tests.
+// Day-22n PR-C-A + Day-23n polish — Calendar service-layer unit tests.
 //
-// Mocks ../../shared/db (withTenant) + ../repository so the service
-// entry points exercise permission, tenant-context, and assembly
-// flow without real Postgres. Repository functions are mocked at
-// the source-module boundary, matching the pattern in
+// Mocks ../../shared/db (withTenant + withServiceRole) + ../repository
+// so the service entry points exercise permission, tenant-context,
+// and assembly flow without real Postgres. Repository functions are
+// mocked at the source-module boundary, matching the pattern in
 // src/modules/tasks/tests/service.spec.ts.
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("../../../shared/db", () => ({
   withTenant: vi.fn(),
+  withServiceRole: vi.fn(),
 }));
 
 vi.mock("../repository", () => ({
   buildWeekDays: vi.fn(),
   computeMetrics: vi.fn(),
+  computeTranscorpAdminMetrics: vi.fn(),
   countTasksGroupedByDay: vi.fn(),
   listDistinctCrmStates: vi.fn(),
   listDistinctDistricts: vi.fn(),
   listDistinctTaskStatuses: vi.fn(),
-  selectTopTasksPerDay: vi.fn(),
 }));
 
-import { withTenant } from "../../../shared/db";
+import { withServiceRole, withTenant } from "../../../shared/db";
 import { ForbiddenError, ValidationError } from "../../../shared/errors";
 import type { RequestContext } from "../../../shared/tenant-context";
 import type { Permission } from "../../../shared/types";
@@ -30,24 +31,26 @@ import type { Permission } from "../../../shared/types";
 import {
   buildWeekDays,
   computeMetrics,
+  computeTranscorpAdminMetrics,
   countTasksGroupedByDay,
   listDistinctCrmStates,
   listDistinctDistricts,
   listDistinctTaskStatuses,
-  selectTopTasksPerDay,
 } from "../repository";
 import {
   computeWeekWindow,
   countTasksByDayAcrossConsignees,
   getCalendarFilterOptions,
   getCalendarMetrics,
+  getCalendarMetricsTranscorpAdmin,
 } from "../service";
 
 const mockWithTenant = vi.mocked(withTenant);
+const mockWithServiceRole = vi.mocked(withServiceRole);
 const mockCountTasksGroupedByDay = vi.mocked(countTasksGroupedByDay);
-const mockSelectTopTasksPerDay = vi.mocked(selectTopTasksPerDay);
 const mockBuildWeekDays = vi.mocked(buildWeekDays);
 const mockComputeMetrics = vi.mocked(computeMetrics);
+const mockComputeTranscorpAdminMetrics = vi.mocked(computeTranscorpAdminMetrics);
 const mockListDistinctDistricts = vi.mocked(listDistinctDistricts);
 const mockListDistinctCrmStates = vi.mocked(listDistinctCrmStates);
 const mockListDistinctTaskStatuses = vi.mocked(listDistinctTaskStatuses);
@@ -75,8 +78,8 @@ function userCtx(
 beforeEach(() => {
   vi.clearAllMocks();
   mockWithTenant.mockImplementation(async (_tenantId, fn) => fn({} as never));
+  mockWithServiceRole.mockImplementation(async (_label, fn) => fn({} as never));
   mockCountTasksGroupedByDay.mockResolvedValue([]);
-  mockSelectTopTasksPerDay.mockResolvedValue([]);
   mockBuildWeekDays.mockReturnValue([]);
   mockComputeMetrics.mockResolvedValue({
     activeConsignees: 0,
@@ -84,6 +87,13 @@ beforeEach(() => {
     deliveredToday: 0,
     outForDelivery: 0,
     failedAtRisk: 0,
+  });
+  mockComputeTranscorpAdminMetrics.mockResolvedValue({
+    activeMerchants: 0,
+    totalDeliveriesToday: 0,
+    deliveredToday: 0,
+    inTransit: 0,
+    failedLast7Days: 0,
   });
   mockListDistinctDistricts.mockResolvedValue([]);
   mockListDistinctCrmStates.mockResolvedValue([]);
@@ -136,47 +146,42 @@ describe("countTasksByDayAcrossConsignees", () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it("runs under withTenant and parallel-fetches counts + top tasks", async () => {
+  it("runs under withTenant and only fetches per-day counts (no top-task slice Day-23n)", async () => {
     const ctx = userCtx(["task:read"]);
     await countTasksByDayAcrossConsignees(ctx, "2026-05-11");
     expect(mockWithTenant).toHaveBeenCalledOnce();
     expect(mockWithTenant.mock.calls[0][0]).toBe(TENANT_ID);
     expect(mockCountTasksGroupedByDay).toHaveBeenCalledOnce();
-    expect(mockSelectTopTasksPerDay).toHaveBeenCalledOnce();
   });
 
-  it("passes the inclusive [weekStart, weekStart+6] window to the repo fns", async () => {
+  it("passes the inclusive [weekStart, weekStart+6] window to the repo fn", async () => {
     const ctx = userCtx(["task:read"]);
     await countTasksByDayAcrossConsignees(ctx, "2026-05-11");
-    // Args: (tx, tenantId, start, end, filters)
     expect(mockCountTasksGroupedByDay.mock.calls[0][2]).toBe("2026-05-11");
     expect(mockCountTasksGroupedByDay.mock.calls[0][3]).toBe("2026-05-17");
-    expect(mockSelectTopTasksPerDay.mock.calls[0][2]).toBe("2026-05-11");
-    expect(mockSelectTopTasksPerDay.mock.calls[0][3]).toBe("2026-05-17");
   });
 
-  it("threads filters through to both repo fns", async () => {
+  it("threads filters through to the count repo fn", async () => {
     const ctx = userCtx(["task:read"]);
     const filters = { q: "Sarah", crm: "HIGH_RISK" };
     await countTasksByDayAcrossConsignees(ctx, "2026-05-11", filters);
     expect(mockCountTasksGroupedByDay.mock.calls[0][4]).toEqual(filters);
-    expect(mockSelectTopTasksPerDay.mock.calls[0][4]).toEqual(filters);
   });
 
   it("returns the buildWeekDays output verbatim", async () => {
     const ctx = userCtx(["task:read"]);
     mockBuildWeekDays.mockReturnValue([
-      { date: "2026-05-11", total: 5, hasHighRisk: true, topTasks: [] },
+      { date: "2026-05-11", total: 5, hasHighRisk: true },
     ] as never);
     const days = await countTasksByDayAcrossConsignees(ctx, "2026-05-11");
     expect(days).toEqual([
-      { date: "2026-05-11", total: 5, hasHighRisk: true, topTasks: [] },
+      { date: "2026-05-11", total: 5, hasHighRisk: true },
     ]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// getCalendarMetrics
+// getCalendarMetrics (tenant)
 // ---------------------------------------------------------------------------
 
 describe("getCalendarMetrics", () => {
@@ -215,6 +220,52 @@ describe("getCalendarMetrics", () => {
     const result = await getCalendarMetrics(ctx, "2026-05-11");
     expect(result.activeConsignees).toBe(42);
     expect(result.failedAtRisk).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getCalendarMetricsTranscorpAdmin (cross-tenant)
+// ---------------------------------------------------------------------------
+
+describe("getCalendarMetricsTranscorpAdmin", () => {
+  it("throws ForbiddenError when actor lacks task:read_all", async () => {
+    const ctx = userCtx(["task:read"]); // tenant-scoped only, no cross-tenant
+    await expect(
+      getCalendarMetricsTranscorpAdmin(ctx, "2026-05-11"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("does not require a tenant context (cross-tenant aggregate)", async () => {
+    const ctx = userCtx(["task:read_all"], null);
+    await expect(
+      getCalendarMetricsTranscorpAdmin(ctx, "2026-05-11"),
+    ).resolves.toBeDefined();
+  });
+
+  it("runs under withServiceRole (RLS bypassed) — never withTenant", async () => {
+    const ctx = userCtx(["task:read_all"]);
+    await getCalendarMetricsTranscorpAdmin(ctx, "2026-05-11");
+    expect(mockWithServiceRole).toHaveBeenCalledOnce();
+    expect(mockWithServiceRole.mock.calls[0][0]).toBe(
+      "transcorp_staff:calendar_metrics",
+    );
+    expect(mockWithTenant).not.toHaveBeenCalled();
+  });
+
+  it("calls the repo with today and returns the cross-tenant metrics", async () => {
+    const ctx = userCtx(["task:read_all"]);
+    mockComputeTranscorpAdminMetrics.mockResolvedValue({
+      activeMerchants: 4,
+      totalDeliveriesToday: 120,
+      deliveredToday: 45,
+      inTransit: 18,
+      failedLast7Days: 6,
+    });
+    const result = await getCalendarMetricsTranscorpAdmin(ctx, "2026-05-11");
+    expect(mockComputeTranscorpAdminMetrics).toHaveBeenCalledOnce();
+    expect(mockComputeTranscorpAdminMetrics.mock.calls[0][1]).toBe("2026-05-11");
+    expect(result.activeMerchants).toBe(4);
+    expect(result.totalDeliveriesToday).toBe(120);
   });
 });
 

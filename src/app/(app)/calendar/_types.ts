@@ -1,26 +1,21 @@
-// Day-22n PR-C-B — Type contract for the consolidated `/calendar`
-// cross-consignee aggregate view (brief §3.3.4).
+// Day-22n PR-C-B + Day-23n polish — Type contract for the consolidated
+// `/calendar` cross-consignee aggregate view (brief §3.3.4).
 //
-// Session B lands these shapes first; Session A's service-layer
-// (PR-C-A) consumes them. If both sessions file _types.ts in
-// parallel, the merge picks Session B's file (filed earlier in the
-// night per reviewer instruction).
+// Day-23n polish (PR #N): the WeekView no longer renders top-3 task
+// previews per scope-narrowing ruling. CalendarTopTaskForDay +
+// CalendarDayCount.topTasks dropped; day cells are now click-through
+// to /calendar?view=day&date=<iso>. Time-window URL filter also
+// dropped (no consumer in the post-narrowing UX).
 //
-// Brief §3.3.4 five metric cards (one snapshot from `getCalendarMetrics`),
-// per-day aggregate counts (one row from `countTasksByDayAcrossConsignees`),
-// and the LIMIT-3 "top tasks today" preview pane wired into the week
-// view per reviewer Q1 ruling.
-
-import type { TaskInternalStatus } from "@/modules/tasks/types";
+// Brief §3.3.4 five metric cards (one snapshot from `getCalendarMetrics`)
+// + per-day aggregate counts (one row from `countTasksByDayAcrossConsignees`).
 
 /**
- * Five metric-card snapshot, returned by the service-layer
- * `getCalendarMetrics(ctx, asOf)` in a single round-trip.
+ * Five metric-card snapshot returned by `getCalendarMetrics`. Tenant
+ * variant — composed of consignee + task counts for the active tenant.
  *
- * `failedAtRisk` composition per reviewer OQ-5 ruling: union of
- * (FAILED tasks in last 7 days) + (active consignees with crm_state
- * = 'HIGH_RISK'). Displayed as a single numeral with optional
- * hover-tooltip breakdown.
+ * `failedAtRisk` per reviewer OQ-5 ruling: union of (FAILED tasks in
+ * last 7 days) + (active consignees with crm_state = 'HIGH_RISK').
  */
 export interface CalendarMetrics {
   readonly activeConsignees: number;
@@ -31,34 +26,28 @@ export interface CalendarMetrics {
 }
 
 /**
- * Per-day aggregate row used by week / month / day grids. Includes
- * the top-3 task preview slice for the week-view preview pane
- * (reviewer Q1 Option (b)). `topTasks` ordered by
- * `deliveryWindowStart` ASC so the earliest deliveries surface
- * first; `total - topTasks.length` overflow rendered as a "+ N more"
- * line beneath the rows.
+ * Day-23n — Transcorp admin (cross-tenant) metric variant. Surfaced
+ * on `/calendar` when the actor carries `task:read_all` (i.e.
+ * transcorp-sysadmin). Composed cross-tenant via withServiceRole;
+ * RLS is bypassed by design — only this role reaches the path.
+ */
+export interface CalendarMetricsTranscorpAdmin {
+  readonly activeMerchants: number;
+  readonly totalDeliveriesToday: number;
+  readonly deliveredToday: number;
+  readonly inTransit: number;
+  readonly failedLast7Days: number;
+}
+
+/**
+ * Per-day aggregate row used by week / month / day grids. Day-23n —
+ * stripped to total + hasHighRisk only (the top-task preview slice
+ * has been removed in favour of click-through day cells).
  */
 export interface CalendarDayCount {
   readonly date: string; // ISO YYYY-MM-DD
   readonly total: number;
   readonly hasHighRisk: boolean;
-  readonly topTasks: readonly CalendarTopTaskForDay[];
-}
-
-/**
- * Single task row inside the WeekView preview pane. Consignee name
- * sourced from `consignees.name` via service-layer JOIN;
- * `isHighRisk` reflects `consignees.crm_state = 'HIGH_RISK'` (not
- * task-state-derived). Used for both the row tint and the
- * drill-down link target.
- */
-export interface CalendarTopTaskForDay {
-  readonly taskId: string;
-  readonly consigneeId: string;
-  readonly consigneeName: string;
-  readonly deliveryWindowStart: string; // "HH:MM"
-  readonly status: TaskInternalStatus;
-  readonly isHighRisk: boolean;
 }
 
 /**
@@ -69,15 +58,12 @@ export interface CalendarTopTaskForDay {
 export type CalendarConsolidatedView = "week" | "month" | "day";
 
 /**
- * URL-state shape for the filter bar. Empty string = "all" for
- * each select; empty `q` = no search filter applied. Mirrors the
- * `/tasks?status=…&page=…` URL-state precedent (reviewer OQ-3:
- * no shared-primitive extraction tonight).
+ * URL-state shape for the filter bar. Day-23n — `window`
+ * (time-of-day) filter dropped; no consumer in the post-narrowing UX.
  */
 export interface CalendarFiltersValue {
   readonly q: string;
   readonly crm: string;
   readonly district: string;
-  readonly window: string;
   readonly status: string;
 }
