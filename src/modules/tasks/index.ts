@@ -41,6 +41,7 @@ export type {
 } from "./types";
 
 export {
+  addNoteToDriver,
   BulkValidationError,
   bulkCreateTasks,
   countTasks,
@@ -49,6 +50,7 @@ export {
   getConsigneeTasksForDateRange,
   getTask,
   getTasksForSubscription,
+  getTaskTimeline,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,
@@ -59,6 +61,9 @@ export {
   type BulkValidationFailure,
   type ListTasksOpts,
   type PrintLabelsForTasksResult,
+  type TaskTimeline,
+  type TaskTimelineEntry,
+  type TaskTimelineEntrySource,
 } from "./service";
 
 export type { DayBucketCount } from "./repository";
