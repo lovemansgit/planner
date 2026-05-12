@@ -82,7 +82,7 @@ describe("Day-24 failed-pushes admin search — listUnresolvedByTenant", () => {
            internal_status, external_tracking_number, created_via)
         VALUES
           (${TASK_A_WITH_AWB}, ${TENANT_A}, ${CONSIGNEE_A}, ${`AFP-ORD-${RUN_ID}-A1`},
-           '2026-05-15', '08:00', '10:00', 'PUSHED', ${AWB_A}, 'manual_admin'),
+           '2026-05-15', '08:00', '10:00', 'DELIVERED', ${AWB_A}, 'manual_admin'),
           (${TASK_A_NO_AWB}, ${TENANT_A}, ${CONSIGNEE_A}, ${`AFP-ORD-${RUN_ID}-A2`},
            '2026-05-15', '10:00', '12:00', 'CREATED', NULL, 'manual_admin'),
           (${TASK_B}, ${TENANT_B}, ${CONSIGNEE_B}, ${`AFP-ORD-${RUN_ID}-B1`},
