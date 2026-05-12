@@ -71,6 +71,7 @@ import {
   insertSubscription,
   type ListAllSubscriptionsFilters,
   listAllSubscriptionsRows,
+  listSubscriptionsByConsignee as listSubscriptionsByConsigneeRow,
   listSubscriptionsByTenant,
   listSubscriptionsWithConsigneeByTenant,
   type SubscriptionWithConsignee,
@@ -368,6 +369,23 @@ export async function listSubscriptions(
   assertTenantScoped(ctx, "subscription:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listSubscriptionsByTenant(tx, ctx.tenantId!);
+  });
+}
+
+/**
+ * Day-23 §3.3.2 — List every subscription for one consignee within the
+ * actor's tenant, newest first. Drives the consignee-detail Subscription
+ * tab. Same `subscription:read` gate as `listSubscriptions`; no audit
+ * emit per R-4.
+ */
+export async function listSubscriptionsByConsignee(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+): Promise<readonly Subscription[]> {
+  requirePermission(ctx, "subscription:read");
+  assertTenantScoped(ctx, "subscription:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listSubscriptionsByConsigneeRow(tx, ctx.tenantId!, consigneeId);
   });
 }
 

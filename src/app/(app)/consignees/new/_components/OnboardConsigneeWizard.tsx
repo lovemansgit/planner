@@ -67,10 +67,13 @@ export function OnboardConsigneeWizard() {
   >(onboardConsigneeAction, { kind: "idle" });
 
   // On success, navigate to the new consignee detail page so the
-  // operator immediately sees the calendar (per brief §3.3.1).
+  // operator immediately sees the calendar (per brief §3.3.1). The
+  // `?created=1` query param triggers the Toast on the destination
+  // page; the Toast auto-dismisses and strips the param after 5s so
+  // a refresh / share-link does not re-fire the confirmation.
   useEffect(() => {
     if (actionResult.kind === "created") {
-      router.push(`/consignees/${actionResult.consigneeId}`);
+      router.push(`/consignees/${actionResult.consigneeId}?created=1`);
     }
   }, [actionResult, router]);
 
