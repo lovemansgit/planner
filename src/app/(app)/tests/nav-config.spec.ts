@@ -154,13 +154,14 @@ describe("visibleAdminNavItems", () => {
   // (all systemOnly; only transcorp-sysadmin carries them).
   const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
 
-  it("transcorp-sysadmin sees all 5 admin nav items (Calendar first per Day-24 PM reorder)", () => {
+  it("transcorp-sysadmin sees all 6 admin nav items (Calendar first per Day-24 PM reorder; Users tail per Day-24 PR #259)", () => {
     expect(visibleAdminNavItems(TRANSCORP_SYSADMIN).map((i) => i.label)).toEqual([
       "Calendar",
       "Merchants",
       "Tasks",
       "Consignees",
       "Subscriptions",
+      "Users",
     ]);
   });
 

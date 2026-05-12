@@ -150,6 +150,12 @@ export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
   { label: "Tasks", path: "/admin/tasks", permission: "task:read_all" },
   { label: "Consignees", path: "/admin/consignees", permission: "consignee:read_all" },
   { label: "Subscriptions", path: "/admin/subscriptions", permission: "subscription:read_all" },
+  // Users entry (Day-24) — Transcorp-staff surface for creating
+  // tenant-admins / ops-managers / sysadmins. Gated on
+  // `merchant:read_all` because user creation across tenants is a
+  // Transcorp-only operation; tenant-admins manage their own users
+  // via Phase 1.5 (deferred per memory/followup_team_management_ui.md).
+  { label: "Users", path: "/admin/users", permission: "merchant:read_all" },
 ] as const;
 
 /**
