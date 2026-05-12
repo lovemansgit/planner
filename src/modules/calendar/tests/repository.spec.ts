@@ -19,6 +19,8 @@ import {
   listDistinctCrmStates,
   listDistinctDistricts,
   listDistinctTaskStatuses,
+  listPerMerchantBreakdown,
+  listTopMerchantsTodayWithTaskCount,
 } from "../repository";
 import type { CalendarFilters } from "../types";
 
@@ -261,6 +263,122 @@ describe("computeTranscorpAdminMetrics", () => {
       inTransit: 0,
       failedLast7Days: 0,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listTopMerchantsTodayWithTaskCount (Day-23n fleet panels)
+// ---------------------------------------------------------------------------
+
+describe("listTopMerchantsTodayWithTaskCount", () => {
+  const TODAY = "2026-05-12";
+
+  it("issues one execute() call with today + active-tenant predicate + LIMIT", async () => {
+    const tx = makeStubTx([[]]);
+    await listTopMerchantsTodayWithTaskCount(tx, TODAY, 10);
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM tasks/);
+    expect(sql).toMatch(/JOIN tenants/);
+    expect(sql).toMatch(/tasks\.delivery_date = /);
+    expect(sql).toMatch(/t\.status = 'active'/);
+    expect(sql).toMatch(/GROUP BY t\.id, t\.name, t\.slug/);
+    expect(sql).toMatch(/ORDER BY task_count DESC/);
+    expect(sql).toMatch(/LIMIT /);
+    expect(params).toContain(TODAY);
+    expect(params).toContain(10);
+  });
+
+  it("clamps limit to [1, 100]", async () => {
+    const tx = makeStubTx([[], []]);
+    await listTopMerchantsTodayWithTaskCount(tx, TODAY, 0);
+    const { params: lowParams } = compile(tx.execute.mock.calls[0][0]);
+    expect(lowParams).toContain(1);
+    await listTopMerchantsTodayWithTaskCount(tx, TODAY, 9999);
+    const { params: highParams } = compile(tx.execute.mock.calls[1][0]);
+    expect(highParams).toContain(100);
+  });
+
+  it("maps rows to the CalendarTopMerchantToday domain shape", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          tenant_id: "tenant-1",
+          tenant_name: "MPL",
+          tenant_slug: "mpl",
+          task_count: "42",
+        },
+        {
+          tenant_id: "tenant-2",
+          tenant_name: "DNR",
+          tenant_slug: "dnr",
+          task_count: 18,
+        },
+      ],
+    ]);
+    const rows = await listTopMerchantsTodayWithTaskCount(tx, TODAY);
+    expect(rows).toEqual([
+      { tenantId: "tenant-1", tenantName: "MPL", tenantSlug: "mpl", taskCount: 42 },
+      { tenantId: "tenant-2", tenantName: "DNR", tenantSlug: "dnr", taskCount: 18 },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listPerMerchantBreakdown (Day-23n fleet panels)
+// ---------------------------------------------------------------------------
+
+describe("listPerMerchantBreakdown", () => {
+  const TODAY = "2026-05-12";
+
+  it("uses FILTER-aggregate clauses in a single round-trip", async () => {
+    const tx = makeStubTx([[]]);
+    await listPerMerchantBreakdown(tx, TODAY);
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER \(WHERE tasks\.delivery_date = /);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER[\s\S]*internal_status = 'DELIVERED'/);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER[\s\S]*internal_status = 'IN_TRANSIT'/);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER[\s\S]*internal_status = 'FAILED'/);
+    expect(sql).toMatch(/INTERVAL '7 days'/);
+    expect(params).toContain(TODAY);
+  });
+
+  it("LEFT JOINs tasks on tenant_id (zero-task merchants still appear)", async () => {
+    const tx = makeStubTx([[]]);
+    await listPerMerchantBreakdown(tx, TODAY);
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM tenants t\s*LEFT JOIN tasks/);
+    expect(sql).toMatch(/t\.status = 'active'/);
+    expect(sql).toMatch(/ORDER BY t\.name ASC/);
+  });
+
+  it("maps rows to CalendarPerMerchantBreakdownRow with bigint coercion", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          tenant_id: "tenant-1",
+          tenant_name: "MPL",
+          tenant_slug: "mpl",
+          total_today: "42",
+          delivered_today: 10,
+          in_transit: "5",
+          failed_last_7_days: 2,
+        },
+      ],
+    ]);
+    const rows = await listPerMerchantBreakdown(tx, TODAY);
+    expect(rows).toEqual([
+      {
+        tenantId: "tenant-1",
+        tenantName: "MPL",
+        tenantSlug: "mpl",
+        totalToday: 42,
+        deliveredToday: 10,
+        inTransit: 5,
+        failedLast7Days: 2,
+      },
+    ]);
   });
 });
 

@@ -31,12 +31,16 @@ import {
   listDistinctCrmStates,
   listDistinctDistricts,
   listDistinctTaskStatuses,
+  listPerMerchantBreakdown,
+  listTopMerchantsTodayWithTaskCount,
 } from "./repository";
 import type {
   CalendarDayCount,
   CalendarFilters,
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,
+  CalendarPerMerchantBreakdownRow,
+  CalendarTopMerchantToday,
 } from "./types";
 
 function assertTenantScoped(
@@ -123,6 +127,38 @@ export async function getCalendarMetricsTranscorpAdmin(
   requirePermission(ctx, "task:read_all");
   return withServiceRole("transcorp_staff:calendar_metrics", async (tx) => {
     return computeTranscorpAdminMetrics(tx, today);
+  });
+}
+
+/**
+ * Day-23n fleet panels — top-N merchants by today's task volume.
+ * Permission gate `task:read_all`; runs under withServiceRole.
+ * Caller supplies `today` (Asia/Dubai calendar date).
+ */
+export async function getTopMerchantsToday(
+  ctx: RequestContext,
+  today: string,
+  limit = 10,
+): Promise<readonly CalendarTopMerchantToday[]> {
+  requirePermission(ctx, "task:read_all");
+  return withServiceRole("transcorp_staff:fleet_panels", async (tx) => {
+    return listTopMerchantsTodayWithTaskCount(tx, today, limit);
+  });
+}
+
+/**
+ * Day-23n fleet panels — per-merchant breakdown. One row per active
+ * tenant with 4 column counts (today's total, delivered today, in
+ * transit, failed last 7 days). Permission gate `task:read_all`;
+ * runs under withServiceRole.
+ */
+export async function getPerMerchantBreakdown(
+  ctx: RequestContext,
+  today: string,
+): Promise<readonly CalendarPerMerchantBreakdownRow[]> {
+  requirePermission(ctx, "task:read_all");
+  return withServiceRole("transcorp_staff:fleet_panels", async (tx) => {
+    return listPerMerchantBreakdown(tx, today);
   });
 }
 

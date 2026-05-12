@@ -11,6 +11,8 @@
 export type {
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,
+  CalendarTopMerchantToday,
+  CalendarPerMerchantBreakdownRow,
   CalendarDayCount,
 } from "@/app/(app)/calendar/_types";
 

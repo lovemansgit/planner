@@ -30,6 +30,8 @@ import type {
   CalendarFilters,
   CalendarMetrics,
   CalendarMetricsTranscorpAdmin,
+  CalendarPerMerchantBreakdownRow,
+  CalendarTopMerchantToday,
 } from "./types";
 import type { TaskInternalStatus } from "../tasks/types";
 import type { ConsigneeCrmState } from "../consignees/types";
@@ -255,6 +257,110 @@ export async function computeTranscorpAdminMetrics(
     inTransit: row ? Number(row.in_transit) : 0,
     failedLast7Days: row ? Number(row.failed_last_7_days) : 0,
   };
+}
+
+// -----------------------------------------------------------------------------
+// Day-23n fleet panels — cross-tenant per-merchant rollups
+// -----------------------------------------------------------------------------
+
+type TopMerchantRow = {
+  tenant_id: string;
+  tenant_name: string;
+  tenant_slug: string;
+  task_count: string | number;
+} & Record<string, unknown>;
+
+/**
+ * Top-N merchants by today's task volume. Cross-tenant: caller wraps
+ * in `withServiceRole`. Filters to active tenants only so suspended /
+ * inactive merchants don't appear in the leaderboard. Defaults to
+ * limit 10 (the panel's display cap); caller may override.
+ *
+ * `limit` is clamped to [1, 100] defensively — the route layer is the
+ * boundary for stricter ranges if needed.
+ */
+export async function listTopMerchantsTodayWithTaskCount(
+  tx: DbTx,
+  today: string,
+  limit = 10,
+): Promise<readonly CalendarTopMerchantToday[]> {
+  const clamped = Math.max(1, Math.min(100, Math.floor(limit)));
+  const rows = await tx.execute<TopMerchantRow>(sqlTag`
+    SELECT
+      t.id   AS tenant_id,
+      t.name AS tenant_name,
+      t.slug AS tenant_slug,
+      COUNT(*) AS task_count
+    FROM tasks
+    JOIN tenants t ON t.id = tasks.tenant_id
+    WHERE tasks.delivery_date = ${today}
+      AND t.status = 'active'
+    GROUP BY t.id, t.name, t.slug
+    ORDER BY task_count DESC, t.name ASC
+    LIMIT ${clamped}
+  `);
+  return rows.map((row) => ({
+    tenantId: row.tenant_id,
+    tenantName: row.tenant_name,
+    tenantSlug: row.tenant_slug,
+    taskCount: Number(row.task_count),
+  }));
+}
+
+type PerMerchantBreakdownRow = {
+  tenant_id: string;
+  tenant_name: string;
+  tenant_slug: string;
+  total_today: string | number;
+  delivered_today: string | number;
+  in_transit: string | number;
+  failed_last_7_days: string | number;
+} & Record<string, unknown>;
+
+/**
+ * Per-merchant breakdown — one row per active tenant with the 4
+ * column counts. Cross-tenant: caller wraps in `withServiceRole`.
+ * Uses `FILTER`-aggregate clauses so a single round-trip yields all
+ * four counters per merchant; `LEFT JOIN tasks` ensures merchants
+ * with zero tasks today still appear (zero-filled).
+ *
+ * Ordered by tenant name ASC; the page-side component handles
+ * client-side sort on column header click.
+ */
+export async function listPerMerchantBreakdown(
+  tx: DbTx,
+  today: string,
+): Promise<readonly CalendarPerMerchantBreakdownRow[]> {
+  const rows = await tx.execute<PerMerchantBreakdownRow>(sqlTag`
+    SELECT
+      t.id   AS tenant_id,
+      t.name AS tenant_name,
+      t.slug AS tenant_slug,
+      COUNT(*) FILTER (WHERE tasks.delivery_date = ${today}) AS total_today,
+      COUNT(*) FILTER (
+        WHERE tasks.delivery_date = ${today}
+          AND tasks.internal_status = 'DELIVERED'
+      ) AS delivered_today,
+      COUNT(*) FILTER (WHERE tasks.internal_status = 'IN_TRANSIT') AS in_transit,
+      COUNT(*) FILTER (
+        WHERE tasks.internal_status = 'FAILED'
+          AND tasks.delivery_date >= (${today}::date - INTERVAL '7 days')
+      ) AS failed_last_7_days
+    FROM tenants t
+    LEFT JOIN tasks ON tasks.tenant_id = t.id
+    WHERE t.status = 'active'
+    GROUP BY t.id, t.name, t.slug
+    ORDER BY t.name ASC
+  `);
+  return rows.map((row) => ({
+    tenantId: row.tenant_id,
+    tenantName: row.tenant_name,
+    tenantSlug: row.tenant_slug,
+    totalToday: Number(row.total_today),
+    deliveredToday: Number(row.delivered_today),
+    inTransit: Number(row.in_transit),
+    failedLast7Days: Number(row.failed_last_7_days),
+  }));
 }
 
 // -----------------------------------------------------------------------------
