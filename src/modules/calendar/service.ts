@@ -1,18 +1,20 @@
-// Day-22n PR-C-A — Calendar service-layer for the consolidated
-// `/calendar` cross-consignee view per brief §3.3.4.
+// Day-22n PR-C-A + Day-23n polish — Calendar service-layer for the
+// consolidated `/calendar` cross-consignee view per brief §3.3.4.
 //
-// Read-only surface. Permission gate `task:read` (the calendar
-// renders tasks across the merchant's book of business — same auth
-// envelope as the /tasks list). Tenant-scoped via withTenant so RLS
-// scopes naturally. NO audit emit per R-4 — reads are not audited.
+// Read-only surface. Tenant-scoped entry points gate on `task:read`
+// and run under withTenant so RLS scopes naturally. The Transcorp
+// admin variant gates on `task:read_all` and runs under
+// withServiceRole — RLS bypassed by design. NO audit emit per R-4 —
+// reads are not audited.
 //
-// Pattern matches the read paths on /tasks (src/modules/tasks/service.ts:
-// listTasks at L561). Each entry point does the same three steps:
-//   1. requirePermission(ctx, 'task:read') — throws ForbiddenError.
-//   2. assertTenantScoped — throws ValidationError if ctx.tenantId is null.
-//   3. withTenant(...) → call into the repo + assemble the response.
+// Day-23n changes:
+//   - countTasksByDayAcrossConsignees no longer parallel-fetches the
+//     top-task slice; the WeekView now renders click-through cells
+//     without inline preview rows.
+//   - Added getCalendarMetricsTranscorpAdmin — cross-tenant metric
+//     variant gated on `task:read_all`.
 
-import { withTenant } from "@/shared/db";
+import { withServiceRole, withTenant } from "@/shared/db";
 import { ValidationError } from "@/shared/errors";
 import type { RequestContext } from "@/shared/tenant-context";
 import type { Uuid } from "@/shared/types";
@@ -24,13 +26,18 @@ import type { TaskInternalStatus } from "../tasks/types";
 import {
   buildWeekDays,
   computeMetrics,
+  computeTranscorpAdminMetrics,
   countTasksGroupedByDay,
   listDistinctCrmStates,
   listDistinctDistricts,
   listDistinctTaskStatuses,
-  selectTopTasksPerDay,
 } from "./repository";
-import type { CalendarDayCount, CalendarFilters, CalendarMetrics } from "./types";
+import type {
+  CalendarDayCount,
+  CalendarFilters,
+  CalendarMetrics,
+  CalendarMetricsTranscorpAdmin,
+} from "./types";
 
 function assertTenantScoped(
   ctx: RequestContext,
@@ -61,11 +68,9 @@ export function computeWeekWindow(weekStart: string): { start: string; end: stri
  * anchor. Returns exactly 7 CalendarDayCount entries — one per day,
  * Monday → Sunday — even on days with zero matching tasks.
  *
- * Per reviewer Q1 Option (b): each entry includes up to 3 preview
- * tasks (ordered by delivery_start_time ASC). The page-side
- * ConsolidatedWeekView component renders the topTasks via Session
- * B's TaskPreviewRow primitive plus an overflow line for
- * `total - topTasks.length` when positive.
+ * Day-23n polish: drops the top-3 preview-task slice; day cells
+ * click through to `/calendar?view=day&date=<iso>` instead of
+ * rendering inline preview rows.
  */
 export async function countTasksByDayAcrossConsignees(
   ctx: RequestContext,
@@ -76,19 +81,22 @@ export async function countTasksByDayAcrossConsignees(
   assertTenantScoped(ctx, "calendar:week-view");
   const { start, end } = computeWeekWindow(weekStart);
   return withTenant(ctx.tenantId, async (tx) => {
-    const [perDayCounts, topTaskRows] = await Promise.all([
-      countTasksGroupedByDay(tx, ctx.tenantId, start, end, filters),
-      selectTopTasksPerDay(tx, ctx.tenantId, start, end, filters),
-    ]);
-    return buildWeekDays(start, end, perDayCounts, topTaskRows);
+    const perDayCounts = await countTasksGroupedByDay(
+      tx,
+      ctx.tenantId,
+      start,
+      end,
+      filters,
+    );
+    return buildWeekDays(start, end, perDayCounts);
   });
 }
 
 /**
- * Five-metric snapshot for the /calendar header. `today` is the
- * Asia/Dubai calendar date (caller supplies it so the value is
- * deterministic and unit-testable; the page-side `page.tsx` computes
- * it via `computeTodayInDubai(new Date())`).
+ * Five-metric snapshot for the /calendar header — tenant variant.
+ * `today` is the Asia/Dubai calendar date (caller supplies it so the
+ * value is deterministic and unit-testable; the page-side `page.tsx`
+ * computes it via `computeTodayInDubai(new Date())`).
  */
 export async function getCalendarMetrics(
   ctx: RequestContext,
@@ -102,6 +110,22 @@ export async function getCalendarMetrics(
   });
 }
 
+/**
+ * Day-23n — Transcorp admin (cross-tenant) metric variant. Permission
+ * gate `task:read_all` (transcorp-sysadmin only). Runs under
+ * withServiceRole — RLS bypassed; aggregates span every merchant.
+ * No tenant context required.
+ */
+export async function getCalendarMetricsTranscorpAdmin(
+  ctx: RequestContext,
+  today: string,
+): Promise<CalendarMetricsTranscorpAdmin> {
+  requirePermission(ctx, "task:read_all");
+  return withServiceRole("transcorp_staff:calendar_metrics", async (tx) => {
+    return computeTranscorpAdminMetrics(tx, today);
+  });
+}
+
 export interface CalendarFilterOptions {
   readonly districts: readonly string[];
   readonly crmStates: readonly ConsigneeCrmState[];
@@ -110,9 +134,7 @@ export interface CalendarFilterOptions {
 
 /**
  * Distinct-value lookups feeding the CalendarFilterBar dropdowns.
- * Single round-trip per dimension — parallel-fetched. Time-window
- * options are a static canonical set ({morning, afternoon, evening})
- * and live in the page-side helper, not here.
+ * Single round-trip per dimension — parallel-fetched.
  */
 export async function getCalendarFilterOptions(
   ctx: RequestContext,
