@@ -460,6 +460,18 @@ describe("listTasksBySubscription", () => {
   });
 });
 
+describe("listAllTasksRows — archive filter", () => {
+  // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
+  // belonging to archived tenants so the bulk CI-leak archive doesn't
+  // leak rows through /admin/tasks at demo time.
+  it("includes the ten.status != 'archived' predicate", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+  });
+});
+
 describe("listAllTaskIdsByTenant", () => {
   it("returns mapped IDs in input order", async () => {
     const tx = makeStubTx([

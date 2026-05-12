@@ -281,6 +281,18 @@ describe("listAllConsigneesRows", () => {
       expect(captured.params).toContain("%Sarah%");
     });
   });
+
+  describe("archive filter", () => {
+    // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
+    // belonging to archived tenants so the bulk CI-leak archive doesn't
+    // leak rows through /admin/consignees at demo time.
+    it("includes the ten.status != 'archived' predicate", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllConsigneesRows(tx, {});
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    });
+  });
 });
 
 describe("updateConsignee", () => {

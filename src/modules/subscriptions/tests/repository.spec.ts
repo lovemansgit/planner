@@ -22,6 +22,7 @@ import {
   endSubscription,
   findSubscriptionById,
   insertSubscription,
+  listAllSubscriptionsRows,
   listSubscriptionsByConsignee,
   listSubscriptionsByTenant,
   listSubscriptionsWithConsigneeByTenant,
@@ -624,5 +625,17 @@ describe("endSubscription", () => {
     const tx = makeStubTx([[]]);
     const result = await endSubscription(tx, TENANT_ID, SUB_ID);
     expect(result).toBeNull();
+  });
+});
+
+describe("listAllSubscriptionsRows — archive filter", () => {
+  // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
+  // belonging to archived tenants so the bulk CI-leak archive doesn't
+  // leak rows through /admin/subscriptions at demo time.
+  it("includes the ten.status != 'archived' predicate", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllSubscriptionsRows(tx, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
   });
 });

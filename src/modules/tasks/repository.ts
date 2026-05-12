@@ -741,6 +741,7 @@ export async function listAllTasksRows(
     JOIN tenants ten ON ten.id = t.tenant_id
     LEFT JOIN consignees c ON c.id = t.consignee_id
     WHERE 1 = 1
+      AND ten.status != 'archived'
       ${statusFilter}
       ${merchantFilter}
       ${searchFilter}

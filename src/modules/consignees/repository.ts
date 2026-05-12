@@ -284,6 +284,7 @@ export async function listAllConsigneesRows(
     FROM consignees c
     JOIN tenants ten ON ten.id = c.tenant_id
     WHERE 1 = 1
+      AND ten.status != 'archived'
       ${merchantFilter}
       ${searchFilter}
     ORDER BY c.created_at DESC
