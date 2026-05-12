@@ -21,6 +21,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
+  { label: "Calendar", path: "/calendar", permission: "task:read" },
   { label: "Tasks", path: "/tasks", permission: "task:read" },
   { label: "Subscriptions", path: "/subscriptions", permission: "subscription:read" },
   { label: "Consignees", path: "/consignees", permission: "consignee:read" },
