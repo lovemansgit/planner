@@ -130,16 +130,25 @@ describe("admin merchants update — integration", () => {
   });
 
   afterAll(async () => {
-    await withServiceRole("edit-merchant integration teardown", async (tx) => {
-      // audit_events has audit_events_no_delete RULE (Day-2 audit
-      // discipline). DELETE on audit_events is silently dropped; the
-      // event rows from this test stay in the integration DB. That's
-      // by design — production has the same RULE. Cleanup focuses on
-      // the tenants rows; audit accumulation is intentional.
-      await tx.execute(sqlTag`
-        DELETE FROM tenants WHERE id IN (${TENANT_A}, ${TENANT_B})
-      `);
-    });
+    // `audit_events_no_delete` RULE intercepts the CASCADE-internal
+    // DELETE that the audit_events.tenant_id FK would normally issue
+    // when a tenant row is removed; Postgres then throws "referential
+    // integrity query gave unexpected result" because the RULE
+    // rewrites the cascade to NOTHING. Documented at
+    // `memory/followup_audit_rule_cascade_conflict.md`. The established
+    // workaround in other integration specs is to wrap the teardown
+    // DELETE in try-catch (see cron-decoupling-happy-path.spec.ts +
+    // asset-tracking-tenant-match.spec.ts). Cleanup failure is not a
+    // test failure; CI gets a fresh ephemeral DB each run.
+    try {
+      await withServiceRole("edit-merchant integration teardown", async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM tenants WHERE id IN (${TENANT_A}, ${TENANT_B})
+        `);
+      });
+    } catch {
+      /* audit RULE; ignore */
+    }
   });
 
   // ---------------------------------------------------------------------------
