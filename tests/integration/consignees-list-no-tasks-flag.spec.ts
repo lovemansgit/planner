@@ -72,11 +72,16 @@ describe("Day-25 integration — listConsigneesWithTaskCount NO TASKS flag", () 
   });
 
   afterAll(async () => {
-    await withServiceRole("no-tasks-flag teardown", async (tx) => {
-      await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id IN (${TENANT_A}, ${TENANT_B})`);
-      await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id IN (${TENANT_A}, ${TENANT_B})`);
-      await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (${TENANT_A}, ${TENANT_B})`);
-    });
+    // audit_events_no_delete RULE blocks DELETE FROM tenants when matching
+    // audit_events exist (see memory/followup_audit_rule_cascade_conflict.md).
+    // Best-effort teardown; swallow the rule-induced failure.
+    try {
+      await withServiceRole("no-tasks-flag teardown", async (tx) => {
+        await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (${TENANT_A}, ${TENANT_B})`);
+      });
+    } catch {
+      /* audit RULE; ignore */
+    }
   });
 
   it("returns taskCount=0 for consignees with no tasks (flag renders)", async () => {

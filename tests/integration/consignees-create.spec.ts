@@ -65,12 +65,18 @@ describe("Day-25 integration — createConsignee (consignee + primary address at
   });
 
   afterAll(async () => {
-    await withServiceRole("consignees-create integration teardown", async (tx) => {
-      await tx.execute(sqlTag`DELETE FROM audit_events WHERE tenant_id IN (${TENANT_ID}, ${OTHER_TENANT_ID})`);
-      await tx.execute(sqlTag`DELETE FROM addresses WHERE tenant_id IN (${TENANT_ID}, ${OTHER_TENANT_ID})`);
-      await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id IN (${TENANT_ID}, ${OTHER_TENANT_ID})`);
-      await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (${TENANT_ID}, ${OTHER_TENANT_ID})`);
-    });
+    // audit_events_no_delete RULE blocks DELETE FROM tenants when matching
+    // audit_events exist (see memory/followup_audit_rule_cascade_conflict.md).
+    // Established codebase pattern: best-effort teardown wrapped in try/catch;
+    // swallow the rule-induced failure. Test tenants leak; random per-run
+    // UUIDs keep CI re-runs non-colliding.
+    try {
+      await withServiceRole("consignees-create integration teardown", async (tx) => {
+        await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (${TENANT_ID}, ${OTHER_TENANT_ID})`);
+      });
+    } catch {
+      /* audit RULE; ignore */
+    }
   });
 
   it("creates consignees row + primary addresses row + audit event in one shot", async () => {

@@ -47,9 +47,9 @@ describe("Day-24 PM tenant count pin — countConsigneesByTenantRows", () => {
         VALUES
           (${CONSIGNEE_A1}, ${TENANT_A}, ${SEARCH_NAME}, ${`+971 ${PHONE_DIGITS}`},
            'Addr A1', 'Dubai', 'Marina', 'ACTIVE'),
-          (${CONSIGNEE_A2}, ${TENANT_A}, ${`Other A ${RUN_ID}`}, ${`tcc-${RUN_ID}-a2`},
+          (${CONSIGNEE_A2}, ${TENANT_A}, ${`Other A ${RUN_ID}`}, '+971400000000',
            'Addr A2', 'Dubai', 'Al Quoz', 'ACTIVE'),
-          (${CONSIGNEE_B1}, ${TENANT_B}, ${`Sarah Khouri ${RUN_ID} BTenant`}, ${`tcc-${RUN_ID}-b1`},
+          (${CONSIGNEE_B1}, ${TENANT_B}, ${`Sarah Khouri ${RUN_ID} BTenant`}, '+971400000001',
            'Addr B1', 'Dubai', 'Jumeirah', 'ACTIVE')
       `);
     });
