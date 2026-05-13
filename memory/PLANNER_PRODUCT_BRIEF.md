@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.12
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match); v1.11 amendment filed Day 22 (11 May 2026) AM — single-address MVP for the `/consignees/new` 3-step wizard (multi-address + per-weekday rotation deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`); v1.12 amendment filed Day 25 (13 May 2026) AM — decoupled consignee creation from subscription creation (wizard removed; flat form lands operator on Overview with Create-subscription + Add-ad-hoc-task CTAs); edit-merchant surface added (`/admin/merchants/[id]/edit`, `updateMerchant` service, `merchant:update` permission).
+**Version:** v1.13
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match); v1.11 amendment filed Day 22 (11 May 2026) AM — single-address MVP for the `/consignees/new` 3-step wizard (multi-address + per-weekday rotation deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`); v1.12 amendment filed Day 25 (13 May 2026) AM — decoupled consignee creation from subscription creation (wizard removed; flat form lands operator on Overview with Create-subscription + Add-ad-hoc-task CTAs); edit-merchant surface added (`/admin/merchants/[id]/edit`, `updateMerchant` service, `merchant:update` permission); v1.13 amendment filed Day 25 (13 May 2026) evening — §7.1 review-discipline checklist codified (§3.6 hard-stop nomenclature + CI status verification gate; per `memory/decision_review_discipline_ci_gate.md`).
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -949,12 +949,49 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 - **Demo-state seeding scripted, not manual.** Demo Bistro + Fatima rotation + Sarah HIGH_RISK + applied skip + delivered POD photo reproducible via `demo-preflight.sh` or seed scripts.
 - **Test discipline.** Each backend addition has unit + integration coverage. Each UI addition has at minimum smoke tests for happy path. Skip-and-append algorithm has worked-example tests for all canonical cases including override variants.
 - **Brand discipline.** No new UI ships without Transcorp design tokens. Day 18 brand pass is sweep, not fix-up.
-- **Tier discipline.** T2 hard-stop at PR open for code; T3 hard-stop twice (plan + PR) for schema/auth/RLS/audit changes.
+- **Tier discipline.** T2 hard-stop at PR open for code; T3 hard-stop twice (plan + PR) for schema/auth/RLS/audit changes. See §7.1 for the §3.6 review-discipline checklist (codified Day 25 per `memory/decision_review_discipline_ci_gate.md`).
 - **RLS verification.** Every new tenant-scoped table has RLS verified in PR review.
 - **Audit correlation_id.** Causally related events (skip → end_date_extended; pause → end_date_extended) share correlation_id in same transaction.
 - **Idempotency on mutating operations.** Skip API requires idempotency_key. Server stores, rejects duplicates with 409.
 - **Webhook deduplication.** Every webhook event deduplicated via UNIQUE.
 - **Pre-demo verification automated.** `demo-preflight.sh` is the gate before live demo.
+
+### 7.1 Review discipline (§3.6 hard-stop checklist)
+
+The "§3.6 hard-stop" convention referenced throughout EOD docs, plan
+PRs, and decision memos codifies the structured review gate that
+every T2 + T3 PR clears before merge. Codified Day 25 per
+`memory/decision_review_discipline_ci_gate.md` (the gate existed
+informally from Day 13 onward; this section makes the checklist
+load-bearing).
+
+**Reviewer checklist (both rounds — plan-PR round 1 + code-PR round 2):**
+
+1. **Plan compliance.** Does the PR's scope match the approved plan?
+   Findings + open questions resolved? §9 rulings honoured in code?
+2. **Test signal.** Local test counts + tsc state surfaced; unit
+   suite green; integration coverage at PR open for new SQL paths
+   (Day-23 §F discipline).
+3. **CI status verification.** Reviewer must check the PR's CI run
+   status before clearing the §3.6 verdict. **CI red is a blocker.**
+   Use `gh pr checks <PR#>` or `gh pr view <PR#> --json mergeStateStatus`.
+   The only exception is demonstrably pre-existing main-side failures
+   (verifiable via `gh run list --branch main`), and only when a
+   parallel fix-PR is in flight. Otherwise: fix-first.
+4. **Architectural gates.** RLS on new tenant-scoped tables; audit
+   correlation_id for causally related events; idempotency on
+   mutating ops; webhook dedup UNIQUE.
+5. **Brand discipline.** New UI uses Transcorp design tokens; no
+   shadows; hairline borders; sentence-case body.
+
+**Builder responsibility:** report CI status in the PR-open message
+alongside local test signal, in the format
+`CI status: <PASS | FAIL | UNSTABLE | PENDING>. Local tests: <count>
+passing, tsc <green | red>.` If CI is red or UNSTABLE, surface that
+in the same message — not in a follow-up, not buried in the PR body.
+
+**Merge gate:** Love-only. No `gh pr merge --admin` bypass without
+explicit Love authorization quoted verbatim in-thread.
 
 ---
 
@@ -990,6 +1027,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.10 | 10 May 2026 (Day 21, evening, post Session B Day-21 data-check) | **Sarah Khouri demo-persona pre-seed reconciliation.** §5.1 Step 5 narrative ("drill into Sarah → consignee timeline shows pattern of failed deliveries → click Change CRM state → mark High Risk") implies a **live-flip during the demo**. §5.2 (pre-seeded HIGH_RISK) and §5.3 Gate 8 (HIGH_RISK + ≥2 failures) implied a **pre-seed HIGH_RISK** state. Internal contradiction surfaced during Day-21 overnight prep when Session A's data-check found Sarah at `crm_state=ACTIVE` with 3 FAILED deliveries (May 2/5/7 2026) — empirical state matches the §5.1 live-flip narrative, NOT the §5.2/§5.3 pre-seed assumption. **Resolution: §5.1 wins.** §5.2 amended to "Sarah Khouri pre-configured with ACTIVE CRM state and ≥2 FAILED deliveries to enable HIGH_RISK transition during demo." §5.3 Gate 8 amended to "Sarah Khouri has ≥2 FAILED deliveries in history; CRM state=ACTIVE pre-demo." No data changes required — current sandbox state already matches the new pre-demo invariant. Filed at `memory/decision_brief_v1_10_amendment_sarah_khouri_pre_seed.md`. |
 | v1.11 | 11 May 2026 (Day 22, AM) | **Single-address MVP for `/consignees/new` wizard (Day-22 forms lane scope ruling).** Discovery surfaced two service-layer gaps: (a) no `createAddress` service fn in `src/` — addresses are insert-side only via the seed scripts; (b) no `createConsigneeWithSubscription` orchestration — existing `createConsignee` + `createSubscription` each open their own `withTenant` tx, breaking the brief §3.3.1 "single transaction" final-submit requirement. Reviewer ruled bundle A2 + B1: wizard collapses 4 steps → 3, single primary address per consignee for v1, multi-address + per-weekday rotation deferred to Phase 2. New orchestration `createConsigneeWithSubscription` at `src/modules/consignees/onboarding.ts` opens ONE `withTenant` tx + inlines all 3 writes atomically. Brief §1 (line 62) + §3.3.1 amended; §3.3.1 wizard text rewritten in full. Phase-2 surface area filed at `memory/followup_multi_address_rotation_phase_2.md`. Filed at `memory/decision_brief_v1_11_amendment_single_address_mvp.md`; landed as a ride-along T1 commit in the Day-22 forms lane Sub-PR #1. **PR-#238 §3.6 ratification clarification (within v1.11 scope):** `/consignees/[id]/edit` excludes ALL address fields (including the legacy inline scalar columns `addressLine`/`district`/`emirateOrRegion`) — editing inline-only would silently desync display from routing. See decision memo §3.1 for rationale. |
 | v1.12 | 13 May 2026 (Day 25 morning) | **Decoupled consignee creation from subscription creation.** Wizard removed; flat `/consignees/new` form lands operator on Overview page with Create-subscription + Add-ad-hoc-task CTAs. New `createConsignee` service method (no subscription side-effects); new `createAdHocTask` service method (optimistic ack via QStash). Consignee list adds amber NO TASKS flag (task-based, not subscription-based). §5.1 Ch.3 demo narrative updated to two-beat flow. **Edit-merchant surface added.** New `/admin/merchants/[id]/edit` route + `updateMerchant` service method + `merchant:update` permission (transcorp-sysadmin only). Slug-change warning dialog. EDIT row action on `/admin/merchants` list. Filed at `memory/decision_brief_v1_12_amendment_decouple_and_edit_merchant.md`. |
+| v1.13 | 13 May 2026 (Day 25 evening) | **§3.6 review-discipline checklist codified — CI status gate locked.** New §7.1 sub-section under Quality gates that codifies the "§3.6 hard-stop" review convention (referenced informally since Day 13) as a structured five-point checklist: plan compliance, test signal, **CI status verification (red is a blocker)**, architectural gates, brand discipline. Builder must report CI state in PR-open messages alongside local test signal; reviewer must verify CI before clearing the §3.6 verdict. Exception path: pre-existing main failures may clear §3.6 only when a parallel fix-PR is in flight (otherwise fix-first). No `--admin` bypass without explicit Love authorization. Driver: PR #264 cleared both §3.6 rounds on a CI-red main without surfacing the state. Filed at `memory/decision_review_discipline_ci_gate.md`. |
 
 ---
 
