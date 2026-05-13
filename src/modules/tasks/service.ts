@@ -341,6 +341,7 @@ function validateCreateTaskInput(
       // (e.g. /subscriptions/new single-task mode) omitted
       // subscriptionId.
       createdVia: input.createdVia,
+      addressId: input.addressId,
       customerOrderNumber,
       referenceNumber: optionalTrim(input.referenceNumber),
       internalStatus: input.internalStatus,
@@ -569,6 +570,178 @@ async function emitOrLog(input: EmitInput): Promise<void> {
       resource_id: input.resourceId,
     });
   }
+}
+
+// -----------------------------------------------------------------------------
+// createAdHocTask (Day-25 / brief v1.12 §3.1.4)
+// -----------------------------------------------------------------------------
+//
+// One-off task creation against an existing consignee, independent of
+// any subscription. Thin wrapper around createTask that:
+//
+//   1. Permission-gates on task:create (user-flow).
+//   2. Pre-resolves the address inside its OWN withTenant block — the
+//      delegated createTask uses withServiceRole internally and so does
+//      not enforce RLS on the consignee + address lookups. Putting the
+//      pre-resolution in a separate withTenant ensures RLS scoping for
+//      the consignee-belongs-to-tenant + address-belongs-to-consignee
+//      checks. (Plan-PR §3.6 round-1 FINDING 1.)
+//   3. Auto-generates `customer_order_number` as `ADHOC-${shortUuid}`
+//      since the operator-facing dialog does not capture this field.
+//   4. Delegates to createTask with createdVia='manual_admin' and
+//      subscriptionId omitted, honouring the composite CHECK
+//      tasks_creation_source_invariant.
+//   5. Post-commit (outside the createTask call) enqueues the SF push
+//      via enqueueTaskPushBatch — matches the optimistic-ack pattern
+//      from the legacy onboarding orchestration + skip/cancel flows.
+//      Enqueue failure is intentionally swallowed; cron reconciliation
+//      re-discovers any task whose enqueue dropped via
+//      `pushed_to_external_at IS NULL`.
+//
+// Audit emit: reused `task.created` event from createTask. Differentiation
+// vs cron-materialised tasks happens via the existing actor_kind=user +
+// metadata.customer_order_number prefix `ADHOC-`. The brief-v1.12
+// amendment memo footer documents the audit reuse decision.
+//
+// Errors:
+//   - ForbiddenError    actor lacks task:create.
+//   - ValidationError   no tenant context, window <30min, malformed
+//                       date/time, address does not belong to consignee.
+//   - NotFoundError     consignee does not exist in this tenant, OR
+//                       consignee has no primary address (operator must
+//                       resolve before retrying).
+
+import { randomUUID } from "node:crypto";
+
+import { enqueueTaskPushBatch } from "../task-materialization/queue";
+
+export interface CreateAdHocTaskParams {
+  readonly date: string;
+  readonly windowStart: string;
+  readonly windowEnd: string;
+  readonly addressId?: Uuid;
+  readonly notes?: string;
+}
+
+export interface CreateAdHocTaskResult {
+  readonly task_id: Uuid;
+}
+
+/** HH:MM[:SS] → minutes since midnight, or null when malformed. */
+function parseTimeToMinutes(raw: string): number | null {
+  const m = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(raw);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(mm) || h > 23 || mm > 59) return null;
+  return h * 60 + mm;
+}
+
+export async function createAdHocTask(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  params: CreateAdHocTaskParams,
+): Promise<CreateAdHocTaskResult> {
+  requirePermission(ctx, "task:create");
+  assertTenantScoped(ctx, "task:create");
+
+  // Field-level validation up front; surfaces clean errors before any
+  // DB round-trip.
+  if (!consigneeId || typeof consigneeId !== "string") {
+    throw new ValidationError("consigneeId is required");
+  }
+  if (!params.date || !/^\d{4}-\d{2}-\d{2}$/.test(params.date)) {
+    throw new ValidationError("date must be YYYY-MM-DD");
+  }
+  const startMin = parseTimeToMinutes(params.windowStart);
+  const endMin = parseTimeToMinutes(params.windowEnd);
+  if (startMin === null) {
+    throw new ValidationError("windowStart must be HH:MM[:SS]");
+  }
+  if (endMin === null) {
+    throw new ValidationError("windowEnd must be HH:MM[:SS]");
+  }
+  if (endMin - startMin < 30) {
+    throw new ValidationError("delivery window must be at least 30 minutes");
+  }
+
+  const tenantId = ctx.tenantId;
+
+  // FINDING 1 (§3.6 round-1) — primary-address resolution runs inside
+  // its own withTenant so RLS scopes the consignee + address reads. The
+  // downstream createTask uses withServiceRole and cannot enforce these
+  // tenant invariants.
+  const resolvedAddressId = await withTenant(tenantId, async (tx) => {
+    const consigneeRows = await tx.execute<{ id: string }>(sqlTag`
+      SELECT id FROM consignees WHERE id = ${consigneeId} LIMIT 1
+    `);
+    if (consigneeRows.length === 0) {
+      throw new NotFoundError(`consignee not found: ${consigneeId}`);
+    }
+
+    if (params.addressId !== undefined) {
+      const ownRows = await tx.execute<{ id: string }>(sqlTag`
+        SELECT id FROM addresses
+        WHERE id = ${params.addressId} AND consignee_id = ${consigneeId}
+        LIMIT 1
+      `);
+      if (ownRows.length === 0) {
+        throw new ValidationError(
+          `address ${params.addressId} does not belong to consignee ${consigneeId}`,
+        );
+      }
+      return params.addressId;
+    }
+
+    const primaryRows = await tx.execute<{ id: string }>(sqlTag`
+      SELECT id FROM addresses
+      WHERE consignee_id = ${consigneeId} AND is_primary = true
+      LIMIT 1
+    `);
+    if (primaryRows.length === 0) {
+      throw new ValidationError(
+        `consignee ${consigneeId} has no primary address; supply addressId or onboard a primary address first`,
+      );
+    }
+    return primaryRows[0].id as Uuid;
+  });
+
+  const customerOrderNumber = `ADHOC-${randomUUID().slice(0, 8).toUpperCase()}`;
+  const notes = params.notes !== undefined ? optionalTrim(params.notes) : undefined;
+
+  const task = await createTask(ctx, {
+    consigneeId,
+    createdVia: "manual_admin",
+    addressId: resolvedAddressId,
+    customerOrderNumber,
+    deliveryDate: params.date,
+    deliveryStartTime: params.windowStart,
+    deliveryEndTime: params.windowEnd,
+    notes,
+    packages: [],
+  });
+
+  // Post-commit SF push enqueue. Failure intentionally swallowed per
+  // the Phase-5 self-healing posture: cron reconciliation will pick up
+  // the task on next tick via pushed_to_external_at IS NULL.
+  try {
+    await enqueueTaskPushBatch({
+      tenantId,
+      taskIds: [task.id],
+      requestId: ctx.requestId,
+    });
+  } catch (err) {
+    logger.error(
+      {
+        operation: "createAdHocTask",
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "post-commit SF push enqueue failed (non-blocking, cron will reconcile)",
+    );
+  }
+
+  return { task_id: task.id };
 }
 
 // -----------------------------------------------------------------------------

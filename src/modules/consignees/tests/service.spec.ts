@@ -21,11 +21,32 @@ vi.mock("../repository", () => ({
   findConsigneeForCrmUpdate: vi.fn(),
   insertConsigneeCrmEvent: vi.fn(),
   listConsigneesByTenant: vi.fn(),
+  listConsigneesWithTaskCountByTenant: vi.fn(),
   selectCrmHistoryForConsignee: vi.fn(),
   selectTimelineForConsignee: vi.fn(),
   updateConsignee: vi.fn(),
   updateConsigneeCrmState: vi.fn(),
   deleteConsignee: vi.fn(),
+  countAllConsigneesRows: vi.fn(),
+  countConsigneesByTenantRows: vi.fn(),
+  listAllConsigneesRows: vi.fn(),
+}));
+
+vi.mock("../../addresses", () => ({
+  insertAddress: vi.fn().mockResolvedValue({
+    id: "addr-1",
+    consigneeId: "11111111-1111-1111-1111-111111111111",
+    tenantId: "00000000-0000-0000-0000-00000000000a",
+    label: "home",
+    isPrimary: true,
+    line: "Building 12",
+    district: "Al Quoz",
+    emirate: "Dubai",
+    lat: null,
+    lng: null,
+    createdAt: "2026-04-28T10:00:00.000Z",
+    updatedAt: "2026-04-28T10:00:00.000Z",
+  }),
 }));
 
 import { withTenant } from "../../../shared/db";
@@ -157,60 +178,56 @@ afterEach(() => {
 // -----------------------------------------------------------------------------
 
 describe("createConsignee", () => {
+  // Day-25 / brief v1.12 §3.1.4 — input now nested as { identity, address }.
+  // Service writes consignees row + primary addresses row atomically.
+  // Metadata picks up `onboarded_via: "flat_form"` (replaces wizard).
+  const validInput = {
+    identity: { name: "Falafel House", phone: "+971501234567" },
+    address: {
+      label: "home" as const,
+      line: "Building 12",
+      district: "Al Quoz",
+      emirate: "Dubai",
+    },
+  };
+
   it("throws ForbiddenError when actor lacks consignee:create", async () => {
-    await expect(
-      createConsignee(ctx([]), {
-        name: "n",
-        phone: "+971501234567",
-        addressLine: "a",
-        emirateOrRegion: "Dubai",
-        district: "Al Quoz",
-      })
-    ).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(createConsignee(ctx([]), validInput)).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockWithTenant).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
   it("throws ValidationError when ctx.tenantId is null", async () => {
     await expect(
-      createConsignee(ctx(["consignee:create"], null), {
-        name: "n",
-        phone: "+971501234567",
-        addressLine: "a",
-        emirateOrRegion: "Dubai",
-        district: "Al Quoz",
-      })
+      createConsignee(ctx(["consignee:create"], null), validInput),
     ).rejects.toBeInstanceOf(ValidationError);
     expect(mockWithTenant).not.toHaveBeenCalled();
   });
 
-  it("throws ValidationError when required fields are empty", async () => {
+  it("throws ValidationError when required identity fields are empty", async () => {
     await expect(
       createConsignee(ctx(["consignee:create"]), {
-        name: "  ",
-        phone: "+971501234567",
-        addressLine: "a",
-        emirateOrRegion: "Dubai",
-        district: "Al Quoz",
-      })
-    ).rejects.toThrow(/name is required/);
+        ...validInput,
+        identity: { ...validInput.identity, name: "  " },
+      }),
+    ).rejects.toThrow(/identity\.name is required/);
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
-  it("normalises the phone before insert and emits with source: planner", async () => {
+  it("normalises phone, writes consignee + address, emits with onboarded_via=flat_form", async () => {
     mockInsert.mockResolvedValue(consigneeFixture({ phone: "+971501234567" }));
 
     const result = await createConsignee(ctx(["consignee:create"]), {
-      name: "Falafel House",
-      phone: "0501234567", // local UAE shape — should normalise
-      addressLine: "Building 12",
-      emirateOrRegion: "Dubai",
-      district: "Al Quoz Industrial 1",
+      identity: { name: "Falafel House", phone: "0501234567" }, // local UAE → normalised
+      address: validInput.address,
     });
 
     expect(mockInsert).toHaveBeenCalledOnce();
     const insertArg = mockInsert.mock.calls[0][2]; // (tx, tenantId, input)
     expect(insertArg.phone).toBe("+971501234567");
+    expect(insertArg.addressLine).toBe("Building 12"); // flattened from address.line
+    expect(insertArg.emirateOrRegion).toBe("Dubai");   // flattened from address.emirate
+    expect(insertArg.district).toBe("Al Quoz");        // flattened from address.district
     expect(result.id).toBe(CONSIGNEE_ID);
 
     expect(mockEmit).toHaveBeenCalledOnce();
@@ -218,20 +235,24 @@ describe("createConsignee", () => {
     expect(emitArg.eventType).toBe("consignee.created");
     expect(emitArg.tenantId).toBe(TENANT_ID);
     expect(emitArg.resourceId).toBe(CONSIGNEE_ID);
-    expect(emitArg.metadata).toEqual({ consignee_id: CONSIGNEE_ID, source: "planner" });
+    expect(emitArg.metadata).toEqual({
+      consignee_id: CONSIGNEE_ID,
+      source: "planner",
+      onboarded_via: "flat_form",
+    });
   });
 
-  it("strips empty optional strings to undefined before insert", async () => {
+  it("strips empty optional strings to undefined before consignee insert", async () => {
     mockInsert.mockResolvedValue(consigneeFixture());
 
     await createConsignee(ctx(["consignee:create"]), {
-      name: "n",
-      phone: "+971501234567",
-      addressLine: "a",
-      emirateOrRegion: "Dubai",
-      district: "Al Quoz",
-      email: "   ",
-      deliveryNotes: "",
+      identity: {
+        name: "n",
+        phone: "+971501234567",
+        email: "   ",
+        deliveryNotes: "",
+      },
+      address: validInput.address,
     });
 
     const insertArg = mockInsert.mock.calls[0][2];
@@ -242,15 +263,23 @@ describe("createConsignee", () => {
   it("does NOT audit when phone normalisation throws (denied path produces no event)", async () => {
     await expect(
       createConsignee(ctx(["consignee:create"]), {
-        name: "n",
-        phone: "not-a-phone",
-        addressLine: "a",
-        emirateOrRegion: "Dubai",
-        district: "Al Quoz",
-      })
+        identity: { name: "n", phone: "not-a-phone" },
+        address: validInput.address,
+      }),
     ).rejects.toBeInstanceOf(ValidationError);
     expect(mockInsert).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid address label", async () => {
+    await expect(
+      createConsignee(ctx(["consignee:create"]), {
+        identity: validInput.identity,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        address: { ...validInput.address, label: "invalid" as any },
+      }),
+    ).rejects.toThrow(/address\.label/);
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 });
 

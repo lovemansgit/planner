@@ -193,6 +193,13 @@ export interface CreateTaskInput {
   readonly consigneeId: Uuid;
   readonly subscriptionId?: Uuid;
   /**
+   * Day-25 / brief v1.12 ad-hoc task lane. When provided, the row's
+   * `address_id` column is populated at insert time. The cron-side
+   * materialization path resolves address via its own CTE; that path
+   * uses a separate INSERT and does not touch this field.
+   */
+  readonly addressId?: Uuid;
+  /**
    * Optional. SQL DEFAULT is 'subscription' (the cron path). Callers
    * that don't have a subscriptionId MUST pass 'manual_admin' or
    * 'migration_import' explicitly — the composite CHECK

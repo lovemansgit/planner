@@ -29,6 +29,7 @@ import {
   type Consignee,
   type TimelineEvent,
   getConsignee,
+  getConsigneeOnboardingStats,
   getConsigneeTimeline,
 } from "@/modules/consignees";
 import {
@@ -75,6 +76,7 @@ import {
 } from "./_components/CalendarViewToggle";
 import { CalendarWeekView } from "./_components/CalendarWeekView";
 import { CalendarYearView } from "./_components/CalendarYearView";
+import { AdHocTaskDialog } from "./_components/AdHocTaskDialog";
 import { CrmStateBadge, CRM_STATE_LABELS } from "./_components/CrmStateBadge";
 import { CrmStateModal } from "./_components/CrmStateModal";
 import { HistoryTab } from "./_components/HistoryTab";
@@ -159,6 +161,12 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let canChangeState = false;
   let canEditConsignee = false;
   let canCreateSubscription = false;
+  let canAddAdHocTask = false;
+  // Day-25 / brief v1.12 §3.3.3 — Overview-tab empty-state detection.
+  // When both subscription and task counts are zero, the Overview tab
+  // renders prominent Create-subscription + Add-ad-hoc-task CTAs.
+  let onboardStats = { subscriptionCount: 0, taskCount: 0 };
+  let overviewAddresses: readonly ConsigneeAddressRow[] = [];
   // Day-22 / PR-B — calendar popover action permissions per brief §3.3.3
   // + §3.3.10 rule 1 ("hide what the user cannot access"). Single source
   // of truth for which popover action buttons render.
@@ -189,6 +197,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
       canEditConsignee = perms.has("consignee:update");
       canCreateSubscription =
         perms.has("subscription:create") && perms.has("task:create");
+      canAddAdHocTask = perms.has("task:create");
       calendarPermissions.canSkip = perms.has("subscription:skip");
       calendarPermissions.canSkipOverride = perms.has("subscription:override_skip_rules");
       calendarPermissions.canPause = perms.has("subscription:pause");
@@ -200,6 +209,17 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
       );
       calendarPermissions.canAddNote = perms.has("task:add_note");
       calendarPermissions.canViewTimeline = perms.has("task:view_timeline");
+    }
+
+    // Day-25 / brief v1.12 §3.3.3 — onboarding stats fetched on every
+    // tab so the Overview empty-state branch can render correctly.
+    // Single SELECT with two count subqueries (no joins).
+    onboardStats = await getConsigneeOnboardingStats(ctx, id as Uuid);
+
+    // For the Overview empty state, fetch addresses (Phase-2 multi-
+    // address would expand the dropdown; v1 has one primary).
+    if (activeTab === "overview" && canAddAdHocTask) {
+      overviewAddresses = await listConsigneeAddresses(ctx, id as Uuid);
     }
 
     // Only fetch history if the History tab is active — defers the
@@ -337,7 +357,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
               {canChangeState ? (
                 <CrmStateModal consigneeId={consignee.id} currentState={consignee.crmState} />
               ) : null}
-              {canEditConsignee || canCreateSubscription ? (
+              {canEditConsignee || canCreateSubscription || canAddAdHocTask ? (
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   {canEditConsignee ? (
                     <Link
@@ -348,20 +368,21 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                     </Link>
                   ) : null}
                   {canCreateSubscription ? (
-                    <>
-                      <Link
-                        href={`/subscriptions/new?consigneeId=${consignee.id}`}
-                        className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-                      >
-                        New subscription
-                      </Link>
-                      <Link
-                        href={`/subscriptions/new?consigneeId=${consignee.id}&mode=single-task`}
-                        className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-                      >
-                        Add ad-hoc task
-                      </Link>
-                    </>
+                    <Link
+                      href={`/subscriptions/new?consigneeId=${consignee.id}`}
+                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                    >
+                      New subscription
+                    </Link>
+                  ) : null}
+                  {canAddAdHocTask ? (
+                    <AdHocTaskDialog
+                      consigneeId={consignee.id}
+                      addresses={overviewAddresses.map((a) => ({
+                        id: a.id,
+                        label: `${a.label} — ${a.line}`,
+                      }))}
+                    />
                   ) : null}
                 </div>
               ) : null}
@@ -372,7 +393,18 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
         <Tabs activeTab={activeTab} consigneeId={consignee.id} />
 
         <section className="mt-8">
-          {activeTab === "overview" ? <OverviewTab consignee={consignee} /> : null}
+          {activeTab === "overview" ? (
+            <OverviewTab
+              consignee={consignee}
+              stats={onboardStats}
+              canCreateSubscription={canCreateSubscription}
+              canAddAdHocTask={canAddAdHocTask}
+              addresses={overviewAddresses.map((a) => ({
+                id: a.id,
+                label: `${a.label} — ${a.line}`,
+              }))}
+            />
+          ) : null}
           {activeTab === "history" ? <HistoryTab events={history} /> : null}
           {activeTab === "subscription" ? (
             <SubscriptionTab
@@ -465,15 +497,68 @@ function Tabs({ activeTab, consigneeId }: { activeTab: TabName; consigneeId: str
   );
 }
 
-function OverviewTab({ consignee }: { consignee: Consignee }) {
+interface OverviewTabProps {
+  readonly consignee: Consignee;
+  readonly stats: { readonly subscriptionCount: number; readonly taskCount: number };
+  readonly canCreateSubscription: boolean;
+  readonly canAddAdHocTask: boolean;
+  readonly addresses: readonly { readonly id: string; readonly label: string }[];
+}
+
+function OverviewTab({
+  consignee,
+  stats,
+  canCreateSubscription,
+  canAddAdHocTask,
+  addresses,
+}: OverviewTabProps) {
+  // Day-25 / brief v1.12 §3.3.3 empty-state branch.
+  const isEmpty = stats.subscriptionCount === 0 && stats.taskCount === 0;
+
   return (
     <div className="space-y-8">
+      {isEmpty ? (
+        <section
+          aria-label="Onboarding next steps"
+          className="rounded-sm border border-stone-200 bg-ivory px-6 py-8"
+        >
+          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+            Next steps
+          </p>
+          <h2 className="mt-1 font-display text-xl font-semibold text-navy">
+            Add work for this consignee
+          </h2>
+          <p className="mt-2 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
+            {consignee.name} is onboarded with their primary address. Set up a recurring subscription, or
+            schedule a single ad-hoc delivery.
+          </p>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            {canCreateSubscription ? (
+              <Link
+                href={`/subscriptions/new?consigneeId=${consignee.id}`}
+                className="inline-flex items-center justify-center rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90"
+              >
+                Create subscription
+              </Link>
+            ) : null}
+            {canAddAdHocTask ? (
+              <AdHocTaskDialog
+                consigneeId={consignee.id}
+                addresses={addresses}
+                triggerVariant="primary"
+              />
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       <section>
         <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
           CRM state
         </p>
         <p className="mt-1 text-sm text-navy">
-          Current state: <span className="font-medium">{CRM_STATE_LABELS[consignee.crmState]}</span>.
+          Current state:{" "}
+          <span className="font-medium">{CRM_STATE_LABELS[consignee.crmState]}</span>.
         </p>
       </section>
 

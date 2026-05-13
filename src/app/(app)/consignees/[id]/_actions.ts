@@ -147,3 +147,76 @@ export async function changeCrmStateAction(
     throw err;
   }
 }
+
+// -----------------------------------------------------------------------------
+// Day-25 / brief v1.12 §3.3 — Add ad-hoc task action
+// -----------------------------------------------------------------------------
+//
+// Wraps the new `createAdHocTask` service. Bound to consigneeId at the
+// dialog trigger render site; the dialog form has no consigneeId field.
+// Optimistic-ack: the service inserts the row + enqueues the SF push.
+// On success the dialog displays a "Saved — pushing to SuiteFleet"
+// toast and closes; revalidatePath refreshes the calendar / overview /
+// list surfaces.
+
+import { createAdHocTask } from "@/modules/tasks";
+
+export type CreateAdHocTaskActionResult =
+  | { readonly kind: "created"; readonly taskId: string }
+  | { readonly kind: "validation"; readonly message: string }
+  | { readonly kind: "forbidden"; readonly message: string }
+  | { readonly kind: "not_found"; readonly message: string };
+
+export async function createAdHocTaskAction(
+  consigneeId: string,
+  _prevState: CreateAdHocTaskActionResult | { kind: "idle" },
+  formData: FormData,
+): Promise<CreateAdHocTaskActionResult> {
+  const requestId = randomUUID();
+  const trimmed = (key: string): string => {
+    const v = formData.get(key);
+    return typeof v === "string" ? v.trim() : "";
+  };
+
+  const date = trimmed("date");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { kind: "validation", message: "Date is required (YYYY-MM-DD)." };
+  }
+  const windowStartRaw = trimmed("window_start");
+  const windowEndRaw = trimmed("window_end");
+  if (!/^\d{2}:\d{2}$/.test(windowStartRaw) || !/^\d{2}:\d{2}$/.test(windowEndRaw)) {
+    return { kind: "validation", message: "Delivery window must be HH:MM times." };
+  }
+  const windowStart = `${windowStartRaw}:00`;
+  const windowEnd = `${windowEndRaw}:00`;
+
+  const addressIdRaw = trimmed("address_id");
+  const addressId = addressIdRaw.length > 0 ? (addressIdRaw as Uuid) : undefined;
+  const notesRaw = trimmed("notes");
+  const notes = notesRaw.length > 0 ? notesRaw : undefined;
+
+  try {
+    const ctx = await buildRequestContext(`/consignees/${consigneeId}`, requestId);
+    const result = await createAdHocTask(ctx, consigneeId as Uuid, {
+      date,
+      windowStart,
+      windowEnd,
+      addressId,
+      notes,
+    });
+    revalidatePath(`/consignees/${consigneeId}`, "page");
+    revalidatePath("/consignees", "page");
+    return { kind: "created", taskId: result.task_id };
+  } catch (err) {
+    if (err instanceof ForbiddenError) {
+      return { kind: "forbidden", message: "You don't have permission to add ad-hoc tasks." };
+    }
+    if (err instanceof NotFoundError) {
+      return { kind: "not_found", message: err.message };
+    }
+    if (err instanceof ValidationError) {
+      return { kind: "validation", message: err.message };
+    }
+    throw err;
+  }
+}

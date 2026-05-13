@@ -45,7 +45,6 @@ import type {
   Consignee,
   ConsigneeCrmEvent,
   ConsigneeCrmState,
-  CreateConsigneeInput,
   SubscriptionExceptionType,
   TaskTerminalStatus,
   TimelineEvent,
@@ -125,10 +124,28 @@ function mapRow(row: ConsigneeRow): Consignee {
  * Returns the inserted row, including DB-defaulted columns
  * (id, created_at, updated_at).
  */
+/**
+ * Internal flat insert shape for the consignees-row write. The service
+ * layer's nested CreateConsigneeInput (brief v1.12 `{ identity, address }`)
+ * is flattened by the service before reaching this repo helper. Keeps
+ * the SQL-binding contract small and ergonomic.
+ */
+export interface InsertConsigneeRow {
+  readonly name: string;
+  readonly phone: string;
+  readonly email?: string;
+  readonly addressLine: string;
+  readonly emirateOrRegion: string;
+  readonly district: string;
+  readonly deliveryNotes?: string;
+  readonly externalRef?: string;
+  readonly notesInternal?: string;
+}
+
 export async function insertConsignee(
   tx: DbTx,
   tenantId: Uuid,
-  input: CreateConsigneeInput
+  input: InsertConsigneeRow,
 ): Promise<Consignee> {
   const rows = await tx.execute<ConsigneeRow>(sqlTag`
     INSERT INTO consignees (
@@ -202,6 +219,34 @@ export async function listConsigneesByTenant(
     ORDER BY created_at DESC
   `);
   return rows.map(mapRow);
+}
+
+/**
+ * Day-25 / brief v1.12 §3.4 — list consignees with their task counts.
+ * Powers the amber NO TASKS badge on `/consignees`. Single round-trip
+ * via LEFT JOIN + GROUP BY on `tasks.consignee_id` (already indexed
+ * per migration 0006). All `internal_status` values count toward the
+ * total per brief — "Flag clears the moment the first task lands."
+ */
+export async function listConsigneesWithTaskCountByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly (Consignee & { taskCount: number })[]> {
+  const searchFilter = buildConsigneeSearchFilter(opts.searchTerm);
+  const rows = await tx.execute<ConsigneeRow & { task_count: number | string }>(sqlTag`
+    SELECT c.*, COALESCE(COUNT(t.id), 0)::int AS task_count
+    FROM consignees c
+    LEFT JOIN tasks t ON t.consignee_id = c.id AND t.tenant_id = c.tenant_id
+    WHERE c.tenant_id = ${tenantId}
+      ${searchFilter}
+    GROUP BY c.id
+    ORDER BY c.created_at DESC
+  `);
+  return rows.map((row) => ({
+    ...mapRow(row),
+    taskCount: Number(row.task_count),
+  }));
 }
 
 function buildConsigneeSearchFilter(searchTerm: string | undefined) {

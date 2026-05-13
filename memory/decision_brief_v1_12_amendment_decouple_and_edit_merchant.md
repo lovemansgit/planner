@@ -71,3 +71,9 @@ Existing gates 1–10 remain valid. Gate 8 unchanged.
 ## §4 — Phase 2 deferrals (no change required)
 
 Edit-merchant promoted from implicit-Phase-2 to MVP via this amendment.
+
+---
+
+## Footer — Day-25 code-PR clarifications
+
+**Audit event reuse (added Day-25 code-PR per plan-PR §3.6 round-1 FINDING 2).** The amendment text above proposes `task.ad_hoc.created` as the emit for the new `createAdHocTask` service. The implementing code reuses the existing `task.created` event instead. Differentiation between cron-materialised and operator-initiated ad-hoc tasks happens via `metadata.created_via='manual_admin'` + `actor_kind='user'` — sufficient for audit-query consumers without registering a new event type. This decision is intentional: event-type proliferation has a real cost (more docs, more audit-query indexes), while the metadata drill-down is the natural query path for analytics retros that need to filter "user-initiated tasks." No brief amendment (v1.13) needed.

@@ -12,8 +12,10 @@ import type { Consignee } from "@/modules/consignees";
 
 import { CrmStateBadge } from "../[id]/_components/CrmStateBadge";
 
+type Row = Consignee & { taskCount?: number };
+
 interface Props {
-  readonly rows: readonly Consignee[];
+  readonly rows: readonly Row[];
   readonly query: string;
 }
 
@@ -48,12 +50,15 @@ export function ConsigneesTable({ rows, query }: Props) {
             className="border-b border-[color:var(--color-border-default)] last:border-b-0 transition-colors hover:bg-ivory"
           >
             <Td>
-              <Link
-                href={`/consignees/${c.id}`}
-                className="text-navy hover:underline"
-              >
-                {c.name}
-              </Link>
+              <div className="flex items-center gap-2">
+                <Link
+                  href={`/consignees/${c.id}`}
+                  className="text-navy hover:underline"
+                >
+                  {c.name}
+                </Link>
+                {c.taskCount === 0 ? <NoTasksBadge /> : null}
+              </div>
             </Td>
             <Td className="tabular-nums">{c.phone}</Td>
             <Td>{c.emirateOrRegion}</Td>
@@ -67,6 +72,26 @@ export function ConsigneesTable({ rows, query }: Props) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * Day-25 / brief v1.12 §3.4 — amber pill rendered next to the name
+ * when the consignee has zero tasks across any internal_status. Flag
+ * clears the moment the first task lands (subscription-materialised
+ * or ad-hoc). Task-based, NOT subscription-based.
+ */
+function NoTasksBadge() {
+  return (
+    <span
+      className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em]"
+      style={{
+        backgroundColor: "var(--color-amber-300)",
+        color: "var(--color-amber-deep)",
+      }}
+    >
+      No tasks
+    </span>
   );
 }
 

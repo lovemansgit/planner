@@ -32,7 +32,8 @@ import {
   updateConsignee,
   updateConsigneeCrmState,
 } from "../repository";
-import type { CreateConsigneeInput, UpdateConsigneePatch } from "../types";
+import type { InsertConsigneeRow } from "../repository";
+import type { UpdateConsigneePatch } from "../types";
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const OTHER_TENANT_ID = "00000000-0000-0000-0000-00000000000b";
@@ -85,7 +86,7 @@ function makeStubTx(executeReturns: unknown[]) {
 describe("insertConsignee", () => {
   it("issues exactly one execute() and returns the camelCase mapped row", async () => {
     const tx = makeStubTx([[rowFixture()]]);
-    const input: CreateConsigneeInput = {
+    const input: InsertConsigneeRow = {
       name: "Falafel House",
       phone: "+971501234567",
       addressLine: "Building 12, Al Quoz",
