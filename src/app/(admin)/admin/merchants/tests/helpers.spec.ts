@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   normaliseSlug,
   parseCreateMerchantForm,
+  parseEditMerchantForm,
   statusAction,
   statusBadgeSurface,
   validateSlug,
@@ -342,6 +343,188 @@ describe("parseCreateMerchantForm", () => {
     if (!result.ok) {
       expect(result.fieldErrors.name).toBeTruthy();
       expect(result.fieldErrors.pickup_line).toBeTruthy();
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// parseEditMerchantForm (Day 25 / T3)
+// -----------------------------------------------------------------------------
+
+describe("parseEditMerchantForm", () => {
+  function fd(values: Record<string, string>): FormData {
+    const f = new FormData();
+    for (const [k, v] of Object.entries(values)) f.set(k, v);
+    return f;
+  }
+
+  function fullForm(overrides: Record<string, string> = {}): FormData {
+    return fd({
+      name: "Demo Bistro",
+      slug: "demo-bistro",
+      pickup_line: "Building 1, Al Quoz",
+      pickup_district: "Al Quoz Industrial 1",
+      pickup_emirate: "Dubai",
+      suitefleet_customer_code: "588",
+      ...overrides,
+    });
+  }
+
+  it("happy path — all fields supplied returns pickupAddress nested object", () => {
+    const result = parseEditMerchantForm(fullForm());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickupAddress: {
+          line: "Building 1, Al Quoz",
+          district: "Al Quoz Industrial 1",
+          emirate: "Dubai",
+        },
+        suitefleetCustomerCode: "588",
+      });
+    }
+  });
+
+  it("trims surrounding whitespace on every field", () => {
+    const result = parseEditMerchantForm(
+      fullForm({
+        name: "  Demo Bistro  ",
+        slug: "  demo-bistro  ",
+        pickup_line: "  Building 1  ",
+        pickup_district: "  Al Quoz  ",
+        pickup_emirate: "  Dubai  ",
+        suitefleet_customer_code: "  588  ",
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.name).toBe("Demo Bistro");
+      expect(result.value.slug).toBe("demo-bistro");
+      expect(result.value.pickupAddress).toEqual({
+        line: "Building 1",
+        district: "Al Quoz",
+        emirate: "Dubai",
+      });
+      expect(result.value.suitefleetCustomerCode).toBe("588");
+    }
+  });
+
+  it("normalizes slug to lowercase", () => {
+    const result = parseEditMerchantForm(fullForm({ slug: "Demo-Bistro" }));
+    // normaliseSlug lowercases but does not strip; "demo-bistro" then
+    // passes validateSlug.
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.slug).toBe("demo-bistro");
+  });
+
+  it("empty name returns field error", () => {
+    const result = parseEditMerchantForm(fullForm({ name: "  " }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.fieldErrors.name).toBeTruthy();
+  });
+
+  it("empty slug returns field error", () => {
+    const result = parseEditMerchantForm(fullForm({ slug: "  " }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.fieldErrors.slug).toBeTruthy();
+  });
+
+  it("invalid-char slug returns field error", () => {
+    const result = parseEditMerchantForm(fullForm({ slug: "demo_bistro" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.fieldErrors.slug).toBeTruthy();
+  });
+
+  it("over-60-char slug returns field error", () => {
+    const result = parseEditMerchantForm(fullForm({ slug: "a".repeat(61) }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.fieldErrors.slug).toBeTruthy();
+  });
+
+  it("empty suitefleet_customer_code returns field error", () => {
+    const result = parseEditMerchantForm(fullForm({ suitefleet_customer_code: "" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.fieldErrors.suitefleet_customer_code).toBeTruthy();
+  });
+
+  it("leading-zero suitefleet_customer_code returns field error", () => {
+    const result = parseEditMerchantForm(
+      fullForm({ suitefleet_customer_code: "0588" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.fieldErrors.suitefleet_customer_code).toBeTruthy();
+  });
+
+  it("non-numeric suitefleet_customer_code returns field error", () => {
+    const result = parseEditMerchantForm(
+      fullForm({ suitefleet_customer_code: "abc" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.fieldErrors.suitefleet_customer_code).toBeTruthy();
+  });
+
+  // -------------------------------------------------------------------------
+  // Pickup-address all-or-none rule (plan §6.3)
+  // -------------------------------------------------------------------------
+
+  it("all-three-empty pickup → pickupAddress omitted from output (no-pickup-update intent)", () => {
+    const result = parseEditMerchantForm(
+      fullForm({ pickup_line: "", pickup_district: "", pickup_emirate: "" }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.pickupAddress).toBeUndefined();
+    }
+  });
+
+  it("one-of-three pickup → field errors on the two empty sub-fields", () => {
+    const result = parseEditMerchantForm(
+      fullForm({ pickup_line: "filled", pickup_district: "", pickup_emirate: "" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.pickup_district).toBeTruthy();
+      expect(result.fieldErrors.pickup_emirate).toBeTruthy();
+      // The supplied sub-field is not flagged.
+      expect(result.fieldErrors.pickup_line).toBeUndefined();
+    }
+  });
+
+  it("two-of-three pickup → field error on the single empty sub-field", () => {
+    const result = parseEditMerchantForm(
+      fullForm({
+        pickup_line: "filled",
+        pickup_district: "filled",
+        pickup_emirate: "",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.pickup_emirate).toBeTruthy();
+      expect(result.fieldErrors.pickup_line).toBeUndefined();
+      expect(result.fieldErrors.pickup_district).toBeUndefined();
+    }
+  });
+
+  it("whitespace-only pickup sub-field counts as empty (treated same as missing)", () => {
+    // Common operator paste-noise. The all-or-none rule operates on
+    // post-trim non-empty count.
+    const result = parseEditMerchantForm(
+      fullForm({
+        pickup_line: "filled",
+        pickup_district: "   ",
+        pickup_emirate: "   ",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.pickup_district).toBeTruthy();
+      expect(result.fieldErrors.pickup_emirate).toBeTruthy();
     }
   });
 });

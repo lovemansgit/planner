@@ -34,8 +34,32 @@ import type {
   CreateMerchantInput,
   ListMerchantsFilters,
   Merchant,
+  PickupAddress,
   TenantStatus,
 } from "./types";
+
+// -----------------------------------------------------------------------------
+// updateMerchantFields patch shape (Day 25 / T3 Edit Merchant)
+// -----------------------------------------------------------------------------
+
+/**
+ * Patch shape consumed by updateMerchantFields. Every field is
+ * optional; absent fields are preserved via COALESCE against the
+ * current row value. The service layer is responsible for the
+ * "at least one field" + "no-op diff" gates per plan §3.2; this
+ * repo fn issues whatever UPDATE the caller asks for.
+ *
+ * `pickupAddress` is all-or-none at the service boundary — when
+ * supplied here it carries all three sub-fields (the service has
+ * already validated non-empty trimming). When omitted, none of the
+ * three pickup_address_* columns are touched.
+ */
+export interface UpdateMerchantFieldsPatch {
+  readonly name?: string;
+  readonly slug?: string;
+  readonly pickupAddress?: PickupAddress;
+  readonly suitefleetCustomerCode?: string;
+}
 
 // -----------------------------------------------------------------------------
 // Row shape and mapper
@@ -49,6 +73,7 @@ type TenantRow = {
   pickup_address_line: string | null;
   pickup_address_district: string | null;
   pickup_address_emirate: string | null;
+  suitefleet_customer_code: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -94,6 +119,7 @@ function mapRow(row: TenantRow): Merchant {
     name: row.name,
     status: row.status as TenantStatus,
     pickupAddress,
+    suitefleetCustomerCode: row.suitefleet_customer_code,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -217,6 +243,62 @@ export async function updateMerchantStatus(
     RETURNING id
   `);
   return rows.length > 0;
+}
+
+/**
+ * UPDATE one tenant row with the supplied patch — Pattern A
+ * COALESCE-style: each editable column is updated to the patch value
+ * when supplied, otherwise preserved via COALESCE against the current
+ * column. Null-sentinel binds work because none of the editable
+ * columns legitimately accept NULL as a "clear" semantic for v1
+ * (the create form requires all of name / slug / pickup_address_* /
+ * suitefleet_customer_code on insert, and the edit form preserves
+ * those values via pre-fill).
+ *
+ * If a future field added here legitimately accepts NULL ("clear this
+ * field"), Pattern A breaks and we revisit; for v1 scope this is fine.
+ *
+ * `updated_at = now()` is set explicitly — defensive in case the
+ * BEFORE-UPDATE trigger from 0001 is ever modified, mirrors the
+ * existing `updateMerchantStatus:215` shape.
+ *
+ * Returns the updated row (mapped to camelCase) on success; null when
+ * no row matched (vanished mid-tx — caller's FOR UPDATE lock should
+ * prevent this in practice, returns null here so the service can map
+ * to NotFoundError consistently with `updateMerchantStatus`).
+ *
+ * Throws PostgresError 23505 when the patched slug collides with
+ * another tenant's slug; the caller's service layer maps to
+ * ConflictError via the existing `isUniqueViolation` shape used by
+ * `createMerchant`.
+ */
+export async function updateMerchantFields(
+  tx: DbTx,
+  id: Uuid,
+  patch: UpdateMerchantFieldsPatch,
+): Promise<Merchant | null> {
+  const name = patch.name ?? null;
+  const slug = patch.slug ?? null;
+  const pickupLine = patch.pickupAddress?.line ?? null;
+  const pickupDistrict = patch.pickupAddress?.district ?? null;
+  const pickupEmirate = patch.pickupAddress?.emirate ?? null;
+  const suitefleetCustomerCode = patch.suitefleetCustomerCode ?? null;
+
+  const rows = await tx.execute<TenantRow>(sqlTag`
+    UPDATE tenants
+    SET
+      name = COALESCE(${name}, name),
+      slug = COALESCE(${slug}, slug),
+      pickup_address_line = COALESCE(${pickupLine}, pickup_address_line),
+      pickup_address_district = COALESCE(${pickupDistrict}, pickup_address_district),
+      pickup_address_emirate = COALESCE(${pickupEmirate}, pickup_address_emirate),
+      suitefleet_customer_code = COALESCE(${suitefleetCustomerCode}, suitefleet_customer_code),
+      updated_at = now()
+    WHERE id = ${id}
+    RETURNING *
+  `);
+
+  return rows[0] ? mapRow(rows[0]) : null;
 }
 
 /**

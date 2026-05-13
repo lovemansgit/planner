@@ -824,6 +824,17 @@ const EVENT_TYPES_DRAFT = {
       "tenant_id (uuid), from_status (literal 'active'), to_status (literal 'inactive').",
     systemOnly: true,
   },
+
+  "merchant.updated": {
+    id: "merchant.updated",
+    resource: "merchant",
+    action: "updated",
+    description:
+      "Day 25 / T3. A merchant tenant was updated via the Transcorp-staff updateMerchant service. Captures field-level diffs (before / after) for each changed column. Does NOT capture status changes — those land in merchant.activated / merchant.deactivated. systemOnly per brief §2.3 (v1.12).",
+    metadataNotes:
+      "tenant_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: name, slug, pickup_address.line, pickup_address.district, pickup_address.emirate, suitefleet_customer_code). DELIBERATE divergence from merchant.created's NESTED pickup_address shape: this event uses FLAT dot-notation in the diff so single-sub-field changes surface atomically to audit-trail readers without nested-object parsing. Only changed fields appear in the changes object; an update that mutates zero fields throws ValidationError and never reaches emit.",
+    systemOnly: true,
+  },
 } as const satisfies Record<string, EventTypeDef>;
 
 /**

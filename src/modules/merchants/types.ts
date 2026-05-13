@@ -90,6 +90,16 @@ export interface Merchant {
    * all three sub-fields populated.
    */
   readonly pickupAddress: PickupAddress | null;
+  /**
+   * SF outbound routing identifier per brief §3.6 v1.7 amendment.
+   * Day 25 / T3 — projected onto the DTO so the edit-merchant
+   * pre-fill + diff computation can read it without a side query.
+   * `null` for legacy tenants that pre-date the Day-22 §5.3 Gate 2
+   * closure; `createMerchant` requires non-null and the SF resolver
+   * (`credentials/suitefleet-resolver.ts:91`) skips tenants with
+   * NULL/empty values.
+   */
+  readonly suitefleetCustomerCode: string | null;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
 }
@@ -149,6 +159,48 @@ export interface DeactivateMerchantResult {
   readonly tenantId: Uuid;
   readonly previousStatus: "active";
   readonly newStatus: "inactive";
+}
+
+/**
+ * updateMerchant input — Day 25 / T3. All fields optional; at least
+ * one must be provided AND the resolved patch must produce a real diff
+ * vs the current row (no-op throws ValidationError per plan §3.2).
+ *
+ * `pickupAddress` is all-or-none: when supplied the nested object
+ * carries every sub-field (`line`, `district`, `emirate`). Partial
+ * pickup updates (operator "just wants to fix the district") use the
+ * pre-fill on the edit form to re-supply unchanged values; the service
+ * contract stays simple (no merge-with-current logic at the service
+ * layer).
+ *
+ * `name` / `slug` / `suitefleetCustomerCode` follow the same shape as
+ * `CreateMerchantInput` — same regexes/validators are reused at the
+ * service surface.
+ *
+ * Status changes are explicitly NOT in this input shape — they go
+ * through activateMerchant / deactivateMerchant (separate
+ * state-machine surface with their own audit events).
+ */
+export interface UpdateMerchantInput {
+  readonly name?: string;
+  readonly slug?: string;
+  readonly pickupAddress?: PickupAddress;
+  readonly suitefleetCustomerCode?: string;
+}
+
+/**
+ * updateMerchant result. `changedFields` enumerates the diff keys that
+ * the audit `merchant.updated` event captured (flat dot-notation:
+ * `name`, `slug`, `pickup_address.line`, `pickup_address.district`,
+ * `pickup_address.emirate`, `suitefleet_customer_code`). Mirrors the
+ * audit `changes` payload's top-level keys so the API surface can
+ * surface "what changed" to operators or tests without re-querying the
+ * audit table.
+ */
+export interface UpdateMerchantResult {
+  readonly status: "updated";
+  readonly tenantId: Uuid;
+  readonly changedFields: readonly string[];
 }
 
 /**

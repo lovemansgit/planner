@@ -156,15 +156,21 @@ function Row({ merchant }: { merchant: Merchant }) {
         {formatCreatedAt(merchant.createdAt)}
       </Td>
       <Td>
-        {action === null ? (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        ) : (
-          <MerchantStatusModal
-            tenantId={merchant.tenantId}
-            merchantName={merchant.name}
-            variant={action}
-          />
-        )}
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/admin/merchants/${merchant.tenantId}/edit`}
+            className="inline-flex min-w-[120px] items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+          >
+            Edit
+          </Link>
+          {action === null ? null : (
+            <MerchantStatusModal
+              tenantId={merchant.tenantId}
+              merchantName={merchant.name}
+              variant={action}
+            />
+          )}
+        </div>
       </Td>
     </tr>
   );
