@@ -24,6 +24,7 @@ import {
   activateMerchant,
   createMerchant,
   deactivateMerchant,
+  updateMerchant,
 } from "@/modules/merchants/service";
 import {
   ConflictError,
@@ -34,7 +35,7 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
 
-import { parseCreateMerchantForm } from "./_helpers";
+import { parseCreateMerchantForm, parseEditMerchantForm } from "./_helpers";
 
 // -----------------------------------------------------------------------------
 // Activate / deactivate (status modal)
@@ -155,6 +156,86 @@ export async function createMerchantAction(
       // Service-side validation differs from client-side (e.g.,
       // unicode-tricky names that pass our trim-only check).
       // Surface as a single combined error on `name` so it's visible.
+      return {
+        kind: "validation",
+        fieldErrors: { _form: err.message },
+      };
+    }
+    throw err;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Update (edit merchant form) — Day 25 / T3
+// -----------------------------------------------------------------------------
+
+/**
+ * Result variants for the edit-merchant form. Mirrors
+ * `CreateActionResult` shape with an additional `not_found` variant
+ * (the merchant could be archived/deleted between page load and submit
+ * — surfaces as inline error + nudge to return to list).
+ */
+export type UpdateActionResult =
+  | {
+      readonly kind: "updated";
+      readonly tenantId: string;
+      readonly changedFields: readonly string[];
+    }
+  | {
+      readonly kind: "validation";
+      readonly fieldErrors: Readonly<Record<string, string>>;
+    }
+  | { readonly kind: "conflict"; readonly message: string }
+  | { readonly kind: "forbidden"; readonly message: string }
+  | { readonly kind: "not_found"; readonly message: string };
+
+export async function updateMerchantAction(
+  tenantId: string,
+  _prevState: UpdateActionResult | { kind: "idle" },
+  formData: FormData,
+): Promise<UpdateActionResult> {
+  const requestId = randomUUID();
+  const parsed = parseEditMerchantForm(formData);
+  if (!parsed.ok) {
+    return { kind: "validation", fieldErrors: parsed.fieldErrors };
+  }
+
+  try {
+    const ctx = await buildRequestContext(
+      `/admin/merchants/${tenantId}/edit`,
+      requestId,
+    );
+    const result = await updateMerchant(ctx, tenantId as Uuid, {
+      name: parsed.value.name,
+      slug: parsed.value.slug,
+      pickupAddress: parsed.value.pickupAddress,
+      suitefleetCustomerCode: parsed.value.suitefleetCustomerCode,
+    });
+    revalidatePath("/admin/merchants", "page");
+    return {
+      kind: "updated",
+      tenantId: result.tenantId,
+      changedFields: result.changedFields,
+    };
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      return { kind: "conflict", message: err.message };
+    }
+    if (err instanceof ForbiddenError) {
+      return {
+        kind: "forbidden",
+        message: "You don't have permission to edit merchants.",
+      };
+    }
+    if (err instanceof NotFoundError) {
+      return {
+        kind: "not_found",
+        message: "Merchant not found. It may have been archived or deleted.",
+      };
+    }
+    if (err instanceof ValidationError) {
+      // Service-side validation surface (no-changes, length cap drift,
+      // etc.) — single combined error on `_form`.
       return {
         kind: "validation",
         fieldErrors: { _form: err.message },

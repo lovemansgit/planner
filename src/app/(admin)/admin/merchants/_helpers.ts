@@ -190,3 +190,111 @@ export function parseCreateMerchantForm(formData: FormData): ParseCreateMerchant
     value: { name, slug, line, district, emirate, suitefleetCustomerCode },
   };
 }
+
+// -----------------------------------------------------------------------------
+// Edit-form parsing (Day 25 / T3)
+// -----------------------------------------------------------------------------
+
+/**
+ * Edit-form parsed shape. Differs from `ParsedCreateMerchantInput` in
+ * one structural way: pickup-address is OPTIONAL and all-or-none. If
+ * all three pickup sub-fields are empty (legacy tenant with NULL
+ * pickup columns + operator chose not to fill them in), the parser
+ * returns `pickupAddress: undefined` and the service input shape
+ * carries no pickup-address patch — the service-layer diff sees no
+ * pickup change. If only some pickup sub-fields are filled, the
+ * parser returns a field-level error per the all-or-none rule.
+ *
+ * `name` / `slug` / `suitefleetCustomerCode` remain required non-empty
+ * (the create form requires all of them at insert; the edit form
+ * pre-fills them so empty submit is the operator deleting them
+ * intentionally, which we reject).
+ */
+export interface ParsedEditMerchantInput {
+  readonly name: string;
+  readonly slug: string;
+  readonly pickupAddress?: {
+    readonly line: string;
+    readonly district: string;
+    readonly emirate: string;
+  };
+  readonly suitefleetCustomerCode: string;
+}
+
+export type ParseEditMerchantResult =
+  | { readonly ok: true; readonly value: ParsedEditMerchantInput }
+  | { readonly ok: false; readonly fieldErrors: Readonly<Record<string, string>> };
+
+/**
+ * Parse + validate raw FormData from the edit form. The shape is
+ * symmetric to `parseCreateMerchantForm` except for the all-or-none
+ * pickup rule (see ParsedEditMerchantInput JSDoc).
+ *
+ * Operator intent inferred from non-empty sub-field count:
+ *   - 0 of 3 → pickupAddress omitted from output (no pickup change).
+ *   - 3 of 3 → pickupAddress in output (operator wants to set/update).
+ *   - 1 or 2 of 3 → field-level errors on the empty sub-fields per
+ *     the all-or-none rule. (Cannot legitimately update only one
+ *     sub-field — service requires all three on the patch.)
+ */
+export function parseEditMerchantForm(formData: FormData): ParseEditMerchantResult {
+  const fieldErrors: Record<string, string> = {};
+  const trimmed = (key: string): string => {
+    const v = formData.get(key);
+    return typeof v === "string" ? v.trim() : "";
+  };
+
+  const name = trimmed("name");
+  if (name.length === 0) fieldErrors.name = "Name is required.";
+
+  const rawSlug = trimmed("slug");
+  const slug = normaliseSlug(rawSlug);
+  if (slug.length === 0) {
+    fieldErrors.slug = "Slug is required.";
+  } else if (!validateSlug(slug)) {
+    fieldErrors.slug =
+      "Slug must be lowercase letters, numbers, and hyphens (1-60 characters).";
+  }
+
+  const line = trimmed("pickup_line");
+  const district = trimmed("pickup_district");
+  const emirate = trimmed("pickup_emirate");
+  const pickupNonEmptyCount =
+    (line.length > 0 ? 1 : 0) +
+    (district.length > 0 ? 1 : 0) +
+    (emirate.length > 0 ? 1 : 0);
+
+  let pickupAddress: ParsedEditMerchantInput["pickupAddress"];
+  if (pickupNonEmptyCount === 0) {
+    pickupAddress = undefined;
+  } else if (pickupNonEmptyCount === 3) {
+    pickupAddress = { line, district, emirate };
+  } else {
+    // 1 or 2 of 3 — surface a field-level error on each empty
+    // sub-field so the operator sees which one to fill in.
+    if (line.length === 0)
+      fieldErrors.pickup_line = "Address line is required when any pickup field is set.";
+    if (district.length === 0)
+      fieldErrors.pickup_district =
+        "District is required when any pickup field is set.";
+    if (emirate.length === 0)
+      fieldErrors.pickup_emirate =
+        "Emirate is required when any pickup field is set.";
+  }
+
+  const suitefleetCustomerCode = trimmed("suitefleet_customer_code");
+  if (suitefleetCustomerCode.length === 0) {
+    fieldErrors.suitefleet_customer_code = "SuiteFleet customer code is required.";
+  } else if (!CLIENT_SUITEFLEET_CUSTOMER_CODE_RE.test(suitefleetCustomerCode)) {
+    fieldErrors.suitefleet_customer_code =
+      "Must be a positive integer (e.g. 588). No leading zeros, no spaces.";
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return { ok: false, fieldErrors };
+  }
+  return {
+    ok: true,
+    value: { name, slug, pickupAddress, suitefleetCustomerCode },
+  };
+}
