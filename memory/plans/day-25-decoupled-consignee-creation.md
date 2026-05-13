@@ -164,7 +164,12 @@ export async function createAdHocTask(
 **Behavior:**
 
 1. Permission gate via `requirePermission(ctx, "task:create")` (the existing permission registered Day-19 per `decision_task_module_amendment_v1.md`).
-2. Resolve `addressId`: if null, `SELECT id FROM addresses WHERE consignee_id = ? AND is_primary = true LIMIT 1` (single-statement; no CTE — ad-hoc has no subscription/rotation/exception chain). If provided, validate it belongs to the same consignee.
+2. **Tenant-scoped pre-resolution (FINDING 1, §3.6 round-1 verdict).** Open a `withTenant(ctx.tenantId, async (tx) => {...})` block to:
+   - Verify the consignee belongs to the current tenant (RLS-enforced via the `withTenant` session config).
+   - Resolve `addressId`: if null, `SELECT id FROM addresses WHERE consignee_id = ? AND is_primary = true LIMIT 1` (single-statement; no CTE — ad-hoc has no subscription/rotation/exception chain).
+   - If `addressId` provided, validate it belongs to the same consignee in the same tenant scope.
+   Return the resolved `addressId` from the `withTenant` block.
+   This separate `withTenant` is necessary because the delegated `createTask` uses `withServiceRole` internally (not `withTenant`); RLS scoping for the consignee + address validation must happen before delegation.
 3. Validate window: ≥30 minutes gap; date is not historical.
 4. Delegate to existing `createTask`:
    ```typescript
@@ -326,7 +331,7 @@ LIMIT $3 OFFSET $4
 ```
 
 - `src/app/(app)/consignees/page.tsx` — pass `taskCount` through to the list row component.
-- `src/app/(app)/consignees/_components/ConsigneeRow.tsx` (or equivalent — find current row component file path during implementation; not enumerated in audit but presumed under `consignees/_components/`) — render amber `NO TASKS` pill when `taskCount === 0`.
+- `src/app/(app)/consignees/_components/ConsigneesTable.tsx` (FINDING 3 resolved — Day-24 successor to the legacy `ConsigneesSearchableTable`; pure server-render, no separate Row file — rows are inline within the table body) — render amber `NO TASKS` pill inline next to each consignee's name in the table's first `<Td>` when `row.taskCount === 0`. Extend the `Props.rows` element type to include `taskCount`.
 
 **Styling:** Amber pill using existing tokens.
 ```css
@@ -447,6 +452,8 @@ No change to role mappings.
 No new event types needed:
 - `consignee.created` — already at `src/modules/audit/event-types.ts:286`. Reused.
 - `task.created` — already at `src/modules/audit/event-types.ts:397`. Reused by `createAdHocTask` via the delegated `createTask` emit.
+
+**Brief-vs-plan reconciliation (FINDING 2, §3.6 round-1 verdict).** Brief v1.12 §3.1.4 (memo `decision_brief_v1_12_amendment_decouple_and_edit_merchant.md`) names a new event `task.ad_hoc.created` for the ad-hoc-task emit. The plan reuses the existing `task.created` instead. Reviewer ruling: reuse wins — differentiation via `metadata.created_via='manual_admin'` + `actor_kind='user'` is sufficient for audit consumers; event-type proliferation has a real cost (more audit-query indexes, more documentation surface) that the lookup-via-metadata pattern avoids. The v1.12 brief amendment memo gets a 2-line footer at code-PR time clarifying the reuse decision. The brief itself does not need a v1.13 amendment — the canonical event name was always going to be reconciled at implementation time.
 
 Metadata refinement (non-breaking): `onboarded_via` value changes from `"wizard"` to `"flat_form"` for `consignee.created`. Audit-query consumers downstream are unaffected (the existing analytics retros key on `event_type`, not metadata values).
 
