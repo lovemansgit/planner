@@ -31,7 +31,7 @@ import {
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
-import { CopyableUrl } from "./client";
+import { CopyableUrl } from "@/components/CopyableUrl";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;

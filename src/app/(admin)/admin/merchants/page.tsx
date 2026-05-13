@@ -137,40 +137,49 @@ function MerchantsTable({ rows }: { rows: readonly Merchant[] }) {
 function Row({ merchant }: { merchant: Merchant }) {
   const badge = statusBadgeSurface(merchant.status);
   const action = statusAction(merchant.status);
+  const detailHref = `/admin/merchants/${merchant.tenantId}`;
+  // Whole-row click target per PR #270 §9.3 ruling. HTML doesn't allow
+  // <a> to wrap <tr>; we instead wrap each non-Actions cell's content
+  // in a <Link> pointing at the detail URL, and apply row-level hover
+  // tint + cursor:pointer. Operator gets a single whole-row click
+  // affordance; middle-click new-tab works on any cell; Actions cell
+  // preserves its own button behavior (no Link wrap there).
   return (
-    <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
+    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
       <Td>
-        <span className="font-medium text-navy">{merchant.name}</span>
+        <Link href={detailHref} className="block font-medium text-navy">
+          {merchant.name}
+        </Link>
       </Td>
       <Td className="font-mono text-xs tabular-nums text-[color:var(--color-text-secondary)]">
-        {merchant.slug}
+        <Link href={detailHref} className="block">
+          {merchant.slug}
+        </Link>
       </Td>
       <Td>
-        <span
-          className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
-        >
-          {badge.label}
-        </span>
+        <Link href={detailHref} className="block">
+          <span
+            className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
+          >
+            {badge.label}
+          </span>
+        </Link>
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        {formatCreatedAt(merchant.createdAt)}
+        <Link href={detailHref} className="block">
+          {formatCreatedAt(merchant.createdAt)}
+        </Link>
       </Td>
       <Td>
-        <div className="flex items-center gap-3">
-          <Link
-            href={`/admin/merchants/${merchant.tenantId}/edit`}
-            className="inline-flex min-w-[120px] items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-          >
-            Edit
-          </Link>
-          {action === null ? null : (
-            <MerchantStatusModal
-              tenantId={merchant.tenantId}
-              merchantName={merchant.name}
-              variant={action}
-            />
-          )}
-        </div>
+        {action === null ? (
+          <span className="text-[color:var(--color-text-tertiary)]">—</span>
+        ) : (
+          <MerchantStatusModal
+            tenantId={merchant.tenantId}
+            merchantName={merchant.name}
+            variant={action}
+          />
+        )}
       </Td>
     </tr>
   );

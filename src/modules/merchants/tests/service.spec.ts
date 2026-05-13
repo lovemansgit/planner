@@ -575,13 +575,19 @@ describe("withServiceRole reason-string convention", () => {
 });
 
 // -----------------------------------------------------------------------------
-// getMerchantById (Day 25 / T3 — read-for-edit)
+// getMerchantById (Day 25 / T2 — read gate relaxed to merchant:read_all)
+//
+// Originally shipped Day 25 AM (PR #264 / C-3) gated on merchant:update
+// per a route-specific tightness argument. PR #270 plan §9.2 inverted
+// the ruling: the new read-only /admin/merchants/[id] detail page
+// legitimately needs read access without the update permission, so the
+// gate relaxed to merchant:read_all (the broader legitimate need).
+// Discipline carry-forward: gate service-layer fns at the broadest
+// legitimate need, not the tightest single-caller posture.
 // -----------------------------------------------------------------------------
 
 describe("getMerchantById", () => {
-  const PERM = "merchant:update" as const;
-
-  it("throws ForbiddenError when actor lacks merchant:update", async () => {
+  it("throws ForbiddenError when actor lacks merchant:read_all", async () => {
     await expect(getMerchantById(ctx([]), TENANT_ID)).rejects.toBeInstanceOf(
       ForbiddenError,
     );
@@ -589,24 +595,44 @@ describe("getMerchantById", () => {
     expect(mockFindById).not.toHaveBeenCalled();
   });
 
-  it("returns the mapped row when found (with merchant:update perm)", async () => {
+  it("returns the mapped row when found (with merchant:read_all perm)", async () => {
     mockFindById.mockResolvedValue(merchantFixture());
-    const result = await getMerchantById(ctx([PERM]), TENANT_ID);
+    const result = await getMerchantById(
+      ctx(["merchant:read_all" as const]),
+      TENANT_ID,
+    );
     expect(result?.tenantId).toBe(TENANT_ID);
     expect(mockFindById).toHaveBeenCalledOnce();
   });
 
-  it("returns null when the merchant is not found", async () => {
-    mockFindById.mockResolvedValue(null);
-    expect(await getMerchantById(ctx([PERM]), TENANT_ID)).toBeNull();
+  it("also accepts merchant:update-holding actor (transcorp-sysadmin holds both via ALL)", async () => {
+    // The sysadmin role auto-grants every permission via roles.ts ALL
+    // pattern, so an actor reaching the edit page (merchant:update)
+    // ALSO has merchant:read_all in practice. Pin both code paths
+    // green — the gate requires read_all, NOT the absence of update.
+    mockFindById.mockResolvedValue(merchantFixture());
+    const result = await getMerchantById(
+      ctx(["merchant:read_all" as const, "merchant:update" as const]),
+      TENANT_ID,
+    );
+    expect(result?.tenantId).toBe(TENANT_ID);
   });
 
-  it("does NOT accept merchant:read_all alone (tighter gate per plan §9.3 ruling)", async () => {
-    // §9.3 ruling: getMerchantById is gated on merchant:update, NOT
-    // merchant:read_all. Operators with read-only cross-tenant access
-    // must not pre-flight the edit page. Pin the contract.
+  it("returns null when the merchant is not found", async () => {
+    mockFindById.mockResolvedValue(null);
+    expect(
+      await getMerchantById(ctx(["merchant:read_all" as const]), TENANT_ID),
+    ).toBeNull();
+  });
+
+  it("does NOT accept merchant:update alone (gate is read_all, not update)", async () => {
+    // The inverted gate (PR #270 plan §9.2) requires read_all
+    // specifically; merchant:update alone is not sufficient. In
+    // practice no role holds update without also holding read_all
+    // (transcorp-sysadmin has ALL); this pin is the contract for
+    // future role-mix changes.
     await expect(
-      getMerchantById(ctx(["merchant:read_all" as const]), TENANT_ID),
+      getMerchantById(ctx(["merchant:update" as const]), TENANT_ID),
     ).rejects.toBeInstanceOf(ForbiddenError);
   });
 });

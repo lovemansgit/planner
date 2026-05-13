@@ -1,10 +1,16 @@
 "use client";
 
-// /admin/webhook-config — interactive client island (Day 9 / P4a).
+// Shared copy-to-clipboard primitive (Day 25 / T2 extraction).
 //
-// Sole interactive element on the page: the copy-to-clipboard control
-// for the webhook URL. Server component renders the URL string; this
-// island handles the click + transient confirmation state.
+// Originally shipped Day 9 / P4a as the interactive client island on
+// /admin/webhook-config; relocated to src/components/ during the
+// admin-merchants-detail page lane (PR #270 plan §6) so both
+// consumers (tenant-admin webhook-config + transcorp-staff merchant
+// detail) can reuse without page-colocation coupling.
+//
+// Behavior unchanged from the original implementation: idle → copied
+// (2s revert) → failed (2s revert) state machine driven by a single
+// onClick handler.
 //
 // Defensive posture: navigator.clipboard is gated on async permission
 // in some browsers + may throw on http (non-secure context). The
