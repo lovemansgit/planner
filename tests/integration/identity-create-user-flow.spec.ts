@@ -102,21 +102,27 @@ describe("identity create-user flow — integration", () => {
   });
 
   afterAll(async () => {
-    await withServiceRole("identity-flow integration teardown", async (tx) => {
-      // Order matters: cascades from auth.users wipe public.users +
-      // role_assignments. Tenants come last (RESTRICT FK from users
-      // would otherwise block).
-      await tx.execute(sqlTag`
-        DELETE FROM auth.users WHERE id IN (
-          ${AUTH_USER_A}, ${AUTH_USER_B}, ${AUTH_USER_TRANSCORP}
-        )
-      `);
-      await tx.execute(sqlTag`
-        DELETE FROM tenants WHERE id IN (
-          ${TENANT_A}, ${TENANT_B}, ${TENANT_ARCHIVED}, ${TRANSCORP_ID_FOR_TEST}
-        )
-      `);
-    });
+    // audit_events_no_delete RULE blocks DELETE FROM tenants when matching
+    // audit_events exist (see memory/followup_audit_rule_cascade_conflict.md).
+    // Best-effort teardown; swallow the rule-induced failure. auth.users
+    // cleanup runs first (cascades to public.users + role_assignments);
+    // tenant DELETE may fail per audit RULE — caught + ignored.
+    try {
+      await withServiceRole("identity-flow integration teardown", async (tx) => {
+        await tx.execute(sqlTag`
+          DELETE FROM auth.users WHERE id IN (
+            ${AUTH_USER_A}, ${AUTH_USER_B}, ${AUTH_USER_TRANSCORP}
+          )
+        `);
+        await tx.execute(sqlTag`
+          DELETE FROM tenants WHERE id IN (
+            ${TENANT_A}, ${TENANT_B}, ${TENANT_ARCHIVED}, ${TRANSCORP_ID_FOR_TEST}
+          )
+        `);
+      });
+    } catch {
+      /* audit RULE; ignore */
+    }
   });
 
   // -------------------------------------------------------------------------
