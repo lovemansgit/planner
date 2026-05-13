@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.11
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match); v1.11 amendment filed Day 22 (11 May 2026) AM — single-address MVP for the `/consignees/new` 3-step wizard (multi-address + per-weekday rotation deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`).
+**Version:** v1.12
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match); v1.11 amendment filed Day 22 (11 May 2026) AM — single-address MVP for the `/consignees/new` 3-step wizard (multi-address + per-weekday rotation deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`); v1.12 amendment filed Day 25 (13 May 2026) AM — decoupled consignee creation from subscription creation (wizard removed; flat form lands operator on Overview with Create-subscription + Add-ad-hoc-task CTAs); edit-merchant surface added (`/admin/merchants/[id]/edit`, `updateMerchant` service, `merchant:update` permission).
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -269,9 +269,17 @@ Bounded pause per BRD glossary:
 - Insert `consignee_crm_events` row
 - Emit `consignee.crm_state.changed`
 
-**`createMerchant(ctx, { name, slug, pickup_address })`** / **`activateMerchant`** / **`deactivateMerchant`:**
+**`createConsignee(ctx, { identity, address })`:**
 
-Transcorp-staff scoped. Audit-emits.
+Decoupled from subscription creation (v1.12 amendment). Creates the `consignees` row + a single primary `addresses` row (`is_primary=true`) in one `withTenant` transaction. No subscription side-effects; no tasks materialised. Returns `{ consignee_id }`. Operator lands on `/consignees/[id]` Overview tab where the Create-subscription and Add-ad-hoc-task CTAs are surfaced (see §3.3.3). Supersedes the v1.11 `createConsigneeWithSubscription` orchestration; the existing `createSubscription` service is invoked separately from the Overview-tab CTA flow with no signature change.
+
+**`createAdHocTask(ctx, consigneeId, { date, window, address_id?, notes? })`:**
+
+One-off task creation against an existing consignee, independent of any subscription. Resolves `address_id` to the consignee's primary address when omitted; validates the supplied `address_id` belongs to the same consignee when provided. Inserts the `tasks` row immediately in Planner DB (`internal_status='PENDING'`) and enqueues the SF outbound push to QStash for near-real-time delivery — matches the optimistic-ack pattern from skip/cancel flows. Operator surfaces a "Saved — pushing to SuiteFleet" toast on success. Audit-emits `task.ad_hoc.created` with the consignee + date + address-id triplet for traceability. Permission: existing `task:create` (already registered Day-19 per `decision_task_module_amendment_v1.md`).
+
+**`createMerchant(ctx, { name, slug, pickup_address })`** / **`updateMerchant(ctx, tenantId, { name?, slug?, pickup_address?, suitefleet_customer_code? })`** / **`activateMerchant`** / **`deactivateMerchant`:**
+
+Transcorp-staff scoped. Audit-emits. `updateMerchant` (v1.12 amendment) audit-emits `merchant.updated` with the diff of changed fields only — unchanged columns omitted from the body to keep the audit row narrow. Cross-field validation: slug uniqueness across all tenants (collision returns `ConflictError`); `suitefleet_customer_code` must parse as positive integer; slug change surfaces a client-side warning dialog pre-submit ("Changing the slug will break any existing bookmarks or saved URLs that use the current slug. Continue?"). `tenants.status` is NOT editable through this method — activate/deactivate remain the only transition paths. Permission: `merchant:update` (new, transcorp-sysadmin only).
 
 **`appendWithoutSkip(ctx, subscriptionId, { target_date?, reason })`:**
 
@@ -410,8 +418,9 @@ Engineers reference SF v2.0 docs at `suitefleet.readme.io` for exact paths/paylo
 
 #### 3.2.1 Routes
 
-- `/admin/merchants` — list view, all merchants, status column, row-level activate/deactivate
+- `/admin/merchants` — list view, all merchants, status column, row-level EDIT + ACTIVATE/DEACTIVATE actions
 - `/admin/merchants/new` — create form: name, slug, pickup address (street, district, emirate)
+- `/admin/merchants/[id]/edit` — edit form (v1.12 amendment) mirroring the `/new` component pre-filled from the current `tenants` row. Editable fields: name, slug, pickup address (line/district/emirate), SF customer code. `tenants.status` is intentionally read-only here — activate/deactivate remain their own row actions. Slug-change confirm dialog gates submit. Permission: `merchant:update` (transcorp-sysadmin only).
 
 #### 3.2.2 Auth posture
 
@@ -422,18 +431,20 @@ Engineers reference SF v2.0 docs at `suitefleet.readme.io` for exact paths/paylo
 
 ### 3.3 Frontend additions — Merchant operator
 
-#### 3.3.1 Consignee onboarding wizard (`/consignees/new`)
+#### 3.3.1 Consignee onboarding — flat form (`/consignees/new`)
 
-**Three-step wizard** (per BRD §8.1 + Claude Code Brief §4.6, with v1.11 amendment narrowing the multi-address scope):
+**Flat single-page form** (v1.12 amendment; supersedes the v1.11 three-step wizard). Onboarding decouples from subscription creation — real operators onboard consignees before the plan is decided, or for one-off ad-hoc deliveries. Form aesthetic mirrors `/admin/merchants/new`: two visually-distinct sections with subtle dividers, single submit button, no step indicators.
 
-**Step 1 — Identity:**
+**Identity section:**
 - Full name (required)
-- Primary phone (required, validated format per country)
-- Alternative phone — **Phase 2** (single phone for v1)
+- Primary phone (required, E.164 per-country validation)
 - Email (optional, recommended for notifications)
-- Merchant internal consignee ID — **Phase 2** (deferred per Day-12 decision)
+- Delivery notes (optional, operator → driver hand-off context)
+- Merchant internal reference (optional)
+- Internal notes (operator-only)
+- Alternative phone — **Phase 2** (single phone for v1)
 
-**Step 2 — Single primary delivery address (v1.11 amendment):**
+**Address section — single primary delivery address (v1.11 amendment carries forward):**
 - Address label (Home / Office / Other)
 - Address line (building / villa / unit, street)
 - District
@@ -441,26 +452,20 @@ Engineers reference SF v2.0 docs at `suitefleet.readme.io` for exact paths/paylo
 - Lat / lng — **Phase 2** (smart geotag; v1 captures address text only)
 - **Alternative addresses + per-weekday rotation deferred to Phase 2** per `memory/followup_multi_address_rotation_phase_2.md`. The schema (migration 0014) is multi-address-ready; v1 ships single primary so the UI lane stays in budget.
 
-**Step 3 — Subscription:**
-- Plan name (free text for MVP; configurable selectable list Phase 2)
-- Start date (default today)
-- End date (optional; leaving empty = open-ended)
-- Days of week (clickable Mon–Sun pills via the WeekdaySelector primitive)
-- Default delivery time window (start time, end time, ≥30 minutes)
-- Internal notes (operator-only)
-- Address rotation tile — **Phase 2** (single primary fallback per migration 0014's COALESCE pattern handles per-day routing in v1)
+**On submit:** creates `consignees` row + single primary `addresses` row (`is_primary=true`) atomically via the v1.12 `createConsignee` service (see §3.1.4). No subscription, no tasks. Redirect to `/consignees/[id]` Overview tab where Create-subscription and Add-ad-hoc-task CTAs are surfaced for the second beat (see §3.3.3 empty-state behavior).
 
-**On final submit:** creates consignee + single primary address (`is_primary=true`) + subscription in a single `withTenant` transaction via the `createConsigneeWithSubscription` orchestration (`src/modules/consignees/onboarding.ts`). Zero rotation rows are written; the materialization CTE's COALESCE final-fallback (`task-materialization/cte-builder.ts:182-187`) routes every materialised task to the primary address. Redirect to `/consignees/[id]` calendar view.
+**Subscription creation** moves to its own standalone surface, reached from the Overview-tab CTA. Plan name, start/end date, days of week, delivery window, internal notes — all captured on a dedicated `/consignees/[id]/subscriptions/new` form using the existing `createSubscription` service (no signature change). Address rotation tile remains **Phase 2** (single primary fallback per migration 0014's COALESCE pattern handles per-day routing in v1).
 
-**Schedule rules** (cut-off time, maximum skips, blackout dates, loyalty tier) — **Phase 2** (the v1 wizard relies on merchant defaults and the existing 18:00 Dubai cut-off convention).
+**Schedule rules** (cut-off time, maximum skips, blackout dates, loyalty tier) — **Phase 2** (the v1 surfaces rely on merchant defaults and the existing 18:00 Dubai cut-off convention).
 
 #### 3.3.2 Consignee list view (`/consignees`)
 
 Evolved from current read-only list. New affordances:
 - CRM state badge column (color-coded per state)
+- **NO TASKS flag (v1.12 amendment)** — amber pill rendered on any row where the consignee has zero `tasks` rows (any `internal_status`). Flag is task-based, not subscription-based: clears the moment the first task lands, whether from a subscription's first materialised task or from an ad-hoc task creation (`createAdHocTask`). Catches the decoupled-onboarding gap — a consignee onboarded without a subscription stays visible-but-flagged until the operator wires work to them via either CTA on the Overview tab.
 - Search by name / phone / email
 - Filter: CRM state, district, today's delivery state
-- Click row → `/consignees/[id]` calendar view
+- Click row → `/consignees/[id]` Overview tab (calendar tab one click further)
 - "Onboard new consignee" CTA
 
 **Visual treatment per BRD §8.5:**
@@ -471,6 +476,15 @@ Evolved from current read-only list. New affordances:
 #### 3.3.3 Consignee detail page with calendar (`/consignees/[id]`)
 
 Headline UI surface. Reference: `subplanner.vercel.app/consignee/c_001`.
+
+**Overview tab empty state (v1.12 amendment).** A consignee with no subscription and no tasks renders the Overview tab as the decoupled-onboarding landing page:
+- Identity block (name, phone, email)
+- Primary address block
+- CRM state badge (defaults `ACTIVE`)
+- Two prominent CTAs: **Create subscription** (links to `/consignees/[id]/subscriptions/new`) and **Add ad-hoc task** (opens a dialog capturing date, window, optional notes, optional address override — backed by the `createAdHocTask` service in §3.1.4)
+- Subscription / Calendar / History tabs render their natural empty states; no tab is hidden. The Subscription tab shows "No subscription yet — create one from Overview"; the Calendar tab shows the merchant week scaffold with all cells empty; the History tab shows the timeline view with just the `consignee.created` event.
+
+Once a subscription or ad-hoc task lands, the Overview tab demotes the CTAs in favor of the standard header card below.
 
 **Header card:**
 - Consignee avatar (initials), name, status badge (CRM state), plan tier badge
@@ -789,7 +803,7 @@ Each item filed as deferral memo in `memory/` during Day-13 setup.
 
 2. **Transcorp-staff onboarding (3 min):** Log in as Transcorp staff → `/admin/merchants` → create new merchant "Demo Bistro" with pickup address → list updates → activate.
 
-3. **Merchant operator first-touch (3 min):** Log in as Demo Bistro operator → land on operator home → onboard first consignee Fatima Al Mansouri (4-step wizard: identity → addresses with Home + Office → subscription Mon-Fri lunch with Home/Office rotation Mon-Wed-Fri Home, Tue-Thu Office → schedule rules) → `/consignees/[id]` calendar materializes immediately. Visible "Pushed to SuiteFleet ✓" indicators.
+3. **Merchant operator first-touch (3 min, two-beat decoupled flow per v1.12 amendment):** Log in as Demo Bistro operator → land on operator home → onboard first consignee Fatima Al Mansouri via flat form (identity + primary address) → land on Fatima's Overview page → CRM state `ACTIVE` badge visible → click "Create subscription" CTA → set Mon-Fri lunch plan in standalone subscription form → `/consignees/[id]` calendar materializes immediately. Visible "Pushed to SuiteFleet ✓" indicators.
 
 4. **Calendar workflow (5 min):**
    - Switch to month view → see address rotation visualized (different address indicators per day)
@@ -975,6 +989,7 @@ If any check fails: stop, fix, or fall back to recorded screen capture.
 | v1.9 | 9 May 2026 (Day 19, post-A2-smoke-PASS) | §2.3 expansion to two Transcorp-staff workflows — adds the Phase 1.5 admin cross-tenant operational read surface (`/admin/tasks` / `/admin/consignees` / `/admin/subscriptions` with merchant-filter dropdown; backed by `task:read_all` / `consignee:read_all` / `subscription:read_all` systemOnly perms granted to the `transcorp-sysadmin` role). Read-only — no action capability. v1.6 if cross-tenant action capability is needed. Filed inline at §2.3 + §1.7 amendment; no separate decision memo — Phase 1.5 lane already shipped, brief catches up. |
 | v1.10 | 10 May 2026 (Day 21, evening, post Session B Day-21 data-check) | **Sarah Khouri demo-persona pre-seed reconciliation.** §5.1 Step 5 narrative ("drill into Sarah → consignee timeline shows pattern of failed deliveries → click Change CRM state → mark High Risk") implies a **live-flip during the demo**. §5.2 (pre-seeded HIGH_RISK) and §5.3 Gate 8 (HIGH_RISK + ≥2 failures) implied a **pre-seed HIGH_RISK** state. Internal contradiction surfaced during Day-21 overnight prep when Session A's data-check found Sarah at `crm_state=ACTIVE` with 3 FAILED deliveries (May 2/5/7 2026) — empirical state matches the §5.1 live-flip narrative, NOT the §5.2/§5.3 pre-seed assumption. **Resolution: §5.1 wins.** §5.2 amended to "Sarah Khouri pre-configured with ACTIVE CRM state and ≥2 FAILED deliveries to enable HIGH_RISK transition during demo." §5.3 Gate 8 amended to "Sarah Khouri has ≥2 FAILED deliveries in history; CRM state=ACTIVE pre-demo." No data changes required — current sandbox state already matches the new pre-demo invariant. Filed at `memory/decision_brief_v1_10_amendment_sarah_khouri_pre_seed.md`. |
 | v1.11 | 11 May 2026 (Day 22, AM) | **Single-address MVP for `/consignees/new` wizard (Day-22 forms lane scope ruling).** Discovery surfaced two service-layer gaps: (a) no `createAddress` service fn in `src/` — addresses are insert-side only via the seed scripts; (b) no `createConsigneeWithSubscription` orchestration — existing `createConsignee` + `createSubscription` each open their own `withTenant` tx, breaking the brief §3.3.1 "single transaction" final-submit requirement. Reviewer ruled bundle A2 + B1: wizard collapses 4 steps → 3, single primary address per consignee for v1, multi-address + per-weekday rotation deferred to Phase 2. New orchestration `createConsigneeWithSubscription` at `src/modules/consignees/onboarding.ts` opens ONE `withTenant` tx + inlines all 3 writes atomically. Brief §1 (line 62) + §3.3.1 amended; §3.3.1 wizard text rewritten in full. Phase-2 surface area filed at `memory/followup_multi_address_rotation_phase_2.md`. Filed at `memory/decision_brief_v1_11_amendment_single_address_mvp.md`; landed as a ride-along T1 commit in the Day-22 forms lane Sub-PR #1. **PR-#238 §3.6 ratification clarification (within v1.11 scope):** `/consignees/[id]/edit` excludes ALL address fields (including the legacy inline scalar columns `addressLine`/`district`/`emirateOrRegion`) — editing inline-only would silently desync display from routing. See decision memo §3.1 for rationale. |
+| v1.12 | 13 May 2026 (Day 25 morning) | **Decoupled consignee creation from subscription creation.** Wizard removed; flat `/consignees/new` form lands operator on Overview page with Create-subscription + Add-ad-hoc-task CTAs. New `createConsignee` service method (no subscription side-effects); new `createAdHocTask` service method (optimistic ack via QStash). Consignee list adds amber NO TASKS flag (task-based, not subscription-based). §5.1 Ch.3 demo narrative updated to two-beat flow. **Edit-merchant surface added.** New `/admin/merchants/[id]/edit` route + `updateMerchant` service method + `merchant:update` permission (transcorp-sysadmin only). Slug-change warning dialog. EDIT row action on `/admin/merchants` list. Filed at `memory/decision_brief_v1_12_amendment_decouple_and_edit_merchant.md`. |
 
 ---
 
@@ -990,4 +1005,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.11.**
+**End of v1.12.**
