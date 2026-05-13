@@ -6,9 +6,16 @@
 //   - ForbiddenError         → redirect to /
 //   - NoTenantConfiguredError→ render SystemNotInitialised inline
 //
-// Then loads the merchant via getMerchantById (gated on merchant:update
-// per plan §9.3 ruling) and renders the EditMerchantForm client
-// component with the current row as pre-fill.
+// Then loads the merchant via getMerchantById (gated on merchant:read_all
+// post PR #270 plan §9.2 perm-gate relaxation) and renders the
+// EditMerchantForm client component with the current row as pre-fill.
+//
+// Edit-specific guard: explicit page-level requirePermission(merchant:update)
+// preflight maintains gate parity with the updateMerchantAction submit
+// path. Without this preflight, a future read_all-only role (not in
+// catalogue today, but on the roadmap per `transcorp-readonly` question
+// in PR #270 §9.1) would be able to LOAD the form but get ForbiddenError
+// on submit — a UX dead-end + defense-in-depth gap.
 //
 // notFound() fires when the tenant id doesn't match a row — Next.js
 // renders the project's default not-found surface.
@@ -17,6 +24,7 @@ import { randomUUID } from "node:crypto";
 
 import { notFound, redirect } from "next/navigation";
 
+import { requirePermission } from "@/modules/identity";
 import { getMerchantById } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import {
@@ -45,6 +53,7 @@ export default async function EditMerchantPage({ params }: EditMerchantPageProps
   let merchant: Merchant | null;
   try {
     const ctx = await buildRequestContext(`/admin/merchants/${id}/edit`, requestId);
+    requirePermission(ctx, "merchant:update");
     merchant = await getMerchantById(ctx, id as Uuid);
   } catch (err) {
     if (err instanceof UnauthorizedError) {

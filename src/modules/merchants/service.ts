@@ -384,32 +384,45 @@ export async function deactivateMerchant(
 }
 
 // -----------------------------------------------------------------------------
-// getMerchantById — read-for-edit (Day 25 / T3)
+// getMerchantById — single-merchant read (Day 25 / T2 detail page)
 // -----------------------------------------------------------------------------
 
 /**
- * Read one merchant by tenant id for the /admin/merchants/[id]/edit
- * pre-fill. Gated on `merchant:update` per plan §9.3 ruling (tighter,
- * route-specific gate; "what you can edit you can see" — avoids
- * granting broader `merchant:read_all` just to support edit).
+ * Read one merchant by tenant id. Gated on `merchant:read_all`.
+ *
+ * **Perm-gate history (Day 25 PR #270 plan §9.2):** originally
+ * shipped Day 25 AM (PR #264) gated on `merchant:update` per a
+ * route-specific tightness argument ("what you can edit, you can
+ * see"). The new read-only `/admin/merchants/[id]` detail page
+ * (PR #270 plan) legitimately needs read access without the update
+ * permission, so the gate relaxed to `merchant:read_all` (the same
+ * gate the list page at `/admin/merchants` uses).
+ *
+ * Discipline carry-forward: gate service-layer functions at the
+ * broadest legitimate need, not the tightest single-caller posture.
+ * The edit page caller has `merchant:update` (which implies
+ * `merchant:read_all` in the current role catalogue since
+ * `transcorp-sysadmin` holds ALL); the read-only viewer caller only
+ * needs `merchant:read_all`. Gating on `merchant:read_all` covers
+ * both legitimately without bifurcating the read fn.
  *
  * Returns null when not found; the page-level caller maps to the
- * not-found surface (Next.js notFound() or inline render).
+ * not-found surface (Next.js `notFound()` or inline render).
  *
  * Cross-tenant scope — runs inside `withServiceRole` to bypass the
  * `tenants` RLS policy. No audit emit (reads not audited per R-4).
  *
  * Throws:
- *   - ForbiddenError    actor lacks `merchant:update`.
+ *   - ForbiddenError    actor lacks `merchant:read_all`.
  */
 export async function getMerchantById(
   ctx: RequestContext,
   tenantId: Uuid,
 ): Promise<Merchant | null> {
-  requirePermission(ctx, "merchant:update");
+  requirePermission(ctx, "merchant:read_all");
 
   return withServiceRole(
-    `transcorp_staff:get_merchant_for_edit ${tenantId}`,
+    `transcorp_staff:get_merchant ${tenantId}`,
     async (tx) => findMerchantById(tx, tenantId),
   );
 }
