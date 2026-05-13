@@ -86,13 +86,16 @@ describe("Day-25 integration — createAdHocTask", () => {
   });
 
   afterAll(async () => {
-    await withServiceRole("ad-hoc task integration teardown", async (tx) => {
-      await tx.execute(sqlTag`DELETE FROM audit_events WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM addresses WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${TENANT_ID}`);
-      await tx.execute(sqlTag`DELETE FROM tenants WHERE id = ${TENANT_ID}`);
-    });
+    // audit_events_no_delete RULE blocks DELETE FROM tenants when matching
+    // audit_events exist (see memory/followup_audit_rule_cascade_conflict.md).
+    // Best-effort teardown; swallow the rule-induced failure.
+    try {
+      await withServiceRole("ad-hoc task integration teardown", async (tx) => {
+        await tx.execute(sqlTag`DELETE FROM tenants WHERE id = ${TENANT_ID}`);
+      });
+    } catch {
+      /* audit RULE; ignore */
+    }
   });
 
   it("default addressId → primary address; subscription_id NULL; created_via='manual_admin'", async () => {
