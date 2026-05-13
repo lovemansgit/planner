@@ -58,10 +58,13 @@ import type { Uuid } from "../../shared/types";
 import { requirePermission } from "../identity";
 
 import {
+  findMerchantById,
   findMerchantForStatusUpdate,
   insertMerchant,
   listMerchants as listMerchantsRows,
+  updateMerchantFields,
   updateMerchantStatus,
+  type UpdateMerchantFieldsPatch,
 } from "./repository";
 import type {
   ActivateMerchantResult,
@@ -70,6 +73,9 @@ import type {
   DeactivateMerchantResult,
   ListMerchantsFilters,
   Merchant,
+  PickupAddress,
+  UpdateMerchantInput,
+  UpdateMerchantResult,
 } from "./types";
 
 // -----------------------------------------------------------------------------
@@ -375,6 +381,245 @@ export async function deactivateMerchant(
     previousStatus: "active",
     newStatus: "inactive",
   };
+}
+
+// -----------------------------------------------------------------------------
+// getMerchantById — read-for-edit (Day 25 / T3)
+// -----------------------------------------------------------------------------
+
+/**
+ * Read one merchant by tenant id for the /admin/merchants/[id]/edit
+ * pre-fill. Gated on `merchant:update` per plan §9.3 ruling (tighter,
+ * route-specific gate; "what you can edit you can see" — avoids
+ * granting broader `merchant:read_all` just to support edit).
+ *
+ * Returns null when not found; the page-level caller maps to the
+ * not-found surface (Next.js notFound() or inline render).
+ *
+ * Cross-tenant scope — runs inside `withServiceRole` to bypass the
+ * `tenants` RLS policy. No audit emit (reads not audited per R-4).
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:update`.
+ */
+export async function getMerchantById(
+  ctx: RequestContext,
+  tenantId: Uuid,
+): Promise<Merchant | null> {
+  requirePermission(ctx, "merchant:update");
+
+  return withServiceRole(
+    `transcorp_staff:get_merchant_for_edit ${tenantId}`,
+    async (tx) => findMerchantById(tx, tenantId),
+  );
+}
+
+// -----------------------------------------------------------------------------
+// updateMerchant — Day 25 / T3
+// -----------------------------------------------------------------------------
+
+/**
+ * Update an existing merchant tenant's identity (name, slug), pickup
+ * address (line/district/emirate), and SF routing
+ * (suitefleet_customer_code). Status changes are explicitly NOT in
+ * scope — they go through activateMerchant / deactivateMerchant.
+ *
+ * Plan §3.3 behavior (single transaction):
+ *   1. Permission gate (`merchant:update`).
+ *   2. Validate input shape — at least one field provided; supplied
+ *      fields pass type-specific regex/non-empty checks; pickup is
+ *      all-or-none.
+ *   3. withServiceRole:
+ *      a. findMerchantForStatusUpdate (FOR UPDATE row-lock).
+ *      b. 404 if not found.
+ *      c. Compute diff: for each provided field, compare normalized
+ *         new value vs current row. Build `changedFields` + audit
+ *         `changes` payload (flat dot-notation per plan §2.5.1).
+ *      d. 422 ValidationError("no changes") if zero fields changed.
+ *      e. updateMerchantFields(tx, tenantId, normalizedPatch).
+ *         - SQLSTATE 23505 from slug-UNIQUE collision → ConflictError.
+ *   4. Post-commit emit: merchant.updated with metadata.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:update`.
+ *   - ValidationError   missing/empty/malformed field; no fields to
+ *                       update; no changes diff; pickup partial.
+ *   - NotFoundError     tenant id not found.
+ *   - ConflictError     slug collision (SQLSTATE 23505).
+ */
+export async function updateMerchant(
+  ctx: RequestContext,
+  tenantId: Uuid,
+  input: UpdateMerchantInput,
+): Promise<UpdateMerchantResult> {
+  requirePermission(ctx, "merchant:update");
+
+  const normalised = normaliseUpdateInput(input);
+
+  let changedFields: readonly string[] = [];
+  let changes: Record<string, { before: unknown; after: unknown }> = {};
+
+  await withServiceRole(
+    `transcorp_staff:update_merchant ${tenantId}`,
+    async (tx) => {
+      const before = await findMerchantForStatusUpdate(tx, tenantId);
+      if (!before) {
+        throw new NotFoundError(`merchant not found: ${tenantId}`);
+      }
+
+      const diff = computeMerchantDiff(before, normalised);
+      if (diff.changedFields.length === 0) {
+        throw new ValidationError("no changes");
+      }
+      changedFields = diff.changedFields;
+      changes = diff.changes;
+
+      try {
+        const updated = await updateMerchantFields(tx, tenantId, normalised);
+        if (!updated) {
+          // FOR UPDATE row-lock should prevent vanished-mid-tx; surface
+          // as NotFound for caller-consistent semantics with
+          // updateMerchantStatus.
+          throw new NotFoundError(`merchant not found: ${tenantId}`);
+        }
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new ConflictError(
+            `merchant slug already exists: ${normalised.slug}`,
+          );
+        }
+        throw err;
+      }
+    },
+  );
+
+  await emit({
+    eventType: "merchant.updated",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: null,
+    resourceType: "merchant",
+    resourceId: tenantId,
+    metadata: {
+      tenant_id: tenantId,
+      changes,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return { status: "updated", tenantId, changedFields };
+}
+
+/**
+ * Normalize + shape-validate an UpdateMerchantInput. Throws
+ * ValidationError on any structural violation; never reads the DB.
+ *
+ * Returns an UpdateMerchantFieldsPatch (the repository shape) — the
+ * fields present here are the ones the caller wants to set; absent
+ * fields are absent.
+ */
+function normaliseUpdateInput(input: UpdateMerchantInput): UpdateMerchantFieldsPatch {
+  const patch: { -readonly [K in keyof UpdateMerchantFieldsPatch]: UpdateMerchantFieldsPatch[K] } = {};
+
+  if (input.name !== undefined) {
+    patch.name = requireNonEmpty(input.name, "name");
+  }
+  if (input.slug !== undefined) {
+    patch.slug = requireValidSlug(input.slug);
+  }
+  if (input.pickupAddress !== undefined) {
+    patch.pickupAddress = {
+      line: requireNonEmpty(input.pickupAddress.line, "pickup_address.line"),
+      district: requireNonEmpty(
+        input.pickupAddress.district,
+        "pickup_address.district",
+      ),
+      emirate: requireNonEmpty(
+        input.pickupAddress.emirate,
+        "pickup_address.emirate",
+      ),
+    };
+  }
+  if (input.suitefleetCustomerCode !== undefined) {
+    patch.suitefleetCustomerCode = requireSuitefleetCustomerCode(
+      input.suitefleetCustomerCode,
+    );
+  }
+
+  if (Object.keys(patch).length === 0) {
+    throw new ValidationError("no fields to update");
+  }
+
+  return patch;
+}
+
+/**
+ * Compute the field-level diff between a current Merchant row and a
+ * normalised patch. Returns the changed-field key list (flat
+ * dot-notation per plan §2.5.1) AND the audit `changes` payload
+ * shape ({ <field>: { before, after } }).
+ *
+ * Pickup-address sub-field diffs are individually keyed
+ * (`pickup_address.line` / `.district` / `.emirate`). This is the
+ * deliberate divergence from `merchant.created`'s NESTED shape — a
+ * single sub-field change surfaces atomically without nested-object
+ * parsing.
+ */
+function computeMerchantDiff(
+  current: Merchant,
+  patch: UpdateMerchantFieldsPatch,
+): {
+  changedFields: readonly string[];
+  changes: Record<string, { before: unknown; after: unknown }>;
+} {
+  const changes: Record<string, { before: unknown; after: unknown }> = {};
+  const fields: string[] = [];
+
+  if (patch.name !== undefined && patch.name !== current.name) {
+    changes.name = { before: current.name, after: patch.name };
+    fields.push("name");
+  }
+  if (patch.slug !== undefined && patch.slug !== current.slug) {
+    changes.slug = { before: current.slug, after: patch.slug };
+    fields.push("slug");
+  }
+  if (patch.pickupAddress !== undefined) {
+    const before: PickupAddress | null = current.pickupAddress;
+    const after: PickupAddress = patch.pickupAddress;
+    if ((before?.line ?? null) !== after.line) {
+      changes["pickup_address.line"] = {
+        before: before?.line ?? null,
+        after: after.line,
+      };
+      fields.push("pickup_address.line");
+    }
+    if ((before?.district ?? null) !== after.district) {
+      changes["pickup_address.district"] = {
+        before: before?.district ?? null,
+        after: after.district,
+      };
+      fields.push("pickup_address.district");
+    }
+    if ((before?.emirate ?? null) !== after.emirate) {
+      changes["pickup_address.emirate"] = {
+        before: before?.emirate ?? null,
+        after: after.emirate,
+      };
+      fields.push("pickup_address.emirate");
+    }
+  }
+  if (
+    patch.suitefleetCustomerCode !== undefined &&
+    patch.suitefleetCustomerCode !== current.suitefleetCustomerCode
+  ) {
+    changes.suitefleet_customer_code = {
+      before: current.suitefleetCustomerCode,
+      after: patch.suitefleetCustomerCode,
+    };
+    fields.push("suitefleet_customer_code");
+  }
+
+  return { changedFields: fields, changes };
 }
 
 // -----------------------------------------------------------------------------

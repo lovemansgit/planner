@@ -73,6 +73,7 @@ type TenantRow = {
   pickup_address_line: string | null;
   pickup_address_district: string | null;
   pickup_address_emirate: string | null;
+  suitefleet_customer_code: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -118,6 +119,7 @@ function mapRow(row: TenantRow): Merchant {
     name: row.name,
     status: row.status as TenantStatus,
     pickupAddress,
+    suitefleetCustomerCode: row.suitefleet_customer_code,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
