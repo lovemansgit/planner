@@ -283,3 +283,9 @@ Demo distance T-2 (internal CAIO May 15) / T-5 (external prospect May 18) at sig
 - [Day-24 EOD handoff](handoffs/day-24-eod.md) — canonical Day-24 record. Production HEAD `3255621` on `dpl_2M7HDHrt9zAAFajiFVP7CXkY2uVn`. Database state: 110 archived tenants + 4 test users deleted via SQL editor cleanup. Demo Bistro pre-demo blocker: webhook URL needs Aqib registration on SF side before May 15. Spec doc v1 drafted (15 slides, screenshots pending Playwright walkthrough).
 - [Session A Day-25 AM bootstrap](handoffs/bootstrap-session-a-day-25-am.md) — Day-25 expected lane: defect patching from Love's dry-run walkthrough + warm standby for Playwright walkthrough script support.
 - [Session B Day-25 AM bootstrap](handoffs/bootstrap-session-b-day-25-am.md) — Day-25 expected lane: Playwright walkthrough script (likely B's lane) + defect patching.
+
+## Day 25 (13 May 2026)
+
+- Brief v1.12 amendment — decouple consignee creation from subscription creation + add edit-merchant surface. PR #261 (filed Session A AM); plan-PR #262 + code-PR #264 (Session B; T3) ship the edit-merchant lane.
+- [PR #264](https://github.com/lovemansgit/planner/pull/264) (merged `6dea6cc`) — Edit Merchant surface: `/admin/merchants/[id]/edit` + `updateMerchant` service + `merchant:update` permission + `merchant.updated` audit event. 6 commits C-1 to C-6 + try-catch fixup on integration teardown.
+- [§3.6 review-discipline CI gate](decision_review_discipline_ci_gate.md) — process amendment locking CI status verification into the §3.6 hard-stop review checklist. Driver: PR #264 cleared both §3.6 rounds on a CI-red main without surfacing the state. Brief v1.13 codifies the checklist at §7.1.
