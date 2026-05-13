@@ -2,8 +2,8 @@
 
 **Status:** Active. This document is the source of truth for Planner product scope, architecture, and demo posture. Supersedes `docs/plan.docx` §10 Day 11–13 scope where in conflict.
 
-**Version:** v1.13
-**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match); v1.11 amendment filed Day 22 (11 May 2026) AM — single-address MVP for the `/consignees/new` 3-step wizard (multi-address + per-weekday rotation deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`); v1.12 amendment filed Day 25 (13 May 2026) AM — decoupled consignee creation from subscription creation (wizard removed; flat form lands operator on Overview with Create-subscription + Add-ad-hoc-task CTAs); edit-merchant surface added (`/admin/merchants/[id]/edit`, `updateMerchant` service, `merchant:update` permission); v1.13 amendment filed Day 25 (13 May 2026) evening — §7.1 review-discipline checklist codified (§3.6 hard-stop nomenclature + CI status verification gate; per `memory/decision_review_discipline_ci_gate.md`).
+**Version:** v1.14
+**Filed:** Day 12 (5 May 2026), evening; v1.2 amendments filed Day 13 (5 May 2026), post-PR-#139 merge; v1.4 amendment filed Day 17 (7 May 2026) morning; v1.5 amendment filed Day 17 (7 May 2026) post-PR-#168 visual refinement; v1.6 amendment filed Day 17 (7 May 2026) ~1:30 PM Dubai; v1.7 amendment filed Day 18 (8 May 2026) post-A1-resolver-swap; v1.8 amendment filed Day 18 (8 May 2026) post-A2-plan-PR — webhook handler 3-layer plan + §3.1.10 array-shape + §5.3 Gate-5 path corrections; v1.9 amendment filed Day 19 (9 May 2026) post-A2-smoke-PASS — §2.3 expansion to two Transcorp-staff workflows (Phase 1.5 admin cross-tenant operational read); v1.10 amendment filed Day 21 (10 May 2026) evening — Sarah Khouri demo-persona pre-seed reconciliation (§5.1 live-flip wins; §5.2 + §5.3 Gate 8 amended to match); v1.11 amendment filed Day 22 (11 May 2026) AM — single-address MVP for the `/consignees/new` 3-step wizard (multi-address + per-weekday rotation deferred to Phase 2 per `memory/followup_multi_address_rotation_phase_2.md`); v1.12 amendment filed Day 25 (13 May 2026) AM — decoupled consignee creation from subscription creation (wizard removed; flat form lands operator on Overview with Create-subscription + Add-ad-hoc-task CTAs); edit-merchant surface added (`/admin/merchants/[id]/edit`, `updateMerchant` service, `merchant:update` permission); v1.13 amendment filed Day 25 (13 May 2026) evening — §7.1 review-discipline checklist codified (§3.6 hard-stop nomenclature + CI status verification gate; per `memory/decision_review_discipline_ci_gate.md`); v1.14 amendment filed Day 25 (13 May 2026) PM — per-merchant SF credentials + multi-region `client_id` resolver. §3.6 identifier model deepened from three layers to four (region + merchant + api_key + secret_key); new `suitefleet_regions` table; per-tenant Vault-backed credential storage; new §3.7 security posture; new admin routes for region management and per-merchant credentials; new `region:manage` permission; four new audit events. OAuth username/password resolution retires; auth migrates to API Key + Secret Key per SF OpsPortal. Filed at `memory/decision_brief_v1_14_amendment_per_merchant_sf_credentials.md`.
 **Path:** Path 2-A (full operator-experience layer, demo May 12)
 
 **Provenance:** This brief is consolidated from:
@@ -177,6 +177,29 @@ Aggregated chronological view per consignee combining:
 
 For MVP, a database view computing this on read is acceptable. If performance requires, denormalize to a table in Phase 2.
 
+**`suitefleet_regions` table (v1.14 amendment):**
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `client_id` | text | UNIQUE, `^[a-z][a-z0-9]*$` CHECK constraint |
+| `display_name` | text | operator-facing label (e.g. "Transcorp UAE") |
+| `status` | text CHECK | `'active'` \| `'inactive'` |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | |
+
+Seed rows: `transcorpsb` (Sandbox), `transcorp` (Transcorp KSA), `transcorpuae` (Transcorp UAE), `transcorpqatar` (Transcorp Qatar) — all `active`.
+
+**`tenants` column additions (v1.14 amendment):**
+
+| Column | Type | Notes |
+|---|---|---|
+| `suitefleet_region_id` | uuid FK | references `suitefleet_regions(id)` `ON DELETE RESTRICT`; NOT NULL after backfill |
+| `suitefleet_api_key_vault_id` | uuid | nullable until credentials provisioned via `/admin/merchants/[id]/credentials` |
+| `suitefleet_secret_vault_id` | uuid | nullable until credentials provisioned via `/admin/merchants/[id]/credentials` |
+
+Backfill: all existing tenants (MPL, DNR, FBU, Demo Bistro) point at `transcorpsb`. `ON DELETE RESTRICT` matches the Day-22 pattern memory — `SET NULL` would silently break the NOT NULL CHECK at runtime; region deactivation is the operator-facing flow, not deletion.
+
 #### 3.1.2 Audit event registrations
 
 Add to `src/modules/audit/event-types.ts`:
@@ -190,6 +213,10 @@ Add to `src/modules/audit/event-types.ts`:
 - `merchant.created`
 - `merchant.activated`
 - `merchant.deactivated`
+- `region.created` — body includes `region_id`, `client_id`, `display_name` (v1.14)
+- `region.updated` — body includes `region_id`, `changes` (flat-diff: `{ <field>: { before, after } }`) (v1.14)
+- `region.deactivated` — body includes `region_id` (v1.14)
+- `credentials.set` — body includes `tenant_id`, `classifier` (`'initial-set'` \| `'rotation'`). **NEVER contains plaintext credentials and NEVER contains Vault IDs** (v1.14)
 
 The skip flow emits `subscription.exception.created` + `subscription.end_date.extended` in same database transaction with shared `correlation_id`.
 
@@ -210,6 +237,10 @@ Per the BRD/v1.1 delta permission catalogue. Add to `src/modules/identity/permis
 
 **Merchant management (Transcorp-staff only):**
 - `merchant:create`, `merchant:read_all`, `merchant:activate`, `merchant:deactivate`
+- `merchant:update` (v1.12) — extended in v1.14 to gate `storeSuitefleetCredentials` (same operator scope; both are SF routing config)
+
+**Region management (Transcorp-staff only, v1.14 amendment):**
+- `region:manage` — umbrella permission covering region create / update / deactivate. Added to `API_KEY_FORBIDDEN_PERMISSIONS` (matches the `merchant:create` precedent for privilege-escalation guarding)
 
 **Roles in MVP** (catalogue-level; UI only needs Tenant Admin for demo, but permission distinctions exist):
 
@@ -288,6 +319,28 @@ Transcorp-staff scoped. Audit-emits. `updateMerchant` (v1.12 amendment) audit-em
 - Extend `end_date`, materialize new task on next horizon advance
 - Insert `subscription_exceptions` row with `type='append_without_skip'`
 - Emit `subscription.end_date.extended` with `triggered_by='append_without_skip'`
+
+**`createRegion(ctx, { client_id, display_name })` / `updateRegion(ctx, regionId, params)` / `deactivateRegion(ctx, regionId)` (v1.14 amendment):**
+
+Transcorp-staff scoped. `createRegion` validates `client_id` against the `^[a-z][a-z0-9]*$` CHECK (lowercase alphanumeric, must start with letter); UNIQUE violation returns `ConflictError`. `deactivateRegion` flips `status` to `inactive` (regions with tenants pointing at them remain in use; deactivation hides the row from the "available regions" picker for new merchant onboarding but does NOT cascade to existing tenants — the `ON DELETE RESTRICT` constraint makes that explicit). Audit-emits `region.created` / `region.updated` / `region.deactivated`. Permission: `region:manage`.
+
+**`storeSuitefleetCredentials(ctx, tenantId, { apiKey, secretKey })` (v1.14 amendment):**
+
+Transcorp-staff scoped. Wraps Supabase Vault:
+1. Permission check: `merchant:update`
+2. If `tenants.suitefleet_api_key_vault_id` IS NOT NULL (rotation path): `vault.update_secret(existing_uuid, new_plaintext)` for both keys; emit `credentials.set` with `classifier='rotation'`.
+3. Else (initial-set path): `vault.create_secret(plaintext)` for each, store the returned UUIDs in the tenant row inside a single `withTenant` transaction; emit `credentials.set` with `classifier='initial-set'`.
+4. On rotation, invalidate the in-memory token cache entry for this tenant so the next push triggers a fresh SF `login()` against the new credentials.
+5. Plaintext NEVER stored in any other table, NEVER returned from this function, NEVER logged. The audit event body excludes both plaintext and Vault UUIDs.
+
+**`resolveSuitefleetCredentials(ctx, tenantId)` (v1.14 amendment — replaces v1.7 env-backed resolver):**
+
+Replaces the OAuth username/password resolver entirely. Read path:
+1. SELECT `suitefleet_region_id`, `suitefleet_customer_code`, `suitefleet_api_key_vault_id`, `suitefleet_secret_vault_id` from the tenant row, JOIN `suitefleet_regions` on the region FK to read `client_id` and region `status`.
+2. If region `status='inactive'` OR either Vault UUID is NULL: throw `ValidationError('credentials not configured for this merchant')`. Fail-closed.
+3. Read both secrets from `vault.decrypted_secrets` (restricted to service-role by Supabase RLS).
+4. Return `{ clientId, customerId, apiKey, secretKey }`. The result is never cached at the resolver layer; the token cache wraps the auth `login()` call separately, so resolver reads only fire on cache miss/refresh.
+5. Plaintext never logged.
 
 #### 3.1.5 Rolling 14-day horizon
 
@@ -420,7 +473,13 @@ Engineers reference SF v2.0 docs at `suitefleet.readme.io` for exact paths/paylo
 
 - `/admin/merchants` — list view, all merchants, status column, row-level EDIT + ACTIVATE/DEACTIVATE actions
 - `/admin/merchants/new` — create form: name, slug, pickup address (street, district, emirate)
-- `/admin/merchants/[id]/edit` — edit form (v1.12 amendment) mirroring the `/new` component pre-filled from the current `tenants` row. Editable fields: name, slug, pickup address (line/district/emirate), SF customer code. `tenants.status` is intentionally read-only here — activate/deactivate remain their own row actions. Slug-change confirm dialog gates submit. Permission: `merchant:update` (transcorp-sysadmin only).
+- `/admin/merchants/[id]/edit` — edit form (v1.12 amendment) mirroring the `/new` component pre-filled from the current `tenants` row. Editable fields: name, slug, pickup address (line/district/emirate), SF customer code, **SF region** (v1.14 — select from active rows in `suitefleet_regions`). `tenants.status` is intentionally read-only here — activate/deactivate remain their own row actions. Credentials are NOT editable here — see `/admin/merchants/[id]/credentials` below. Slug-change confirm dialog gates submit. Permission: `merchant:update` (transcorp-sysadmin only).
+- `/admin/merchants/[id]/credentials` — write-only credentials surface (v1.14 amendment). Two password inputs (API Key + Secret Key), autocomplete=off. Submit button label depends on state: SET CREDENTIALS when both Vault IDs are null on the tenant, ROTATE CREDENTIALS otherwise. Rotation path gates submit on a confirmation modal ("Rotating credentials will invalidate the current API Key and Secret Key. Pushes from this merchant will fail until SuiteFleet's side is updated. Continue?"). Page NEVER displays existing credential values — write-only by design. Permission: `merchant:update`.
+- `/admin/regions` — list view (v1.14 amendment). Columns: Display Name / Client ID / Status / In-Use Count (tenants pointing at this region) / Created / Actions (DEACTIVATE if active; ACTIVATE if inactive). NEW REGION CTA top-right.
+- `/admin/regions/new` — create form (v1.14 amendment). Inputs: `client_id` (lowercase alphanumeric, must start with letter — mirrors the CHECK constraint), `display_name`. Submit CREATE REGION.
+- `/admin/regions/[id]` — read-only detail (v1.14 amendment). Shows client_id, display_name, status badge, created date, in-use count. Deactivate action if no tenants point at the region (otherwise warning copy explaining deactivation hides region from picker but preserves existing assignments).
+
+**Merchant detail page integration (PR #271 coordination):** The merchant detail page (`/admin/merchants/[id]`) renders a credentials status badge in the Routing section — "Credentials configured" (green) when both Vault IDs are present, "Credentials missing" (amber) when either is null — with a MANAGE CREDENTIALS link → `/admin/merchants/[id]/credentials`.
 
 #### 3.2.2 Auth posture
 
@@ -731,23 +790,44 @@ No PDF post-processing or logo swap. Decision locked at v1.6 per `memory/decisio
 
 ### 3.6 SuiteFleet credential decision
 
-**MVP:** SF credentials are region-scoped (`transcorpsb` for sandbox; `transcorpuae` and `transcorpqatar` for future regional deployments). All merchants within a region share that region's `username` / `password` / `clientId` env-backed credentials. Each tenant's `customerId` (numeric merchant identifier: 588 MPL / 586 DNR / 578 FBU in sandbox) is read from `tenants.suitefleet_customer_code` via the per-tenant resolver. Wire body carries `customerId` (numeric) only; `customer.code` (alphanumeric: MPL/FBU/DNR) is an AWB prefix and plays no role in routing.
+**MVP (v1.14 amendment — four-layer identifier model):** SF credentials are **per-merchant**, scoped via region for routing. Each tenant has its own `api_key` + `secret_key` (issued via SF OpsPortal, stored at-rest in Supabase Vault) plus a numeric `customerId` and a DB-backed region pointer. Wire body carries `customerId` (numeric); request auth headers carry `client_id` + API Key + Secret Key (exact header shape per Aqib confirmation pending plan-PR §9). `customer.code` (alphanumeric AWB prefix: MPL/FBU/DNR) remains cosmetic and plays no role in routing.
 
-**Architectural model (three identifier layers, locked Day 18):**
+**Architectural model (four identifier layers, locked Day 25 per v1.14 amendment):**
 
-| Layer | Identifier | Example | Scope |
+| Layer | Identifier | Storage | Scope |
 |---|---|---|---|
-| Region | `client_id` (env-backed) | `transcorpsb` (sandbox), `transcorpuae` (UAE), `transcorpqatar` (Qatar) | Per region; shared across merchants in that region |
-| Merchant | `customerId` (numeric, DB-backed via `tenants.suitefleet_customer_code`) | 588 (MPL), 586 (DNR), 578 (FBU) | Per merchant within a region; routes tasks to correct SF merchant |
-| AWB prefix | `customer.code` (alphanumeric) | MPL, DNR, FBU | Cosmetic; AWB prefix only; NO routing role |
+| Region | `client_id` (e.g. `transcorpsb`, `transcorpuae`, `transcorpqatar`) | `suitefleet_regions.client_id` (DB-backed) — JOINed from `tenants.suitefleet_region_id` | Per region; multiple merchants per region (but each merchant authenticates with its own credentials, not the region's) |
+| Merchant | `customerId` (numeric, e.g. 588 / 586 / 578) | `tenants.suitefleet_customer_code` | Per merchant within a region; routes tasks to correct SF merchant for invoicing |
+| Auth — API Key | `api_key` (opaque token from SF OpsPortal) | Supabase Vault — UUID stored in `tenants.suitefleet_api_key_vault_id` | Per merchant; never shared, never logged |
+| Auth — Secret Key | `secret_key` (opaque secret from SF OpsPortal) | Supabase Vault — UUID stored in `tenants.suitefleet_secret_vault_id` | Per merchant; never shared, never logged |
+| AWB prefix | `customer.code` (alphanumeric) | (SF-managed) | Cosmetic; AWB prefix only; NO routing role |
 
-**Resolver (post A1 Day 18):** `src/modules/credentials/suitefleet-resolver.ts` reads region creds from `process.env`, per-merchant `customerId` from DB via `withServiceRole` + `sqlTag`. Throws `CredentialError` on tenant-not-found, NULL/empty `customer_code`, or non-positive-integer values (see `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`).
+**Resolver (v1.14 — replaces v1.7 env-backed resolver):** `src/modules/credentials/suitefleet-resolver.ts` resolves all four identifier values from the database. Read path: SELECT the tenant row + JOIN `suitefleet_regions` on the region FK to fetch `client_id`; SELECT `decrypted_secret` from `vault.decrypted_secrets` for both Vault UUIDs. Returns `{ clientId, customerId, apiKey, secretKey }`. Throws `ValidationError('credentials not configured')` if either Vault UUID is NULL or the region row is `inactive`. The OAuth username/password resolution path is removed entirely; no fallback. Plaintext credentials are never logged and never cached past the SF token-cache scope (the token cache wraps the authenticated `login()` call, so the resolver only fires on cache miss/refresh). See §3.7 for the security posture.
 
-**Phase 2:** Regional credential expansion (UAE/Qatar onboarding) — adding `transcorpuae` / `transcorpqatar` env-or-Secrets-Manager entries when those regions onboard. Per-merchant `customerId` continues to read from DB via the per-tenant resolver. AWS Secrets Manager swap (`memory/followup_secrets_manager_swap_critical_path.md`) is for the regional credentials, not for per-tenant isolation.
+**Fail-closed extension:** `pushSingleTask` (and any other resolver caller) returns / throws `ValidationError` if credentials are not configured. The existing missing-`customer_code` guard at `src/modules/task-push/service.ts` is supplemented by a missing-credentials guard immediately upstream.
+
+**Phase 2:** Regional onboarding (UAE/Qatar going live) is operational work — adding the region row already happens via `/admin/regions/new` (in scope for v1.14 MVP). Per-merchant credential provisioning happens via `/admin/merchants/[id]/credentials`. AWS Secrets Manager migration (Vault UUID → Secrets Manager ARN per tenant) remains Phase 2 — see `memory/followup_secrets_manager_swap_critical_path.md` (now reshaped to the per-merchant scope).
 
 **Demo Q&A rehearsal:**
 
-> "SF `client_id` is region-scoped — sandbox, UAE, Qatar each have their own. All merchants within a region share that credential and route tasks via `customerId` in the wire body. Three demo merchants share `transcorpsb` because they're all sandbox-region. The resolver threads each tenant's `customerId` (588/586/578) into every `createTask` call so SF invoices each merchant correctly."
+> "Every merchant has its own SuiteFleet API Key and Secret Key, issued by SuiteFleet's OpsPortal. We store them at rest in Supabase Vault — pgsodium-encrypted — and resolve them per-merchant at push time. The resolver also reads each merchant's region pointer (the `client_id` SF uses for routing) from a `suitefleet_regions` table, so adding a new region — UAE, Qatar, future markets — is an operator-facing flow, not a deploy. The three demo merchants currently share the `transcorpsb` region (sandbox), but each merchant has its own credentials inside that region, so SF sees three distinct authenticated callers, not one shared identity."
+
+### 3.7 Security posture — credential storage (v1.14 amendment)
+
+**At-rest encryption.** SF API Key + Secret Key are stored in Supabase Vault (pgsodium AEAD). `tenants` row holds only the Vault UUID; plaintext never lives in the tenant row, never appears in logs, never returns from any service function outside the authenticated SF call path.
+
+**Storage primitive:**
+- `vault.create_secret(plaintext)` returns the UUID; stored in `tenants.suitefleet_api_key_vault_id` / `_secret_vault_id`.
+- `vault.update_secret(uuid, new_plaintext)` rotates in place (preserves the UUID).
+- Reads via `SELECT decrypted_secret FROM vault.decrypted_secrets WHERE id = $vault_id` — Supabase RLS restricts the view to service-role.
+
+**Operational guardrails:**
+- The `/admin/merchants/[id]/credentials` UI is write-only by design. Existing values cannot be displayed back to the operator under any flow; the only operations are SET (initial) and ROTATE.
+- The `credentials.set` audit event body contains the tenant ID, the classifier (`'initial-set'` \| `'rotation'`), and the actor — never plaintext, never the Vault UUIDs themselves.
+- Rotation invalidates the in-memory SF token cache for that tenant; the next push triggers a fresh authenticated `login()` against the new credentials.
+- Region deactivation (`status='inactive'`) makes the resolver fail-closed for any tenant pointing at the deactivated region — operational kill-switch for compromised-region scenarios.
+
+**Future migration path:** AWS Secrets Manager swap (Phase 2 per §4) reshapes the `suitefleet_api_key_vault_id` / `_secret_vault_id` semantics from "Vault UUID" to "Secrets Manager ARN" — same column shape, different resolver implementation. The service-layer interface (`resolveSuitefleetCredentials` return shape) remains stable across the swap.
 
 ---
 
@@ -764,11 +844,9 @@ Each item filed as deferral memo in `memory/` during Day-13 setup.
 | Skip notifications via SMS to consignee | BRD §14 Q5 | Post-pilot |
 | Reconciliation job between Planner and SF | BRD §10.2 | Post-pilot |
 | Failed-attempt manual retry workflow (delivery-level, not webhook-DLQ) | BRD §6.2.3 | Post-pilot |
-| Regional credential expansion (UAE/Qatar onboarding) | v1.7 amendment §3.6 | Post-pilot — when those regions onboard |
-| AWS Secrets Manager swap (regional credentials) | `followup_secrets_manager_swap_critical_path.md` | Post-pilot |
+| AWS Secrets Manager swap — Vault UUID → Secrets Manager ARN, per-merchant scope (v1.14 reshape) | `followup_secrets_manager_swap_critical_path.md` | Post-pilot |
+| Adding new regions via tenant-admin (merchant-portal) UI (v1.14 — currently Transcorp-sysadmin scope only) | v1.14 amendment §3.2.1 | Post-pilot if ever needed |
 | Webhook events admin UI | plan.docx §10 Day 12 | Post-pilot |
-| Credential rotation UX | plan.docx §10 Day 12 | Post-pilot |
-| Integrations page (SF credential entry/test in merchant portal) | plan.docx §10 Day 5 + v1.1 delta §6.2.1.9 | Post-pilot |
 | Audit log viewer UI | plan.docx §10.3 | Post-pilot |
 | Reporting / BI dashboards | plan.docx §10.3 | Post-pilot |
 | CSV export from consolidated calendar | BRD §6.4 | Post-pilot |
@@ -1028,6 +1106,7 @@ explicit Love authorization quoted verbatim in-thread.
 | v1.11 | 11 May 2026 (Day 22, AM) | **Single-address MVP for `/consignees/new` wizard (Day-22 forms lane scope ruling).** Discovery surfaced two service-layer gaps: (a) no `createAddress` service fn in `src/` — addresses are insert-side only via the seed scripts; (b) no `createConsigneeWithSubscription` orchestration — existing `createConsignee` + `createSubscription` each open their own `withTenant` tx, breaking the brief §3.3.1 "single transaction" final-submit requirement. Reviewer ruled bundle A2 + B1: wizard collapses 4 steps → 3, single primary address per consignee for v1, multi-address + per-weekday rotation deferred to Phase 2. New orchestration `createConsigneeWithSubscription` at `src/modules/consignees/onboarding.ts` opens ONE `withTenant` tx + inlines all 3 writes atomically. Brief §1 (line 62) + §3.3.1 amended; §3.3.1 wizard text rewritten in full. Phase-2 surface area filed at `memory/followup_multi_address_rotation_phase_2.md`. Filed at `memory/decision_brief_v1_11_amendment_single_address_mvp.md`; landed as a ride-along T1 commit in the Day-22 forms lane Sub-PR #1. **PR-#238 §3.6 ratification clarification (within v1.11 scope):** `/consignees/[id]/edit` excludes ALL address fields (including the legacy inline scalar columns `addressLine`/`district`/`emirateOrRegion`) — editing inline-only would silently desync display from routing. See decision memo §3.1 for rationale. |
 | v1.12 | 13 May 2026 (Day 25 morning) | **Decoupled consignee creation from subscription creation.** Wizard removed; flat `/consignees/new` form lands operator on Overview page with Create-subscription + Add-ad-hoc-task CTAs. New `createConsignee` service method (no subscription side-effects); new `createAdHocTask` service method (optimistic ack via QStash). Consignee list adds amber NO TASKS flag (task-based, not subscription-based). §5.1 Ch.3 demo narrative updated to two-beat flow. **Edit-merchant surface added.** New `/admin/merchants/[id]/edit` route + `updateMerchant` service method + `merchant:update` permission (transcorp-sysadmin only). Slug-change warning dialog. EDIT row action on `/admin/merchants` list. Filed at `memory/decision_brief_v1_12_amendment_decouple_and_edit_merchant.md`. |
 | v1.13 | 13 May 2026 (Day 25 evening) | **§3.6 review-discipline checklist codified — CI status gate locked.** New §7.1 sub-section under Quality gates that codifies the "§3.6 hard-stop" review convention (referenced informally since Day 13) as a structured five-point checklist: plan compliance, test signal, **CI status verification (red is a blocker)**, architectural gates, brand discipline. Builder must report CI state in PR-open messages alongside local test signal; reviewer must verify CI before clearing the §3.6 verdict. Exception path: pre-existing main failures may clear §3.6 only when a parallel fix-PR is in flight (otherwise fix-first). No `--admin` bypass without explicit Love authorization. Driver: PR #264 cleared both §3.6 rounds on a CI-red main without surfacing the state. Filed at `memory/decision_review_discipline_ci_gate.md`. |
+| v1.14 | 13 May 2026 (Day 25 PM) | **Per-merchant SF credentials + multi-region `client_id` resolver.** §3.6 identifier model deepens from three layers to four (region + merchant + api_key + secret_key). New `suitefleet_regions` table (DB-backed regions; seeded sandbox + transcorp / transcorpuae / transcorpqatar — all `active`). `tenants` gains `suitefleet_region_id` (`ON DELETE RESTRICT`, NOT NULL after backfill to sandbox) plus two nullable Vault FK columns (`suitefleet_api_key_vault_id`, `suitefleet_secret_vault_id`). Supabase Vault (pgsodium AEAD) is the at-rest encryption primitive. New `region:manage` permission (Transcorp-sysadmin only, added to `API_KEY_FORBIDDEN_PERMISSIONS`); existing `merchant:update` extends to credentials write (same scope; both are SF routing config). Four new audit events: `region.created` / `region.updated` / `region.deactivated` / `credentials.set` (the credentials event carries `classifier: 'initial-set' \| 'rotation'` only; NO plaintext, NO Vault UUIDs in the body). New admin routes: `/admin/regions` (list / new / [id] read-only) + `/admin/merchants/[id]/credentials` (write-only — existing values intentionally undisplayable). Merchant detail page (PR #271) gains a credentials status badge. New §3.7 documents Vault-backed credential storage posture + rotation cache-invalidation + future Secrets Manager ARN swap path. §4 Phase 2 reshape: "AWS Secrets Manager swap" now means Vault UUID → Secrets Manager ARN per merchant; "Integrations page" and "Credential rotation UX" rows retire (now MVP via the new admin surfaces); "Regional credential expansion" row retires (regions no longer hold credentials). OAuth username/password resolver retires; auth migrates to API Key + Secret Key per SF OpsPortal (exact request-header shape pending Aqib confirmation — flagged in plan-PR §9 as the code-PR blocker). Filed at `memory/decision_brief_v1_14_amendment_per_merchant_sf_credentials.md`. |
 
 ---
 
@@ -1043,4 +1122,4 @@ When a new Claude Code session opens (Day 13, 14, 15, etc.):
 
 ---
 
-**End of v1.12.**
+**End of v1.14.**
