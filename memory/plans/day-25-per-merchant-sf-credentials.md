@@ -421,7 +421,7 @@ All four events registered in `src/modules/audit/event-types.ts` (insert before 
   resource: "credentials",
   action: "set",
   description: "Per-merchant SuiteFleet credentials set or rotated via /admin/merchants/[id]/credentials",
-  metadataNotes: "tenant_id (uuid), classifier ('initial-set' | 'rotation'). NEVER contains plaintext credentials or Vault UUIDs.",
+  metadataNotes: "tenant_id (uuid), classifier ('initial-set' | 'rotation'). NEVER contains plaintext credentials or Vault UUIDs. SHAPE DIVERGENCE (per Day-25 §A discipline): this event deliberately diverges from the merchant.updated / region.updated flat-diff convention — payload is { tenant_id, classifier } only, NOT a { changes: { <field>: { before, after } } } diff. Rationale: credentials are sensitive-by-class; any per-field before/after shape risks leaking partial plaintext or rotation-vintage metadata into the audit body. Forensic queries filter on classifier for rotation history.",
   systemOnly: true,
 },
 ```
@@ -537,13 +537,13 @@ These resolve at §3.6 round 1 by reviewer ruling. Each has a default lean; revi
 
 - Default lean: flat-diff `{ changes: { <field>: { before, after } } }` matching the v1.12 `merchant.updated` precedent.
 - Alternative: discrete `region.client_id.changed` / `region.display_name.changed` events.
-- Reviewer ruling locked: flat-diff per `merchant.updated` precedent. Reduces audit-event-type count.
+- **§3.6 round-1 ratification (Love, Day-25 PM):** APPROVED — flat-diff per `merchant.updated` precedent.
 
 **OQ-4 — Vault wrapper module location: `src/modules/credentials/vault-store.ts` vs. `src/shared/vault.ts`?**
 
 - Default lean: `src/modules/credentials/vault-store.ts` (co-located with the resolver). Vault is used only by this lane right now; co-location keeps the surface narrow.
 - Alternative: `src/shared/vault.ts` if future modules might want Vault for other secrets (e.g., webhook signing keys).
-- Reviewer ruling: __`src/modules/credentials/vault-store.ts`__ (YAGNI; relocate if a second consumer emerges).
+- **§3.6 round-1 ratification (Love, Day-25 PM):** APPROVED — `src/modules/credentials/vault-store.ts` (YAGNI; relocate if a second consumer emerges).
 
 **OQ-5 — Token cache invalidation: on rotation only, or also on initial-set?**
 
@@ -559,18 +559,18 @@ These resolve at §3.6 round 1 by reviewer ruling. Each has a default lean; revi
 
 **OQ-7 — Region UI: list view sortable, or static order?**
 
-- Default lean: static order (created_at ASC). UI is Transcorp-internal, 4 regions seeded, low cardinality.
-- Reviewer ruling: __static, alphabetical by display_name__. Sorting affordance not needed at this scale.
+- Default lean: static, alphabetical by `display_name` ASC. UI is Transcorp-internal, 4 regions seeded; alphabetical by display name beats `created_at ASC` because operators recognise display names, not creation timestamps.
+- **§3.6 round-1 ratification (Love, Day-25 PM):** APPROVED — static, alphabetical by `display_name` ASC.
 
 **OQ-8 — `storeSuitefleetCredentials` permission: `merchant:update`, but should the audit event tag the change as a separate forensic class from regular merchant updates?**
 
 - Default lean: yes — discrete `credentials.set` event (already in §9.1). Even though the permission is `merchant:update`, the event-type separation gives ops a clean filter for "rotation history" queries.
-- Reviewer ruling: __confirmed__ — separate event type per §9.1.
+- **§3.6 round-1 ratification (Love, Day-25 PM):** APPROVED — separate event type per §9.1, **with discipline note:** `credentials.set` event `metadataNotes` MUST explicitly call out divergence from the `merchant.updated` / `region.updated` flat-diff shape. Payload is `{ tenant_id, classifier }`, NOT a `changes` diff. Per Day-25 §A discipline, deliberate shape divergence must be `metadataNotes`-flagged in the catalogue so future reviewers see the rationale inline. Amended into §9.1 `credentials.set` entry in this plan-PR.
 
 **OQ-9 — Should the migration include a comment block explaining the four-layer model + Vault for future readers?**
 
-- Default lean: yes — a top-of-file SQL comment summarising the change + linking to brief v1.14 §3.6. Mirrors `0013_sf_integration_required_fields.sql` precedent.
-- Reviewer ruling: __yes, include comment block__ — supports future readers.
+- Default lean: yes — a top-of-file SQL comment summarising the change + linking to brief v1.14 §3.6 + §3.7 + this plan-PR. Mirrors `0013_sf_integration_required_fields.sql` precedent.
+- **§3.6 round-1 ratification (Love, Day-25 PM):** APPROVED — include comment block.
 
 **OQ-10 — Should the SF auth-client `login()` path be replaced or wrapped (feature-flag a new path)?**
 
