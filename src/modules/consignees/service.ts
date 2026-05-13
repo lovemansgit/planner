@@ -35,6 +35,8 @@ import type { Uuid } from "../../shared/types";
 import { requirePermission } from "../identity";
 import type { TenantStatus } from "../merchants/types";
 
+import { insertAddress, type AddressLabel } from "../addresses";
+
 import { normaliseToE164 } from "./phone";
 import {
   countAllConsigneesRows,
@@ -47,6 +49,7 @@ import {
   type ListAllConsigneesFilters,
   listAllConsigneesRows,
   listConsigneesByTenant,
+  listConsigneesWithTaskCountByTenant,
   selectCrmHistoryForConsignee,
   selectTimelineForConsignee,
   updateConsignee as updateConsigneeRow,
@@ -131,16 +134,28 @@ function assertTenantScoped(
 // -----------------------------------------------------------------------------
 
 /**
- * Create a single consignee. Validates required fields, normalises the
- * phone to E.164, inserts inside `withTenant`, and emits
- * `consignee.created` post-commit with `source: "planner"` (this code
- * path IS the planner; the SuiteFleet ingress will land its own
- * service path with `source: "suitefleet"`).
+ * Create a single consignee + primary address atomically. Brief v1.12
+ * §3.1.4 — `createConsignee(ctx, { identity, address })`. Replaces the
+ * v1.11 `createConsigneeWithSubscription` orchestration; subscription
+ * creation moves to its own surface via the Overview-tab CTA.
+ *
+ * Behavior inside one `withTenant` tx:
+ *   1. INSERT consignees row — legacy inline address columns
+ *      (`address_line` / `district` / `emirate_or_region`) populated
+ *      from `input.address.*` for back-compat with downstream readers
+ *      pending the migration-0014 Phase-2 deprecation.
+ *   2. INSERT addresses row with `is_primary=true`. The schema's
+ *      partial UNIQUE on `(consignee_id) WHERE is_primary=true` catches
+ *      any drift.
+ *
+ * Post-commit (outside tx):
+ *   - emit `consignee.created` with metadata
+ *     `{ consignee_id, source: "planner", onboarded_via: "flat_form" }`.
  *
  * Throws:
  *   - ForbiddenError    actor lacks `consignee:create`.
- *   - ValidationError   missing required fields, malformed phone, or
- *                       no tenant context.
+ *   - ValidationError   missing required fields, malformed phone,
+ *                       invalid address label, or no tenant context.
  */
 export async function createConsignee(
   ctx: RequestContext,
@@ -149,21 +164,50 @@ export async function createConsignee(
   requirePermission(ctx, "consignee:create");
   assertTenantScoped(ctx, "consignee:create");
 
-  const normalised: CreateConsigneeInput = {
-    name: requireNonEmpty(input.name, "name"),
-    phone: normaliseToE164(input.phone),
-    addressLine: requireNonEmpty(input.addressLine, "addressLine"),
-    emirateOrRegion: requireNonEmpty(input.emirateOrRegion, "emirateOrRegion"),
-    district: requireNonEmpty(input.district, "district"),
-    email: optionalTrim(input.email),
-    deliveryNotes: optionalTrim(input.deliveryNotes),
-    externalRef: optionalTrim(input.externalRef),
-    notesInternal: optionalTrim(input.notesInternal),
-  };
+  const identityName = requireNonEmpty(input.identity.name, "identity.name");
+  const identityPhone = normaliseToE164(input.identity.phone);
+  const identityEmail = optionalTrim(input.identity.email);
+  const identityDeliveryNotes = optionalTrim(input.identity.deliveryNotes);
+  const identityExternalRef = optionalTrim(input.identity.externalRef);
+  const identityNotesInternal = optionalTrim(input.identity.notesInternal);
+
+  const addressLabel: AddressLabel = input.address.label;
+  if (!["home", "office", "other"].includes(addressLabel)) {
+    throw new ValidationError(
+      `address.label must be home | office | other; got ${addressLabel}`,
+    );
+  }
+  const addressLine = requireNonEmpty(input.address.line, "address.line");
+  const addressDistrict = requireNonEmpty(input.address.district, "address.district");
+  const addressEmirate = requireNonEmpty(input.address.emirate, "address.emirate");
+  const addressLat = input.address.lat ?? null;
+  const addressLng = input.address.lng ?? null;
 
   const tenantId = ctx.tenantId;
   const created = await withTenant(tenantId, async (tx) => {
-    return insertConsignee(tx, tenantId, normalised);
+    const consignee = await insertConsignee(tx, tenantId, {
+      name: identityName,
+      phone: identityPhone,
+      email: identityEmail,
+      addressLine,
+      emirateOrRegion: addressEmirate,
+      district: addressDistrict,
+      deliveryNotes: identityDeliveryNotes,
+      externalRef: identityExternalRef,
+      notesInternal: identityNotesInternal,
+    });
+
+    await insertAddress(tx, tenantId, consignee.id, {
+      label: addressLabel,
+      isPrimary: true,
+      line: addressLine,
+      district: addressDistrict,
+      emirate: addressEmirate,
+      lat: addressLat,
+      lng: addressLng,
+    });
+
+    return consignee;
   });
 
   await emit({
@@ -173,7 +217,11 @@ export async function createConsignee(
     tenantId,
     resourceType: "consignee",
     resourceId: created.id,
-    metadata: { consignee_id: created.id, source: "planner" },
+    metadata: {
+      consignee_id: created.id,
+      source: "planner",
+      onboarded_via: "flat_form",
+    },
     requestId: ctx.requestId,
   });
 
@@ -212,6 +260,51 @@ export async function listConsignees(
   assertTenantScoped(ctx, "consignee:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listConsigneesByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day-25 / brief v1.12 §3.4 — list consignees with per-row task counts.
+ * Same auth surface + tenant scope as listConsignees; the difference is
+ * the row shape. Powers the amber NO TASKS badge on `/consignees`.
+ */
+export async function listConsigneesWithTaskCount(
+  ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly (Consignee & { taskCount: number })[]> {
+  requirePermission(ctx, "consignee:read");
+  assertTenantScoped(ctx, "consignee:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listConsigneesWithTaskCountByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day-25 / brief v1.12 §3.3.3 — return subscription + task counts for
+ * one consignee. Drives the Overview-tab empty-state branch ("no
+ * subscription, no tasks" → render the two CTAs prominently). Single
+ * round-trip via two correlated subqueries; both tables RLS-isolated.
+ */
+export async function getConsigneeOnboardingStats(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+): Promise<{ subscriptionCount: number; taskCount: number }> {
+  requirePermission(ctx, "consignee:read");
+  assertTenantScoped(ctx, "consignee:read");
+  const tenantId = ctx.tenantId;
+  return withTenant(tenantId, async (tx) => {
+    const rows = await tx.execute<{ sub_count: number | string; task_count: number | string }>(
+      sqlTag`
+        SELECT
+          (SELECT COUNT(*) FROM subscriptions WHERE consignee_id = ${consigneeId})::int AS sub_count,
+          (SELECT COUNT(*) FROM tasks         WHERE consignee_id = ${consigneeId})::int AS task_count
+      `,
+    );
+    const row = rows[0] ?? { sub_count: 0, task_count: 0 };
+    return {
+      subscriptionCount: Number(row.sub_count),
+      taskCount: Number(row.task_count),
+    };
   });
 }
 

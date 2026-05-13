@@ -20,7 +20,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { SearchBar } from "@/components/SearchBar";
-import { countConsigneesByTenant, listConsignees, type Consignee } from "@/modules/consignees";
+import {
+  countConsigneesByTenant,
+  listConsigneesWithTaskCount,
+  type Consignee,
+} from "@/modules/consignees";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
@@ -41,19 +45,21 @@ export default async function ConsigneesPage({ searchParams }: ConsigneesPagePro
   const params = await searchParams;
   const query = (params.q ?? "").trim();
 
-  let consignees: readonly Consignee[];
+  let consignees: readonly (Consignee & { taskCount: number })[];
   let totalCount: number;
   let canOnboard = false;
   try {
     const ctx = await buildRequestContext("/consignees", requestId);
     const listOpts = query.length > 0 ? { searchTerm: query } : {};
     [consignees, totalCount] = await Promise.all([
-      listConsignees(ctx, listOpts),
+      listConsigneesWithTaskCount(ctx, listOpts),
       countConsigneesByTenant(ctx, listOpts),
     ]);
     if (ctx.actor.kind === "user") {
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
-      canOnboard = perms.has("consignee:create") && perms.has("subscription:create");
+      // Day-25 / brief v1.12 §3.3.1 — onboarding decoupled from
+      // subscription creation. consignee:create alone is sufficient.
+      canOnboard = perms.has("consignee:create");
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {

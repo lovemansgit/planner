@@ -1,13 +1,8 @@
-// Day 22 / Phase 1 forms lane — /consignees/new (server component shell).
+// Day-25 / brief v1.12 §3.3.1 — /consignees/new (server component shell).
 //
-// Permission preflight pattern mirrors
-// src/app/(admin)/admin/merchants/new/page.tsx:
-//   - buildRequestContext + requirePermission(consignee:create + subscription:create) preflight
-//   - UnauthorizedError → redirect to /login
-//   - ForbiddenError    → redirect to / (operator landing)
-//
-// The wizard form is a client component; this page wraps it in the
-// brand-canon shell.
+// Permission preflight only requires `consignee:create`; subscription
+// creation moves to its own surface (Overview-tab CTA → /subscriptions/new).
+// UnauthorizedError → redirect to /login; ForbiddenError → redirect to /.
 
 import { randomUUID } from "node:crypto";
 
@@ -17,7 +12,7 @@ import { requirePermission } from "@/modules/identity";
 import { ForbiddenError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
-import { OnboardConsigneeWizard } from "./_components/OnboardConsigneeWizard";
+import { CreateConsigneeForm } from "./_components/CreateConsigneeForm";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -28,7 +23,6 @@ export default async function NewConsigneePage() {
   try {
     const ctx = await buildRequestContext("/consignees/new", requestId);
     requirePermission(ctx, "consignee:create");
-    requirePermission(ctx, "subscription:create");
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/consignees/new"));
@@ -50,12 +44,12 @@ export default async function NewConsigneePage() {
             Onboard new consignee
           </h1>
           <p className="mt-3 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
-            Captures the consignee, primary delivery address, and recurring subscription in one
-            atomic submission.
+            Capture identity + primary delivery address. Create a subscription or add an ad-hoc
+            delivery from the consignee detail page after onboarding.
           </p>
         </header>
 
-        <OnboardConsigneeWizard />
+        <CreateConsigneeForm />
       </div>
     </main>
   );

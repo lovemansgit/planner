@@ -1,27 +1,20 @@
-// Day 22 / Phase 1 forms lane — onboard-consignee server action.
+// Day-25 / brief v1.12 §3.3.1 — flat consignee form server action.
 //
-// Wraps `createConsigneeWithSubscription` (consignees/onboarding.ts)
-// with form-state semantics. The OnboardConsigneeWizard client
-// component binds via React's useActionState; the action returns a
-// discriminated-union result the wizard renders inline.
+// Replaces the v1.11 wizard's onboardConsigneeAction. The flat form
+// captures identity + primary address only; subscription creation
+// moves to its own surface (Overview-tab CTA → /subscriptions/new).
 //
-// Pattern mirrors src/app/(admin)/admin/merchants/_actions.ts
-// createMerchantAction:
-//   - Parse + validate FormData via parseOnboardForm (helpers).
-//   - Build RequestContext + call orchestration fn.
-//   - Map AppError instances to typed result kinds.
-//   - revalidatePath on success.
-//
-// On success: client component navigates to /consignees/[id] (the new
-// consignee's detail page) — operator immediately sees the calendar
-// view per brief §3.3.1 redirect target.
+// Wraps the new `createConsignee` service (consignees/service.ts) which
+// writes consignees + primary addresses atomically inside one
+// withTenant tx. Returns discriminated-union result the form renders
+// inline.
 
 "use server";
 
 import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 
-import { createConsigneeWithSubscription } from "@/modules/consignees";
+import { createConsignee } from "@/modules/consignees";
 import {
   ConflictError,
   ForbiddenError,
@@ -29,14 +22,10 @@ import {
 } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
-import { parseOnboardForm } from "./_helpers";
+import { parseConsigneeForm } from "./_helpers";
 
-/**
- * Discriminated-union result. `kind` mirrors the orchestration's
- * happy-path + error variants.
- */
-export type OnboardConsigneeActionResult =
-  | { readonly kind: "created"; readonly consigneeId: string; readonly subscriptionId: string }
+export type CreateConsigneeActionResult =
+  | { readonly kind: "created"; readonly consigneeId: string }
   | {
       readonly kind: "validation";
       readonly fieldErrors: Readonly<Record<string, string>>;
@@ -45,28 +34,22 @@ export type OnboardConsigneeActionResult =
   | { readonly kind: "forbidden"; readonly message: string }
   | { readonly kind: "internal_error"; readonly message: string };
 
-export async function onboardConsigneeAction(
-  _prevState: OnboardConsigneeActionResult | { kind: "idle" },
+export async function createConsigneeAction(
+  _prevState: CreateConsigneeActionResult | { kind: "idle" },
   formData: FormData,
-): Promise<OnboardConsigneeActionResult> {
+): Promise<CreateConsigneeActionResult> {
   const requestId = randomUUID();
-  const parsed = parseOnboardForm(formData);
+  const parsed = parseConsigneeForm(formData);
   if (!parsed.ok) {
     return { kind: "validation", fieldErrors: parsed.fieldErrors };
   }
 
   try {
     const ctx = await buildRequestContext("/consignees/new", requestId);
-    const result = await createConsigneeWithSubscription(ctx, parsed.value);
-    // Revalidate both the list (a new row appears) and the new
-    // detail page (preempts an empty-data fetch on first navigation).
+    const created = await createConsignee(ctx, parsed.value);
     revalidatePath("/consignees", "page");
-    revalidatePath(`/consignees/${result.consignee.id}`, "page");
-    return {
-      kind: "created",
-      consigneeId: result.consignee.id,
-      subscriptionId: result.subscription.id,
-    };
+    revalidatePath(`/consignees/${created.id}`, "page");
+    return { kind: "created", consigneeId: created.id };
   } catch (err) {
     if (err instanceof ConflictError) {
       return { kind: "conflict", message: err.message };
@@ -78,21 +61,12 @@ export async function onboardConsigneeAction(
       };
     }
     if (err instanceof ValidationError) {
-      // Service-layer validation differs from client-side (e.g. phone
-      // shapes that pass the +/digit check but fail normaliseToE164's
-      // stricter parser). Surface as a single combined error in the
-      // form-level slot so it's visible regardless of which step the
-      // operator stopped on.
       return {
         kind: "validation",
         fieldErrors: { _form: err.message },
       };
     }
-    // Unknown error — surface a generic operator-facing banner and log
-    // the underlying error to Vercel function logs for ops debugging.
-    // Avoids the Vercel generic 500 page (mid-flow operators lose all
-    // input on hard error, terrible demo UX).
-    console.error("[onboardConsigneeAction] unknown error:", err);
+    console.error("[createConsigneeAction] unknown error:", err);
     return {
       kind: "internal_error",
       message:

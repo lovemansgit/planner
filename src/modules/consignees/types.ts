@@ -20,6 +20,8 @@
 
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
+import type { AddressLabel } from "../addresses";
+
 /**
  * Consignee CRM state per brief §3.1.1 line 153 + migration 0016 CHECK.
  *
@@ -57,21 +59,33 @@ export interface Consignee {
 }
 
 /**
- * Insert payload. `tenantId` is supplied by the service layer
- * (typically `ctx.tenantId`) and is asserted non-null before the call;
- * keeping it out of this type makes accidental tenant-id-from-input
- * impossible.
+ * Insert payload for the flat consignee onboarding form. Brief v1.12
+ * §3.1.4 — `createConsignee(ctx, { identity, address })`. Nested
+ * grouping mirrors the form sections (Identity / Delivery address);
+ * the service flattens internally when calling the consignee + address
+ * repository inserts inside a single `withTenant` tx.
+ *
+ * `tenantId` is supplied by the service layer (typically `ctx.tenantId`)
+ * and is asserted non-null before the call; keeping it out of this type
+ * makes accidental tenant-id-from-input impossible.
  */
 export interface CreateConsigneeInput {
-  readonly name: string;
-  readonly phone: string;
-  readonly email?: string;
-  readonly addressLine: string;
-  readonly emirateOrRegion: string;
-  readonly district: string;
-  readonly deliveryNotes?: string;
-  readonly externalRef?: string;
-  readonly notesInternal?: string;
+  readonly identity: {
+    readonly name: string;
+    readonly phone: string;
+    readonly email?: string;
+    readonly deliveryNotes?: string;
+    readonly externalRef?: string;
+    readonly notesInternal?: string;
+  };
+  readonly address: {
+    readonly label: AddressLabel;
+    readonly line: string;
+    readonly district: string;
+    readonly emirate: string;
+    readonly lat?: number | null;
+    readonly lng?: number | null;
+  };
 }
 
 /**
