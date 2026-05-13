@@ -657,6 +657,15 @@ const PERMISSIONS_DRAFT = {
     systemOnly: true,
   },
 
+  "merchant:update": {
+    id: "merchant:update",
+    resource: "merchant",
+    action: "update",
+    description:
+      "Day 25 / T3. Update an existing merchant tenant's identity (name, slug), pickup address (line/district/emirate), and SF routing (suitefleet_customer_code) via the Transcorp-staff updateMerchant flow. Status changes are NOT in scope — those go through merchant:activate / merchant:deactivate. systemOnly per brief §2.3 (v1.12); granted only to transcorp-sysadmin.",
+    systemOnly: true,
+  },
+
   "task:read_all": {
     id: "task:read_all",
     resource: "task",
@@ -741,6 +750,10 @@ export const API_KEY_FORBIDDEN_PERMISSIONS: ReadonlySet<PermissionId> = Object.f
     "merchant:read_all",
     "merchant:activate",
     "merchant:deactivate",
+    // Day 25 / T3 — merchant edit perm is systemOnly per brief §2.3
+    // (v1.12); API keys must not mutate merchant tenants any more than
+    // they can mint them.
+    "merchant:update",
     // Day 19 / Phase 1.5 — cross-tenant read perms are systemOnly per
     // brief §2.3 (v1.9); API keys must not exfiltrate cross-tenant
     // operational data.
