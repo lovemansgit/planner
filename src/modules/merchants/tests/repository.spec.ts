@@ -18,6 +18,7 @@ import {
   findMerchantForStatusUpdate,
   insertMerchant,
   listMerchants,
+  updateMerchantFields,
   updateMerchantStatus,
 } from "../repository";
 
@@ -210,6 +211,102 @@ describe("updateMerchantStatus", () => {
     const tx = makeStubTx([[]]);
     const ok = await updateMerchantStatus(tx, TENANT_ID, "inactive");
     expect(ok).toBe(false);
+  });
+});
+
+describe("updateMerchantFields", () => {
+  it("issues UPDATE with COALESCE-style null-sentinel binds for every editable column", async () => {
+    const tx = makeStubTx([
+      [rowFixture({ name: "Updated Name", slug: "updated-slug" })],
+    ]);
+
+    const result = await updateMerchantFields(tx, TENANT_ID, {
+      name: "Updated Name",
+      slug: "updated-slug",
+    });
+
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/UPDATE tenants/i);
+    // Every editable column wrapped in COALESCE — name + slug + 3 pickup + sf code = 6 calls.
+    const coalesceMatches = captured.sql.match(/COALESCE/gi);
+    expect(coalesceMatches).not.toBeNull();
+    expect(coalesceMatches?.length).toBe(6);
+    expect(captured.sql).toMatch(/name\s*=\s*COALESCE/i);
+    expect(captured.sql).toMatch(/slug\s*=\s*COALESCE/i);
+    expect(captured.sql).toMatch(/pickup_address_line\s*=\s*COALESCE/i);
+    expect(captured.sql).toMatch(/pickup_address_district\s*=\s*COALESCE/i);
+    expect(captured.sql).toMatch(/pickup_address_emirate\s*=\s*COALESCE/i);
+    expect(captured.sql).toMatch(/suitefleet_customer_code\s*=\s*COALESCE/i);
+    expect(captured.sql).toMatch(/updated_at\s*=\s*now\(\)/i);
+    expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/RETURNING\s+\*/i);
+
+    // The bound params for supplied fields are present; the unsupplied
+    // ones are null sentinels (the COALESCE wrapper preserves the
+    // existing column value when the param is null).
+    expect(captured.params).toContain("Updated Name");
+    expect(captured.params).toContain("updated-slug");
+    // 4 unsupplied fields → 4 null sentinels in the params array.
+    const nullCount = captured.params.filter((p) => p === null).length;
+    expect(nullCount).toBe(4);
+
+    expect(result?.tenantId).toBe(TENANT_ID);
+    expect(result?.name).toBe("Updated Name");
+  });
+
+  it("expands nested pickupAddress to all three flat columns", async () => {
+    const tx = makeStubTx([
+      [
+        rowFixture({
+          pickup_address_line: "New Line",
+          pickup_address_district: "New District",
+          pickup_address_emirate: "Sharjah",
+        }),
+      ],
+    ]);
+
+    const result = await updateMerchantFields(tx, TENANT_ID, {
+      pickupAddress: {
+        line: "New Line",
+        district: "New District",
+        emirate: "Sharjah",
+      },
+    });
+
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.params).toContain("New Line");
+    expect(captured.params).toContain("New District");
+    expect(captured.params).toContain("Sharjah");
+    // name + slug + sf code = 3 unsupplied → 3 null sentinels.
+    const nullCount = captured.params.filter((p) => p === null).length;
+    expect(nullCount).toBe(3);
+
+    expect(result?.pickupAddress).toEqual({
+      line: "New Line",
+      district: "New District",
+      emirate: "Sharjah",
+    });
+  });
+
+  it("all-undefined patch issues UPDATE with six null sentinels (no-op semantic at SQL layer)", async () => {
+    // The service layer is responsible for the "no fields to update"
+    // gate (plan §3.2); the repo just compiles whatever the caller
+    // passes. An all-null UPDATE preserves every column via COALESCE
+    // and only bumps updated_at, which is harmless at the SQL layer.
+    const tx = makeStubTx([[rowFixture()]]);
+    await updateMerchantFields(tx, TENANT_ID, {});
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    const nullCount = captured.params.filter((p) => p === null).length;
+    expect(nullCount).toBe(6);
+  });
+
+  it("returns null when no row matched (vanished mid-tx → service maps to NotFoundError)", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await updateMerchantFields(tx, TENANT_ID, {
+      name: "Updated Name",
+    });
+    expect(result).toBeNull();
   });
 });
 
