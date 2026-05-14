@@ -19,11 +19,20 @@ export {
   updateRegion,
   deactivateRegion,
   storeSuitefleetCredentials,
+  // Read-side surface (Sub-PR 3 admin UI)
+  listRegions,
+  listRegionsWithUsage,
+  findRegionByIdWithUsage,
+  findRegionForMerchant,
+  loadCredentialsPageState,
 } from "./service";
 export type {
   Region,
   RegionAuthMethod,
   RegionStatus,
+  RegionWithUsage,
+  ListRegionsFilters,
+  CredentialsPageState,
   CreateRegionInput,
   CreateRegionResult,
   UpdateRegionInput,

@@ -31,3 +31,24 @@ export function isUniqueViolation(err: unknown): boolean {
   const cause = (err as { cause?: unknown }).cause;
   return isUniqueViolation(cause);
 }
+
+/**
+ * SQLSTATE 23503 — foreign_key_violation. Emitted when an INSERT or
+ * UPDATE references a row that does not exist in the referenced table
+ * (or when a DELETE in the parent would orphan a row in a RESTRICT-ed
+ * child).
+ */
+export const PG_FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * True when `err` is (or wraps) a PG foreign-key-violation. Walks the
+ * `err.cause` chain to unwrap drizzle's `DrizzleQueryError` (same
+ * pattern as `isUniqueViolation` per file header).
+ */
+export function isForeignKeyViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === PG_FOREIGN_KEY_VIOLATION) return true;
+  const cause = (err as { cause?: unknown }).cause;
+  return isForeignKeyViolation(cause);
+}

@@ -38,7 +38,7 @@ import {
   ValidationError,
 } from "../../../shared/errors";
 import type { RequestContext } from "../../../shared/tenant-context";
-import type { Permission } from "../../../shared/types";
+import type { Permission, Uuid } from "../../../shared/types";
 
 import { emit } from "../../audit";
 
@@ -102,6 +102,9 @@ function merchantFixture(overrides: Partial<Merchant> = {}): Merchant {
       emirate: "Dubai",
     },
     suitefleetCustomerCode: "588",
+    suitefleetRegionId: "11111111-1111-4111-a111-111111111111" as Uuid,
+    suitefleetCredential1VaultId: null,
+    suitefleetCredential2VaultId: null,
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     ...overrides,

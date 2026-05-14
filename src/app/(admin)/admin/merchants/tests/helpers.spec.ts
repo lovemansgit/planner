@@ -358,6 +358,8 @@ describe("parseEditMerchantForm", () => {
     return f;
   }
 
+  const SAMPLE_REGION_ID = "11111111-1111-4111-a111-111111111111";
+
   function fullForm(overrides: Record<string, string> = {}): FormData {
     return fd({
       name: "Demo Bistro",
@@ -366,6 +368,7 @@ describe("parseEditMerchantForm", () => {
       pickup_district: "Al Quoz Industrial 1",
       pickup_emirate: "Dubai",
       suitefleet_customer_code: "588",
+      suitefleet_region_id: SAMPLE_REGION_ID,
       ...overrides,
     });
   }
@@ -382,6 +385,7 @@ describe("parseEditMerchantForm", () => {
           emirate: "Dubai",
         },
         suitefleetCustomerCode: "588",
+        suitefleetRegionId: SAMPLE_REGION_ID,
       });
       // Defense-in-depth: any `slug` value in FormData is silently
       // dropped — slug is creation-only. Pin via property absence
@@ -389,6 +393,14 @@ describe("parseEditMerchantForm", () => {
       // assertion documents the FormData-level intent for anyone
       // crafting a manual POST against the action endpoint).
       expect((result.value as unknown as Record<string, unknown>).slug).toBeUndefined();
+    }
+  });
+
+  it("empty suitefleet_region_id returns field error (Day-26 picker safety)", () => {
+    const result = parseEditMerchantForm(fullForm({ suitefleet_region_id: "" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors.suitefleet_region_id).toBeTruthy();
     }
   });
 

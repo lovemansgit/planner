@@ -58,6 +58,15 @@ export interface UpdateMerchantFieldsPatch {
   readonly name?: string;
   readonly pickupAddress?: PickupAddress;
   readonly suitefleetCustomerCode?: string;
+  /**
+   * SF region FK — Day 26 / T3 Sub-PR 3. Updates
+   * `tenants.suitefleet_region_id`. The DB FK (ON DELETE RESTRICT
+   * against `suitefleet_regions(id)`) catches bogus UUIDs at write
+   * time; the column is NOT NULL post-migration-0024 so the
+   * COALESCE-style update is null-safe (sentinel-null preserves the
+   * existing value).
+   */
+  readonly suitefleetRegionId?: Uuid;
 }
 
 // -----------------------------------------------------------------------------
@@ -73,6 +82,9 @@ type TenantRow = {
   pickup_address_district: string | null;
   pickup_address_emirate: string | null;
   suitefleet_customer_code: string | null;
+  suitefleet_region_id: string;
+  suitefleet_credential_1_vault_id: string | null;
+  suitefleet_credential_2_vault_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -119,6 +131,9 @@ function mapRow(row: TenantRow): Merchant {
     status: row.status as TenantStatus,
     pickupAddress,
     suitefleetCustomerCode: row.suitefleet_customer_code,
+    suitefleetRegionId: row.suitefleet_region_id as Uuid,
+    suitefleetCredential1VaultId: row.suitefleet_credential_1_vault_id as Uuid | null,
+    suitefleetCredential2VaultId: row.suitefleet_credential_2_vault_id as Uuid | null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -283,6 +298,7 @@ export async function updateMerchantFields(
   const pickupDistrict = patch.pickupAddress?.district ?? null;
   const pickupEmirate = patch.pickupAddress?.emirate ?? null;
   const suitefleetCustomerCode = patch.suitefleetCustomerCode ?? null;
+  const suitefleetRegionId = patch.suitefleetRegionId ?? null;
 
   const rows = await tx.execute<TenantRow>(sqlTag`
     UPDATE tenants
@@ -292,6 +308,7 @@ export async function updateMerchantFields(
       pickup_address_district = COALESCE(${pickupDistrict}, pickup_address_district),
       pickup_address_emirate = COALESCE(${pickupEmirate}, pickup_address_emirate),
       suitefleet_customer_code = COALESCE(${suitefleetCustomerCode}, suitefleet_customer_code),
+      suitefleet_region_id = COALESCE(${suitefleetRegionId}::uuid, suitefleet_region_id),
       updated_at = now()
     WHERE id = ${id}
     RETURNING *

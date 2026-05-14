@@ -539,3 +539,259 @@ export async function storeSuitefleetCredentials(
 
   return { status: "stored", tenantId, classifier };
 }
+
+// =============================================================================
+// Read-side surface — Day 26 / T3 Sub-PR 3 (admin UI)
+// =============================================================================
+//
+// The /admin/regions list/[id]/new pages + the /admin/merchants/[id]/edit
+// region picker + the merchant detail page's credentials badge all need
+// read-side queries against `suitefleet_regions`. None of those reads
+// mutate state or touch Vault plaintext.
+//
+// Permission posture: the four region-admin reads (listRegions /
+// listRegionsWithUsage / findRegionById / findRegionByIdWithUsage) all
+// gate on `region:manage`. The `findRegionForMerchant` read gates on
+// `merchant:read_all` (the broadest legitimate need for a region-
+// metadata read in a merchant-facing context — the merchant detail
+// page consumes this to render the auth_method row, and the edit
+// form's pre-fill consumes this to render the picker's current value).
+// The `loadCredentialsPageState` read gates on `merchant:update`
+// (it's the same gate that the action layer enforces).
+
+export interface RegionWithUsage extends Region {
+  /** Count of `tenants` rows pointing at this region. */
+  readonly inUseCount: number;
+}
+
+export interface ListRegionsFilters {
+  /** Only return regions in `status='active'` when true. Default: all. */
+  readonly onlyActive?: boolean;
+}
+
+interface RegionUsageRow extends RegionRow {
+  readonly in_use_count: number | string;
+}
+
+function mapUsageRow(row: RegionUsageRow): RegionWithUsage {
+  return {
+    ...mapRegionRow(row),
+    inUseCount: typeof row.in_use_count === "string"
+      ? Number.parseInt(row.in_use_count, 10)
+      : row.in_use_count,
+  };
+}
+
+/**
+ * SELECT every region, ordered alphabetically by display_name ASC
+ * (OQ-7 ratified static-sort). `onlyActive` filter trims to
+ * `status='active'` — used by the edit-form region picker (operators
+ * shouldn't be able to select an inactive region for a merchant).
+ *
+ * Gate: `region:manage`. transcorp-sysadmin (the only role carrying it
+ * in v1) also has `merchant:update`, so the picker call from the edit
+ * form's parent server component succeeds.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `region:manage`.
+ */
+export async function listRegions(
+  ctx: RequestContext,
+  filters: ListRegionsFilters = {},
+): Promise<readonly Region[]> {
+  requirePermission(ctx, "region:manage");
+
+  const onlyActiveFragment = filters.onlyActive
+    ? sqlTag`WHERE status = 'active'`
+    : sqlTag``;
+
+  return withServiceRole("transcorp_staff:list_regions", async (tx) => {
+    const rows = await tx.execute<RegionRow & Record<string, unknown>>(sqlTag`
+      SELECT *
+      FROM suitefleet_regions
+      ${onlyActiveFragment}
+      ORDER BY display_name ASC
+    `);
+    return (rows as unknown as ReadonlyArray<RegionRow>).map(mapRegionRow);
+  });
+}
+
+/**
+ * SELECT every region with its in-use count (COUNT of tenants pointing
+ * at the region). Ordered alphabetically by display_name ASC per
+ * ratified OQ-7. Powers the /admin/regions list view.
+ *
+ * The LEFT JOIN ensures rows with zero tenants surface with
+ * in_use_count = 0 rather than dropping out.
+ *
+ * Gate: `region:manage`.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `region:manage`.
+ */
+export async function listRegionsWithUsage(
+  ctx: RequestContext,
+): Promise<readonly RegionWithUsage[]> {
+  requirePermission(ctx, "region:manage");
+
+  return withServiceRole("transcorp_staff:list_regions_usage", async (tx) => {
+    const rows = await tx.execute<RegionUsageRow & Record<string, unknown>>(sqlTag`
+      SELECT
+        r.*,
+        COUNT(t.id) AS in_use_count
+      FROM suitefleet_regions r
+      LEFT JOIN tenants t ON t.suitefleet_region_id = r.id
+      GROUP BY r.id
+      ORDER BY r.display_name ASC
+    `);
+    return (rows as unknown as ReadonlyArray<RegionUsageRow>).map(mapUsageRow);
+  });
+}
+
+/**
+ * SELECT one region by id. Returns null when not found. Used by the
+ * /admin/regions/[id] detail page in conjunction with the in-use count.
+ *
+ * Gate: `region:manage`.
+ */
+export async function findRegionByIdWithUsage(
+  ctx: RequestContext,
+  regionId: Uuid,
+): Promise<RegionWithUsage | null> {
+  requirePermission(ctx, "region:manage");
+
+  return withServiceRole(
+    `transcorp_staff:find_region_usage ${regionId}`,
+    async (tx) => {
+      const rows = await tx.execute<RegionUsageRow & Record<string, unknown>>(sqlTag`
+        SELECT
+          r.*,
+          COUNT(t.id) AS in_use_count
+        FROM suitefleet_regions r
+        LEFT JOIN tenants t ON t.suitefleet_region_id = r.id
+        WHERE r.id = ${regionId}
+        GROUP BY r.id
+      `);
+      const result = rows as unknown as ReadonlyArray<RegionUsageRow>;
+      return result[0] ? mapUsageRow(result[0]) : null;
+    },
+  );
+}
+
+/**
+ * SELECT one region's display-only metadata by id. Distinct from
+ * `findRegionByIdWithUsage` in two ways:
+ *   1. Gate is `merchant:read_all` — the read fires from merchant-
+ *      facing pages (detail + edit + credentials) that need region
+ *      metadata for display, not for region-admin operations.
+ *   2. No usage count — pure region row, no JOIN.
+ *
+ * Returns null when not found.
+ */
+export async function findRegionForMerchant(
+  ctx: RequestContext,
+  regionId: Uuid,
+): Promise<Region | null> {
+  requirePermission(ctx, "merchant:read_all");
+
+  return withServiceRole(
+    `transcorp_staff:find_region_for_merchant ${regionId}`,
+    async (tx) => {
+      const rows = await tx.execute<RegionRow & Record<string, unknown>>(sqlTag`
+        SELECT * FROM suitefleet_regions WHERE id = ${regionId}
+      `);
+      const result = rows as unknown as ReadonlyArray<RegionRow>;
+      return result[0] ? mapRegionRow(result[0]) : null;
+    },
+  );
+}
+
+export interface CredentialsPageState {
+  /** Tenant id (echoed for caller convenience). */
+  readonly tenantId: Uuid;
+  /** Display name for the credentials page heading. */
+  readonly merchantName: string;
+  /** Region row the tenant's `suitefleet_region_id` points at. */
+  readonly region: Region;
+  /**
+   * Whether both Vault UUIDs are present on the tenant row.
+   * Drives the SET vs ROTATE submit-button label + modal copy.
+   */
+  readonly hasCredentials: boolean;
+}
+
+/**
+ * Load the state needed to render `/admin/merchants/[id]/credentials`.
+ * One SQL trip: JOINs tenants + suitefleet_regions; reads only what
+ * the page renders (no Vault `decrypted_secret` — that would defeat
+ * the write-only-by-design posture per brief §3.7 + plan §8.2).
+ *
+ * Gate: `merchant:update` (mirrors the storeSuitefleetCredentials
+ * action gate so the page and the action enforce the same envelope).
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:update`.
+ *   - NotFoundError     tenant id not found.
+ */
+export async function loadCredentialsPageState(
+  ctx: RequestContext,
+  tenantId: Uuid,
+): Promise<CredentialsPageState> {
+  requirePermission(ctx, "merchant:update");
+
+  const row = await withServiceRole(
+    `transcorp_staff:load_credentials_page_state ${tenantId}`,
+    async (tx) => {
+      type JoinedRow = {
+        merchant_name: string;
+        has_credential_1: boolean;
+        has_credential_2: boolean;
+        region_id: string;
+        region_client_id: string;
+        region_display_name: string;
+        region_status: string;
+        region_auth_method: string;
+        region_created_at: Date | string;
+        region_updated_at: Date | string;
+      } & Record<string, unknown>;
+      const rows = await tx.execute<JoinedRow>(sqlTag`
+        SELECT
+          t.name AS merchant_name,
+          (t.suitefleet_credential_1_vault_id IS NOT NULL) AS has_credential_1,
+          (t.suitefleet_credential_2_vault_id IS NOT NULL) AS has_credential_2,
+          r.id           AS region_id,
+          r.client_id    AS region_client_id,
+          r.display_name AS region_display_name,
+          r.status       AS region_status,
+          r.auth_method  AS region_auth_method,
+          r.created_at   AS region_created_at,
+          r.updated_at   AS region_updated_at
+        FROM tenants t
+        JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+        WHERE t.id = ${tenantId}
+        LIMIT 1
+      `);
+      const result = rows as unknown as ReadonlyArray<JoinedRow>;
+      return result[0] ?? null;
+    },
+  );
+
+  if (row === null) {
+    throw new NotFoundError(`tenant not found: ${tenantId}`);
+  }
+
+  return {
+    tenantId,
+    merchantName: row.merchant_name,
+    region: {
+      id: row.region_id as Uuid,
+      clientId: row.region_client_id,
+      displayName: row.region_display_name,
+      status: row.region_status as RegionStatus,
+      authMethod: row.region_auth_method as RegionAuthMethod,
+      createdAt: toIso(row.region_created_at),
+      updatedAt: toIso(row.region_updated_at),
+    },
+    hasCredentials: row.has_credential_1 && row.has_credential_2,
+  };
+}

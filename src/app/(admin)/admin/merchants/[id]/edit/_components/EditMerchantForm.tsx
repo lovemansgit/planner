@@ -31,6 +31,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
+import type { Region } from "@/modules/credentials";
 import type { Merchant } from "@/modules/merchants/types";
 
 import {
@@ -40,9 +41,19 @@ import {
 
 interface EditMerchantFormProps {
   readonly initial: Merchant;
+  /**
+   * Active regions for the SF region picker. Sourced from
+   * `listRegions(ctx, { onlyActive: true })` at the parent server
+   * component. If the merchant's current `suitefleetRegionId` points
+   * at a region not in this list (deactivated since the merchant was
+   * assigned), it's surfaced as a sticky read-only display below the
+   * picker rather than dropped — the operator can see the misalignment
+   * and pick a replacement explicitly.
+   */
+  readonly activeRegions: readonly Region[];
 }
 
-export function EditMerchantForm({ initial }: EditMerchantFormProps) {
+export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormProps) {
   const router = useRouter();
   const boundAction = updateMerchantAction.bind(null, initial.tenantId);
   const [actionResult, formAction, isPending] = useActionState<
@@ -164,6 +175,12 @@ export function EditMerchantForm({ initial }: EditMerchantFormProps) {
             error={fieldErrors.suitefleet_customer_code}
             required
           />
+
+          <RegionPicker
+            currentRegionId={initial.suitefleetRegionId}
+            activeRegions={activeRegions}
+            error={fieldErrors.suitefleet_region_id}
+          />
         </fieldset>
 
         <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-strong)] pt-8">
@@ -194,6 +211,65 @@ interface FieldProps {
   readonly hint?: string;
   readonly error?: string;
   readonly required?: boolean;
+}
+
+interface RegionPickerProps {
+  readonly currentRegionId: string;
+  readonly activeRegions: readonly Region[];
+  readonly error?: string;
+}
+
+function RegionPicker({ currentRegionId, activeRegions, error }: RegionPickerProps) {
+  const id = "merchant-edit-suitefleet_region_id";
+  // If the merchant's current region is INACTIVE, listRegions(onlyActive)
+  // will not return it. Surface a sticky <option> for the current value
+  // so the picker doesn't silently drop the assignment + so the operator
+  // sees the misalignment.
+  const currentInList = activeRegions.some((r) => r.id === currentRegionId);
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
+      >
+        SuiteFleet region
+      </label>
+      <select
+        id={id}
+        name="suitefleet_region_id"
+        defaultValue={currentRegionId}
+        required
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={error ? `${id}-error` : `${id}-hint`}
+        className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+      >
+        {!currentInList ? (
+          <option value={currentRegionId} disabled>
+            (Current region is inactive — pick a replacement)
+          </option>
+        ) : null}
+        {activeRegions.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.displayName} ({r.clientId})
+          </option>
+        ))}
+      </select>
+      {error ? (
+        <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red">
+          {error}
+        </p>
+      ) : (
+        <p
+          id={`${id}-hint`}
+          className="mt-1 text-xs text-[color:var(--color-text-tertiary)]"
+        >
+          Determines which SuiteFleet region the merchant routes to + which authentication method
+          applies to the credentials. Changing this is a routing change — credentials remain bound
+          to the merchant.
+        </p>
+      )}
+    </div>
+  );
 }
 
 function Field({

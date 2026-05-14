@@ -50,7 +50,7 @@
 
 import { emit } from "../audit";
 import { withServiceRole } from "../../shared/db";
-import { isUniqueViolation } from "../../shared/db-errors";
+import { isForeignKeyViolation, isUniqueViolation } from "../../shared/db-errors";
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
@@ -138,6 +138,25 @@ function requireSuitefleetCustomerCode(value: string): string {
     );
   }
   return trimmed;
+}
+
+/**
+ * Canonical RFC-4122 UUID regex (lowercase hex; any version digit; any
+ * variant bit). Used to shape-validate the SF region FK at the service
+ * boundary before the DB sees it — a bogus string here would otherwise
+ * surface as a postgres parse error rather than a typed ValidationError.
+ * The DB-level FK constraint (`REFERENCES suitefleet_regions(id) ON
+ * DELETE RESTRICT`) is the canonical existence check; this regex only
+ * guarantees the value can BE a UUID.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function requireValidUuid(value: string, field: string): string {
+  const trimmed = requireNonEmpty(value, field);
+  if (!UUID_RE.test(trimmed)) {
+    throw new ValidationError(`${field} must be a valid UUID`);
+  }
+  return trimmed.toLowerCase();
 }
 
 // -----------------------------------------------------------------------------
@@ -510,6 +529,16 @@ export async function updateMerchant(
           // surfaces as 409 instead of 500 without service-layer churn.
           throw new ConflictError(`merchant update conflict (uniqueness violation)`);
         }
+        if (isForeignKeyViolation(err)) {
+          // suitefleet_region_id FK violation — operator submitted a
+          // region UUID that doesn't exist in suitefleet_regions. The
+          // UI picker only ever sends IDs from listRegions results, so
+          // this is defense-in-depth against a manual POST. Surface as
+          // ValidationError (422) rather than letting it bubble as 500.
+          throw new ValidationError(
+            "suitefleet_region_id references an unknown region",
+          );
+        }
         throw err;
       }
     },
@@ -563,6 +592,12 @@ function normaliseUpdateInput(input: UpdateMerchantInput): UpdateMerchantFieldsP
     patch.suitefleetCustomerCode = requireSuitefleetCustomerCode(
       input.suitefleetCustomerCode,
     );
+  }
+  if (input.suitefleetRegionId !== undefined) {
+    patch.suitefleetRegionId = requireValidUuid(
+      input.suitefleetRegionId,
+      "suitefleet_region_id",
+    ) as Uuid;
   }
 
   if (Object.keys(patch).length === 0) {
@@ -632,6 +667,16 @@ function computeMerchantDiff(
       after: patch.suitefleetCustomerCode,
     };
     fields.push("suitefleet_customer_code");
+  }
+  if (
+    patch.suitefleetRegionId !== undefined &&
+    patch.suitefleetRegionId !== current.suitefleetRegionId
+  ) {
+    changes.suitefleet_region_id = {
+      before: current.suitefleetRegionId,
+      after: patch.suitefleetRegionId,
+    };
+    fields.push("suitefleet_region_id");
   }
 
   return { changedFields: fields, changes };
