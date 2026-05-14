@@ -209,6 +209,7 @@ export async function updateMerchantAction(
       name: parsed.value.name,
       pickupAddress: parsed.value.pickupAddress,
       suitefleetCustomerCode: parsed.value.suitefleetCustomerCode,
+      suitefleetRegionId: parsed.value.suitefleetRegionId as Uuid,
     });
     revalidatePath("/admin/merchants", "page");
     return {

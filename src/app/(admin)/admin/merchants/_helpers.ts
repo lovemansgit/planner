@@ -220,6 +220,13 @@ export interface ParsedEditMerchantInput {
     readonly emirate: string;
   };
   readonly suitefleetCustomerCode: string;
+  /**
+   * SF region FK — Day 26 / T3 Sub-PR 3. Required non-empty when present
+   * in the form (the picker is always rendered with a default; an empty
+   * value is a parse-layer surprise). The DB FK + service-layer
+   * `requireValidUuid` (UUID_RE) catch any bogus value at write time.
+   */
+  readonly suitefleetRegionId: string;
 }
 
 export type ParseEditMerchantResult =
@@ -283,11 +290,20 @@ export function parseEditMerchantForm(formData: FormData): ParseEditMerchantResu
       "Must be a positive integer (e.g. 588). No leading zeros, no spaces.";
   }
 
+  const suitefleetRegionId = trimmed("suitefleet_region_id");
+  if (suitefleetRegionId.length === 0) {
+    // The picker is rendered with the merchant's current region pre-
+    // selected; an empty value means a manual POST or a broken render.
+    // Surface as a field-level error rather than letting the service
+    // see an empty string + 422.
+    fieldErrors.suitefleet_region_id = "SuiteFleet region is required.";
+  }
+
   if (Object.keys(fieldErrors).length > 0) {
     return { ok: false, fieldErrors };
   }
   return {
     ok: true,
-    value: { name, pickupAddress, suitefleetCustomerCode },
+    value: { name, pickupAddress, suitefleetCustomerCode, suitefleetRegionId },
   };
 }

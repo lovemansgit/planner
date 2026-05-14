@@ -100,6 +100,29 @@ export interface Merchant {
    * NULL/empty values.
    */
   readonly suitefleetCustomerCode: string | null;
+  /**
+   * SuiteFleet region FK per brief §3.6 v1.14 — the routing region for
+   * this merchant. NOT NULL post-migration-0024 (every existing tenant
+   * was backfilled to the sandbox region; the column has a DEFAULT to
+   * the sandbox UUID for new INSERTs). The region's `auth_method` +
+   * `client_id` are resolver inputs for SF auth.
+   */
+  readonly suitefleetRegionId: Uuid;
+  /**
+   * Per-merchant SuiteFleet credentials Vault UUIDs (v1.14 + v1.15
+   * dual-auth). Generic credential_1/credential_2 — semantics
+   * interpreted by `region.auth_method` (oauth → username/password;
+   * api_key → apiKey/secretKey). Nullable; both NULL = un-provisioned.
+   * Surfaced on the DTO so the merchant detail page can render the
+   * "credentials configured / missing" badge without a second query.
+   *
+   * The presence flags are exposed but the Vault UUIDs themselves are
+   * NOT secret — the UUID is meaningless without service-role access
+   * to `vault.decrypted_secrets`. Operators never see them; the
+   * detail page reads only the !== null check.
+   */
+  readonly suitefleetCredential1VaultId: Uuid | null;
+  readonly suitefleetCredential2VaultId: Uuid | null;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
 }
@@ -196,6 +219,15 @@ export interface UpdateMerchantInput {
   readonly name?: string;
   readonly pickupAddress?: PickupAddress;
   readonly suitefleetCustomerCode?: string;
+  /**
+   * SF region FK — Day 26 / T3 Sub-PR 3 (edit-form region picker per
+   * v1.14 plan §8.4). Operator picks from active `suitefleet_regions`
+   * rows; updateMerchant validates the FK by INSERT-style trust + DB
+   * REFERENCES enforcement (ON DELETE RESTRICT on the column makes the
+   * FK validation implicit at write time). Diff surfaces as
+   * `suitefleet_region_id` in the `merchant.updated` flat-diff body.
+   */
+  readonly suitefleetRegionId?: Uuid;
 }
 
 /**

@@ -43,6 +43,10 @@ function rowFixture(overrides: Partial<Record<string, unknown>> = {}) {
     pickup_address_line: "Building 1, Al Quoz",
     pickup_address_district: "Al Quoz Industrial 1",
     pickup_address_emirate: "Dubai",
+    suitefleet_customer_code: null,
+    suitefleet_region_id: "11111111-1111-4111-a111-111111111111",
+    suitefleet_credential_1_vault_id: null,
+    suitefleet_credential_2_vault_id: null,
     created_at: FIXED_NOW,
     updated_at: FIXED_NOW,
     ...overrides,
@@ -100,6 +104,10 @@ describe("insertMerchant", () => {
         district: "Al Quoz Industrial 1",
         emirate: "Dubai",
       },
+      suitefleetCustomerCode: null,
+      suitefleetRegionId: "11111111-1111-4111-a111-111111111111",
+      suitefleetCredential1VaultId: null,
+      suitefleetCredential2VaultId: null,
       createdAt: FIXED_NOW.toISOString(),
       updatedAt: FIXED_NOW.toISOString(),
     });
@@ -228,17 +236,19 @@ describe("updateMerchantFields", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/UPDATE tenants/i);
     // Every editable column wrapped in COALESCE — name + 3 pickup +
-    // sf code = 5 calls. (Slug was removed from the patch shape; it's
-    // creation-only — see UpdateMerchantInput JSDoc for context.)
+    // sf code + sf region id = 6 calls. (Slug was removed from the
+    // patch shape; it's creation-only. SF region id added by Day-26
+    // Sub-PR 3 for the region picker on /admin/merchants/[id]/edit.)
     const coalesceMatches = captured.sql.match(/COALESCE/gi);
     expect(coalesceMatches).not.toBeNull();
-    expect(coalesceMatches?.length).toBe(5);
+    expect(coalesceMatches?.length).toBe(6);
     expect(captured.sql).toMatch(/name\s*=\s*COALESCE/i);
     expect(captured.sql).not.toMatch(/slug\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/pickup_address_line\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/pickup_address_district\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/pickup_address_emirate\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/suitefleet_customer_code\s*=\s*COALESCE/i);
+    expect(captured.sql).toMatch(/suitefleet_region_id\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/updated_at\s*=\s*now\(\)/i);
     expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+/i);
     expect(captured.sql).toMatch(/RETURNING\s+\*/i);
@@ -247,9 +257,9 @@ describe("updateMerchantFields", () => {
     // ones are null sentinels (the COALESCE wrapper preserves the
     // existing column value when the param is null).
     expect(captured.params).toContain("Updated Name");
-    // 4 unsupplied fields (3 pickup + sf code) → 4 null sentinels.
+    // 5 unsupplied fields (3 pickup + sf code + sf region id) → 5 null sentinels.
     const nullCount = captured.params.filter((p) => p === null).length;
-    expect(nullCount).toBe(4);
+    expect(nullCount).toBe(5);
 
     expect(result?.tenantId).toBe(TENANT_ID);
     expect(result?.name).toBe("Updated Name");
@@ -278,9 +288,9 @@ describe("updateMerchantFields", () => {
     expect(captured.params).toContain("New Line");
     expect(captured.params).toContain("New District");
     expect(captured.params).toContain("Sharjah");
-    // name + sf code = 2 unsupplied → 2 null sentinels.
+    // name + sf code + sf region id = 3 unsupplied → 3 null sentinels.
     const nullCount = captured.params.filter((p) => p === null).length;
-    expect(nullCount).toBe(2);
+    expect(nullCount).toBe(3);
 
     expect(result?.pickupAddress).toEqual({
       line: "New Line",
@@ -289,16 +299,17 @@ describe("updateMerchantFields", () => {
     });
   });
 
-  it("all-undefined patch issues UPDATE with five null sentinels (no-op semantic at SQL layer)", async () => {
+  it("all-undefined patch issues UPDATE with six null sentinels (no-op semantic at SQL layer)", async () => {
     // The service layer is responsible for the "no fields to update"
     // gate (plan §3.2); the repo just compiles whatever the caller
     // passes. An all-null UPDATE preserves every column via COALESCE
     // and only bumps updated_at, which is harmless at the SQL layer.
+    // Six COALESCE'd columns: name + 3 pickup + sf code + sf region id.
     const tx = makeStubTx([[rowFixture()]]);
     await updateMerchantFields(tx, TENANT_ID, {});
     const captured = compile(tx.execute.mock.calls[0][0]);
     const nullCount = captured.params.filter((p) => p === null).length;
-    expect(nullCount).toBe(5);
+    expect(nullCount).toBe(6);
   });
 
   it("returns null when no row matched (vanished mid-tx → service maps to NotFoundError)", async () => {

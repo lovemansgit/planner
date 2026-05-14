@@ -27,6 +27,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { CopyableUrl } from "@/components/CopyableUrl";
+import { findRegionForMerchant, type Region } from "@/modules/credentials";
 import { getMerchantById } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import { buildWebhookUrl, resolvePublicBaseUrl } from "@/modules/webhooks";
@@ -38,6 +39,7 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
 
+import { authMethodBadge } from "../../regions/_helpers";
 import { statusBadgeSurface } from "../_helpers";
 
 export const dynamic = "force-dynamic";
@@ -54,11 +56,17 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
   const requestId = randomUUID();
 
   let merchant: Merchant | null;
+  let region: Region | null = null;
   let canEdit: boolean;
+  let canManageCredentials: boolean;
   try {
     const ctx = await buildRequestContext(`/admin/merchants/${id}`, requestId);
     merchant = await getMerchantById(ctx, id as Uuid);
     canEdit = ctx.actor.permissions.has("merchant:update");
+    canManageCredentials = ctx.actor.permissions.has("merchant:update");
+    if (merchant) {
+      region = await findRegionForMerchant(ctx, merchant.suitefleetRegionId);
+    }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent(`/admin/merchants/${id}`));
@@ -79,6 +87,10 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
   const baseUrl = resolvePublicBaseUrl();
   const webhookUrl = buildWebhookUrl(merchant.tenantId, baseUrl);
   const badge = statusBadgeSurface(merchant.status);
+  const credentialsConfigured =
+    merchant.suitefleetCredential1VaultId !== null &&
+    merchant.suitefleetCredential2VaultId !== null;
+  const authBadge = region !== null ? authMethodBadge(region.authMethod) : null;
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
@@ -129,6 +141,66 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
             value={merchant.suitefleetCustomerCode}
             mono
           />
+
+          <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
+            <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+              SuiteFleet region
+            </p>
+            {region ? (
+              <Link
+                href={`/admin/regions/${region.id}`}
+                className="text-sm text-navy underline-offset-4 hover:underline"
+              >
+                {region.displayName}{" "}
+                <span className="font-mono text-xs text-[color:var(--color-text-secondary)]">
+                  ({region.clientId})
+                </span>
+              </Link>
+            ) : (
+              <p className="text-sm text-[color:var(--color-text-tertiary)]">—</p>
+            )}
+          </div>
+
+          {authBadge ? (
+            <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
+              <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+                Auth method
+              </p>
+              <div>
+                <span
+                  className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${authBadge.className}`}
+                >
+                  {authBadge.label}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
+            <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+              Credentials
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              {credentialsConfigured ? (
+                <span className="inline-flex items-center bg-green/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-green">
+                  Configured
+                </span>
+              ) : (
+                <span className="inline-flex items-center bg-amber/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-amber-deep">
+                  Missing
+                </span>
+              )}
+              {canManageCredentials ? (
+                <Link
+                  href={`/admin/merchants/${merchant.tenantId}/credentials`}
+                  className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] underline-offset-4 hover:text-navy hover:underline"
+                >
+                  Manage credentials →
+                </Link>
+              ) : null}
+            </div>
+          </div>
+
           <div className="py-4">
             <p className="mb-2 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
               Webhook URL

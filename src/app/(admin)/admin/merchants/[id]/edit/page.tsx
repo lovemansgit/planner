@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 
 import { notFound, redirect } from "next/navigation";
 
+import { listRegions, type Region } from "@/modules/credentials";
 import { requirePermission } from "@/modules/identity";
 import { getMerchantById } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
@@ -51,10 +52,17 @@ export default async function EditMerchantPage({ params }: EditMerchantPageProps
   const requestId = randomUUID();
 
   let merchant: Merchant | null;
+  let activeRegions: readonly Region[] = [];
   try {
     const ctx = await buildRequestContext(`/admin/merchants/${id}/edit`, requestId);
     requirePermission(ctx, "merchant:update");
     merchant = await getMerchantById(ctx, id as Uuid);
+    // Picker source: only active regions. Operators shouldn't be able
+    // to route a merchant to a deactivated region — the resolver would
+    // fail closed at push time. transcorp-sysadmin (the only role with
+    // merchant:update in v1) also has region:manage; listRegions's
+    // permission gate is satisfied.
+    activeRegions = await listRegions(ctx, { onlyActive: true });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect(
@@ -89,7 +97,7 @@ export default async function EditMerchantPage({ params }: EditMerchantPageProps
           </p>
         </header>
 
-        <EditMerchantForm initial={merchant} />
+        <EditMerchantForm initial={merchant} activeRegions={activeRegions} />
       </div>
     </main>
   );
