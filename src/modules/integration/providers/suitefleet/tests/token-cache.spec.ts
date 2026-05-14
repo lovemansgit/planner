@@ -17,6 +17,7 @@ const TENANT_A: Uuid = "00000000-0000-0000-0000-000000000001";
 const TENANT_B: Uuid = "00000000-0000-0000-0000-000000000002";
 
 const SAMPLE_CREDENTIALS: SuiteFleetCredentials = {
+  auth_method: "oauth",
   username: "planner@transcorp-intl.com",
   password: "sandbox-secret",
   clientId: "transcorpsb",

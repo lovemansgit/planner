@@ -835,6 +835,50 @@ const EVENT_TYPES_DRAFT = {
       "tenant_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: name, slug, pickup_address.line, pickup_address.district, pickup_address.emirate, suitefleet_customer_code). DELIBERATE divergence from merchant.created's NESTED pickup_address shape: this event uses FLAT dot-notation in the diff so single-sub-field changes surface atomically to audit-trail readers without nested-object parsing. Only changed fields appear in the changes object; an update that mutates zero fields throws ValidationError and never reaches emit.",
     systemOnly: true,
   },
+
+  "region.created": {
+    id: "region.created",
+    resource: "region",
+    action: "created",
+    description:
+      "Day 26 / T3. A SuiteFleet region was created via the Transcorp-staff createRegion service. Regions are cross-tenant routing configuration (suitefleet_regions table); merchants point at one via tenants.suitefleet_region_id. auth_method is captured because it is the load-bearing discriminator that determines how merchants in this region authenticate to SuiteFleet (and is IMMUTABLE post-create). systemOnly per brief §3.6 (v1.14).",
+    metadataNotes:
+      "region_id (uuid), client_id (text — lowercase-alphanumeric region identifier), display_name (text), auth_method ('oauth' | 'api_key').",
+    systemOnly: true,
+  },
+
+  "region.updated": {
+    id: "region.updated",
+    resource: "region",
+    action: "updated",
+    description:
+      "Day 26 / T3. A SuiteFleet region was updated via the Transcorp-staff updateRegion service. Captures field-level diffs for each changed column. auth_method is IMMUTABLE post-create per v1.15; updateRegion rejects any auth_method mutation, so the discriminator never appears in this event's changes payload. Status changes (active ↔ inactive) land in region.deactivated separately. systemOnly per brief §3.6 (v1.14).",
+    metadataNotes:
+      "region_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: client_id, display_name). FLAT diff per the merchant.updated precedent + ratified OQ-3. auth_method is NEVER in the changes object — the field is IMMUTABLE post-create and the updateRegion service rejects mutation attempts upstream. Status changes go through region.deactivated, not here.",
+    systemOnly: true,
+  },
+
+  "region.deactivated": {
+    id: "region.deactivated",
+    resource: "region",
+    action: "deactivated",
+    description:
+      "Day 26 / T3. A SuiteFleet region was deactivated via the Transcorp-staff deactivateRegion service (status flipped from 'active' to 'inactive'). Operational kill-switch per brief §3.7: tenants pointing at a deactivated region resolve-fail-closed on subsequent SF push attempts. Does NOT cascade to tenants — existing pointers remain intact and route correctly if the region is later re-activated (out-of-band SQL only, since reactivateRegion is not in scope). systemOnly per brief §3.6 (v1.14).",
+    metadataNotes:
+      "region_id (uuid).",
+    systemOnly: true,
+  },
+
+  "credentials.set": {
+    id: "credentials.set",
+    resource: "credentials",
+    action: "set",
+    description:
+      "Day 26 / T3. Per-merchant SuiteFleet credentials were set or rotated via the Transcorp-staff storeSuitefleetCredentials service. Wraps both initial-set (first provisioning of a tenant's Vault credential UUIDs) and rotation (replacing plaintext in place, preserving the Vault UUIDs). systemOnly per brief §3.6 (v1.14); gated on the existing merchant:update permission per ratified OQ-1 (no new credentials:set permission — same operator scope as merchant updates).",
+    metadataNotes:
+      "tenant_id (uuid), classifier ('initial-set' | 'rotation'). NEVER contains plaintext credentials or Vault UUIDs. SHAPE DIVERGENCE (per Day-25 §A discipline + ratified OQ-8): this event deliberately diverges from the merchant.updated / region.updated flat-diff convention — payload is { tenant_id, classifier } only, NOT a { changes: { <field>: { before, after } } } diff. Rationale: credentials are sensitive-by-class; any per-field before/after shape risks leaking partial plaintext or rotation-vintage metadata into the audit body. auth_method is deliberately NOT in the payload either — recoverable forensically via tenant_id → region_id → auth_method for queries that need it. Forensic queries filter on classifier for rotation history.",
+    systemOnly: true,
+  },
 } as const satisfies Record<string, EventTypeDef>;
 
 /**

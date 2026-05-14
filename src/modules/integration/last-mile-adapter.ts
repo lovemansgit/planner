@@ -55,6 +55,14 @@ import type { Uuid } from "@/shared/types";
 export interface LastMileAdapter {
   authenticate(tenantId: Uuid): Promise<AuthenticatedSession>;
   refreshSession(session: AuthenticatedSession): Promise<AuthenticatedSession>;
+  /**
+   * Day 26 / T3. Drop the cached session for one tenant without
+   * triggering a re-login. Called by the credentials service on
+   * initial-set AND rotation (ratified OQ-5) so the next push for
+   * this tenant resolves fresh credentials against the new Vault
+   * row. Idempotent — no-op if no session is cached.
+   */
+  invalidateSession(tenantId: Uuid): void;
   createTask(
     session: AuthenticatedSession,
     task: TaskCreateRequest,

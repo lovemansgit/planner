@@ -140,6 +140,9 @@ function makeAdapter(records: readonly AssetTrackingPackage[]): LastMileAdapter 
     async refreshSession(s) {
       return s;
     },
+    invalidateSession() {
+      // no-op stub; this spec exercises asset-tracking only.
+    },
     async createTask() {
       throw new Error("not used");
     },
