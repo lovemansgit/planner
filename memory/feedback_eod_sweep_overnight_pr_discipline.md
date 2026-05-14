@@ -80,8 +80,15 @@ was filed.
 ## §4 Retroactive fix scope
 
 PR #281 (this commit's PR) patches Day-23 EOD §B with PR #245's row
-+ files this memo. No backward sweep of pre-Day-23 EOD docs — only
-PR #245 was caught with high confidence during the index
-reconstruction. If a future audit surfaces more pre-Day-23
-documentation gaps of the same shape, file them under the same
-"added retroactively" convention.
++ files this memo. **Pre-Day-23 EOD docs are out of scope — not
+audited; future audits can apply this pattern backward.** The
+Day-26 MEMORY.md index reconstruction (PR #280) read Days 21–25 EOD
+docs for the index-building task but did not specifically audit any
+EOD's §B for `d{N}n`-seam gaps; PR #245's absence in Day-23's §B
+surfaced incidentally during PR-by-PR verification of the Day-22 →
+Day-23 boundary. Pre-Day-21 EOD docs were not opened during the
+reconstruction at all. A future targeted audit (one EOD doc at a
+time, applying the §2 sweep command against the merge-time window
+between each consecutive pair of EODs) would catch any further
+seam-gap instances; until that audit runs, pre-Day-23 ledgers should
+not be assumed clean.
