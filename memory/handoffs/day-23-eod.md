@@ -19,6 +19,7 @@ B work landed across AM + PM. Replaces the rolling
 | PR | Author | Slot | Title |
 |---|---|---|---|
 | #244 | Session B | AM | Preflight Gate 8 v1.10 + scripts/README |
+| #245 | Session A | AM (d22n) | /calendar consolidated view — service + page + week-view (added retroactively — merged Day-23 AM Dubai as a d22n overnight-lane continuation; missed in the original §B ledger, caught during Day-26 MEMORY.md index reconstruction (PR #280)) |
 | #246 | Session A | AM | VERCEL_URL fallback for callback base URL |
 | #247 | Session A | PM | /calendar polish + Transcorp admin variant metrics |
 | #248 | Session B | PM | Subscription tab + wizard success toast |
