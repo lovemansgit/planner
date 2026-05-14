@@ -173,9 +173,20 @@ export interface DeactivateMerchantResult {
  * contract stays simple (no merge-with-current logic at the service
  * layer).
  *
- * `name` / `slug` / `suitefleetCustomerCode` follow the same shape as
+ * `name` / `suitefleetCustomerCode` follow the same shape as
  * `CreateMerchantInput` — same regexes/validators are reused at the
  * service surface.
+ *
+ * `slug` is intentionally NOT in this input shape — slug is set at
+ * creation only. The "transcorp" slug is the identity key for the
+ * internal tenant at the auth layer (string-literal compare at
+ * src/modules/identity/service.ts:428 + tenant-vs-merchant
+ * classification at src/app/(admin)/admin/users/new/page.tsx:40,71).
+ * A UI-driven rename would silently break sysadmin role assignment.
+ * Typo recovery is direct-DB by Transcorp staff, deliberately not a
+ * UI affordance. Correctness-debt followup (move identity off the
+ * string literal to a tenants.is_internal_tenant flag) at
+ * memory/followup_internal_tenant_identity_string_literal.md.
  *
  * Status changes are explicitly NOT in this input shape — they go
  * through activateMerchant / deactivateMerchant (separate
@@ -183,7 +194,6 @@ export interface DeactivateMerchantResult {
  */
 export interface UpdateMerchantInput {
   readonly name?: string;
-  readonly slug?: string;
   readonly pickupAddress?: PickupAddress;
   readonly suitefleetCustomerCode?: string;
 }
@@ -191,7 +201,7 @@ export interface UpdateMerchantInput {
 /**
  * updateMerchant result. `changedFields` enumerates the diff keys that
  * the audit `merchant.updated` event captured (flat dot-notation:
- * `name`, `slug`, `pickup_address.line`, `pickup_address.district`,
+ * `name`, `pickup_address.line`, `pickup_address.district`,
  * `pickup_address.emirate`, `suitefleet_customer_code`). Mirrors the
  * audit `changes` payload's top-level keys so the API surface can
  * surface "what changed" to operators or tests without re-querying the

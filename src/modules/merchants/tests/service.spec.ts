@@ -671,21 +671,6 @@ describe("updateMerchant", () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it("throws ValidationError on slug with uppercase or invalid chars", async () => {
-    await expect(
-      updateMerchant(ctx([PERM]), TENANT_ID, { slug: "Demo-Bistro" }),
-    ).rejects.toBeInstanceOf(ValidationError);
-    await expect(
-      updateMerchant(ctx([PERM]), TENANT_ID, { slug: "demo_bistro" }),
-    ).rejects.toBeInstanceOf(ValidationError);
-  });
-
-  it("throws ValidationError on slug longer than 60 chars", async () => {
-    await expect(
-      updateMerchant(ctx([PERM]), TENANT_ID, { slug: "a".repeat(61) }),
-    ).rejects.toBeInstanceOf(ValidationError);
-  });
-
   it("throws ValidationError when any pickup_address sub-field is empty", async () => {
     await expect(
       updateMerchant(ctx([PERM]), TENANT_ID, {
@@ -755,28 +740,25 @@ describe("updateMerchant", () => {
     });
   });
 
-  it("happy path multi-field — name + slug + customer code emit 3 keys in changes", async () => {
+  it("happy path multi-field — name + customer code emit 2 keys in changes", async () => {
     setupHappyPath(
       merchantFixture({
         name: "Old Name",
-        slug: "old-slug",
         suitefleetCustomerCode: "588",
       }),
     );
 
     const result = await updateMerchant(ctx([PERM]), TENANT_ID, {
       name: "New Name",
-      slug: "new-slug",
       suitefleetCustomerCode: "612",
     });
 
-    expect(result.changedFields).toEqual(["name", "slug", "suitefleet_customer_code"]);
+    expect(result.changedFields).toEqual(["name", "suitefleet_customer_code"]);
     const emitArg = mockEmit.mock.calls[0][0];
     expect(emitArg.metadata).toEqual({
       tenant_id: TENANT_ID,
       changes: {
         name: { before: "Old Name", after: "New Name" },
-        slug: { before: "old-slug", after: "new-slug" },
         suitefleet_customer_code: { before: "588", after: "612" },
       },
     });
@@ -838,7 +820,13 @@ describe("updateMerchant", () => {
   });
 
   it("maps SQLSTATE 23505 from updateMerchantFields to ConflictError; no audit emitted", async () => {
-    mockFindForStatusUpdate.mockResolvedValue(merchantFixture({ slug: "old-slug" }));
+    // Defense-in-depth: no editable column under the v1 patch shape
+    // carries a UNIQUE constraint (slug-edit was retired), so this
+    // branch has no live trigger today. The catch+map remains so any
+    // future UNIQUE-constrained editable column surfaces as 409 without
+    // service-layer churn. Triggered here via a synthetic 23505 from
+    // the mocked repo to pin the wiring stays intact.
+    mockFindForStatusUpdate.mockResolvedValue(merchantFixture({ name: "Old Name" }));
     const err = new Error("duplicate key value violates unique constraint") as Error & {
       code?: string;
     };
@@ -846,7 +834,7 @@ describe("updateMerchant", () => {
     mockUpdateFields.mockRejectedValue(err);
 
     await expect(
-      updateMerchant(ctx([PERM]), TENANT_ID, { slug: "new-slug-but-taken" }),
+      updateMerchant(ctx([PERM]), TENANT_ID, { name: "New Name" }),
     ).rejects.toBeInstanceOf(ConflictError);
     expect(mockEmit).not.toHaveBeenCalled();
   });
@@ -883,11 +871,11 @@ describe("updateMerchant", () => {
 
   it("requirePermission runs first — invalid input never reaches validation when actor lacks perm", async () => {
     // Defensive ordering check: a ForbiddenError-throwing actor calling
-    // with an obviously-bad slug should still get ForbiddenError, not
+    // with an obviously-bad name should still get ForbiddenError, not
     // ValidationError. Permission gate is the first thing the service
     // does (plan §3.3 step 1).
     await expect(
-      updateMerchant(ctx([]), TENANT_ID, { slug: "INVALID UPPERCASE" }),
+      updateMerchant(ctx([]), TENANT_ID, { name: "  " }),
     ).rejects.toBeInstanceOf(ForbiddenError);
   });
 });

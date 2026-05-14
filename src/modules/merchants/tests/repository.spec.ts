@@ -217,23 +217,24 @@ describe("updateMerchantStatus", () => {
 describe("updateMerchantFields", () => {
   it("issues UPDATE with COALESCE-style null-sentinel binds for every editable column", async () => {
     const tx = makeStubTx([
-      [rowFixture({ name: "Updated Name", slug: "updated-slug" })],
+      [rowFixture({ name: "Updated Name" })],
     ]);
 
     const result = await updateMerchantFields(tx, TENANT_ID, {
       name: "Updated Name",
-      slug: "updated-slug",
     });
 
     expect(tx.execute).toHaveBeenCalledOnce();
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/UPDATE tenants/i);
-    // Every editable column wrapped in COALESCE — name + slug + 3 pickup + sf code = 6 calls.
+    // Every editable column wrapped in COALESCE — name + 3 pickup +
+    // sf code = 5 calls. (Slug was removed from the patch shape; it's
+    // creation-only — see UpdateMerchantInput JSDoc for context.)
     const coalesceMatches = captured.sql.match(/COALESCE/gi);
     expect(coalesceMatches).not.toBeNull();
-    expect(coalesceMatches?.length).toBe(6);
+    expect(coalesceMatches?.length).toBe(5);
     expect(captured.sql).toMatch(/name\s*=\s*COALESCE/i);
-    expect(captured.sql).toMatch(/slug\s*=\s*COALESCE/i);
+    expect(captured.sql).not.toMatch(/slug\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/pickup_address_line\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/pickup_address_district\s*=\s*COALESCE/i);
     expect(captured.sql).toMatch(/pickup_address_emirate\s*=\s*COALESCE/i);
@@ -242,12 +243,11 @@ describe("updateMerchantFields", () => {
     expect(captured.sql).toMatch(/where\s+id\s*=\s*\$\d+/i);
     expect(captured.sql).toMatch(/RETURNING\s+\*/i);
 
-    // The bound params for supplied fields are present; the unsupplied
+    // The bound param for the supplied field is present; the unsupplied
     // ones are null sentinels (the COALESCE wrapper preserves the
     // existing column value when the param is null).
     expect(captured.params).toContain("Updated Name");
-    expect(captured.params).toContain("updated-slug");
-    // 4 unsupplied fields → 4 null sentinels in the params array.
+    // 4 unsupplied fields (3 pickup + sf code) → 4 null sentinels.
     const nullCount = captured.params.filter((p) => p === null).length;
     expect(nullCount).toBe(4);
 
@@ -278,9 +278,9 @@ describe("updateMerchantFields", () => {
     expect(captured.params).toContain("New Line");
     expect(captured.params).toContain("New District");
     expect(captured.params).toContain("Sharjah");
-    // name + slug + sf code = 3 unsupplied → 3 null sentinels.
+    // name + sf code = 2 unsupplied → 2 null sentinels.
     const nullCount = captured.params.filter((p) => p === null).length;
-    expect(nullCount).toBe(3);
+    expect(nullCount).toBe(2);
 
     expect(result?.pickupAddress).toEqual({
       line: "New Line",
@@ -289,7 +289,7 @@ describe("updateMerchantFields", () => {
     });
   });
 
-  it("all-undefined patch issues UPDATE with six null sentinels (no-op semantic at SQL layer)", async () => {
+  it("all-undefined patch issues UPDATE with five null sentinels (no-op semantic at SQL layer)", async () => {
     // The service layer is responsible for the "no fields to update"
     // gate (plan §3.2); the repo just compiles whatever the caller
     // passes. An all-null UPDATE preserves every column via COALESCE
@@ -298,7 +298,7 @@ describe("updateMerchantFields", () => {
     await updateMerchantFields(tx, TENANT_ID, {});
     const captured = compile(tx.execute.mock.calls[0][0]);
     const nullCount = captured.params.filter((p) => p === null).length;
-    expect(nullCount).toBe(6);
+    expect(nullCount).toBe(5);
   });
 
   it("returns null when no row matched (vanished mid-tx → service maps to NotFoundError)", async () => {

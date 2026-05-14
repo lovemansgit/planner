@@ -25,7 +25,6 @@ vi.mock("server-only", () => ({}));
 import { updateMerchant } from "../../src/modules/merchants/service";
 import { withServiceRole } from "../../src/shared/db";
 import {
-  ConflictError,
   ForbiddenError,
   NotFoundError,
   ValidationError,
@@ -35,9 +34,7 @@ import type { Permission, Uuid } from "../../src/shared/types";
 
 const RUN_ID = randomUUID().slice(0, 8);
 const TENANT_A = randomUUID();
-const TENANT_B = randomUUID();
 const SLUG_A = `edm-${RUN_ID}-a`;
-const SLUG_B = `edm-${RUN_ID}-b`;
 
 const SYSADMIN_ACTOR = randomUUID();
 const TENANT_OPERATOR_ACTOR = randomUUID();
@@ -122,9 +119,7 @@ describe("admin merchants update — integration", () => {
           suitefleet_customer_code
         ) VALUES
           (${TENANT_A}, ${SLUG_A}, 'Edit Merchant Test A', 'active',
-           'Building 1', 'Al Quoz', 'Dubai', '588'),
-          (${TENANT_B}, ${SLUG_B}, 'Edit Merchant Test B', 'active',
-           'Building 2', 'Business Bay', 'Dubai', '586')
+           'Building 1', 'Al Quoz', 'Dubai', '588')
       `);
     });
   });
@@ -143,7 +138,7 @@ describe("admin merchants update — integration", () => {
     try {
       await withServiceRole("edit-merchant integration teardown", async (tx) => {
         await tx.execute(sqlTag`
-          DELETE FROM tenants WHERE id IN (${TENANT_A}, ${TENANT_B})
+          DELETE FROM tenants WHERE id IN (${TENANT_A})
         `);
       });
     } catch {
@@ -244,66 +239,52 @@ describe("admin merchants update — integration", () => {
     });
   });
 
-  it("multi-field update — name + slug emits 2 keys in changes payload", async () => {
+  it("multi-field update — name + suitefleet_customer_code emits 2 keys in changes payload", async () => {
     const baselineEvents = await selectMerchantUpdatedEvents(TENANT_A);
     const baselineCount = baselineEvents.length;
 
     const result = await updateMerchant(sysadminCtx(), TENANT_A as Uuid, {
       name: "Multi-Field Name",
-      slug: `${SLUG_A}-v2`,
+      suitefleetCustomerCode: "777",
     });
-    expect([...result.changedFields].sort()).toEqual(["name", "slug"]);
+    expect([...result.changedFields].sort()).toEqual([
+      "name",
+      "suitefleet_customer_code",
+    ]);
 
     const events = await selectMerchantUpdatedEvents(TENANT_A);
     expect(events).toHaveLength(baselineCount + 1);
     const last = events[events.length - 1];
-    expect(Object.keys(last.metadata.changes).sort()).toEqual(["name", "slug"]);
+    expect(Object.keys(last.metadata.changes).sort()).toEqual([
+      "name",
+      "suitefleet_customer_code",
+    ]);
     expect(last.metadata.changes.name).toEqual({
       before: "Edit Merchant Test A",
       after: "Multi-Field Name",
     });
-    expect(last.metadata.changes.slug).toEqual({
-      before: SLUG_A,
-      after: `${SLUG_A}-v2`,
+    expect(last.metadata.changes.suitefleet_customer_code).toEqual({
+      before: "588",
+      after: "777",
     });
 
     // Reset for downstream tests.
     await updateMerchant(sysadminCtx(), TENANT_A as Uuid, {
       name: "Edit Merchant Test A",
-      slug: SLUG_A,
+      suitefleetCustomerCode: "588",
     });
   });
 
   // ---------------------------------------------------------------------------
   // Rejections
   // ---------------------------------------------------------------------------
-
-  it("slug uniqueness rejection — updating A's slug to B's slug throws ConflictError + leaves A unchanged + emits no audit", async () => {
-    const baselineEvents = await selectMerchantUpdatedEvents(TENANT_A);
-    const baselineCount = baselineEvents.length;
-
-    await expect(
-      updateMerchant(sysadminCtx(), TENANT_A as Uuid, { slug: SLUG_B }),
-    ).rejects.toBeInstanceOf(ConflictError);
-
-    const row = await selectMerchant(TENANT_A);
-    expect(row?.slug).toBe(SLUG_A);
-
-    const events = await selectMerchantUpdatedEvents(TENANT_A);
-    expect(events).toHaveLength(baselineCount);
-  });
-
-  it("slug self-update — submitting current slug throws ValidationError(no changes) + no DB write + no audit", async () => {
-    const baselineEvents = await selectMerchantUpdatedEvents(TENANT_A);
-    const baselineCount = baselineEvents.length;
-
-    await expect(
-      updateMerchant(sysadminCtx(), TENANT_A as Uuid, { slug: SLUG_A }),
-    ).rejects.toBeInstanceOf(ValidationError);
-
-    const events = await selectMerchantUpdatedEvents(TENANT_A);
-    expect(events).toHaveLength(baselineCount);
-  });
+  //
+  // Slug-specific rejection tests (uniqueness collision; self-update
+  // "no changes") were removed when slug was retired from the
+  // UpdateMerchantInput shape — those paths are now structurally
+  // unreachable from updateMerchant. Slug-collision-conflict on
+  // createMerchant is regressed separately at
+  // tests/integration/merchant-slug-collision-conflict.spec.ts.
 
   it("validation — suitefleet_customer_code with leading zero throws ValidationError + no DB write", async () => {
     const baselineEvents = await selectMerchantUpdatedEvents(TENANT_A);

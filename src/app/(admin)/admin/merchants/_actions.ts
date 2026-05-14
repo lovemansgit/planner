@@ -207,7 +207,6 @@ export async function updateMerchantAction(
     );
     const result = await updateMerchant(ctx, tenantId as Uuid, {
       name: parsed.value.name,
-      slug: parsed.value.slug,
       pickupAddress: parsed.value.pickupAddress,
       suitefleetCustomerCode: parsed.value.suitefleetCustomerCode,
     });

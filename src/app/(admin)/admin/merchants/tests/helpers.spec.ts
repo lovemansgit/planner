@@ -376,7 +376,6 @@ describe("parseEditMerchantForm", () => {
     if (result.ok) {
       expect(result.value).toEqual({
         name: "Demo Bistro",
-        slug: "demo-bistro",
         pickupAddress: {
           line: "Building 1, Al Quoz",
           district: "Al Quoz Industrial 1",
@@ -384,14 +383,19 @@ describe("parseEditMerchantForm", () => {
         },
         suitefleetCustomerCode: "588",
       });
+      // Defense-in-depth: any `slug` value in FormData is silently
+      // dropped — slug is creation-only. Pin via property absence
+      // (the type system already enforces this, but the runtime
+      // assertion documents the FormData-level intent for anyone
+      // crafting a manual POST against the action endpoint).
+      expect((result.value as unknown as Record<string, unknown>).slug).toBeUndefined();
     }
   });
 
-  it("trims surrounding whitespace on every field", () => {
+  it("trims surrounding whitespace on every parsed field", () => {
     const result = parseEditMerchantForm(
       fullForm({
         name: "  Demo Bistro  ",
-        slug: "  demo-bistro  ",
         pickup_line: "  Building 1  ",
         pickup_district: "  Al Quoz  ",
         pickup_emirate: "  Dubai  ",
@@ -401,7 +405,6 @@ describe("parseEditMerchantForm", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.name).toBe("Demo Bistro");
-      expect(result.value.slug).toBe("demo-bistro");
       expect(result.value.pickupAddress).toEqual({
         line: "Building 1",
         district: "Al Quoz",
@@ -411,36 +414,24 @@ describe("parseEditMerchantForm", () => {
     }
   });
 
-  it("normalizes slug to lowercase", () => {
-    const result = parseEditMerchantForm(fullForm({ slug: "Demo-Bistro" }));
-    // normaliseSlug lowercases but does not strip; "demo-bistro" then
-    // passes validateSlug.
+  it("slug field in FormData is silently ignored (creation-only field)", () => {
+    // Defense-in-depth against a manual POST against the action
+    // endpoint that includes a slug — the parser drops it without
+    // raising. The UI no longer renders a slug input; this pin protects
+    // the contract at the parse layer.
+    const result = parseEditMerchantForm(
+      fullForm({ slug: "attacker-supplied-slug" }),
+    );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.slug).toBe("demo-bistro");
+    if (result.ok) {
+      expect((result.value as unknown as Record<string, unknown>).slug).toBeUndefined();
+    }
   });
 
   it("empty name returns field error", () => {
     const result = parseEditMerchantForm(fullForm({ name: "  " }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.fieldErrors.name).toBeTruthy();
-  });
-
-  it("empty slug returns field error", () => {
-    const result = parseEditMerchantForm(fullForm({ slug: "  " }));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.fieldErrors.slug).toBeTruthy();
-  });
-
-  it("invalid-char slug returns field error", () => {
-    const result = parseEditMerchantForm(fullForm({ slug: "demo_bistro" }));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.fieldErrors.slug).toBeTruthy();
-  });
-
-  it("over-60-char slug returns field error", () => {
-    const result = parseEditMerchantForm(fullForm({ slug: "a".repeat(61) }));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.fieldErrors.slug).toBeTruthy();
   });
 
   it("empty suitefleet_customer_code returns field error", () => {
