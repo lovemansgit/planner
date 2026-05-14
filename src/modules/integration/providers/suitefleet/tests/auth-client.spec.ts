@@ -32,6 +32,7 @@ function plainResponse(text: string, status: number): Response {
 }
 
 const SAMPLE_CREDENTIALS = {
+  auth_method: "oauth" as const,
   username: "planner@transcorp-intl.com",
   password: "p@ss+word with spaces",
   clientId: "transcorpsb",

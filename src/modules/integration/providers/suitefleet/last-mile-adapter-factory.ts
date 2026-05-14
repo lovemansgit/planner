@@ -133,6 +133,10 @@ export function createSuiteFleetLastMileAdapter(
       return tokenCache.getSession(session.tenantId);
     },
 
+    invalidateSession(tenantId) {
+      tokenCache.invalidate(tenantId);
+    },
+
     async createTask(session, request) {
       // Per-call resolve to get customerId + clientId. See file
       // header for why this is per-call rather than cached.

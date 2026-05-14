@@ -28,6 +28,7 @@ export type AppErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "CREDENTIAL"
+  | "CONFIGURATION_ERROR"
   | "NO_TENANT_CONFIGURED"
   | "UNAUTHORIZED"
   | "NO_LABELABLE_PUSHED_TASKS";
@@ -147,6 +148,30 @@ export class NoLabelablePushedTasksError extends AppError {
 }
 
 /**
+ * Day 26. The integration path is well-formed and the call would
+ * succeed if the operator had configured the required upstream — but
+ * that configuration is not yet in place. Distinct from
+ * CredentialError (auth failure on a wired-up call) and ValidationError
+ * (input-shape failure).
+ *
+ * Used by the SuiteFleet auth-client `loginApiKey` stub: the api_key
+ * code path is structurally in place (discriminated-union resolver →
+ * exhaustive switch in `login()`) but the SF OpsPortal header shape
+ * is pending Aqib's reply per v1.15 amendment §0.4. Any tenant routed
+ * through an `api_key` region fails closed at runtime with this error
+ * until the follow-on T2 PR wires the body.
+ *
+ * Maps to HTTP 503 (service unavailable) at the API boundary — the
+ * upstream configuration is the unavailable resource.
+ */
+export class ConfigurationError extends AppError {
+  readonly code = "CONFIGURATION_ERROR";
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
  * Closed union of every concrete typed error. Use as the parameter
  * type when you want exhaustiveness via `switch (err.code)` with a
  * `const _exhaustive: never = err` default branch.
@@ -157,6 +182,7 @@ export type KnownAppError =
   | NotFoundError
   | ConflictError
   | CredentialError
+  | ConfigurationError
   | NoTenantConfiguredError
   | UnauthorizedError
   | NoLabelablePushedTasksError;

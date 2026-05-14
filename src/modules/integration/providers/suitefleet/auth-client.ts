@@ -54,7 +54,7 @@
 // point in S-8.
 
 import type { SuiteFleetCredentials } from "../../../credentials";
-import { CredentialError } from "@/shared/errors";
+import { ConfigurationError, CredentialError } from "@/shared/errors";
 import { logger } from "@/shared/logger";
 
 import type {
@@ -209,42 +209,93 @@ export function createSuiteFleetAuthClient(
     throw new CredentialError(`SuiteFleet ${operation} rejected with status ${status}`);
   }
 
+  // -------------------------------------------------------------------
+  // OAuth login — existing flow preserved as-is per v1.15 amendment §5.2.
+  // Sandbox region uses this path; the discriminator narrows the typed
+  // credential pair to { username, password, clientId, customerId }.
+  // -------------------------------------------------------------------
+  async function loginOAuth(
+    credentials: SuiteFleetCredentials & { auth_method: "oauth" },
+  ): Promise<SuiteFleetTokenSet> {
+    const url = new URL(`${baseUrl}/api/auth/authenticate`);
+    url.searchParams.set("username", credentials.username);
+    url.searchParams.set("password", credentials.password);
+
+    const response = await callWithRetry("login", () =>
+      deps.fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          Clientid: credentials.clientId,
+          Accept: "application/json",
+        },
+      }),
+    );
+
+    if (response.status >= 400) rejectClientError("login", response.status);
+
+    const body = await readJson(response, "login");
+    const tokens = parseTokenSet(body);
+
+    const now = deps.clock().getTime();
+    if (tokens.accessTokenExpiresAt.getTime() <= now) {
+      throw new CredentialError(
+        "SuiteFleet login returned a token whose expiration is in the past",
+      );
+    }
+
+    log.info({
+      operation: "login",
+      status: response.status,
+      auth_method: "oauth",
+      access_expires_at: tokens.accessTokenExpiresAt.toISOString(),
+      refresh_expires_at: tokens.refreshTokenExpiresAt.toISOString(),
+    });
+
+    return tokens;
+  }
+
+  // -------------------------------------------------------------------
+  // API Key login — STUBBED per v1.15 amendment §5.3.
+  //
+  // The exact SF OpsPortal request-header shape is pending Aqib's reply
+  // (narrowed-scope blocker per v1.15 amendment §0.4). Production
+  // regions are seeded with auth_method='api_key'; any tenant routed
+  // through one of those regions fails closed here at runtime with
+  // ConfigurationError. The follow-on T2 PR lands the loginApiKey body
+  // + one integration spec once Aqib confirms.
+  //
+  // The stub exists so the discriminated-union switch over auth_method
+  // is exhaustive at compile time — tsc rejects a missing case branch.
+  // -------------------------------------------------------------------
+  async function loginApiKey(
+    _credentials: SuiteFleetCredentials & { auth_method: "api_key" },
+  ): Promise<SuiteFleetTokenSet> {
+    log.warn({
+      operation: "login",
+      auth_method: "api_key",
+      error_code: "configuration_not_yet_enabled",
+    });
+    throw new ConfigurationError(
+      "api_key auth not yet implemented; awaiting SF OpsPortal header confirmation",
+    );
+  }
+
   return {
     async login(credentials: SuiteFleetCredentials): Promise<SuiteFleetTokenSet> {
-      const url = new URL(`${baseUrl}/api/auth/authenticate`);
-      url.searchParams.set("username", credentials.username);
-      url.searchParams.set("password", credentials.password);
-
-      const response = await callWithRetry("login", () =>
-        deps.fetch(url.toString(), {
-          method: "POST",
-          headers: {
-            Clientid: credentials.clientId,
-            Accept: "application/json",
-          },
-        }),
-      );
-
-      if (response.status >= 400) rejectClientError("login", response.status);
-
-      const body = await readJson(response, "login");
-      const tokens = parseTokenSet(body);
-
-      const now = deps.clock().getTime();
-      if (tokens.accessTokenExpiresAt.getTime() <= now) {
-        throw new CredentialError(
-          "SuiteFleet login returned a token whose expiration is in the past",
-        );
+      switch (credentials.auth_method) {
+        case "oauth":
+          return loginOAuth(credentials);
+        case "api_key":
+          return loginApiKey(credentials);
+        default: {
+          // Exhaustiveness guard. If `credentials` here is anything
+          // other than `never`, it's because a new auth_method variant
+          // was added to the discriminated union without being handled
+          // above — tsc fails to compile this assignment.
+          const _exhaustive: never = credentials;
+          return _exhaustive;
+        }
       }
-
-      log.info({
-        operation: "login",
-        status: response.status,
-        access_expires_at: tokens.accessTokenExpiresAt.toISOString(),
-        refresh_expires_at: tokens.refreshTokenExpiresAt.toISOString(),
-      });
-
-      return tokens;
     },
 
     async refresh(input: SuiteFleetRefreshInput): Promise<SuiteFleetTokenSet> {

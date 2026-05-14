@@ -692,6 +692,15 @@ const PERMISSIONS_DRAFT = {
       "Day 19 / Phase 1.5. Cross-tenant read access to the full subscription list across all merchants. Powers the /admin/subscriptions list view per brief §2.3 (v1.9). Granted only to transcorp-sysadmin; tenant operators see only their own tenant's data via subscription:read (single-tenant scope).",
     systemOnly: true,
   },
+
+  "region:manage": {
+    id: "region:manage",
+    resource: "region",
+    action: "manage",
+    description:
+      "Day 26 / T3. Manage SuiteFleet region configuration (create, update, deactivate) on the cross-tenant suitefleet_regions table. Gates the createRegion / updateRegion / deactivateRegion service surface (Sub-PR 2) and the /admin/regions UI (Sub-PR 3). systemOnly per brief §3.6 (v1.14); granted only to transcorp-sysadmin. Distinct from merchant:update (which gates per-merchant credentials writes via storeSuitefleetCredentials on the same lane) — regions are global routing configuration, not tenant-scoped.",
+    systemOnly: true,
+  },
 } as const satisfies Record<Permission, PermissionDef>;
 
 /**
@@ -760,6 +769,9 @@ export const API_KEY_FORBIDDEN_PERMISSIONS: ReadonlySet<PermissionId> = Object.f
     "task:read_all",
     "consignee:read_all",
     "subscription:read_all",
+    // Day 26 / T3 — region management perm is systemOnly per brief §3.6
+    // (v1.14); API keys must not mutate SuiteFleet routing config.
+    "region:manage",
     // Identity write paths — exfiltrated keys must not be able to mint/escalate.
     "api_key:create",
     "api_key:update",

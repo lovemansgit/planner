@@ -70,6 +70,9 @@ class StubAdapter implements LastMileAdapter {
   async refreshSession(session: AuthenticatedSession): Promise<AuthenticatedSession> {
     return session;
   }
+  invalidateSession(_tenantId: Uuid): void {
+    // no-op stub for tests; production adapter drops the cached session.
+  }
   async createTask(
     session: AuthenticatedSession,
     task: TaskCreateRequest,

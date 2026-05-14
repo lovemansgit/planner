@@ -59,6 +59,13 @@ export function errorResponse(err: unknown): NextResponse {
       // unavailable) rather than 404 because the caller's request is
       // well-formed; the system isn't ready yet.
       return envelope(err, 503);
+    case "CONFIGURATION_ERROR":
+      // Day 26. Upstream integration well-formed but its required
+      // configuration is not yet in place (e.g. SF api_key auth path is
+      // stubbed pending Aqib's header confirmation per v1.15 amendment
+      // §0.4). 503 (service unavailable) — the upstream is the
+      // unavailable resource.
+      return envelope(err, 503);
     case "UNAUTHORIZED":
       // No authenticated session. Distinct from FORBIDDEN (session
       // present but permission insufficient). API consumers receive
