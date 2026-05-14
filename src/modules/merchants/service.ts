@@ -432,10 +432,13 @@ export async function getMerchantById(
 // -----------------------------------------------------------------------------
 
 /**
- * Update an existing merchant tenant's identity (name, slug), pickup
- * address (line/district/emirate), and SF routing
- * (suitefleet_customer_code). Status changes are explicitly NOT in
- * scope — they go through activateMerchant / deactivateMerchant.
+ * Update an existing merchant tenant's name, pickup address
+ * (line/district/emirate), and SF routing (suitefleet_customer_code).
+ * Status changes are NOT in scope — they go through activateMerchant /
+ * deactivateMerchant. Slug changes are NOT in scope — slug is set at
+ * creation only (UI-driven rename would silently break internal-tenant
+ * identity per the string-literal coupling documented at
+ * UpdateMerchantInput).
  *
  * Plan §3.3 behavior (single transaction):
  *   1. Permission gate (`merchant:update`).
@@ -450,7 +453,10 @@ export async function getMerchantById(
  *         `changes` payload (flat dot-notation per plan §2.5.1).
  *      d. 422 ValidationError("no changes") if zero fields changed.
  *      e. updateMerchantFields(tx, tenantId, normalizedPatch).
- *         - SQLSTATE 23505 from slug-UNIQUE collision → ConflictError.
+ *         - SQLSTATE 23505 → ConflictError (defense-in-depth against
+ *           any future UNIQUE-constrained column added to the patch
+ *           shape; no editable column under the current v1 surface
+ *           carries a UNIQUE constraint).
  *   4. Post-commit emit: merchant.updated with metadata.
  *
  * Throws:
@@ -458,7 +464,8 @@ export async function getMerchantById(
  *   - ValidationError   missing/empty/malformed field; no fields to
  *                       update; no changes diff; pickup partial.
  *   - NotFoundError     tenant id not found.
- *   - ConflictError     slug collision (SQLSTATE 23505).
+ *   - ConflictError     SQLSTATE 23505 (no live trigger under v1 patch
+ *                       shape; defensive for future UNIQUE columns).
  */
 export async function updateMerchant(
   ctx: RequestContext,
@@ -497,9 +504,11 @@ export async function updateMerchant(
         }
       } catch (err) {
         if (isUniqueViolation(err)) {
-          throw new ConflictError(
-            `merchant slug already exists: ${normalised.slug}`,
-          );
+          // Defensive: no editable column on the v1 patch shape carries
+          // a UNIQUE constraint, so this branch has no live trigger.
+          // Retained so any future UNIQUE-constrained editable column
+          // surfaces as 409 instead of 500 without service-layer churn.
+          throw new ConflictError(`merchant update conflict (uniqueness violation)`);
         }
         throw err;
       }
@@ -536,9 +545,6 @@ function normaliseUpdateInput(input: UpdateMerchantInput): UpdateMerchantFieldsP
 
   if (input.name !== undefined) {
     patch.name = requireNonEmpty(input.name, "name");
-  }
-  if (input.slug !== undefined) {
-    patch.slug = requireValidSlug(input.slug);
   }
   if (input.pickupAddress !== undefined) {
     patch.pickupAddress = {
@@ -591,10 +597,6 @@ function computeMerchantDiff(
   if (patch.name !== undefined && patch.name !== current.name) {
     changes.name = { before: current.name, after: patch.name };
     fields.push("name");
-  }
-  if (patch.slug !== undefined && patch.slug !== current.slug) {
-    changes.slug = { before: current.slug, after: patch.slug };
-    fields.push("slug");
   }
   if (patch.pickupAddress !== undefined) {
     const before: PickupAddress | null = current.pickupAddress;

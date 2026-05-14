@@ -56,7 +56,6 @@ import type {
  */
 export interface UpdateMerchantFieldsPatch {
   readonly name?: string;
-  readonly slug?: string;
   readonly pickupAddress?: PickupAddress;
   readonly suitefleetCustomerCode?: string;
 }
@@ -267,10 +266,12 @@ export async function updateMerchantStatus(
  * prevent this in practice, returns null here so the service can map
  * to NotFoundError consistently with `updateMerchantStatus`).
  *
- * Throws PostgresError 23505 when the patched slug collides with
- * another tenant's slug; the caller's service layer maps to
- * ConflictError via the existing `isUniqueViolation` shape used by
- * `createMerchant`.
+ * No 23505 path under the current patch shape — `slug` (the only
+ * UNIQUE-constrained editable column on `tenants`) was removed from
+ * UpdateMerchantFieldsPatch in the slug-edit-removal PR. The service
+ * layer still wraps the call in isUniqueViolation/ConflictError mapping
+ * as defense-in-depth so any future UNIQUE-constrained column added
+ * here lights up the existing 409 path without touching the service.
  */
 export async function updateMerchantFields(
   tx: DbTx,
@@ -278,7 +279,6 @@ export async function updateMerchantFields(
   patch: UpdateMerchantFieldsPatch,
 ): Promise<Merchant | null> {
   const name = patch.name ?? null;
-  const slug = patch.slug ?? null;
   const pickupLine = patch.pickupAddress?.line ?? null;
   const pickupDistrict = patch.pickupAddress?.district ?? null;
   const pickupEmirate = patch.pickupAddress?.emirate ?? null;
@@ -288,7 +288,6 @@ export async function updateMerchantFields(
     UPDATE tenants
     SET
       name = COALESCE(${name}, name),
-      slug = COALESCE(${slug}, slug),
       pickup_address_line = COALESCE(${pickupLine}, pickup_address_line),
       pickup_address_district = COALESCE(${pickupDistrict}, pickup_address_district),
       pickup_address_emirate = COALESCE(${pickupEmirate}, pickup_address_emirate),

@@ -197,22 +197,23 @@ export function parseCreateMerchantForm(formData: FormData): ParseCreateMerchant
 
 /**
  * Edit-form parsed shape. Differs from `ParsedCreateMerchantInput` in
- * one structural way: pickup-address is OPTIONAL and all-or-none. If
- * all three pickup sub-fields are empty (legacy tenant with NULL
- * pickup columns + operator chose not to fill them in), the parser
- * returns `pickupAddress: undefined` and the service input shape
- * carries no pickup-address patch — the service-layer diff sees no
- * pickup change. If only some pickup sub-fields are filled, the
- * parser returns a field-level error per the all-or-none rule.
+ * two structural ways:
+ *   - pickup-address is OPTIONAL and all-or-none (operator can leave
+ *     a legacy NULL-pickup tenant untouched, or supply all three to
+ *     set/update; partial submits return field-level errors).
+ *   - `slug` is NOT a parsed field. Slug is set at creation only —
+ *     editing the internal-tenant slug ("transcorp") would break
+ *     sysadmin role assignment. The edit form has no slug input;
+ *     any `slug` key present in FormData (defense-in-depth against a
+ *     manual POST) is silently ignored at parse time.
  *
- * `name` / `slug` / `suitefleetCustomerCode` remain required non-empty
- * (the create form requires all of them at insert; the edit form
- * pre-fills them so empty submit is the operator deleting them
- * intentionally, which we reject).
+ * `name` / `suitefleetCustomerCode` remain required non-empty
+ * (the create form requires both at insert; the edit form pre-fills
+ * them so empty submit is the operator deleting them intentionally,
+ * which we reject).
  */
 export interface ParsedEditMerchantInput {
   readonly name: string;
-  readonly slug: string;
   readonly pickupAddress?: {
     readonly line: string;
     readonly district: string;
@@ -226,11 +227,12 @@ export type ParseEditMerchantResult =
   | { readonly ok: false; readonly fieldErrors: Readonly<Record<string, string>> };
 
 /**
- * Parse + validate raw FormData from the edit form. The shape is
- * symmetric to `parseCreateMerchantForm` except for the all-or-none
- * pickup rule (see ParsedEditMerchantInput JSDoc).
+ * Parse + validate raw FormData from the edit form. Slug is
+ * deliberately not parsed (see ParsedEditMerchantInput JSDoc) — any
+ * `slug` value present in FormData is silently dropped.
  *
- * Operator intent inferred from non-empty sub-field count:
+ * Operator intent on pickup-address inferred from non-empty sub-field
+ * count:
  *   - 0 of 3 → pickupAddress omitted from output (no pickup change).
  *   - 3 of 3 → pickupAddress in output (operator wants to set/update).
  *   - 1 or 2 of 3 → field-level errors on the empty sub-fields per
@@ -246,15 +248,6 @@ export function parseEditMerchantForm(formData: FormData): ParseEditMerchantResu
 
   const name = trimmed("name");
   if (name.length === 0) fieldErrors.name = "Name is required.";
-
-  const rawSlug = trimmed("slug");
-  const slug = normaliseSlug(rawSlug);
-  if (slug.length === 0) {
-    fieldErrors.slug = "Slug is required.";
-  } else if (!validateSlug(slug)) {
-    fieldErrors.slug =
-      "Slug must be lowercase letters, numbers, and hyphens (1-60 characters).";
-  }
 
   const line = trimmed("pickup_line");
   const district = trimmed("pickup_district");
@@ -295,6 +288,6 @@ export function parseEditMerchantForm(formData: FormData): ParseEditMerchantResu
   }
   return {
     ok: true,
-    value: { name, slug, pickupAddress, suitefleetCustomerCode },
+    value: { name, pickupAddress, suitefleetCustomerCode },
   };
 }

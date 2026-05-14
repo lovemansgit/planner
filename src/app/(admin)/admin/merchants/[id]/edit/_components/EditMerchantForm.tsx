@@ -12,14 +12,15 @@
 // between render and submit); that path returns kind: "forbidden"
 // which renders inline.
 //
-// Slug-change confirm modal (plan §6.4):
-//   - When the operator's submitted slug differs from initial slug,
-//     preventDefault, open a confirm dialog with break-glass copy.
-//   - Cancel → close modal, no submit, slug-state preserved.
-//   - Continue → close modal, re-trigger form submit programmatically.
-//   - Per §9.2 ruling: modal re-fires every submit-with-different-slug,
-//     including after a failed submit. Single rule:
-//     formData.get("slug") !== initial.slug.
+// Slug is intentionally NOT editable here. Slug is set at creation
+// only — a UI-driven rename of the internal-tenant slug ("transcorp")
+// would silently break sysadmin role assignment + the user-creation
+// UI's internal-vs-merchant classification (string-literal coupling at
+// src/modules/identity/service.ts:428 + src/app/(admin)/admin/users/new/page.tsx:40,71).
+// Typo recovery is direct-DB by Transcorp staff, deliberately not a
+// UI affordance. See memory/followup_internal_tenant_identity_string_literal.md
+// for the correctness-debt followup that moves identity off the string
+// literal to a tenants.is_internal_tenant flag.
 //
 // On success: useEffect routes to /admin/merchants list (revalidatePath
 // already flushed the list server-side).
@@ -28,7 +29,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect } from "react";
 
 import type { Merchant } from "@/modules/merchants/types";
 
@@ -49,12 +50,6 @@ export function EditMerchantForm({ initial }: EditMerchantFormProps) {
     FormData
   >(boundAction, { kind: "idle" });
 
-  // Slug-change confirm modal state (plan §6.4).
-  const [pendingSubmit, setPendingSubmit] = useState<FormData | null>(null);
-  const formRef = useRef<HTMLFormElement>(null);
-  const confirmTriggerRef = useRef<HTMLButtonElement>(null);
-  const confirmPanelRef = useRef<HTMLDivElement>(null);
-
   // Navigate after success outside the render path.
   useEffect(() => {
     if (actionResult.kind === "updated") {
@@ -69,51 +64,6 @@ export function EditMerchantForm({ initial }: EditMerchantFormProps) {
     const handle = setTimeout(() => router.push("/admin/merchants"), 3000);
     return () => clearTimeout(handle);
   }, [actionResult.kind, router]);
-
-  // Confirm modal — click-outside (mousedown) close.
-  useEffect(() => {
-    if (pendingSubmit === null) return;
-    function handleMousedown(event: MouseEvent) {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (confirmPanelRef.current?.contains(target)) return;
-      setPendingSubmit(null);
-    }
-    document.addEventListener("mousedown", handleMousedown);
-    return () => document.removeEventListener("mousedown", handleMousedown);
-  }, [pendingSubmit]);
-
-  // Confirm modal — Escape close.
-  useEffect(() => {
-    if (pendingSubmit === null) return;
-    function handleKeydown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setPendingSubmit(null);
-      }
-    }
-    document.addEventListener("keydown", handleKeydown);
-    return () => document.removeEventListener("keydown", handleKeydown);
-  }, [pendingSubmit]);
-
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    const formData = new FormData(event.currentTarget);
-    const submittedSlug = String(formData.get("slug") ?? "").trim().toLowerCase();
-    if (submittedSlug !== initial.slug && submittedSlug.length > 0) {
-      event.preventDefault();
-      setPendingSubmit(formData);
-    }
-    // Otherwise — let the form submit naturally to formAction.
-  }
-
-  function confirmSlugChange() {
-    if (pendingSubmit === null) return;
-    // useTransition-free submit: dispatch the bound action directly with
-    // the captured FormData. useActionState's formAction signature is
-    // (formData) => void; we invoke it with the stored payload.
-    const data = pendingSubmit;
-    setPendingSubmit(null);
-    formAction(data);
-  }
 
   const fieldErrors =
     actionResult.kind === "validation" ? actionResult.fieldErrors : {};
@@ -139,12 +89,7 @@ export function EditMerchantForm({ initial }: EditMerchantFormProps) {
         </p>
       ) : null}
 
-      <form
-        ref={formRef}
-        action={formAction}
-        onSubmit={handleSubmit}
-        className="space-y-8"
-      >
+      <form action={formAction} className="space-y-8">
         <Field
           label="Merchant name"
           name="name"
@@ -154,15 +99,18 @@ export function EditMerchantForm({ initial }: EditMerchantFormProps) {
           required
         />
 
-        <Field
-          label="Slug"
-          name="slug"
-          defaultValue={initial.slug}
-          placeholder="demo-bistro"
-          hint="Lowercase letters, numbers, and hyphens (1-60 characters). Changing breaks any saved URL that uses the current slug."
-          error={fieldErrors.slug}
-          required
-        />
+        <div>
+          <p className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+            Slug
+          </p>
+          <p className="rounded-sm border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-sm text-[color:var(--color-text-secondary)]">
+            {initial.slug}
+          </p>
+          <p className="mt-1 text-xs text-[color:var(--color-text-tertiary)]">
+            Slug is set at creation and not editable here. Contact Transcorp
+            staff if a slug needs to be corrected.
+          </p>
+        </div>
 
         <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
           <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
@@ -226,7 +174,6 @@ export function EditMerchantForm({ initial }: EditMerchantFormProps) {
             Cancel
           </Link>
           <button
-            ref={confirmTriggerRef}
             type="submit"
             disabled={isPending}
             className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
@@ -235,48 +182,6 @@ export function EditMerchantForm({ initial }: EditMerchantFormProps) {
           </button>
         </div>
       </form>
-
-      {pendingSubmit !== null ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Confirm slug change"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-navy/20 p-4"
-        >
-          <div
-            ref={confirmPanelRef}
-            className="w-full max-w-md rounded-sm border border-stone-200 border-t-[1px] border-t-amber bg-surface-primary p-6"
-          >
-            <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Slug change
-            </p>
-            <h2 className="mt-1 font-display text-xl font-semibold text-navy">
-              Confirm slug change
-            </h2>
-            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              Changing the slug will break any existing bookmarks or saved URLs that use the current
-              slug. Continue?
-            </p>
-
-            <div className="mt-6 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setPendingSubmit(null)}
-                className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirmSlugChange}
-                className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90"
-              >
-                Continue
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </>
   );
 }
