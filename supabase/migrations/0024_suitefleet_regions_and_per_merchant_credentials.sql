@@ -72,7 +72,7 @@
 --     invariant at runtime; RESTRICT forces an explicit decision before
 --     a region can be removed.
 --
---     DEFAULT subquery binds new INSERTs to the sandbox region
+--     DEFAULT literal binds new INSERTs to the sandbox region
 --     ('transcorpsb'). Sandbox is the safe-default region — every new
 --     tenant that does not explicitly choose a region is correctly
 --     routed there. This is the same truth the backfill UPDATE
@@ -81,6 +81,18 @@
 --     goes dormant; it remains as a defense-in-depth backstop against
 --     any tenant-row INSERT path that omits the FK (e.g. test fixtures
 --     and seed scripts), and matches production reality.
+--
+--     CORRECTION TRAIL (Day-26 PR #284 round 2): an earlier draft of
+--     this migration encoded the same default as a subquery DEFAULT —
+--     DEFAULT (SELECT id FROM suitefleet_regions WHERE client_id =
+--     'transcorpsb'). Postgres rejects that form structurally:
+--     `cannot use subquery in DEFAULT expression` (DEFAULT expressions
+--     must be non-volatile and cannot reference other tables). The
+--     pinned-UUID literal below is the Postgres-valid form of the same
+--     intent — the sandbox region row is seeded with the same
+--     deliberately-shaped UUID literal at the suitefleet_regions seed
+--     INSERT (see comment there), and this DEFAULT clause points at
+--     that literal. Semantics + OQ-6 edge-case rationale are unchanged.
 --
 --     OQ-6 edge-case ruling (Day-26): the ratified OQ-6 covered the
 --     production mental model (existing tenants get backfilled). It
@@ -130,11 +142,19 @@ CREATE INDEX suitefleet_regions_status_idx
 -- Sub-PR 2's resolver returns a discriminated union typed by auth_method;
 -- Sub-PR 2's auth-client login() branches: loginOAuth lives, loginApiKey
 -- stubs ConfigurationError until Aqib's header reply lands.
-INSERT INTO suitefleet_regions (client_id, display_name, status, auth_method) VALUES
-  ('transcorpsb',    'Sandbox',          'active', 'oauth'),
-  ('transcorp',      'Transcorp KSA',    'active', 'api_key'),
-  ('transcorpuae',   'Transcorp UAE',    'active', 'api_key'),
-  ('transcorpqatar', 'Transcorp Qatar',  'active', 'api_key');
+--
+-- Sandbox row uses a PINNED v4-shaped UUID literal — the same literal
+-- is referenced as the DEFAULT on tenants.suitefleet_region_id below.
+-- A subquery DEFAULT (the more natural form) is structurally invalid
+-- in Postgres (`cannot use subquery in DEFAULT expression`), so the
+-- two sites are bound by a shared literal instead. The other three
+-- regions use gen_random_uuid() — only sandbox needs a pinned ID
+-- because only sandbox is the DEFAULT target.
+INSERT INTO suitefleet_regions (id, client_id, display_name, status, auth_method) VALUES
+  ('11111111-1111-4111-a111-111111111111'::uuid, 'transcorpsb',    'Sandbox',          'active', 'oauth'),
+  (gen_random_uuid(),                            'transcorp',      'Transcorp KSA',    'active', 'api_key'),
+  (gen_random_uuid(),                            'transcorpuae',   'Transcorp UAE',    'active', 'api_key'),
+  (gen_random_uuid(),                            'transcorpqatar', 'Transcorp Qatar',  'active', 'api_key');
 
 
 -- -----------------------------------------------------------------------------
@@ -177,9 +197,15 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON suitefleet_regions TO planner_app;
 -- production; backfill is microseconds). The UPDATE is idempotent
 -- via the IS NULL guard — safe to re-run as a no-op once the column
 -- is populated.
+-- DEFAULT is a literal v4-shaped UUID matching the pinned sandbox row
+-- seeded above. Bound by shared literal because Postgres rejects
+-- subquery DEFAULTs (`cannot use subquery in DEFAULT expression`).
+-- Both sites must move in lockstep if the sandbox UUID ever rotates;
+-- in practice it does not — the seeded row stays put for the lifetime
+-- of the column.
 ALTER TABLE tenants
   ADD COLUMN suitefleet_region_id             uuid REFERENCES suitefleet_regions(id) ON DELETE RESTRICT
-                                                DEFAULT (SELECT id FROM suitefleet_regions WHERE client_id = 'transcorpsb'),
+                                                DEFAULT '11111111-1111-4111-a111-111111111111'::uuid,
   ADD COLUMN suitefleet_credential_1_vault_id uuid,
   ADD COLUMN suitefleet_credential_2_vault_id uuid;
 
