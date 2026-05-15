@@ -421,9 +421,12 @@ ALTER TABLE tenants
 
 ```sql
 -- §3.POST.1 — suitefleet_regions has the 4 seed rows with the right shape.
--- Expected: 4 rows. transcorp/api_key/active, transcorpqatar/api_key/active,
--- transcorpsb/oauth/active, transcorpuae/api_key/active. Sandbox row's id
--- must be exactly the pinned UUID.
+-- Expected: 4 rows in client_id alphabetical order (matching the ORDER BY):
+--   (1) transcorp        [display: Transcorp KSA]   / api_key / active
+--   (2) transcorpqatar   [display: Transcorp Qatar] / api_key / active
+--   (3) transcorpsb      [display: Sandbox]         / oauth   / active
+--       — id MUST be the pinned UUID '11111111-1111-4111-a111-111111111111'
+--   (4) transcorpuae     [display: Transcorp UAE]   / api_key / active
 SELECT id, client_id, display_name, status, auth_method
 FROM public.suitefleet_regions
 ORDER BY client_id;
@@ -468,6 +471,9 @@ Postgres reverses 0024's effects via the inverse DDL sequence. Order matters: dr
 -- =============================================================================
 -- §3 ROLLBACK — execute ONLY if §3 post-checks fail.
 -- Restores production to its pre-§3 state.
+-- Wrapped in BEGIN/COMMIT (intentionally asymmetric with the forward block,
+-- which runs naked): rollback wants atomicity (all-or-nothing restore);
+-- forward block intentionally allows partial-state surfacing for diagnostics.
 -- =============================================================================
 BEGIN;
 
@@ -561,9 +567,9 @@ Same query as pre-check. **Expected: `SELECT, INSERT` only.**
 GRANT UPDATE, DELETE ON public.webhook_events TO planner_app;
 ```
 
-#### §4(b) — `audit_events` (in scope IF reviewer rules to include)
+#### §4(b) — `audit_events` (IN SCOPE per §3.6 ruling)
 
-If §2's sweep confirms broad grants on `audit_events` (predicted), the reviewer rules on whether to include this REVOKE. Architecturally cleaner; operationally inert (the RULE from 0002 already blocks UPDATE/DELETE at DB layer).
+Reviewer ruled to include. §2's sweep is predicted to confirm broad grants on `audit_events` (per the repo-grep analysis in §2 Part A); REVOKE here brings grants in line with 0002's narrow intent. Operationally inert (the RULE from 0002 already blocks UPDATE/DELETE at DB layer), architecturally cleaner.
 
 ##### Pre-check
 
@@ -578,7 +584,7 @@ GROUP BY table_name;
 -- Expected: SELECT, INSERT, UPDATE, DELETE (predicted by §2 sweep).
 ```
 
-##### Statement (IF reviewer rules to include)
+##### Statement
 
 ```sql
 REVOKE UPDATE, DELETE ON public.audit_events FROM planner_app;
@@ -592,9 +598,11 @@ Same shape as the `webhook_events` case above.
 
 Per-table application of the same pre/exec/post/rollback shape. Scope determined by sweep output. The reviewer rules.
 
-#### §4(b) — Defensive-depth option (CREATE RULE on webhook_events)
+#### §4(b) — Defensive-depth option (CREATE RULE on webhook_events) — DEFERRED per §3.6 ruling
 
-**§3.6 decision: surface, do not pre-decide.** Mirroring `audit_events`'s 0002 RULE pattern, defensive depth for `webhook_events` would add:
+**Rationale (one line):** After §4(b)(webhook_events) revokes UPDATE/DELETE, grants alone fully gate the writes; RULE-layer enforcement is pure defensive depth that adds the cascade-conflict footprint (per `followup_audit_rule_cascade_conflict.md`) without closing a real exposure. Deferred to a post-demo cleanup lane.
+
+The trade-off discussion and SQL below are preserved for that future lane to consume. Mirroring `audit_events`'s 0002 RULE pattern, defensive depth for `webhook_events` would add:
 
 ```sql
 -- DEFENSIVE DEPTH (reviewer decides include vs defer):
@@ -610,11 +618,13 @@ If included, the equivalent ROLLBACK is `DROP RULE webhook_events_no_update ON p
 
 ---
 
-### §4(c) — `webhook_events` policy narrowing
+### §4(c) — `webhook_events` policy narrowing — DEFERRED to post-demo cleanup lane per §3.6 ruling
+
+**Rationale (one line):** Once §4(b) revokes UPDATE/DELETE grants on `webhook_events`, the FOR ALL policy is operationally inert (grants gate before RLS in Postgres's permission model); divergence is functionally closed without policy work, and architectural cleanup decouples from the demo-critical path. The section body below is preserved intact for the post-demo cleanup lane to consume.
 
 The policy `webhook_events_tenant_isolation` is `FOR ALL` on production; the migration intent (per 0018 line 101's narrow GRANT) is that only SELECT and INSERT need a policy. After §4(b) revokes UPDATE+DELETE grants, the policy breadth becomes operationally inert (grants gate before RLS in Postgres's permission model). But narrowing the policy to match intent is still architecturally cleaner.
 
-**§3.6 decision: surface, do not pre-decide.** Trade-offs:
+**§3.6 decision (RESOLVED — DEFERRED).** Original trade-offs surfaced:
 
 - **Include now.** Policy posture matches migration intent + RLS scope is precise. Cost: DROP+CREATE POLICY (Postgres has no `ALTER POLICY` for command-scope changes). Two policies replace one.
 - **Defer.** After §4(b) revokes UPDATE/DELETE, the FOR ALL policy can never gate writes that grants don't already block. Divergence is functionally closed without policy work.
@@ -689,14 +699,15 @@ The user-proposed sequence is correct as-is. Verified: no step's pre-check depen
 | 3 | Execute §3 (un-wrapped 0024). | Highest-risk operation; do first with rollback path ready so if it fails, mop-up has minimal complexity. |
 | 4 | Run §3 post-checks. If red, execute §3 Rollback; STOP and surface to reviewer. If green, continue. | Pre-§4 sanity. §3 either fully applies (continue) or fully rolls back (re-run pre-checks, then STOP). |
 | 5 | Run §4(a) trigger pre-check / CREATE TRIGGER / post-check. | Tiny, low-risk, no dependencies. |
-| 6 | Run §4(b) REVOKE(s) per the §2 sweep output. Per-table pre/exec/post. | Sweep scoped before this; can't be moved earlier. |
-| 7 | Run §4(c) policy narrowing pre-check / DROP+CREATE / post-check — IF reviewer ruled to include. | Last because it's the most cosmetic; deferring it is a clean fallback if anything went wrong upstream. |
-| 8 | Surface "production schema reconciled" to reviewer with the full pre/exec/post output. | Reviewer is the next §3.6 gate. |
-| 9 | Reviewer §3.6-clears the Vercel promote. | Independent decision — schema reconciled ≠ ready-to-promote. |
-| 10 | Promote main HEAD to production via Vercel. | §6. |
-| 11 | Smoke-test the credentials flow on a sandbox tenant. | §7. |
+| 6 | Run §4(b) REVOKE(s) per the §2 sweep output. Per-table pre/exec/post. Scope per §3.6 ruling: `{webhook_events, audit_events}` + any additional tables surfaced by §2. | Sweep scoped before this; can't be moved earlier. |
+| 7 | Surface "production schema reconciled" to reviewer with the full pre/exec/post output. | Reviewer is the next §3.6 gate. |
+| 8 | Reviewer §3.6-clears the Vercel promote. | Independent decision — schema reconciled ≠ ready-to-promote. |
+| 9 | Promote main HEAD to production via Vercel. | §6. |
+| 10 | Smoke-test the credentials flow on a sandbox tenant. | §7. |
 
-**No reorder warranted.** Cross-step dependency check: §3 doesn't touch `webhook_events`, `users`, or grants → §4 is unaffected by §3's outcome. §4(a) only adds a trigger → §4(b) and §4(c) unaffected. §4(b) REVOKEs grants → §4(c)'s policy narrowing operates on RLS, orthogonal to grants. §4(c) DROP+CREATE POLICY → no downstream step depends on the FOR ALL form being in place.
+**§4(c) is deferred per §3.6 ruling to a post-demo cleanup lane.** The sequencing table reflects the deferred state — the original §4(c) row removed; subsequent steps renumbered (8 → 7, 9 → 8, 10 → 9, 11 → 10). The §4(c) section body is preserved intact for the future cleanup lane to consume.
+
+**No further reorder warranted.** Cross-step dependency check: §3 doesn't touch `webhook_events`, `users`, or grants → §4 is unaffected by §3's outcome. §4(a) only adds a trigger → §4(b) unaffected. §4(b) REVOKEs grants on `{webhook_events, audit_events, ...}` → no downstream step in this execution sequence depends on the broader grant shape.
 
 ---
 
@@ -741,7 +752,7 @@ vercel ls --scope=lovemansgits-projects | head -5
 
 The production alias should now resolve to the new deployment ID. Capture the new `dpl_*` ID for the audit record (Day-N EOD doc).
 
-### Rollback path (promotion-only)
+### Rollback path (deployment-only per §3.6 ruling)
 
 If the post-promote smoke (§7) reveals a regression, the rollback is to re-promote the previous deployment:
 
@@ -751,7 +762,7 @@ If the post-promote smoke (§7) reveals a regression, the rollback is to re-prom
 vercel promote dpl_29fxudjgb-lovemansgits-projects --scope=lovemansgits-projects
 ```
 
-A promotion rollback does NOT undo schema changes from §3 / §4. Schema-side rollback would use the §3 Rollback block — but at that point, code on production no longer expects the post-§3 columns, so reverting BOTH schema and code is the safest path. Reviewer rules on whether to roll back schema alongside the deployment.
+**Schema stays at v1.15-intended state per §3.6 ruling.** A promotion rollback does NOT undo schema changes from §3 / §4. The pre-§3 code on deployment `dpl_29fxudjgb-...` (built from `6c637f4`) does not read the new `suitefleet_region_id` / `suitefleet_credential_*_vault_id` columns, so the additional columns sit unused but inert from the old code's perspective; the restored `users_set_updated_at` trigger and the `webhook_events` / `audit_events` REVOKEs are additive-narrowing (no read path depended on the old looseness). The deployment-only rollback path therefore does not violate the old code's assumptions.
 
 ---
 
@@ -776,11 +787,11 @@ Not detailed SQL. The checklist of what Love verifies after promotion:
 1. **No improvisation.** Every statement in §2/§3/§4/§6 is reviewed before execution. Nothing is invented at execution time. The standing constraint from the audit-input PR (#287) — "no reconciliation SQL improvised live in the SQL editor" — extends to this plan-PR: this plan IS the reconciliation SQL, reviewed in advance.
 2. **§2 GRANT sweep output is surfaced to reviewer BEFORE §4(b) executes.** The sweep may expand §4(b)'s REVOKE scope beyond `webhook_events`. The reviewer rules on whether to include each additional table.
 3. **Rollback paths are non-optional.** Every §3 / §4 statement has its rollback documented in this plan. If any post-check fails, STOP and execute that step's rollback. Surface to reviewer before proceeding. Do not invent a "creative recovery" at execution time.
-4. **§3.6 decisions in this plan, surfaced not pre-decided:**
-   - §4(b) `audit_events` REVOKE scope — include now or defer.
-   - §4(b) defensive-depth RULEs on `webhook_events` — include now or defer.
-   - §4(c) `webhook_events` policy narrowing — include now or defer.
-   - §6 promotion-rollback schema-side scope — schema rollback alongside deployment rollback?
+4. **§3.6 rulings (resolved):**
+   - §4(b) `audit_events` REVOKE — **INCLUDE** (in scope alongside `webhook_events` and any additional tables surfaced by §2's sweep).
+   - §4(b) defensive-depth RULEs on `webhook_events` — **DEFER** (grant REVOKE alone fully gates writes; RULE layer is pure defensive depth and adds cascade-conflict footprint).
+   - §4(c) `webhook_events` policy narrowing — **DEFER to post-demo cleanup lane** (functionally inert after §4(b); architectural cleanup decoupled).
+   - §6 promotion-rollback schema-side scope — **DEPLOYMENT-ONLY** (schema stays at v1.15-intended; old code is additive-compatible).
 5. **Aqib API-key auth-header reply remains pending.** Production-region (`transcorp` / `transcorpuae` / `transcorpqatar`) api_key credentials cannot be provisioned today regardless of how the rest of this plan goes. Sandbox-region (`transcorpsb`) credentials work via OAuth and are the live integration path for tomorrow's demo. Live-added merchants in the demo go on sandbox; that's a demo-narrative decision, not a plan constraint.
 6. **The credentials lane code on `main` at `47780e1` is correctly written.** Today's audit chain established the code is sound; this plan brings production into the state the code expects. The reverse posture (rewrite code to match a partially-applied schema) is explicitly NOT considered.
 7. **Tomorrow's demo deadline is the forcing function.** This plan exists to bring production to the v1.15-intended state before tomorrow. Anything that could be deferred to post-demo (e.g., the 501-orphaned-tenants integration-test residue cleanup, the SQ §3.6-deferred items above) is left for a separate lane.
