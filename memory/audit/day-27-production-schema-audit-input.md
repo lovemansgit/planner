@@ -279,7 +279,14 @@ Part B treats the presence-vs-absence and content of `supabase_migrations.schema
 
 ## Part B — Production audit query block (read-only)
 
-**Instructions for Love.** Paste this entire block into the Supabase SQL editor for project `qdotjmwqbyzldfuxphei`. Every statement is read-only (SELECT / `information_schema` / `pg_catalog`). No DDL, no writes. The output of each numbered query maps back to a specific question Part A raised.
+**Instructions for Love.** Part B has two parts:
+
+1. **The MAIN BLOCK** — Q1–Q15 below (with Q12 deliberately omitted; see in-block note). Paste the entire main block into the Supabase SQL editor for project `qdotjmwqbyzldfuxphei` as a single execution. Every statement in the main block is guaranteed not to error on a schema where the expected tables/columns may be absent — they all use `pg_catalog` / `information_schema` or join candidate-table lists against `pg_class` so missing objects are silently skipped rather than thrown.
+2. **The FOLLOW-UP QUERIES** — Q6-followup, Q12a, Q12b — appear in a separate section AFTER the main block. **Do not paste those with the main block.** Each runs as its own SQL-editor execution, only after the main-block result has confirmed the referenced object/column exists. The Supabase SQL editor wraps any multi-statement paste in a single transaction; if a query mid-paste throws, every statement after it is aborted and you lose the tail of the audit. The follow-up queries are the ones that could throw, so they are isolated.
+
+Every statement in both parts is read-only (SELECT / `information_schema` / `pg_catalog`). No DDL, no writes. The output of each numbered query maps back to a specific question Part A raised.
+
+**Before running anything:** confirm the SQL-editor URL shows project ref `qdotjmwqbyzldfuxphei`. See Q1's annotation for why this matters — `current_database()` returns the same value for every Supabase project and cannot establish project identity.
 
 ```sql
 -- =============================================================================
@@ -289,11 +296,21 @@ Part B treats the presence-vs-absence and content of `supabase_migrations.schema
 -- =============================================================================
 
 
--- Q1 — Sanity check: which database + role am I running as?
--- Establishes basic context. If the wrong database is queried, every finding
--- below is invalidated. Cross-check the result against the project's
--- expected DB name to address the "is this the pilot DB?" open question.
-SELECT current_database() AS db_name,
+-- Q1 — Connection context capture.
+--
+-- IMPORTANT — this query does NOT establish "is this the pilot DB?".
+-- current_database() returns 'postgres' on every Supabase hosted project, so
+-- the value is the same regardless of which project you're connected to and
+-- cannot distinguish qdotjmwqbyzldfuxphei from any other project.
+--
+-- The actual identity check is OUT-OF-BAND, in the Supabase dashboard /
+-- SQL-editor URL: before running anything else in this block, confirm the
+-- editor URL shows project ref `qdotjmwqbyzldfuxphei` (the URL path will
+-- contain that ref). Only proceed if it does.
+--
+-- What Q1 does capture: connected role, Postgres server version, and the
+-- query timestamp — useful for the audit record but not for project ID.
+SELECT current_database() AS db_name,    -- expected: 'postgres' (does not identify the project)
        current_user      AS connected_role,
        version()         AS pg_version,
        now()             AS query_time;
@@ -363,13 +380,14 @@ WHERE NOT t.tgisinternal
 ORDER BY c.relname, t.tgname;
 
 
--- Q6 — Supabase CLI migration ledger: does it exist, and what does it claim
--- has been applied?
+-- Q6 — Supabase CLI migration ledger: does the ledger relation exist?
 -- A.5 explains why this is itself a finding. If the table is absent,
 -- production migrations were not applied via supabase CLI / Studio panel;
--- raw SQL-editor paste was the path. If present, its contents tell us which
--- migration versions production's own ledger thinks have been applied.
--- Step 1 — does the schema + table exist?
+-- raw SQL-editor paste was the path. If present, the follow-up query
+-- (Q6-followup, in the separate section below this block) reads its
+-- contents to surface which migration versions production's own ledger
+-- thinks have been applied. THIS query is catalog-only and safe; it cannot
+-- error on a schema where the ledger is absent.
 SELECT n.nspname AS schema,
        c.relname AS table_name,
        c.relkind AS relkind
@@ -377,13 +395,6 @@ FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname IN ('supabase_migrations')
    OR (n.nspname = 'public' AND c.relname IN ('schema_migrations','_migrations'));
-
--- Step 2 — if Q6 step 1 returned a row, run THIS to read the ledger.
--- If step 1 returned no row, SKIP step 2 (it will error harmlessly — relation
--- does not exist — and that error is itself a confirming finding).
-SELECT *
-FROM supabase_migrations.schema_migrations
-ORDER BY version;
 
 
 -- Q7 — Existence of the planner_app database role (created by 0003).
@@ -479,30 +490,13 @@ WHERE c.relkind = 'r'
 ORDER BY w.table_name;
 
 
--- Q12 — Earliest + latest timestamps and unique tenant fingerprint inside
--- public.users (which exists per Day-26 finding).
--- If created_at exists, this tells us approximately when this users table
--- started being written to (versus the pilot timeline). If the tenant_id
--- column is present, the set of distinct values + counts reveals how many
--- tenants the rows belong to, even though the tenants table itself is absent
--- on prod. (Both queries handle column absence gracefully via a try-style
--- selector — Love: if a column doesn't exist, the SELECT errors; run Q12a and
--- Q12b independently and skip whichever fails.)
-
--- Q12a — created_at / updated_at range (skip if either column absent)
-SELECT 'public.users' AS table_name,
-       min(created_at) AS earliest_created_at,
-       max(created_at) AS latest_created_at,
-       count(*)        AS total_rows
-FROM public.users;
-
--- Q12b — distinct tenant_id values and per-tenant row count (skip if
--- tenant_id column absent on prod's users table — Q3 will have surfaced
--- that)
-SELECT tenant_id, count(*) AS row_count
-FROM public.users
-GROUP BY tenant_id
-ORDER BY row_count DESC;
+-- Q12 — MOVED to the FOLLOW-UP QUERIES section below the main block.
+-- Q12a (created_at range on public.users) and Q12b (tenant_id distribution)
+-- both reference columns that may not exist on production's public.users
+-- (Q3 surfaces the actual column list). Running them inside the main block
+-- would risk aborting the whole transaction. They are deliberately kept
+-- OUT of the main block; run them individually after the main block
+-- completes, only if Q3 confirmed the referenced columns are present.
 
 
 -- Q13 — Supabase Vault extension availability (already-known blocker from
@@ -553,14 +547,60 @@ ORDER BY c.relname, r.rulename;
 
 
 -- =============================================================================
--- End of audit query block.
--- Expected reading order for the output: Q1 (sanity) → Q2 (relation count
--- vs 21) → Q3 (identity columns) → Q4 (function) → Q5 (triggers) → Q6
--- (ledger) → Q7 (role) → Q8 (RLS) → Q9 (policies) → Q10 + Q11 (counts) →
--- Q12 (users fingerprint) → Q13 (vault) → Q14 (identity constraints) →
--- Q15 (rules). Each finding either confirms repo expectation or surfaces
--- a divergence to feed into the reconciliation plan-PR.
+-- End of MAIN audit query block.
+--
+-- Expected reading order for the main block: Q1 (connection context, not
+-- project ID) → Q2 (relation inventory vs 21) → Q3 (identity columns) →
+-- Q4 (set_updated_at function) → Q5 (triggers) → Q6 (ledger existence) →
+-- Q7 (planner_app role) → Q8 (RLS) → Q9 (policies) → Q10 + Q11 (row
+-- counts) → Q13 (vault) → Q14 (identity constraints) → Q15 (rules).
+-- Q12 lives in the follow-up section below — not in the main block.
+--
+-- Every query above is safe to run as one paste: each statement either uses
+-- pg_catalog / information_schema (which never errors on missing relations)
+-- or, in Q11's case, joins the candidate-table list against pg_class so
+-- non-existent tables are silently omitted. The block as a whole completes
+-- regardless of how much of the expected schema is absent.
 -- =============================================================================
+```
+
+### FOLLOW-UP QUERIES — run each INDIVIDUALLY, one at a time
+
+The three queries below are NOT in the main block. The Supabase SQL editor wraps a pasted multi-statement block in a single transaction; one error aborts every subsequent statement. These three reference relations / columns that may be absent on production — running them inside the main block would have risked losing the tail of the audit. They're broken out so an error in one cannot affect anything else.
+
+**Discipline for running these.** Run each in its own SQL-editor execution (don't paste this whole section as one block). For each, the main-block results will already have told you whether the referenced object exists; only run the follow-up if the corresponding main-block query confirmed presence. If you run one anyway and it errors, the error establishes the absence — but no other query is affected.
+
+#### Q6-followup — read the Supabase CLI migration ledger contents
+
+Run ONLY if Q6 returned a row (i.e. the ledger relation exists). If Q6 returned zero rows, do not run this — the absence is already the finding.
+
+```sql
+SELECT *
+FROM supabase_migrations.schema_migrations
+ORDER BY version;
+```
+
+#### Q12a — `public.users` created_at range and total row count
+
+Run ONLY if Q3 confirmed `public.users.created_at` exists. The result tells us approximately when this users table started being written to, which helps date the pilot timeline against the (absent) identity schema.
+
+```sql
+SELECT 'public.users' AS table_name,
+       min(created_at) AS earliest_created_at,
+       max(created_at) AS latest_created_at,
+       count(*)        AS total_rows
+FROM public.users;
+```
+
+#### Q12b — distinct tenant_id values in `public.users` and per-tenant row count
+
+Run ONLY if Q3 confirmed `public.users.tenant_id` exists. The set of distinct values + counts reveals how many tenants prod's users rows reference, even though the tenants table itself is absent. Likely a key clue for the "which DB / partial wipe" question.
+
+```sql
+SELECT tenant_id, count(*) AS row_count
+FROM public.users
+GROUP BY tenant_id
+ORDER BY row_count DESC;
 ```
 
 ---
