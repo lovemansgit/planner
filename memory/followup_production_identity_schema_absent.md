@@ -1,5 +1,9 @@
 # 🔴 LOAD-BEARING — Production identity schema is absent
 
+> **SUPERSEDED — see [`memory/audit/day-27-production-schema-audit-findings.md`](audit/day-27-production-schema-audit-findings.md).**
+>
+> The Day-27 audit established that production's identity schema is intact: all four tables this memo claims absent are present, `set_updated_at()` is present, and `public.users.updated_at` is present. The factual basis of this memo is invalidated. Migration 0024's failure is still real and unexplained, but is no longer attributed to absent identity schema. This file is retained as historical record of Day-26's diagnostic conclusion; it is no longer load-bearing.
+
 **Filed:** Day-26 (14 May 2026), PM-late. Blocks Vercel promote of the
 Day-26 per-merchant SF credentials lane until resolved.
 
