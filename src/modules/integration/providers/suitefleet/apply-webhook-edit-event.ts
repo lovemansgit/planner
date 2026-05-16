@@ -224,36 +224,51 @@ export async function applyWebhookEditEvent(
       const taskId = row.id as Uuid;
       const parsed = parseResult.data;
       const extracted = extractEditFields(parsed);
-      const changedFields = computeChangedFields(row, extracted, parsed);
+      const allChanges = computeChangedFields(row, extracted, parsed);
 
-      if (changedFields.length === 0) {
-        // No-op edit — payload values match current row state. Don't
-        // UPDATE; webhook_events row already preserves the receipt.
+      // Bug 2 fix — decouple changedFields' four overloaded responsibilities
+      // (plan PR #294 §4.1 + locked §4.2 X.A + Z.A):
+      //   (a) columnsToUpdate     → DB UPDATE column list
+      //   (b) auditMetadataFields → audit row's metadata.changed_fields
+      //   (c) hasAnyChange        → no_diff gate    (input: columnsToUpdate; Z.A)
+      //   (d) wasApplied          → outcome.applied (input: columnsToUpdate; X.A)
+      //
+      // The address audit-only entry (computeChangedFields tail, hard-coded
+      // previous:null) now flows ONLY into (b). It cannot inflate (a), and
+      // cannot flip hasAnyChange or wasApplied from false to true regardless
+      // of whether the address entry is present in the payload.
+      //
+      // outcome.applied semantic (X.A locked): "≥1 column actually moved on
+      // the row." Address-only payloads return no_diff (X.A reuses existing
+      // vocabulary — no new outcome reason; no new audit event).
+      const columnsToUpdate = allChanges.filter((c) => c.field !== "address");
+      const auditMetadataFields = allChanges;
+
+      if (columnsToUpdate.length === 0) {
+        // No column moved — return no_diff (X.A + Z.A). Webhook_events row
+        // already preserves the receipt; no audit emit; no UPDATE issued.
         return {
           outcome: { applied: false, reason: "no_diff" } as const,
           meta: null,
         };
       }
 
-      // UPDATE only the columns whose values differ. Address-audit-only
-      // entries are filtered out — they don't correspond to columns.
-      const columnChanges = changedFields.filter((c) => c.field !== "address");
-      if (columnChanges.length > 0) {
-        await applyConditionalUpdate(tx, tenantId, taskId, columnChanges);
-      }
+      await applyConditionalUpdate(tx, tenantId, taskId, columnsToUpdate);
 
       const meta: AuditMeta = {
         taskId,
         suitefleetTaskId: event.externalTaskId,
         webhookEventsId,
-        changedFields,
+        changedFields: auditMetadataFields,
       };
 
+      // Past the columnsToUpdate.length === 0 gate above, wasApplied is
+      // intrinsically true (X.A: outcome.applied = "≥1 column actually moved").
       return {
         outcome: {
           applied: true,
           taskId,
-          changedFieldCount: changedFields.length,
+          changedFieldCount: auditMetadataFields.length,
         } as const,
         meta,
       };
