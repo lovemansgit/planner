@@ -75,6 +75,8 @@ const webhookEditPayloadSchema = z.object({
   consignee: consigneeSchema.optional(),
 });
 
+type WebhookEditPayload = z.infer<typeof webhookEditPayloadSchema>;
+
 export type ApplyWebhookEditEventResult =
   | {
       readonly applied: true;
@@ -220,8 +222,9 @@ export async function applyWebhookEditEvent(
 
       const row = taskRows[0];
       const taskId = row.id as Uuid;
-      const extracted = extractEditFields(rawPayload);
-      const changedFields = computeChangedFields(row, extracted, rawPayload);
+      const parsed = parseResult.data;
+      const extracted = extractEditFields(parsed);
+      const changedFields = computeChangedFields(row, extracted, parsed);
 
       if (changedFields.length === 0) {
         // No-op edit — payload values match current row state. Don't
@@ -304,30 +307,35 @@ interface ExtractedFields {
   readonly completion_longitude: number | undefined;
 }
 
-function extractEditFields(rawPayload: unknown): ExtractedFields {
-  const root = isRecord(rawPayload) ? rawPayload : {};
-  const deliveryInfo = isRecord(root.deliveryInformation) ? root.deliveryInformation : {};
-
+function extractEditFields(parsed: WebhookEditPayload): ExtractedFields {
+  // Bug 1 fix (plan PR #294 §3): line was `pickString(root.delivery_date)`
+  // reading snake_case off rawPayload; SF sends camelCase deliveryDate so the
+  // read resolved to undefined and the date was silently dropped from the
+  // diff. Post-fix the value comes off the parsed shape (Zod-typed
+  // camelCase) so a future snake_case typo would not compile.
+  const di = parsed.deliveryInformation;
   return {
-    delivery_date: pickString(root.delivery_date),
-    delivery_start_time: pickString(root.deliveryStartTime),
-    delivery_end_time: pickString(root.deliveryEndTime),
-    recipient_name: pickString(deliveryInfo.recipientName),
-    signature: pickString(deliveryInfo.signature),
-    consignee_rating: pickNumber(deliveryInfo.consigneeRating),
-    consignee_comment: pickString(deliveryInfo.consigneeComment),
-    driver_comment: pickString(deliveryInfo.driverComment),
-    number_of_attempts: pickNumber(deliveryInfo.numberOfAttempts),
-    failure_reason_comment: pickString(deliveryInfo.failureReasonComment),
-    completion_latitude: pickNumber(deliveryInfo.completionLatitude),
-    completion_longitude: pickNumber(deliveryInfo.completionLongitude),
+    delivery_date: parsed.deliveryDate,
+    delivery_start_time: parsed.deliveryStartTime,
+    delivery_end_time: parsed.deliveryEndTime,
+    recipient_name: di?.recipientName,
+    signature: di?.signature,
+    consignee_rating: di?.consigneeRating,
+    consignee_comment: di?.consigneeComment,
+    driver_comment: di?.driverComment,
+    number_of_attempts: di?.numberOfAttempts,
+    // Zod schema allows null for failureReasonComment; coerce null → undefined
+    // to preserve "field absent" semantics for diffField.
+    failure_reason_comment: di?.failureReasonComment ?? undefined,
+    completion_latitude: di?.completionLatitude,
+    completion_longitude: di?.completionLongitude,
   };
 }
 
 function computeChangedFields(
   row: TaskRow,
   extracted: ExtractedFields,
-  rawPayload: unknown,
+  parsed: WebhookEditPayload,
 ): ChangedField[] {
   const changes: ChangedField[] = [];
 
@@ -365,10 +373,10 @@ function computeChangedFields(
   // If consignee.location.* is present in the payload, capture it as
   // a metadata entry. previous=null marks "we observed an SF-side
   // address but didn't apply it" — distinct from real edit-event diffs.
-  const root = isRecord(rawPayload) ? rawPayload : {};
-  const consignee = isRecord(root.consignee) ? root.consignee : null;
-  const location = consignee !== null && isRecord(consignee.location) ? consignee.location : null;
-  if (location !== null) {
+  // C3 decouples this from the no_diff gate + outcome.applied flag (see
+  // computeColumnsToUpdate / wasApplied logic at the caller).
+  const location = parsed.consignee?.location;
+  if (location !== undefined) {
     changes.push({
       field: "address",
       previous: null,
@@ -494,20 +502,6 @@ function buildSetFragment(column: string, value: unknown): ReturnType<typeof sql
       // Unreachable — caller validates against EXTRACTED_COLUMN_NAMES.
       throw new Error(`buildSetFragment: unexpected column '${column}'`);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function pickString(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  return undefined;
-}
-
-function pickNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  return undefined;
 }
 
 async function emitEditAppliedAudit(tenantId: Uuid, meta: AuditMeta): Promise<void> {

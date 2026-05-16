@@ -108,13 +108,14 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
   // 1. Happy path — time-window edit
   // ---------------------------------------------------------------------------
 
-  it("happy path — delivery_date + start/end time edits land on the row", async () => {
+  it("happy path — deliveryDate + start/end time edits land on the row", async () => {
     const occurredAt = "2026-05-09T11:00:00.000Z";
     const event = buildEditEvent(AWB_TIME_EDIT, occurredAt, {
-      // C1 fixture update: time strings tightened to canonical HH:MM:SS per
-      // locked §5.2 regex. Payload date key still snake_case here — C2 fixes
-      // both the line-247 source AND this fixture to camelCase deliveryDate.
-      delivery_date: "2026-05-12",
+      // C2 fixture update: payload date key migrated to camelCase
+      // deliveryDate (matches real SF wire format + the Bug 1 fix at the
+      // line-247 source). Snake_case delivery_date is now an unknown root
+      // key — silently stripped by the Zod parser per locked §6.1 U2.
+      deliveryDate: "2026-05-12",
       deliveryStartTime: "14:00:00",
       deliveryEndTime: "16:00:00",
     });
@@ -345,7 +346,7 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
   it("duplicate edit-event replay returns reason='duplicate'", async () => {
     const occurredAt = "2026-05-09T11:00:00.000Z"; // same as test 1
     const event = buildEditEvent(AWB_TIME_EDIT, occurredAt, {
-      delivery_date: "2026-05-12",
+      deliveryDate: "2026-05-12",
       deliveryStartTime: "14:00:00",
       deliveryEndTime: "16:00:00",
     });
