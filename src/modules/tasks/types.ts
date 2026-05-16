@@ -29,7 +29,18 @@
 
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
-/** 7-value internal status. Mirrors the CHECK constraint on tasks.internal_status. */
+/**
+ * 8-value internal status. Mirrors the CHECK constraint on tasks.internal_status
+ * after `supabase/migrations/0019_tasks_internal_status_skipped.sql` (Day-13)
+ * extended the original 7-value enum with 'SKIPPED' for human-driven skip
+ * exceptions per brief §3.1.1.
+ *
+ * The TS union had drifted from the DB CHECK since Day-13 — the missing
+ * 'SKIPPED' entry hid a non-exhaustive switch in
+ * `src/app/(app)/consignees/[id]/_components/DayDisplayStatus.ts` that
+ * surfaced as a production TypeError on the consignee calendar (Day-28
+ * fix lane; digest 4172237023).
+ */
 export type TaskInternalStatus =
   | "CREATED"
   | "ASSIGNED"
@@ -37,7 +48,8 @@ export type TaskInternalStatus =
   | "DELIVERED"
   | "FAILED"
   | "CANCELED"
-  | "ON_HOLD";
+  | "ON_HOLD"
+  | "SKIPPED";
 
 /** 2-value task kind. Mirrors the CHECK constraint on tasks.task_kind. */
 export type TaskKind = "DELIVERY" | "PICKUP";

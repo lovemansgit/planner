@@ -68,6 +68,21 @@ export function projectDayDisplayStatus(
       return "FAILED";
     case "CANCELED":
       return "CANCELED";
+    case "SKIPPED":
+      // Task row in SKIPPED state (set by addSubscriptionException type='skip'
+      // per Day-13 §3.1.1). Routes to the existing SKIPPED visual — same
+      // muted/strikethrough treatment as the no-task + skip-exception path.
+      return "SKIPPED";
+    default: {
+      // Exhaustiveness guard: future additions to the TaskInternalStatus
+      // union become a compile error here rather than a production TypeError
+      // downstream (`DAY_DISPLAY_VISUALS[undefined].label` was the Day-28
+      // failure mode). Render-time degrade: unknown status renders as an
+      // empty day-cell rather than crashing the whole calendar render.
+      const _exhaustive: never = task.internalStatus;
+      void _exhaustive;
+      return null;
+    }
   }
 }
 
