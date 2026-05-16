@@ -1,8 +1,10 @@
 // Day-20 §3.3.3 — DayDisplayStatus projection unit tests.
 //
-// Covers the projection precedence rules + all 7 enum branches per
-// brief §3.3.3 line 485 + DECISION-2 (ii) ruling at
-// memory/plans/day-20-consignee-detail-calendar-survey.md.
+// Covers the projection precedence rules + all 8 task-internal-status
+// enum branches per brief §3.3.3 line 485 + DECISION-2 (ii) ruling at
+// memory/plans/day-20-consignee-detail-calendar-survey.md, plus the
+// task-level SKIPPED branch added Day-28 to close the production
+// TypeError surfaced post-cc811d8 promote.
 //
 // Branches:
 //   1. no-task + skip exception → SKIPPED
@@ -14,6 +16,7 @@
 //   7. task FAILED → FAILED
 //   8. task CANCELED → CANCELED (renders muted+strikethrough on cell;
 //      excluded from legend per Day-20 ruling)
+//   9. task SKIPPED → SKIPPED (Day-28 fix; covers 0019 enum extension)
 
 import { describe, expect, it } from "vitest";
 
@@ -88,5 +91,17 @@ describe("projectDayDisplayStatus", () => {
 
   it("returns CANCELED when task is CANCELED", () => {
     expect(projectDayDisplayStatus(task("CANCELED"), [], ANY_DATE)).toBe("CANCELED");
+  });
+
+  // Day-28 production fix (digest 4172237023):
+  // A task row in internal_status='SKIPPED' (set by addSubscriptionException
+  // type='skip' per Day-13 §3.1.1 + migration 0019) was not in the original
+  // 7-value TaskInternalStatus union, so the switch fell through to
+  // undefined, the `displayStatus === null` guard didn't catch undefined,
+  // and DAY_DISPLAY_VISUALS[undefined].label threw a production TypeError
+  // on the consignee calendar render path. This case fills the exact
+  // coverage gap that hid the drift since Day-13.
+  it("returns SKIPPED when task is SKIPPED (task-level skip, post-0019 enum)", () => {
+    expect(projectDayDisplayStatus(task("SKIPPED"), [], ANY_DATE)).toBe("SKIPPED");
   });
 });
