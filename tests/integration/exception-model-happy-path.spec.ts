@@ -554,16 +554,26 @@ describe("Block 4-G integration — exception-model happy-path + cron handoff", 
         delivery_date: string;
         address_id: string;
       } & Record<string, unknown>;
+      // Filter date set is HORIZON-COUPLED. Narrowed from
+      // {2026-05-25, 2026-06-01} to {2026-06-01} when the cron horizon
+      // bumped 14 → 21 (Day-28, src/modules/task-materialization/dubai-date.ts
+      // MATERIALIZATION_HORIZON_DAYS). At horizon=21, tick 1
+      // (now=2026-05-06, target=2026-05-27) already materializes
+      // 2026-05-25 BEFORE Step 2's rotation PATCH — so 2026-05-25 is
+      // now correctly pre-PATCH (ADDR_ROT_B per Phase-2 deferral; Step 5
+      // documents this rule). Only 2026-06-01 is genuinely post-PATCH
+      // at horizon=21. If the horizon constant changes again, recompute
+      // tick-1 + tick-2 boundaries to refresh this set.
       const rows = await tx.execute<Row>(sqlTag`
         SELECT delivery_date::text AS delivery_date, address_id
         FROM tasks
         WHERE subscription_id = ${SUB_ROT}
           AND delivery_date IN (
-            '2026-05-25'::date, '2026-06-01'::date
+            '2026-06-01'::date
           )
         ORDER BY delivery_date ASC
       `);
-      expect(rows.length).toBe(2);
+      expect(rows.length).toBe(1);
       for (const row of rows) {
         expect(row.address_id).toBe(ADDR_ROT_C);
       }
