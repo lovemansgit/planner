@@ -175,6 +175,7 @@ Per PR #292 §7 checklist:
 | 9 | **Vercel build-skip-optimization `fatal:`** | `git fetch --depth=50` + `merge-base origin/main` doesn't work on shallow clones; script's `|| exit 0` silent-safe-degrades to "always build". Needs `git fetch --unshallow` or alternate base-ref. Non-blocking. |
 | 10 | **`demo-bistro` vs `demo-bistro1` duplicate** | Two demo-Bistro tenants on production. Love to decide pre-demo whether to deactivate one. |
 | 11 | **Aqib API-key auth-header reply** | **🔴 LOAD-BEARING new active lane** — see followup memo + §M below. |
+| 12 | **Inbound SF webhook edit-apply: two compounding bugs (`delivery_date` dropped + misleading audit)** | 🔴 Post-demo T3 lane. Discovered Day-27 PM-late via behavioural anchor on AWB DMB-99123608 (operator changed date 2026-05-25 → 2026-06-01 in SF). **Bug 1:** `apply-webhook-edit-event.ts:247` reads snake_case `root.delivery_date` vs SF camelCase `deliveryDate` → date never extracted. **Bug 2:** `changedFields` array overloaded across 4 responsibilities; unconditional address audit-only push (lines 306-311, hard-coded `previous:null`) trips `no_diff`-gate + `outcome.applied` + audit-emit while contributing zero column writes. **Combined effect:** `task.edit_applied_via_webhook` audit row fires but NO task column updates and `updated_at` does not advance — audit ledger currently records "edit applied" for edits that applied nothing. Zero overlap with outbound push path (demo-safe). Full mechanism + 4-fact reconciliation in [`memory/followup_inbound_webhook_edit_apply_two_bugs.md`](../followup_inbound_webhook_edit_apply_two_bugs.md). T3 because Bug 2 decoupling is a design decision with audit-integrity implications. |
 
 ## §I — Day-28 (demo day, May 16)
 
@@ -189,13 +190,15 @@ Session A standby. No code-side substantive lanes planned (Day-28 is demo execut
 
 ## §J — Discipline learnings filed Day-27
 
-Three institutional artifacts:
+Four institutional artifacts:
 
 - 🔴 **Single-diagnostic surprise → re-diagnose, don't plan** (`memory/followup_single_diagnostic_surprise_discipline.md`, PR #293). Rule: when a single diagnostic contradicts all other evidence in the project, the next step is ANOTHER diagnostic — not a plan-PR. Filed in response to Day-26's reconciliation-lane misfire on a single false-positive diagnostic.
 
 - **SQL editor wraps multi-statement pastes in a single transaction.** Caught in PR #287's round 2 §3.6 review: the original block claimed "errors are harmless" for queries that could throw on missing relations — but the transaction-wrap means one error aborts every subsequent statement in the paste. Discipline: audit blocks must be provably non-throwing on partially-applied schemas; isolated follow-up queries get their own execution.
 
 - **Vercel preview-built deployment cannot be directly promoted to production — it rebuilds against the production env scope.** Runtime-discovered Day-27 PM during the cutover. The `vercel inspect` chain still works (same source SHA on both builds), but the deployed-to-production build is structurally a NEW deployment with potentially-different env-driven behavior. Reviewer should be aware of this pattern for future promotes.
+
+- **Single-diagnostic-surprise discipline applied successfully Day-27 PM (the memo working in its first live test).** Session B's initial root-cause for the inbound-webhook bug (line-247 → `no_diff` silent-exit → no audit) was confidently presented; the reviewer required the audit-events confirming read per the just-filed #293 discipline; the read DIVERGED (3 audit rows incl. an `edit_applied` at `01:50:28`, not the predicted 2 with none). Re-diagnosis produced the correct two-bug compounding mechanism (see §H item 12 + `memory/followup_inbound_webhook_edit_apply_two_bugs.md`). The discipline filed that same morning prevented a T2 fix being scoped against a falsified mechanism. **First live validation of `followup_single_diagnostic_surprise_discipline.md`.**
 
 ## §K — Memory delta filed Day-27
 
