@@ -1,7 +1,45 @@
 ---
-name: subscription-exceptions appendWithoutSkip calendar-flake
-description: Day-19 PR #213 CI investigation re-surfaced this pre-existing test flake. tests/integration/subscription-exceptions/service.spec.ts:325 ("appendWithoutSkip happy path") fails on calendar dates that land on non-eligible weekdays for the test's Mon-Fri subscription cadence. Production-zero impact; test-only.
+name: subscription-exceptions appendWithoutSkip calendar-flake (SUPERSEDED)
+description: SUPERSEDED Day-28 by Phase-1 re-diagnose + plan PR #295 + fix code-PR. The Day-19 diagnosis here was wrong — it framed the failure as test-only with production-zero impact, but the actual mechanism is a production bug in appendWithoutSkip's service-layer wrapper call. See memory/plans/day-28-appendwithoutskip-weekend-validationerror-fix.md for the correct diagnosis + fix.
 type: project
+---
+
+> **SUPERSEDED Day-28 (16 May 2026).** This memo's diagnosis is wrong on two
+> load-bearing claims:
+>
+> 1. **§2 hypothesis** — framed the failure as test-arithmetic landing on
+>    Sat/Sun. The actual mechanism is `appendWithoutSkip`'s service-layer
+>    wrapper call at `src/modules/subscription-exceptions/service.ts:732`
+>    passing `today` as a synthetic `skipDate` to
+>    `computeCompensatingDateForSkip`, which subjects `today` to the pure
+>    helper's skipDate-eligibility weekday gate at
+>    `src/modules/subscription-exceptions/skip-algorithm.ts:222-225`.
+>    The failing test does NOT use `today + N` arithmetic for
+>    `appendWithoutSkip`; that test passes only `reason` + `idempotencyKey`
+>    and the service derives `today` internally.
+>
+> 2. **§3 production-impact claim — "Zero"** — false. The bug fires in
+>    `service.ts:732` runtime. Any operator invoking `appendWithoutSkip`
+>    via `POST /api/subscriptions/[id]/append-without-skip` on a Mon-Fri
+>    subscription during Sat/Sun-Dubai hits the same `ValidationError`.
+>    The Day-21 PR #227 `gh pr merge --admin` override (§7 below) rested
+>    on this falsified claim.
+>
+> **Correct diagnosis + fix:** see
+> [`memory/plans/day-28-appendwithoutskip-weekend-validationerror-fix.md`](plans/day-28-appendwithoutskip-weekend-validationerror-fix.md)
+> (plan PR #295, merged Day-28; reviewer-cleared Approach 3 — carve
+> `computeNextEligibleAfterEndDate` no-skipDate helper).
+>
+> **Cross-discipline:** the misdiagnose pattern (single confident
+> diagnostic anchored on a false premise without structurally-different
+> confirmation) is exactly the discipline encoded in
+> [`followup_single_diagnostic_surprise_discipline.md`](followup_single_diagnostic_surprise_discipline.md);
+> the bypass-justification half of the lesson is filed at
+> [`followup_ci_bypass_justification_requires_confirmed_diagnosis.md`](followup_ci_bypass_justification_requires_confirmed_diagnosis.md).
+>
+> Original Day-19 content retained below as historical record per §B
+> amendment-log conventions.
+
 ---
 
 # subscription-exceptions appendWithoutSkip calendar-flake

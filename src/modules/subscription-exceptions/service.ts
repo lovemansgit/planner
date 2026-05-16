@@ -57,6 +57,7 @@ import { findAddressForConsignee } from "@/modules/subscription-addresses";
 
 import {
   computeCompensatingDate as pureComputeCompensatingDate,
+  computeNextEligibleAfterEndDate,
   type IsoDate,
   type IsoWeekday,
   type PauseWindow,
@@ -724,12 +725,38 @@ export async function appendWithoutSkip(
       }
       newEndDate = target;
     } else {
-      // Walk forward via the wrapper, with `skipDate = today` standing
-      // in as a no-op skip-date input (the algorithm only uses
-      // skipDate for the past-date guard, which `today` passes
-      // trivially). The actual outcome is governed by endDate +
-      // daysOfWeek + pauseWindows.
-      newEndDate = await computeCompensatingDateForSkip(tx, subscription, today, today);
+      // Walk forward to the next eligible delivery date strictly after
+      // the current end_date, respecting daysOfWeek + active pause
+      // windows. Uses the no-skipDate helper computeNextEligibleAfterEndDate
+      // so the appendWithoutSkip semantic — tail-end goodwill addition
+      // per brief §3.1.4, no specific date being skipped — is not
+      // subjected to skip-flow eligibility gates. Day-28 fix lane,
+      // Approach 3 per plan PR #295.
+      if (subscription.endDate === null) {
+        throw new ConflictError(
+          "subscription has no end_date — cannot compute tail-end extension for append-without-skip flow",
+        );
+      }
+      const pauseWindowRows = await listActivePauseWindows(tx, subscriptionId, today);
+      const pauseWindows: readonly PauseWindow[] = pauseWindowRows.map((r) => ({
+        start: r.start,
+        end: r.end,
+      }));
+      const nextEligible = computeNextEligibleAfterEndDate({
+        subscription: {
+          endDate: subscription.endDate,
+          daysOfWeek: asIsoWeekdays(subscription.daysOfWeek),
+          status: subscription.status,
+        },
+        today,
+        pauseWindows,
+      });
+      if (nextEligible.kind === "rejected") {
+        throw new ConflictError(
+          "could not find a next eligible delivery date within the 365-day safety window",
+        );
+      }
+      newEndDate = nextEligible.newEndDate;
     }
 
     const correlationId = randomUUID() as Uuid;

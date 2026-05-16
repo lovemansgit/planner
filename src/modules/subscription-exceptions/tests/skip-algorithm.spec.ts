@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeCompensatingDate,
+  computeNextEligibleAfterEndDate,
   computePauseExtensionDate,
   countEligibleDeliveryDays,
   type ComputeCompensatingDateInput,
@@ -463,5 +464,121 @@ describe("countEligibleDeliveryDays", () => {
       status: "active",
     };
     expect(countEligibleDeliveryDays(sub, "2026-05-04", "2026-05-08")).toBe(0);
+  });
+});
+
+// =============================================================================
+// computeNextEligibleAfterEndDate — Day-28 fix lane Approach 3 helper
+// =============================================================================
+//
+// Calendar reference (same as the existing fixtures above):
+//   Mon 2026-05-04, Tue 05, Wed 06, Thu 07, Fri 08
+//   Mon 2026-05-11, Tue 12, Wed 13, Thu 14, Fri 15
+//   Mon 2026-05-18, Tue 19, Wed 20, Thu 21, Fri 22
+//   ...
+//
+// Plan PR #295 §7.3 Approach-3 list — required coverage:
+//   1. Happy path Mon-Fri, end Friday → Mon
+//   2. End on Wed → Thu (Mon-Fri sub)
+//   3. daysOfWeek=[3,5], end Friday → next Wednesday
+//   4. Pause window covers the natural next-eligible day → next-next
+//   5. 365-day safety cap reached → rejected('no_next_eligible_date_found')
+//   6. Degenerate daysOfWeek=[] → rejected (DB CHECK should prevent this in
+//      production, but the helper guards defensively)
+
+describe("computeNextEligibleAfterEndDate — Day-28 fix lane", () => {
+  it("happy path Mon-Fri, end Fri 15 May → returns Mon 18 May", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-18" });
+  });
+
+  it("end on Wed 13 May (Mon-Fri sub) → returns Thu 14 May", () => {
+    const sub = activeSub("2026-05-13", [1, 2, 3, 4, 5]);
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-14" });
+  });
+
+  it("daysOfWeek=[3,5] Wed+Fri only, end Fri 15 May → returns Wed 20 May", () => {
+    const sub = activeSub("2026-05-15", [3, 5]);
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-20" });
+  });
+
+  it("pause window covers natural next-eligible Mon 18 May → returns Tue 19 May", () => {
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+      pauseWindows: [{ start: "2026-05-18", end: "2026-05-18" }],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-19" });
+  });
+
+  it("blackout date on Mon 18 May → returns Tue 19 May", () => {
+    // Sanity coverage on the blackouts gate; same shape as the pause-window
+    // case above. Blackouts aren't plumbed through the service today, but
+    // the pure helper accepts them — pin behavior so future plumbing
+    // doesn't regress.
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+      blackoutDates: ["2026-05-18"],
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-19" });
+  });
+
+  it("365-day safety cap reached → rejected('no_next_eligible_date_found')", () => {
+    // daysOfWeek=[3] (Wed only) + a single pause window covering every Wed
+    // in the 365-day forward window (start = endDate+1, end = endDate+400).
+    // Walk reaches MAX_FORWARD_DAYS (365) without finding an eligible date.
+    const sub = activeSub("2026-05-15", [3]);
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+      pauseWindows: [{ start: "2026-05-16", end: "2027-06-30" }],
+    });
+    expect(result).toEqual({
+      kind: "rejected",
+      reason: "no_next_eligible_date_found",
+    });
+  });
+
+  it("degenerate daysOfWeek=[] → rejected('no_next_eligible_date_found')", () => {
+    const sub: SubscriptionForSkip = {
+      endDate: "2026-05-15",
+      daysOfWeek: [],
+      status: "active",
+    };
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+    });
+    expect(result).toEqual({
+      kind: "rejected",
+      reason: "no_next_eligible_date_found",
+    });
+  });
+
+  it("undefined pauseWindows + undefined blackoutDates is OK (both optional)", () => {
+    // API contract: both filtering inputs are optional on the new helper.
+    // Pin so that a future signature change doesn't make them required
+    // without notice.
+    const sub = activeSub("2026-05-15", [1, 2, 3, 4, 5]);
+    const result = computeNextEligibleAfterEndDate({
+      subscription: sub,
+      today: TODAY,
+    });
+    expect(result).toEqual({ kind: "ok", newEndDate: "2026-05-18" });
   });
 });
