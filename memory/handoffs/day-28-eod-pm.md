@@ -61,7 +61,7 @@ PR #300's lane in particular threw three "wider-than-mapped" surprises (cap-scar
 
 **Designed-vs-bug undetermined.** Two possibilities:
 
-- **Designed** — per brief §3.1.6 the skip is Planner-local; SF only learns when the cron pushes the new compensating task. Acceptable for the demo if narrated correctly ("the skipped delivery is cancelled in SF via Phase 2's cancel API, not in MVP").
+- **Designed (UNVERIFIED — Monday-prep investigation item)** — the skip MAY be intended to be Planner-local, with the original SF task subject to one of several possible lifecycles: (a) cancelled later when/if the compensating task pushes, (b) cancelled by an explicit Phase-2 cancel API that hasn't shipped yet, (c) never explicitly cancelled (operator-level SF cleanup or accepted state drift), or (d) some other mechanism. **No brief section was read this session to confirm the intended design** — no specific citation; treat the design intent as UNKNOWN. If Monday's investigation confirms a specific sub-mechanism is intended, the demo narrative updates accordingly.
 - **Bug** — the skip should emit an outbound `PATCH /api/tasks/awb/{awb}` with `{status: 'CANCELED'}` via the existing `cancelTask` adapter (PR #227, Day-21). The call is missing.
 
 **Monday-prep fresh-session task:** trace from `addSubscriptionException(type='skip')` through to (any) outbound emission. If a SF cancel call should be there and isn't, T2 fix scope. If it's designed, demo narrative needs updating to set expectations correctly.
