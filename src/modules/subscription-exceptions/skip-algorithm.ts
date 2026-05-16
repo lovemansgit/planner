@@ -124,6 +124,31 @@ export type ComputeCompensatingDateResult =
         | "no_compensating_date_found";
     };
 
+/**
+ * Day-28 fix lane (Approach 3 per plan PR #295): inputs for the
+ * tail-end-extension walk WITHOUT skip semantics. Used by appendWithoutSkip
+ * which has no skipDate to validate. See `computeNextEligibleAfterEndDate`.
+ */
+export interface ComputeNextEligibleAfterEndDateInput {
+  readonly subscription: SubscriptionForSkip;
+  /**
+   * "Today" in the relevant tenant timezone. Reserved for past-walk
+   * observability + potential future degenerate-state guards; NOT a
+   * gate input on the walk. The walk runs from `endDate + 1` forward
+   * regardless of `today`.
+   */
+  readonly today: IsoDate;
+  readonly pauseWindows?: readonly PauseWindow[];
+  readonly blackoutDates?: readonly IsoDate[];
+}
+
+export type ComputeNextEligibleAfterEndDateResult =
+  | { readonly kind: "ok"; readonly newEndDate: IsoDate }
+  | {
+      readonly kind: "rejected";
+      readonly reason: "no_next_eligible_date_found";
+    };
+
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Maximum forward walk before giving up (brief §3.1.6 safety stop). */
@@ -184,6 +209,14 @@ function isInPauseWindow(
 
 /**
  * Compute the compensating date for a skip, per the brief §3.1.6 algorithm.
+ *
+ * `skipDate` is a real operator-supplied skip date subject to delivery-
+ * eligibility gates (weekday / blackout / pause-window) BEFORE the walk-
+ * forward starts. For tail-end extension with NO skip semantics (e.g.
+ * `appendWithoutSkip` goodwill addition), use
+ * `computeNextEligibleAfterEndDate` instead — passing a synthetic `today`
+ * as `skipDate` here would subject it to gates the no-skip semantic does
+ * not have (Day-28 plan PR #295 §9.1 guardrail).
  *
  * Pre-validation rejects:
  *   - subscription_not_active   — F (paused / ended cannot accept skip)
@@ -259,6 +292,70 @@ export function computeCompensatingDate(
   }
 
   return { kind: "rejected", reason: "no_compensating_date_found" };
+}
+
+// =============================================================================
+// computeNextEligibleAfterEndDate — Day-28 fix lane Approach 3 pure helper
+// =============================================================================
+
+/**
+ * Compute the next eligible delivery date strictly after the subscription's
+ * current `endDate`, respecting `daysOfWeek` + active pause windows +
+ * blackout dates. Used by `appendWithoutSkip` (tail-end goodwill addition,
+ * brief §3.1.4) — a flow that has NO skip date and therefore no
+ * skipDate-eligibility semantics.
+ *
+ * Day-28 fix lane (plan PR #295, Approach 3): the prior implementation
+ * routed `appendWithoutSkip` through `computeCompensatingDate` with `today`
+ * passed as a synthetic `skipDate`. That subjected `today` to the skip-
+ * flow's skipDate-eligibility gates (weekday / blackout / pause-window),
+ * which fired falsely on Sat/Sun-Dubai for Mon-Fri subscriptions and on
+ * any other day-of-week where `today` did not coincide with an eligible
+ * delivery weekday. This helper has no `skipDate` parameter — the
+ * synthetic-skipDate trap is structurally impossible.
+ *
+ * Algorithm: walk forward from `endDate + 1` day. First date that is
+ *   (a) in `daysOfWeek`,
+ *   (b) not in `blackoutDates`,
+ *   (c) not inside any `pauseWindow`
+ * is the next-eligible date. Safety stop after MAX_FORWARD_DAYS (365)
+ * days returns `no_next_eligible_date_found`.
+ *
+ * Degenerate `daysOfWeek: []` returns rejected without entering the walk
+ * (the DB CHECK constraint on `subscriptions.days_of_week` should prevent
+ * this in production, but the helper guards defensively for unit tests
+ * + future callers).
+ *
+ * Pure: no I/O, no async, no mutation. Result is plain data; the service
+ * layer applies it to `subscriptions.end_date` + `subscription_exceptions`
+ * inside a transaction with shared correlation_id.
+ */
+export function computeNextEligibleAfterEndDate(
+  input: ComputeNextEligibleAfterEndDateInput,
+): ComputeNextEligibleAfterEndDateResult {
+  const { subscription } = input;
+
+  if (subscription.daysOfWeek.length === 0) {
+    return { kind: "rejected", reason: "no_next_eligible_date_found" };
+  }
+
+  const endDateUtc = parseIsoDate(subscription.endDate);
+  let candidate = addDaysUtc(endDateUtc, 1);
+
+  for (let walked = 1; walked <= MAX_FORWARD_DAYS; walked++) {
+    const candidateIso = formatIsoDate(candidate);
+    const wd = isoWeekday(candidate);
+    if (
+      subscription.daysOfWeek.includes(wd) &&
+      !isInBlackout(candidateIso, input.blackoutDates) &&
+      !isInPauseWindow(candidateIso, input.pauseWindows)
+    ) {
+      return { kind: "ok", newEndDate: candidateIso };
+    }
+    candidate = addDaysUtc(candidate, 1);
+  }
+
+  return { kind: "rejected", reason: "no_next_eligible_date_found" };
 }
 
 // =============================================================================
