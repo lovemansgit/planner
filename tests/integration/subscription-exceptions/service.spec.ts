@@ -48,9 +48,16 @@ const USER_B = randomUUID() as Uuid;
 
 const CONSIGNEE_A = randomUUID() as Uuid;
 const CONSIGNEE_B = randomUUID() as Uuid;
+// Day-28 fix lane: CONSIGNEE_C + SUBSCRIPTION_C are dedicated to the
+// 365-day-safety-cap reject coverage on appendWithoutSkip's new
+// computeNextEligibleAfterEndDate path. SUBSCRIPTION_C uses daysOfWeek=[3]
+// (Wed only) plus a single pause-window exception covering ~400 days to
+// engineer a "no eligible delivery date within 365 days" state.
+const CONSIGNEE_C = randomUUID() as Uuid;
 
 const SUBSCRIPTION_A = randomUUID() as Uuid;
 const SUBSCRIPTION_B = randomUUID() as Uuid;
+const SUBSCRIPTION_C = randomUUID() as Uuid;
 
 const ADDRESS_A = randomUUID() as Uuid;
 
@@ -143,7 +150,9 @@ describe("Service A (subscription-exceptions) — integration", () => {
           (${CONSIGNEE_A}, ${TENANT_A}, 'Consignee A', 'cons-a@test', '+971500000001',
            'Test Address Line A', 'Dubai', 'Test District A'),
           (${CONSIGNEE_B}, ${TENANT_B}, 'Consignee B', 'cons-b@test', '+971500000002',
-           'Test Address Line B', 'Dubai', 'Test District B')
+           'Test Address Line B', 'Dubai', 'Test District B'),
+          (${CONSIGNEE_C}, ${TENANT_A}, 'Consignee C', 'cons-c@test', '+971500000003',
+           'Test Address Line C', 'Dubai', 'Test District C')
       `);
 
       await tx.execute(sqlTag`
@@ -164,6 +173,22 @@ describe("Service A (subscription-exceptions) — integration", () => {
           ${SUBSCRIPTION_B}, ${TENANT_B}, ${CONSIGNEE_B}, 'active',
           ${FUTURE}, ${ORIGINAL_END},
           ARRAY[1,2,3,4,5]::int[], '09:00:00', '18:00:00'
+        )
+      `);
+
+      // Day-28 fix lane: SUBSCRIPTION_C — daysOfWeek=[3] (Wed only). The
+      // 365-day-safety-cap reject test inserts a pause-window exception
+      // spanning >365 days from end_date+1 onward, so every Wed inside the
+      // walk window is paused and the new computeNextEligibleAfterEndDate
+      // helper hits MAX_FORWARD_DAYS and rejects.
+      await tx.execute(sqlTag`
+        INSERT INTO subscriptions (
+          id, tenant_id, consignee_id, status, start_date, end_date,
+          days_of_week, delivery_window_start, delivery_window_end
+        ) VALUES (
+          ${SUBSCRIPTION_C}, ${TENANT_A}, ${CONSIGNEE_C}, 'active',
+          ${FUTURE}, ${ORIGINAL_END},
+          ARRAY[3]::int[], '09:00:00', '18:00:00'
         )
       `);
 
@@ -345,5 +370,172 @@ describe("Service A (subscription-exceptions) — integration", () => {
       const endDateRow = rows.find((r) => r.event_type === "subscription.end_date.extended");
       expect(endDateRow?.metadata.triggered_by).toBe("append_without_skip");
     });
+  });
+
+  // Day-28 fix lane: weekend-Dubai clock coverage. Pre-fix, appendWithoutSkip
+  // routes through computeCompensatingDateForSkip with `today` as a synthetic
+  // skipDate, and the pure helper's skipDate-weekday gate rejects when Dubai
+  // today falls outside the subscription's daysOfWeek. Post-fix (Approach 3),
+  // appendWithoutSkip uses the new computeNextEligibleAfterEndDate helper
+  // which has no skipDate parameter, so the wall-clock weekday is irrelevant.
+  //
+  // The injection is via the existing `options.now` surface on service.ts
+  // (already supported pre-fix; the failing test simply doesn't use it).
+  // ISO weekday Sat=6, Sun=7 — neither is in SUBSCRIPTION_A's daysOfWeek
+  // [1,2,3,4,5] (Mon-Fri).
+
+  it("appendWithoutSkip succeeds when Dubai today is Saturday (Mon-Fri subscription)", async () => {
+    const ctx = ctxFor(TENANT_A, USER_A);
+    const idempotencyKey = randomUUID() as Uuid;
+
+    // 2026-05-23T08:00:00Z = 12:00 Dubai Saturday 2026-05-23.
+    // ISO weekday 6, not in [1,2,3,4,5]. Pre-fix this trips the synthetic-
+    // skipDate weekday gate; post-fix the new helper has no such gate.
+    const saturdayDubai = new Date("2026-05-23T08:00:00Z");
+
+    const result = await appendWithoutSkip(
+      ctx,
+      SUBSCRIPTION_A,
+      {
+        reason: "goodwill addition — Saturday-Dubai clock injection",
+        idempotencyKey,
+      },
+      { now: saturdayDubai },
+    );
+
+    expect(result.status).toBe("inserted");
+    expect(result.newEndDate).toBeTruthy();
+
+    await withServiceRole("svc-a integration append-sat audit check", async (tx) => {
+      type Row = { event_type: string; metadata: { triggered_by?: string } } & Record<
+        string,
+        unknown
+      >;
+      const rows = await tx.execute<Row>(sqlTag`
+        SELECT event_type, metadata
+        FROM audit_events
+        WHERE metadata->>'correlation_id' = ${result.correlationId}
+        ORDER BY occurred_at ASC
+      `);
+      expect(rows.length).toBe(2);
+      const endDateRow = rows.find((r) => r.event_type === "subscription.end_date.extended");
+      expect(endDateRow?.metadata.triggered_by).toBe("append_without_skip");
+    });
+  });
+
+  it("appendWithoutSkip succeeds when Dubai today is Sunday (Mon-Fri subscription)", async () => {
+    const ctx = ctxFor(TENANT_A, USER_A);
+    const idempotencyKey = randomUUID() as Uuid;
+
+    // 2026-05-24T08:00:00Z = 12:00 Dubai Sunday 2026-05-24.
+    // ISO weekday 7, not in [1,2,3,4,5]. Independent of the Saturday case
+    // because Sat and Sun are two distinct gate-evaluations on the pre-fix
+    // helper.
+    const sundayDubai = new Date("2026-05-24T08:00:00Z");
+
+    const result = await appendWithoutSkip(
+      ctx,
+      SUBSCRIPTION_A,
+      {
+        reason: "goodwill addition — Sunday-Dubai clock injection",
+        idempotencyKey,
+      },
+      { now: sundayDubai },
+    );
+
+    expect(result.status).toBe("inserted");
+    expect(result.newEndDate).toBeTruthy();
+
+    await withServiceRole("svc-a integration append-sun audit check", async (tx) => {
+      type Row = { event_type: string; metadata: { triggered_by?: string } } & Record<
+        string,
+        unknown
+      >;
+      const rows = await tx.execute<Row>(sqlTag`
+        SELECT event_type, metadata
+        FROM audit_events
+        WHERE metadata->>'correlation_id' = ${result.correlationId}
+        ORDER BY occurred_at ASC
+      `);
+      expect(rows.length).toBe(2);
+      const endDateRow = rows.find((r) => r.event_type === "subscription.end_date.extended");
+      expect(endDateRow?.metadata.triggered_by).toBe("append_without_skip");
+    });
+  });
+
+  it("appendWithoutSkip rejects when no eligible delivery date exists within the 365-day safety window", async () => {
+    // Engineered fixture: SUBSCRIPTION_C has daysOfWeek=[3] (Wed only).
+    // Insert a single pause-window exception spanning end_date+1 through
+    // end_date+400 days — every Wed in the walk window is paused. The new
+    // helper's 365-day forward walk finds zero eligible dates and rejects.
+    //
+    // Pause window is inserted via raw SQL (bypassing the addSubscriptionException
+    // service surface) to keep the fixture simple — same posture as the
+    // beforeAll seed.
+
+    const pauseStart = (() => {
+      const dt = new Date(ORIGINAL_END);
+      dt.setUTCDate(dt.getUTCDate() + 1);
+      return dt.toISOString().slice(0, 10);
+    })();
+    const pauseEnd = (() => {
+      const dt = new Date(ORIGINAL_END);
+      dt.setUTCDate(dt.getUTCDate() + 400);
+      return dt.toISOString().slice(0, 10);
+    })();
+
+    await withServiceRole("svc-a integration 365-cap pause-window seed", async (tx) => {
+      await tx.execute(sqlTag`
+        INSERT INTO subscription_exceptions (
+          subscription_id,
+          tenant_id,
+          type,
+          start_date,
+          end_date,
+          target_date_override,
+          skip_without_append,
+          reason,
+          address_override_id,
+          compensating_date,
+          correlation_id,
+          idempotency_key,
+          created_by
+        ) VALUES (
+          ${SUBSCRIPTION_C},
+          ${TENANT_A},
+          'pause_window',
+          ${pauseStart},
+          ${pauseEnd},
+          NULL,
+          false,
+          'integration-test 365-cap fixture',
+          NULL,
+          NULL,
+          ${randomUUID()},
+          ${randomUUID()},
+          ${USER_A}
+        )
+      `);
+    });
+
+    const ctx = ctxFor(TENANT_A, USER_A);
+    const idempotencyKey = randomUUID() as Uuid;
+
+    // Expected error message comes from the C2 fix's service-side mapping
+    // of the new helper's `no_next_eligible_date_found` rejection reason
+    // to a ConflictError. Asserting on the message substring pins the
+    // verification target — pre-C2 the call fails for a different reason
+    // (skipDate weekday gate trips because daysOfWeek=[3] doesn't include
+    // wall-clock today's weekday on most calendar days).
+    await expect(
+      appendWithoutSkip(
+        ctx,
+        SUBSCRIPTION_C,
+        {
+          reason: "goodwill addition — 365-cap fixture",
+          idempotencyKey,
+        },
+      ),
+    ).rejects.toThrow(/365-day safety window/);
   });
 });
