@@ -11,17 +11,18 @@
 //   2. Pre-seed 1 backlog task (pushed_to_external_at IS NULL,
 //      address_id IS NOT NULL) — Phase 1 reconciliation candidate
 //   3. Trigger materialization cron handler (test-invoked GET)
-//   4. Assert: 1 backlog row + 14 newly-materialized rows = 15 tasks
-//      now exist for the tenant (sub.days_of_week = [1..7] + 14-day
-//      horizon = 14 new)
-//   5. Assert: post-commit batchJSON called once (≤100 messages, all 15
+//   4. Assert: 1 backlog row + 21 newly-materialized rows = 22 tasks
+//      now exist for the tenant (sub.days_of_week = [1..7] + 21-day
+//      horizon = 21 new). Horizon bumped 14 → 21 on Day-28 per
+//      MATERIALIZATION_HORIZON_DAYS in src/modules/task-materialization/dubai-date.ts.
+//   5. Assert: post-commit batchJSON called once (≤100 messages, all 22
 //      fit in 1 batch); each message carries deduplicationId, flowControl,
 //      retries, failureCallback per §1.1 + §6.3 + §5.2
 //   6. Assert: subscription_materialization.materialized_through_date
 //      advanced to target_date
 //   7. Assert: task_generation_runs row exists with status='completed',
-//      target_date set, tasks_created=14
-//   8. Trigger the push handler with one of the 15 messages (test-
+//      target_date set, tasks_created=21
+//   8. Trigger the push handler with one of the 22 messages (test-
 //      invoked POST to /api/queue/push-task)
 //   9. Assert: pushSingleTask invoked; markTaskPushed via mock impl;
 //      pushed_to_external_at set on that task; 200 returned
@@ -104,9 +105,11 @@ const SUITEFLEET_CUSTOMER_CODE = `E2E-${RUN_ID}`;
 // the postgres-js driver (the driver uses real setTimeout for connection
 // timeouts; mocking timers globally would freeze those).
 //
-// expectedTargetDate = today_in_dubai + 14
-// matThrough         = expectedTargetDate - 14 (so 14 net-new tasks
+// expectedTargetDate = today_in_dubai + 21
+// matThrough         = expectedTargetDate - 21 (so 21 net-new tasks
 //                      materialize when days_of_week=[1..7])
+// Horizon constant lives at src/modules/task-materialization/dubai-date.ts
+// (MATERIALIZATION_HORIZON_DAYS); bumped from 14 → 21 on Day-28.
 function isoDubaiDate(now: Date): string {
   const dubai = new Date(now.getTime() + 4 * 60 * 60 * 1000);
   return new Date(
@@ -132,7 +135,7 @@ function isoDubaiDatePlus(now: Date, daysOffset: number): string {
     .slice(0, 10);
 }
 const NOW_AT_SETUP = new Date();
-const EXPECTED_TARGET_DATE = isoDubaiDatePlus(NOW_AT_SETUP, 14);
+const EXPECTED_TARGET_DATE = isoDubaiDatePlus(NOW_AT_SETUP, 21);
 const MAT_THROUGH = isoDubaiDate(NOW_AT_SETUP);
 // SUB_START must be ≤ MAT_THROUGH+1 so generate_series picks up the day
 // after MAT_THROUGH (otherwise GREATEST(mat+1, start_date) = start_date
@@ -213,8 +216,8 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
       `);
       primaryAddressId = a[0].id;
 
-      // days_of_week = [1..7] (every day) → 14 new tasks over the
-      // 14-day horizon.
+      // days_of_week = [1..7] (every day) → 21 new tasks over the
+      // 21-day horizon.
       const s = await tx.execute<{ id: Uuid }>(sqlTag`
         INSERT INTO subscriptions (
           tenant_id, consignee_id, status,
@@ -287,7 +290,7 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
     }
   });
 
-  it("step 3-7: cron handler materializes + enqueues 1 backlog + 14 new tasks", async () => {
+  it("step 3-7: cron handler materializes + enqueues 1 backlog + 21 new tasks", async () => {
     const cronReq = new Request(
       "https://test.example.com/api/cron/generate-tasks",
       { headers: { authorization: "Bearer test-cron-secret" } },
@@ -297,15 +300,15 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
     const body = (await cronRes.json()) as Record<string, unknown>;
     expect(body.target_date).toBe(EXPECTED_TARGET_DATE);
 
-    // Step 4 — 1 backlog + 14 newly-materialized = 15 total in tasks.
+    // Step 4 — 1 backlog + 21 newly-materialized = 22 total in tasks.
     const taskCount = await withServiceRole("§7.4 count tasks", (tx) =>
       tx.execute<{ n: number }>(sqlTag`
         SELECT COUNT(*)::int AS n FROM tasks WHERE tenant_id = ${TENANT_ID}
       `),
     );
-    expect(taskCount[0].n).toBe(15);
+    expect(taskCount[0].n).toBe(22);
 
-    // Step 5 — batchJSON called once (15 messages fit in 1 chunk of 100).
+    // Step 5 — batchJSON called once (22 messages fit in 1 chunk of 100).
     expect(batchJSONSpy).toHaveBeenCalledTimes(1);
     const messages = batchJSONSpy.mock.calls[0][0] as Array<{
       url: string;
@@ -315,7 +318,7 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
       retries: number;
       failureCallback: string;
     }>;
-    expect(messages).toHaveLength(15);
+    expect(messages).toHaveLength(22);
 
     // Backlog task ID present in the enqueue (Phase 1 reconciliation contract).
     const enqueuedTaskIds = messages.map((m) => m.body.task_id);
@@ -349,7 +352,7 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
     );
     expect(matRow[0].d).toBe(EXPECTED_TARGET_DATE);
 
-    // Step 7 — run row at status='completed' with tasks_created=14.
+    // Step 7 — run row at status='completed' with tasks_created=21.
     const runRow = await withServiceRole("§7.4 read run", (tx) =>
       tx.execute<{
         status: string;
@@ -365,7 +368,7 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
     );
     expect(runRow[0].status).toBe("completed");
     expect(runRow[0].target_date).toBe(EXPECTED_TARGET_DATE);
-    expect(runRow[0].tasks_created).toBe(14);
+    expect(runRow[0].tasks_created).toBe(21);
   });
 
   it("step 8-10: push handler invokes pushSingleTask + sets pushed_to_external_at", async () => {

@@ -21,12 +21,40 @@
 const DUBAI_OFFSET_MS = 4 * 60 * 60 * 1000;
 
 /**
- * Compute the Day-14 materialization handler's target horizon date —
- * `today + 14 days` in Asia/Dubai, formatted as YYYY-MM-DD.
+ * Materialization horizon in calendar days. The Phase 2 INSERT…SELECT in
+ * `materializeTenant` clamps per-subscription via
+ * `LEAST(today + MATERIALIZATION_HORIZON_DAYS, COALESCE(s.end_date, target))`.
  *
- * Per plan §3.2 (corrected by PR #146): the handler-level value is
- * `today + 14`. Per-subscription cap to `LEAST(target, S.end_date)`
- * is applied inside the §2.3 INSERT…SELECT (Phase 2 SQL), not here.
+ * Bumped from 14 → 21 on Day-28 to cover skip-compensation tail tasks
+ * that land past the original 14-day window. Skip-flow extends a
+ * subscription's `end_date` to the next eligible weekday (~+3 calendar
+ * days per skip on Mon-Fri subs); a 14-day horizon was too tight to
+ * reach the new end_date for subs near saturation. 21 days covers the
+ * demo's documented scenario (consignee a5b6eeab subscription with one
+ * 2026-05-20 skip → new end_date 2026-06-01/02) plus margin.
+ *
+ * Cap-headroom rationale: the per-tenant guardrail
+ * `TASK_MATERIALIZATION_CAP = 7000` at
+ * `src/modules/task-materialization/service.ts:62` clamps Phase 2 INSERT
+ * volume per tenant per cron tick. At observed days-of-week distribution
+ * (largest tenant: 500 subs at 2-5 days/week) the cap-check projected
+ * count stays well under 7000 even at horizon = 21 — today's run-row
+ * evidence confirms `capped_by_gate: false` across all 6 cron-eligible
+ * tenants at 14d; the 21d bump scales linearly and still leaves margin.
+ * Going beyond ~25 days would risk a cap fire on hypothetical 7-day-a-week
+ * 500-sub tenants. See Day-28 EOD addendum for the cap-math + run-row
+ * working that underpins this value.
+ */
+const MATERIALIZATION_HORIZON_DAYS = 21;
+
+/**
+ * Compute the materialization handler's target horizon date —
+ * `today + MATERIALIZATION_HORIZON_DAYS` in Asia/Dubai, formatted as YYYY-MM-DD.
+ *
+ * Per plan §3.2 (corrected by PR #146): the handler-level value is the
+ * cron's outer horizon target. Per-subscription cap to
+ * `LEAST(target, S.end_date)` is applied inside the §2.3 INSERT…SELECT
+ * (Phase 2 SQL), not here.
  */
 export function computeTargetDateInDubai(now: Date): string {
   const dubaiNow = new Date(now.getTime() + DUBAI_OFFSET_MS);
@@ -34,7 +62,7 @@ export function computeTargetDateInDubai(now: Date): string {
     Date.UTC(
       dubaiNow.getUTCFullYear(),
       dubaiNow.getUTCMonth(),
-      dubaiNow.getUTCDate() + 14,
+      dubaiNow.getUTCDate() + MATERIALIZATION_HORIZON_DAYS,
     ),
   );
   return horizon.toISOString().slice(0, 10);
@@ -42,7 +70,7 @@ export function computeTargetDateInDubai(now: Date): string {
 
 /**
  * Compute today's calendar date in Asia/Dubai for the cut-off check.
- * Mirror of `computeTargetDateInDubai` without the +14 horizon offset.
+ * Mirror of `computeTargetDateInDubai` without the horizon offset.
  */
 export function computeTodayInDubai(now: Date): string {
   const dubaiNow = new Date(now.getTime() + DUBAI_OFFSET_MS);
