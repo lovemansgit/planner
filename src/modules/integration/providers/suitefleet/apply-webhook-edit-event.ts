@@ -22,6 +22,7 @@
 import "server-only";
 
 import { sql as sqlTag } from "drizzle-orm";
+import { z } from "zod";
 
 import { emit as auditEmit } from "@/modules/audit";
 import { withTenant } from "@/shared/db";
@@ -32,6 +33,47 @@ import type { Uuid } from "@/shared/types";
 import type { WebhookEvent } from "../../types";
 
 const log = logger.with({ component: "apply_webhook_edit_event" });
+
+// ---------------------------------------------------------------------------
+// Payload schema (plan PR #294 §5.2 + §5.3 + §6.1 U2)
+// ---------------------------------------------------------------------------
+//
+// LENIENT on unknown keys: future SF field additions must not hard-fail the
+// webhook. Default Zod object behaviour (strip) silently drops unknown root
+// + deliveryInformation keys; nested consignee.location uses passthrough so
+// the audit-metadata capture sees the full location object SF sent.
+//
+// Regex constraints reject non-canonical date/time forms at the boundary —
+// post-parser equality is trivial string === (NO parseISO, NO dateFns, NO
+// epoch-ms compare; no date-arithmetic dependency added per locked §5.2).
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const HMS_TIME_REGEX = /^\d{2}:\d{2}:\d{2}$/;
+
+const consigneeLocationSchema = z.object({}).passthrough();
+
+const consigneeSchema = z.object({
+  location: consigneeLocationSchema.optional(),
+});
+
+const deliveryInformationSchema = z.object({
+  recipientName: z.string().optional(),
+  signature: z.string().optional(),
+  consigneeRating: z.number().optional(),
+  consigneeComment: z.string().optional(),
+  driverComment: z.string().optional(),
+  numberOfAttempts: z.number().optional(),
+  failureReasonComment: z.string().nullable().optional(),
+  completionLatitude: z.number().optional(),
+  completionLongitude: z.number().optional(),
+});
+
+const webhookEditPayloadSchema = z.object({
+  deliveryDate: z.string().regex(ISO_DATE_REGEX).optional(),
+  deliveryStartTime: z.string().regex(HMS_TIME_REGEX).optional(),
+  deliveryEndTime: z.string().regex(HMS_TIME_REGEX).optional(),
+  deliveryInformation: deliveryInformationSchema.optional(),
+  consignee: consigneeSchema.optional(),
+});
 
 export type ApplyWebhookEditEventResult =
   | {
@@ -45,7 +87,8 @@ export type ApplyWebhookEditEventResult =
         | "wrong_action"
         | "duplicate"
         | "task_not_found"
-        | "no_diff";
+        | "no_diff"
+        | "payload_validation_failed";
     };
 
 interface ChangedField {
@@ -114,6 +157,28 @@ export async function applyWebhookEditEvent(
         RETURNING id
       `);
       const webhookEventsId = (insertResult[0] as { id: string }).id;
+
+      // Validate payload shape at the boundary (plan PR #294 §5.2 + §5.3).
+      // Failure is structured-return (NOT throw) per locked §5.3 Option A —
+      // tx commits so the webhook_events row above is preserved as a forensic
+      // record of the malformed payload. Duplicate replays of the same
+      // malformed payload subsequently return 'duplicate' via the UNIQUE
+      // violation catch at line ~210.
+      const parseResult = webhookEditPayloadSchema.safeParse(rawPayload);
+      if (!parseResult.success) {
+        log.warn({
+          operation: "apply_webhook_edit_event",
+          error_code: "payload_validation_failed",
+          tenant_id: tenantId,
+          suitefleet_task_id: event.externalTaskId,
+          webhook_events_id: webhookEventsId,
+          zod_issue_count: parseResult.error.issues.length,
+        });
+        return {
+          outcome: { applied: false, reason: "payload_validation_failed" } as const,
+          meta: null,
+        };
+      }
 
       // SELECT the row's current state for the 12 tracked columns.
       const taskRows = (await tx.execute(sqlTag`

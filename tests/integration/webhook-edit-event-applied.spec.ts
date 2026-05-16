@@ -111,9 +111,12 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
   it("happy path — delivery_date + start/end time edits land on the row", async () => {
     const occurredAt = "2026-05-09T11:00:00.000Z";
     const event = buildEditEvent(AWB_TIME_EDIT, occurredAt, {
+      // C1 fixture update: time strings tightened to canonical HH:MM:SS per
+      // locked §5.2 regex. Payload date key still snake_case here — C2 fixes
+      // both the line-247 source AND this fixture to camelCase deliveryDate.
       delivery_date: "2026-05-12",
-      deliveryStartTime: "14:00",
-      deliveryEndTime: "16:00",
+      deliveryStartTime: "14:00:00",
+      deliveryEndTime: "16:00:00",
     });
 
     const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
@@ -343,8 +346,8 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
     const occurredAt = "2026-05-09T11:00:00.000Z"; // same as test 1
     const event = buildEditEvent(AWB_TIME_EDIT, occurredAt, {
       delivery_date: "2026-05-12",
-      deliveryStartTime: "14:00",
-      deliveryEndTime: "16:00",
+      deliveryStartTime: "14:00:00",
+      deliveryEndTime: "16:00:00",
     });
 
     const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
@@ -352,5 +355,82 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
     if (!result.applied) {
       expect(result.reason).toBe("duplicate");
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // I4 (plan PR #294 §5.3 + §6.2) — payload_validation_failed path.
+  //
+  // Non-canonical date string (ISO datetime variant `2026-06-01T00:00:00Z`)
+  // is rejected by the boundary Zod schema's YYYY-MM-DD regex per locked
+  // §5.2. The function returns the new structured outcome reason
+  // 'payload_validation_failed' (Option A per locked §5.3 — NOT throw); the
+  // webhook_events forensic row is preserved (INSERT runs before the parse
+  // gate); no audit row emitted; no tasks UPDATE.
+  // ---------------------------------------------------------------------------
+
+  it("I4 — non-canonical deliveryDate (ISO datetime variant) returns payload_validation_failed", async () => {
+    const occurredAt = "2026-05-09T14:00:00.000Z";
+    const AWB_I4 = `WEE-${RUN_ID}-I4`;
+    const EXT_ID_I4 = String(EXT_ID_BASE + 99);
+    const TASK_I4 = randomUUID() as Uuid;
+
+    // Seed a task to ensure the gate isn't `task_not_found` (we want to prove
+    // the parser-rejection short-circuits BEFORE the task SELECT).
+    await withServiceRole("seed I4 task", async (tx) => {
+      await tx.execute(sqlTag`
+        INSERT INTO tasks (
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
+          internal_status, delivery_date, delivery_start_time, delivery_end_time,
+          created_via
+        ) VALUES (
+          ${TASK_I4}, ${TENANT}, ${CONSIGNEE}, ${`WEE-I4-${RUN_ID}`},
+          ${EXT_ID_I4}, ${AWB_I4},
+          'CREATED', '2026-05-09', '08:00', '10:00', 'manual_admin'
+        )
+      `);
+    });
+
+    const event = buildEditEvent(AWB_I4, occurredAt, {
+      deliveryDate: "2026-06-01T00:00:00Z", // ISO datetime variant — rejected
+    });
+
+    const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(result.reason).toBe("payload_validation_failed");
+    }
+
+    // webhook_events row preserved (tx committed via structured return).
+    const webhookRows = await withServiceRole("verify webhook_events preserved on I4", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT id, raw_payload FROM webhook_events
+        WHERE tenant_id = ${TENANT}
+          AND suitefleet_task_id = ${AWB_I4}
+          AND action = 'TASK_HAS_BEEN_UPDATED'
+      `),
+    );
+    expect(webhookRows).toHaveLength(1);
+    const raw = (webhookRows[0] as { raw_payload: Record<string, unknown> }).raw_payload;
+    expect(raw.deliveryDate).toBe("2026-06-01T00:00:00Z");
+
+    // No audit row emitted for this task.
+    const audits = await withServiceRole("verify no audit emit on I4", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT id FROM audit_events
+        WHERE event_type = 'task.edit_applied_via_webhook'
+          AND tenant_id = ${TENANT}
+          AND resource_id = ${TASK_I4}
+      `),
+    );
+    expect(audits).toEqual([]);
+
+    // tasks row unchanged.
+    const [task] = await withServiceRole("verify task row unchanged on I4", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT delivery_date FROM tasks WHERE id = ${TASK_I4} LIMIT 1
+      `),
+    );
+    expect((task as { delivery_date: string }).delivery_date).toMatch(/2026-05-09/);
   });
 });
