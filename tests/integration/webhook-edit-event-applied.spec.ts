@@ -338,9 +338,13 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
   it("returns no_diff when payload values match the current row state", async () => {
     const occurredAt = "2026-05-09T13:30:00.000Z";
     // The seed has delivery_date = '2026-05-09', start = '08:00', end = '10:00'.
-    // Send the same values; no field changes.
+    // Send the same values; no field changes. C4 fix: payload key migrated
+    // to camelCase deliveryDate so the no-diff path is genuinely exercised
+    // (post-C1 the Zod parser strips unknown snake_case keys per locked
+    // §6.1 U2 — pre-C4 this test passed for the wrong reason because the
+    // date payload was silently dropped before the comparison).
     const event = buildEditEvent(AWB_NO_DIFF, occurredAt, {
-      delivery_date: "2026-05-09",
+      deliveryDate: "2026-05-09",
       deliveryStartTime: "08:00:00",
       deliveryEndTime: "10:00:00",
     });
@@ -484,6 +488,10 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
     const TASK_I1 = randomUUID() as Uuid;
 
     await withServiceRole("seed I1 task (DMB-99123608 surrogate)", async (tx) => {
+      // C4 fix: time strings seeded as canonical HH:MM:SS (was '08:00' /
+      // '10:00') to match post-fix canonical-time discipline. Removes a
+      // latent seed-vs-stored-format trap; not a live failure here since
+      // I1 does not assert on times.
       await tx.execute(sqlTag`
         INSERT INTO tasks (
           id, tenant_id, consignee_id, customer_order_number,
@@ -493,7 +501,7 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
         ) VALUES (
           ${TASK_I1}, ${TENANT}, ${CONSIGNEE}, ${`WEE-I1-${RUN_ID}`},
           ${EXT_ID_I1}, ${AWB_I1},
-          'CREATED', '2026-05-25', '08:00', '10:00', 'manual_admin'
+          'CREATED', '2026-05-25', '08:00:00', '10:00:00', 'manual_admin'
         )
       `);
     });
@@ -524,7 +532,13 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
         SELECT delivery_date, updated_at, created_at FROM tasks WHERE id = ${TASK_I1} LIMIT 1
       `),
     );
-    expect((task as { delivery_date: string }).delivery_date).toMatch(/2026-06-01/);
+    // C4 fix: load-bearing regression anchor for the headline bug. Strict
+    // equality on the moved date column — fails loudly on any drift. The
+    // YYYY-MM-DD prefix normalisation is defensive against postgres-js
+    // driver-config variants that might serialise DATE columns differently;
+    // the calendar date asserted is exact.
+    const deliveryDateRaw = (task as { delivery_date: string }).delivery_date;
+    expect(deliveryDateRaw.slice(0, 10)).toBe("2026-06-01");
     const updatedAt = new Date((task as { updated_at: string }).updated_at);
     const createdAt = new Date((task as { created_at: string }).created_at);
     expect(updatedAt.getTime()).toBeGreaterThan(createdAt.getTime());
