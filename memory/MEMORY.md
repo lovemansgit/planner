@@ -2,7 +2,7 @@
 
 ## Permanent product memory
 
-- [**Product Brief (Path 2-A)**](PLANNER_PRODUCT_BRIEF.md) — **load-bearing source of truth** for Planner scope, architecture, demo posture (May 12, 2026). Supersedes plan.docx §10 Day 11-13 in conflict. Reading discipline: every fresh session reads this first; every substantive PR references brief sections; amendments require explicit `decision_*.md` + version bump in §9. Currently at v1.2.
+- [**Product Brief (Path 2-A)**](PLANNER_PRODUCT_BRIEF.md) — **load-bearing source of truth** for Planner scope, architecture, demo posture (May 12, 2026). Supersedes plan.docx §10 Day 11-13 in conflict. Reading discipline: every fresh session reads this first; every substantive PR references brief sections; amendments require explicit `decision_*.md` + version bump in §9. Currently at v1.15.
 
 ## Day 2 (27 April 2026)
 
