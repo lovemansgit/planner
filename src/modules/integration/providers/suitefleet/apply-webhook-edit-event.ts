@@ -22,6 +22,7 @@
 import "server-only";
 
 import { sql as sqlTag } from "drizzle-orm";
+import { z } from "zod";
 
 import { emit as auditEmit } from "@/modules/audit";
 import { withTenant } from "@/shared/db";
@@ -32,6 +33,49 @@ import type { Uuid } from "@/shared/types";
 import type { WebhookEvent } from "../../types";
 
 const log = logger.with({ component: "apply_webhook_edit_event" });
+
+// ---------------------------------------------------------------------------
+// Payload schema (plan PR #294 §5.2 + §5.3 + §6.1 U2)
+// ---------------------------------------------------------------------------
+//
+// LENIENT on unknown keys: future SF field additions must not hard-fail the
+// webhook. Default Zod object behaviour (strip) silently drops unknown root
+// + deliveryInformation keys; nested consignee.location uses passthrough so
+// the audit-metadata capture sees the full location object SF sent.
+//
+// Regex constraints reject non-canonical date/time forms at the boundary —
+// post-parser equality is trivial string === (NO parseISO, NO dateFns, NO
+// epoch-ms compare; no date-arithmetic dependency added per locked §5.2).
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const HMS_TIME_REGEX = /^\d{2}:\d{2}:\d{2}$/;
+
+const consigneeLocationSchema = z.object({}).passthrough();
+
+const consigneeSchema = z.object({
+  location: consigneeLocationSchema.optional(),
+});
+
+const deliveryInformationSchema = z.object({
+  recipientName: z.string().optional(),
+  signature: z.string().optional(),
+  consigneeRating: z.number().optional(),
+  consigneeComment: z.string().optional(),
+  driverComment: z.string().optional(),
+  numberOfAttempts: z.number().optional(),
+  failureReasonComment: z.string().nullable().optional(),
+  completionLatitude: z.number().optional(),
+  completionLongitude: z.number().optional(),
+});
+
+const webhookEditPayloadSchema = z.object({
+  deliveryDate: z.string().regex(ISO_DATE_REGEX).optional(),
+  deliveryStartTime: z.string().regex(HMS_TIME_REGEX).optional(),
+  deliveryEndTime: z.string().regex(HMS_TIME_REGEX).optional(),
+  deliveryInformation: deliveryInformationSchema.optional(),
+  consignee: consigneeSchema.optional(),
+});
+
+type WebhookEditPayload = z.infer<typeof webhookEditPayloadSchema>;
 
 export type ApplyWebhookEditEventResult =
   | {
@@ -45,7 +89,8 @@ export type ApplyWebhookEditEventResult =
         | "wrong_action"
         | "duplicate"
         | "task_not_found"
-        | "no_diff";
+        | "no_diff"
+        | "payload_validation_failed";
     };
 
 interface ChangedField {
@@ -115,6 +160,28 @@ export async function applyWebhookEditEvent(
       `);
       const webhookEventsId = (insertResult[0] as { id: string }).id;
 
+      // Validate payload shape at the boundary (plan PR #294 §5.2 + §5.3).
+      // Failure is structured-return (NOT throw) per locked §5.3 Option A —
+      // tx commits so the webhook_events row above is preserved as a forensic
+      // record of the malformed payload. Duplicate replays of the same
+      // malformed payload subsequently return 'duplicate' via the UNIQUE
+      // violation catch at line ~210.
+      const parseResult = webhookEditPayloadSchema.safeParse(rawPayload);
+      if (!parseResult.success) {
+        log.warn({
+          operation: "apply_webhook_edit_event",
+          error_code: "payload_validation_failed",
+          tenant_id: tenantId,
+          suitefleet_task_id: event.externalTaskId,
+          webhook_events_id: webhookEventsId,
+          zod_issue_count: parseResult.error.issues.length,
+        });
+        return {
+          outcome: { applied: false, reason: "payload_validation_failed" } as const,
+          meta: null,
+        };
+      }
+
       // SELECT the row's current state for the 12 tracked columns.
       const taskRows = (await tx.execute(sqlTag`
         SELECT
@@ -155,37 +222,53 @@ export async function applyWebhookEditEvent(
 
       const row = taskRows[0];
       const taskId = row.id as Uuid;
-      const extracted = extractEditFields(rawPayload);
-      const changedFields = computeChangedFields(row, extracted, rawPayload);
+      const parsed = parseResult.data;
+      const extracted = extractEditFields(parsed);
+      const allChanges = computeChangedFields(row, extracted, parsed);
 
-      if (changedFields.length === 0) {
-        // No-op edit — payload values match current row state. Don't
-        // UPDATE; webhook_events row already preserves the receipt.
+      // Bug 2 fix — decouple changedFields' four overloaded responsibilities
+      // (plan PR #294 §4.1 + locked §4.2 X.A + Z.A):
+      //   (a) columnsToUpdate     → DB UPDATE column list
+      //   (b) auditMetadataFields → audit row's metadata.changed_fields
+      //   (c) hasAnyChange        → no_diff gate    (input: columnsToUpdate; Z.A)
+      //   (d) wasApplied          → outcome.applied (input: columnsToUpdate; X.A)
+      //
+      // The address audit-only entry (computeChangedFields tail, hard-coded
+      // previous:null) now flows ONLY into (b). It cannot inflate (a), and
+      // cannot flip hasAnyChange or wasApplied from false to true regardless
+      // of whether the address entry is present in the payload.
+      //
+      // outcome.applied semantic (X.A locked): "≥1 column actually moved on
+      // the row." Address-only payloads return no_diff (X.A reuses existing
+      // vocabulary — no new outcome reason; no new audit event).
+      const columnsToUpdate = allChanges.filter((c) => c.field !== "address");
+      const auditMetadataFields = allChanges;
+
+      if (columnsToUpdate.length === 0) {
+        // No column moved — return no_diff (X.A + Z.A). Webhook_events row
+        // already preserves the receipt; no audit emit; no UPDATE issued.
         return {
           outcome: { applied: false, reason: "no_diff" } as const,
           meta: null,
         };
       }
 
-      // UPDATE only the columns whose values differ. Address-audit-only
-      // entries are filtered out — they don't correspond to columns.
-      const columnChanges = changedFields.filter((c) => c.field !== "address");
-      if (columnChanges.length > 0) {
-        await applyConditionalUpdate(tx, tenantId, taskId, columnChanges);
-      }
+      await applyConditionalUpdate(tx, tenantId, taskId, columnsToUpdate);
 
       const meta: AuditMeta = {
         taskId,
         suitefleetTaskId: event.externalTaskId,
         webhookEventsId,
-        changedFields,
+        changedFields: auditMetadataFields,
       };
 
+      // Past the columnsToUpdate.length === 0 gate above, wasApplied is
+      // intrinsically true (X.A: outcome.applied = "≥1 column actually moved").
       return {
         outcome: {
           applied: true,
           taskId,
-          changedFieldCount: changedFields.length,
+          changedFieldCount: auditMetadataFields.length,
         } as const,
         meta,
       };
@@ -239,30 +322,35 @@ interface ExtractedFields {
   readonly completion_longitude: number | undefined;
 }
 
-function extractEditFields(rawPayload: unknown): ExtractedFields {
-  const root = isRecord(rawPayload) ? rawPayload : {};
-  const deliveryInfo = isRecord(root.deliveryInformation) ? root.deliveryInformation : {};
-
+function extractEditFields(parsed: WebhookEditPayload): ExtractedFields {
+  // Bug 1 fix (plan PR #294 §3): line was `pickString(root.delivery_date)`
+  // reading snake_case off rawPayload; SF sends camelCase deliveryDate so the
+  // read resolved to undefined and the date was silently dropped from the
+  // diff. Post-fix the value comes off the parsed shape (Zod-typed
+  // camelCase) so a future snake_case typo would not compile.
+  const di = parsed.deliveryInformation;
   return {
-    delivery_date: pickString(root.delivery_date),
-    delivery_start_time: pickString(root.deliveryStartTime),
-    delivery_end_time: pickString(root.deliveryEndTime),
-    recipient_name: pickString(deliveryInfo.recipientName),
-    signature: pickString(deliveryInfo.signature),
-    consignee_rating: pickNumber(deliveryInfo.consigneeRating),
-    consignee_comment: pickString(deliveryInfo.consigneeComment),
-    driver_comment: pickString(deliveryInfo.driverComment),
-    number_of_attempts: pickNumber(deliveryInfo.numberOfAttempts),
-    failure_reason_comment: pickString(deliveryInfo.failureReasonComment),
-    completion_latitude: pickNumber(deliveryInfo.completionLatitude),
-    completion_longitude: pickNumber(deliveryInfo.completionLongitude),
+    delivery_date: parsed.deliveryDate,
+    delivery_start_time: parsed.deliveryStartTime,
+    delivery_end_time: parsed.deliveryEndTime,
+    recipient_name: di?.recipientName,
+    signature: di?.signature,
+    consignee_rating: di?.consigneeRating,
+    consignee_comment: di?.consigneeComment,
+    driver_comment: di?.driverComment,
+    number_of_attempts: di?.numberOfAttempts,
+    // Zod schema allows null for failureReasonComment; coerce null → undefined
+    // to preserve "field absent" semantics for diffField.
+    failure_reason_comment: di?.failureReasonComment ?? undefined,
+    completion_latitude: di?.completionLatitude,
+    completion_longitude: di?.completionLongitude,
   };
 }
 
 function computeChangedFields(
   row: TaskRow,
   extracted: ExtractedFields,
-  rawPayload: unknown,
+  parsed: WebhookEditPayload,
 ): ChangedField[] {
   const changes: ChangedField[] = [];
 
@@ -300,10 +388,10 @@ function computeChangedFields(
   // If consignee.location.* is present in the payload, capture it as
   // a metadata entry. previous=null marks "we observed an SF-side
   // address but didn't apply it" — distinct from real edit-event diffs.
-  const root = isRecord(rawPayload) ? rawPayload : {};
-  const consignee = isRecord(root.consignee) ? root.consignee : null;
-  const location = consignee !== null && isRecord(consignee.location) ? consignee.location : null;
-  if (location !== null) {
+  // C3 decouples this from the no_diff gate + outcome.applied flag (see
+  // computeColumnsToUpdate / wasApplied logic at the caller).
+  const location = parsed.consignee?.location;
+  if (location !== undefined) {
     changes.push({
       field: "address",
       previous: null,
@@ -429,20 +517,6 @@ function buildSetFragment(column: string, value: unknown): ReturnType<typeof sql
       // Unreachable — caller validates against EXTRACTED_COLUMN_NAMES.
       throw new Error(`buildSetFragment: unexpected column '${column}'`);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function pickString(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  return undefined;
-}
-
-function pickNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  return undefined;
 }
 
 async function emitEditAppliedAudit(tenantId: Uuid, meta: AuditMeta): Promise<void> {
