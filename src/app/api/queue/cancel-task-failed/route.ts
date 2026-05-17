@@ -13,6 +13,7 @@ import "server-only";
 
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 import { NextResponse } from "next/server";
+import { sql as sqlTag } from "drizzle-orm";
 
 import { withServiceRole } from "@/shared/db";
 import { logger } from "@/shared/logger";
@@ -121,15 +122,33 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
   try {
     const dlqRow = await withServiceRole(
       `queue:cancel_task_failed insert ${taskId}`,
-      async (tx) =>
-        insertOutboundPushFailure(tx, tenantId, {
+      async (tx) => {
+        const row = await insertOutboundPushFailure(tx, tenantId, {
           taskId,
           operation: "cancel",
           correlationId,
           failureReason,
           failurePayload,
           retryCount: qstashFailure.retried ?? 0,
-        }),
+        });
+
+        // Day-29 §D(2) Phase-1 (plan-PR #302 §6.3 + §3.6 OQ-7 ruling
+        // Option A): flip outbound_sync_state to 'failed' alongside
+        // the DLQ row insert, in the same withServiceRole tx. Gates
+        // on the pending state so a row already 'failed' (rare repeat
+        // failure for the same task) is unchanged, and a row 'synced'
+        // (the operator-initiated cancel path which Phase 1 does not
+        // touch) is unchanged. The DLQ row IS the authoritative
+        // failure record; the column flip is the read-side UI signal.
+        await tx.execute(sqlTag`
+          UPDATE tasks
+          SET outbound_sync_state = 'failed'
+          WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND outbound_sync_state IN ('pending_cancel', 'pending_reschedule')
+        `);
+
+        return row;
+      },
     );
     requestLog.warn(
       {
@@ -139,7 +158,7 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
         http_status: qstashFailure.status,
         retried_count: qstashFailure.retried,
       },
-      "cancel-task-failed: recorded to outbound_push_failures DLQ",
+      "cancel-task-failed: recorded to outbound_push_failures DLQ + outbound_sync_state flipped to 'failed'",
     );
     return NextResponse.json(
       { outcome: "recorded", outbound_push_failure_id: dlqRow.id },

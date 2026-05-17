@@ -51,6 +51,36 @@ export type TaskInternalStatus =
   | "ON_HOLD"
   | "SKIPPED";
 
+/**
+ * 4-value outbound sync state. Mirrors the CHECK constraint on
+ * tasks.outbound_sync_state from supabase/migrations/0026 (Day-29
+ * §D(2) Phase-1 per plan-PR #302 §6.3 / §3.6 OQ-7 ruling Option A).
+ *
+ * Tracks the per-task lifecycle of an operator-initiated outbound
+ * mutation to SuiteFleet (currently: skip-cancel; Phase 2 extends to
+ * include operator-initiated reschedule).
+ *
+ * - 'synced'             — no pending outbound op, no unresolved DLQ
+ *                          failure. Default for newly INSERTed rows.
+ * - 'pending_cancel'     — skip committed locally; SF cancel queued.
+ *                          Flips to 'synced' on QStash 2xx success at
+ *                          /api/queue/cancel-task. Flips to 'failed'
+ *                          on failureCallback at
+ *                          /api/queue/cancel-task-failed.
+ * - 'pending_reschedule' — Phase 2 placeholder (move-to-date variant).
+ *                          NOT written by Phase 1 code; CHECK admits.
+ * - 'failed'             — QStash retries exhausted;
+ *                          outbound_push_failures row exists for ops
+ *                          triage. Cleared to 'synced' on subsequent
+ *                          SF 2xx (any successful convergence implies
+ *                          merchant + SF reached consistency).
+ */
+export type TaskOutboundSyncState =
+  | "synced"
+  | "pending_cancel"
+  | "pending_reschedule"
+  | "failed";
+
 /** 2-value task kind. Mirrors the CHECK constraint on tasks.task_kind. */
 export type TaskKind = "DELIVERY" | "PICKUP";
 
@@ -171,6 +201,13 @@ export interface Task {
    * cell per brief §3.3.3 line 487.
    */
   readonly addressLabel: "home" | "office" | "other" | null;
+  /**
+   * Day-29 §D(2) Phase-1 (plan-PR #302 §6.3): per-task outbound sync
+   * lifecycle marker. Set in tx by markTaskSkipped on the skip path;
+   * converged by the QStash cancel-task success route or DLQ failure
+   * route. See TaskOutboundSyncState union for full semantics.
+   */
+  readonly outboundSyncState: TaskOutboundSyncState;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
   /** Zero or more packages, ordered by `position` ascending. */

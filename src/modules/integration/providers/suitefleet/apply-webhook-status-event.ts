@@ -151,6 +151,17 @@ export async function applyWebhookStatusEvent(
 
       // Step 6: UPDATE tasks. When DELIVERED, fold pod_photos into
       // the same statement (plan §4.6 Option (a) atomicity).
+      //
+      // Day-29 §D(2) Phase-1 (plan-PR #302 §6.2 + §3.6 OQ-6 ruling
+      // Option A): the SKIPPED state is operator-set and Planner-local
+      // per brief §3.1.1; the inbound SF webhook ack of our own cancel
+      // (TASK_STATUS_UPDATED_TO_CANCELED) must NOT overwrite it.
+      // Pure additive WHERE-clause guard — webhook_events row above
+      // is unaffected (audit trail preserved); only the tasks UPDATE
+      // is gated. Guard applies uniformly to DELIVERED + non-DELIVERED
+      // branches (a DELIVERED webhook landing on a SKIPPED row is a
+      // driver-vs-operator race — operator intent wins; ops triage
+      // resolves the rare collision via the existing audit log).
       if (newStatus === "DELIVERED") {
         await tx.execute(sqlTag`
           UPDATE tasks
@@ -159,12 +170,14 @@ export async function applyWebhookStatusEvent(
             pod_photos = ${podPhotosJson}::jsonb,
             updated_at = now()
           WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND internal_status NOT IN ('SKIPPED')
         `);
       } else {
         await tx.execute(sqlTag`
           UPDATE tasks
           SET internal_status = ${newStatus}, updated_at = now()
           WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND internal_status NOT IN ('SKIPPED')
         `);
       }
 

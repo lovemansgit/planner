@@ -58,6 +58,7 @@ import type {
   TaskCreationSource,
   TaskInternalStatus,
   TaskKind,
+  TaskOutboundSyncState,
   TaskPackage,
   TaskPackageStatus,
   UpdateTaskPatch,
@@ -109,6 +110,12 @@ type TaskRow = {
   pushed_to_external_at: Date | string | null;
   address_id: string | null;
   pod_photos: unknown;
+  /**
+   * Day-29 §D(2) Phase-1 (plan-PR #302 §6.3): outbound sync lifecycle
+   * marker. NOT NULL DEFAULT 'synced' per migration 0026; mapper
+   * narrows the string to TaskOutboundSyncState.
+   */
+  outbound_sync_state: string;
   /**
    * Day-20 §3.3.3 calendar JOIN projection — populated only when the
    * caller's SELECT projects `addresses.label` via a LEFT JOIN. Most
@@ -232,6 +239,7 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
     addressId: row.address_id,
     podPhotos: mapPodPhotos(row.pod_photos),
     addressLabel: mapAddressLabel(row.address_label),
+    outboundSyncState: mapOutboundSyncState(row.outbound_sync_state),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     packages,
@@ -248,6 +256,25 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
 function mapAddressLabel(value: unknown): "home" | "office" | "other" | null {
   if (value === "home" || value === "office" || value === "other") return value;
   return null;
+}
+
+/**
+ * Day-29 §D(2) Phase-1 — narrow tasks.outbound_sync_state (string at
+ * the wire) to the TaskOutboundSyncState union at the boundary.
+ * Defensive: unknown values collapse to 'synced' (the safest read-side
+ * default — the column is NOT NULL DEFAULT 'synced' at the DB layer,
+ * so the only path to an unknown value would be schema drift).
+ */
+function mapOutboundSyncState(value: unknown): TaskOutboundSyncState {
+  if (
+    value === "synced" ||
+    value === "pending_cancel" ||
+    value === "pending_reschedule" ||
+    value === "failed"
+  ) {
+    return value;
+  }
+  return "synced";
 }
 
 /**
@@ -1263,20 +1290,33 @@ export async function findTaskBySubscriptionAndDate(
 /**
  * Day-16 §3.2 step 13 — flip a task's internal_status to 'SKIPPED'
  * when an operator records a skip exception on its (subscription_id,
- * target_date) tuple. Returns the number of rows affected so the
- * service layer can distinguish:
+ * target_date) tuple.
  *
- *   - rowsAffected === 1: task existed and is now SKIPPED (happy path)
- *   - rowsAffected === 0: the date's task hasn't materialized yet
- *     (sub-case 13a per merged plan §3.2 step 13). The
- *     subscription_exceptions row IS the durable record; the cron's
- *     §2.4 row 1 skip-the-date EXISTS guard reads it on the next
- *     materialization tick when the horizon eventually reaches that
- *     date. No service-side error.
+ * Day-29 §D(2) Phase-1 extension (plan-PR #302 §2.2 / §6.3): in the
+ * same UPDATE, conditionally flip outbound_sync_state from 'synced'
+ * to 'pending_cancel' when the task has been pushed to SuiteFleet
+ * (external_tracking_number IS NOT NULL). Returns the affected task's
+ * id + external_tracking_number so the service-layer post-commit
+ * block can decide whether to enqueue the SF cancel push.
+ *
+ * Return contract:
+ *   - { taskId, externalTrackingNumber }: task existed and is now
+ *     SKIPPED (happy path). externalTrackingNumber is null if the
+ *     task was never pushed to SF (sub-case 13b — task materialized
+ *     locally but cron's nightly push hasn't reached it yet); the
+ *     post-commit enqueue gates on this being non-null.
+ *   - null: the date's task hasn't materialized yet (sub-case 13a
+ *     per merged plan §3.2 step 13). The subscription_exceptions
+ *     row IS the durable record; the cron's §2.4 row 1 skip-the-date
+ *     EXISTS guard reads it on the next materialization tick when
+ *     the horizon eventually reaches that date. No service-side
+ *     error; no outbound enqueue.
  *
  * Tenant-id predicate alongside RLS. The `internal_status` value
  * 'SKIPPED' is included in the `tasks_internal_status_check` CHECK
- * constraint per migration 0019 (Day-13 part 1).
+ * constraint per migration 0019 (Day-13 part 1). The
+ * `outbound_sync_state` enum 'pending_cancel' is per migration 0026
+ * (Day-29).
  *
  * Note: this method does NOT carry the exception_id back onto the
  * task row — there's no FK column for that on `tasks`. The link is
@@ -1289,20 +1329,29 @@ export async function markTaskSkipped(
   tenantId: Uuid,
   subscriptionId: Uuid,
   deliveryDate: string,
-): Promise<number> {
-  const result = await tx.execute(sqlTag`
+): Promise<{ taskId: Uuid; externalTrackingNumber: string | null } | null> {
+  const result = (await tx.execute(sqlTag`
     UPDATE tasks
-    SET internal_status = 'SKIPPED'
+    SET internal_status = 'SKIPPED',
+        outbound_sync_state = CASE
+          WHEN external_tracking_number IS NOT NULL THEN 'pending_cancel'
+          ELSE outbound_sync_state
+        END
     WHERE tenant_id = ${tenantId}
       AND subscription_id = ${subscriptionId}
       AND delivery_date = ${deliveryDate}
       AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
-  `);
-  return typeof (result as { count?: number }).count === "number"
-    ? (result as { count: number }).count
-    : Array.isArray(result)
-      ? result.length
-      : 0;
+    RETURNING id, external_tracking_number
+  `)) as readonly { id: string; external_tracking_number: string | null }[];
+
+  if (result.length === 0) {
+    return null;
+  }
+  const row = result[0];
+  return {
+    taskId: row.id as Uuid,
+    externalTrackingNumber: row.external_tracking_number,
+  };
 }
 
 /**

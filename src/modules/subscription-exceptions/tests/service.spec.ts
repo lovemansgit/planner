@@ -40,6 +40,15 @@ vi.mock("@/modules/audit", () => ({
   }),
 }));
 
+// Day-29 §D(2) Phase-1 — mock the outbound publisher to prevent the
+// real QStash client constructor from running in unit tests. The unit
+// fixtures keep external_tracking_number=null on the markTaskSkipped
+// mock return, so the service's gating clause never invokes the
+// publisher; this mock just satisfies the import surface.
+vi.mock("@/modules/task-outbound-queue", () => ({
+  enqueueCancelTask: vi.fn(async () => undefined),
+}));
+
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/shared/errors";
 import type { RequestContext } from "@/shared/tenant-context";
 import type { Uuid } from "@/shared/types";
@@ -211,11 +220,19 @@ function setupHappyPath(opts?: {
   mockExecute.mockResolvedValueOnce([opts?.insertedException ?? insertedExceptionRow()]);
 
   // 6. (skip extending) UPDATE subscriptions — single result, count form
-  // 7. (skip flow) UPDATE tasks
+  // 7. (skip flow) UPDATE tasks — Day-29 §D(2) Phase-1: markTaskSkipped
+  //    now uses RETURNING and yields a row array. external_tracking_number
+  //    stays NULL for unit fixtures so the post-commit publisher gate
+  //    short-circuits (no outbound enqueue in unit tests). Pass
+  //    skippedTaskRows=0 to simulate sub-case 13a (date not materialized).
   // For the happy path mocks, we add two more no-op responses; not all
   // type variants reach both, but extras are harmless.
   mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
-  mockExecute.mockResolvedValueOnce({ count: opts?.skippedTaskRows ?? 1 } as unknown);
+  mockExecute.mockResolvedValueOnce(
+    (opts?.skippedTaskRows ?? 1) === 0
+      ? []
+      : [{ id: "00000000-0000-0000-0000-00000000ffff", external_tracking_number: null }],
+  );
 }
 
 beforeEach(() => {
@@ -274,7 +291,9 @@ describe("addSubscriptionException — permission matrix", () => {
       insertedExceptionRow({ compensatingDate: "2026-07-06", targetDateOverride: "2026-07-06" }),
     ]); // 3. INSERT
     mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // 4. UPDATE end_date
-    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // 5. UPDATE task SKIPPED
+    mockExecute.mockResolvedValueOnce([
+      { id: "00000000-0000-0000-0000-00000000ffff", external_tracking_number: null },
+    ]); // 5. UPDATE task SKIPPED (RETURNING per Day-29)
 
     const ctx = ctxWith(["subscription:override_skip_rules"]);
     const result = await addSubscriptionException(ctx, SUBSCRIPTION_ID, input, { now: NOW });
@@ -303,7 +322,9 @@ describe("addSubscriptionException — permission matrix", () => {
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({ skipWithoutAppend: true, compensatingDate: null }),
     ]); // 3. INSERT
-    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // 4. UPDATE task SKIPPED
+    mockExecute.mockResolvedValueOnce([
+      { id: "00000000-0000-0000-0000-00000000ffff", external_tracking_number: null },
+    ]); // 4. UPDATE task SKIPPED (RETURNING per Day-29)
 
     const ctx = ctxWith(["subscription:override_skip_rules"]);
     const result = await addSubscriptionException(ctx, SUBSCRIPTION_ID, input, { now: NOW });
@@ -707,7 +728,9 @@ describe("addSubscriptionException — audit emission per type", () => {
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({ skipWithoutAppend: true, compensatingDate: null }),
     ]);
-    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockExecute.mockResolvedValueOnce([
+      { id: "00000000-0000-0000-0000-00000000ffff", external_tracking_number: null },
+    ]); // UPDATE task SKIPPED — RETURNING per Day-29
 
     const ctx = ctxWith(["subscription:override_skip_rules"]);
     await addSubscriptionException(

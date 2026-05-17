@@ -48,6 +48,9 @@ import type { Uuid } from "@/shared/types";
 import { emit } from "@/modules/audit";
 import { requirePermission } from "@/modules/identity";
 import type { PermissionId } from "@/modules/identity/permissions";
+import { enqueueCancelTask } from "@/modules/task-outbound-queue";
+import { logger } from "@/shared/logger";
+import { captureException } from "@/shared/sentry-capture";
 // Day 16 / Block 4-E §B B1 — shared cross-consignee address
 // ownership helper. Used inside the address_override branches of
 // addSubscriptionException to reject malformed operator inputs
@@ -543,11 +546,15 @@ export async function addSubscriptionException(
     }
 
     // 12. UPDATE the affected target task → SKIPPED (skip flows only).
-    // rowsAffected discarded; the SKIPPED state is the durable record
-    // and 0-rows-affected sub-cases are documented in
-    // `markTaskSkipped`'s JSDoc + the disambiguation followup memo.
+    // Day-29 §D(2) Phase-1: capture the affected task tuple so the
+    // post-commit block can decide whether to enqueue the SF cancel
+    // push. null result = sub-case 13a (unmaterialized); non-null
+    // with null external_tracking_number = materialized-but-not-pushed
+    // (sub-case 13b); non-null with non-null external_tracking_number
+    // = the variants 1+2 enqueue target.
+    let skippedTask: { taskId: Uuid; externalTrackingNumber: string | null } | null = null;
     if (input.type === "skip") {
-      await markTaskSkipped(tx, tenantId, subscriptionId, skipDate);
+      skippedTask = await markTaskSkipped(tx, tenantId, subscriptionId, skipDate);
     }
 
     return {
@@ -556,6 +563,7 @@ export async function addSubscriptionException(
       newEndDate,
       compensatingDate,
       endDateExtended,
+      skippedTask,
     } as const;
   });
 
@@ -565,7 +573,31 @@ export async function addSubscriptionException(
     return idempotentReplayResult(txResult.replay);
   }
 
-  const { exception, newEndDate, endDateExtended } = txResult;
+  const { exception, newEndDate, endDateExtended, skippedTask } = txResult;
+
+  // Day-29 §D(2) Phase-1 (plan-PR #302 §7 + §3.6 OQ-3 ruling Option A):
+  // compute the outbound_emission metadata field for the
+  // subscription.exception.created audit row. Phase 1 emits kind values
+  // 'cancel' | 'none' for variants 1+2. Variant 3 (move-to-date) omits
+  // the field entirely — Phase 2 will add 'reschedule' when the
+  // rescheduleTask adapter ships (Aqib-gated). registered metadata in
+  // event-types.ts subscription.exception.created.metadataNotes is
+  // updated in lock-step per §3.6 binding constraint.
+  const isMoveToDate =
+    input.type === "skip" &&
+    input.targetDateOverride !== undefined &&
+    input.skipWithoutAppend !== true;
+
+  type OutboundEmissionMeta =
+    | { readonly kind: "cancel"; readonly task_id: Uuid }
+    | { readonly kind: "none" };
+
+  const outboundEmission: OutboundEmissionMeta | undefined =
+    input.type === "skip" && !isMoveToDate
+      ? skippedTask !== null && skippedTask.externalTrackingNumber !== null
+        ? { kind: "cancel", task_id: skippedTask.taskId }
+        : { kind: "none" }
+      : undefined;
 
   // Step 14 — audit emit (post-commit). Shared correlation_id across
   // all events emitted by this call.
@@ -592,6 +624,7 @@ export async function addSubscriptionException(
       address_override_id: exception.addressOverrideId,
       correlation_id: exception.correlationId,
       reason: exception.reason,
+      ...(outboundEmission !== undefined ? { outbound_emission: outboundEmission } : {}),
     },
   });
 
@@ -628,6 +661,54 @@ export async function addSubscriptionException(
         correlation_id: exception.correlationId,
       },
     });
+  }
+
+  // Day-29 §D(2) Phase-1 — outbound SF cancel enqueue for variants 1+2.
+  // Mirrors the optimistic-ack pattern documented at brief §3.1.4 line
+  // 319 and the operator-initiated cancelTask precedent at
+  // src/modules/tasks/service.ts:1326-1362. Variant 3 (move-to-date) is
+  // Aqib-gated on the SF rescheduleTask wire contract and lives in the
+  // Phase 2 code-PR — Phase 1 emits no outbound for variant 3.
+  //
+  // Local DB is already committed at this point; a publisher throw
+  // does NOT roll back. We re-throw so the route layer surfaces the
+  // failure to the form action ("saved locally; SF push pending"),
+  // and the task row stays in outbound_sync_state='pending_cancel'
+  // (set by markTaskSkipped in the tx) until ops triage or a
+  // subsequent QStash success-path webhook ack flips it.
+  if (
+    input.type === "skip" &&
+    !isMoveToDate &&
+    skippedTask !== null &&
+    skippedTask.externalTrackingNumber !== null
+  ) {
+    try {
+      await enqueueCancelTask({
+        tenant_id: tenantId,
+        task_id: skippedTask.taskId,
+        awb: skippedTask.externalTrackingNumber,
+        correlation_id: exception.correlationId,
+      });
+    } catch (err) {
+      logger.error(
+        {
+          operation: "skip_enqueue_cancel_task",
+          tenant_id: tenantId,
+          task_id: skippedTask.taskId,
+          exception_id: exception.id,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "addSubscriptionException: local DB committed; QStash cancel enqueue failed (caller surfaces)",
+      );
+      captureException(err, {
+        component: "subscription_exceptions_service_add_exception",
+        operation: "enqueue_cancel_task",
+        tenant_id: tenantId,
+        task_id: skippedTask.taskId,
+        exception_id: exception.id,
+      });
+      throw err;
+    }
   }
 
   return {
