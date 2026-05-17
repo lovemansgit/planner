@@ -203,6 +203,7 @@ export function CalendarWeekView({
                             permissions={permissions}
                             availableAddresses={availableAddresses}
                             addressLabel={task.addressLabel}
+                            outboundSyncState={task.outboundSyncState}
                           />
                         )}
                       </li>

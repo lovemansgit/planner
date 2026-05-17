@@ -730,9 +730,9 @@ const EVENT_TYPES_DRAFT = {
     resource: "subscription",
     action: "exception.created",
     description:
-      "Day 13 / T3. A subscription exception (skip / pause_window / address_override_one_off / address_override_forward / append_without_skip) was created. Emitted in the same database transaction as the originating service call. For type='skip' without skip_without_append=true, emitted alongside subscription.end_date.extended with shared correlation_id.",
+      "Day 13 / T3. A subscription exception (skip / pause_window / address_override_one_off / address_override_forward / append_without_skip) was created. Emitted in the same database transaction as the originating service call. For type='skip' without skip_without_append=true, emitted alongside subscription.end_date.extended with shared correlation_id. Day 29 / §D(2) Phase-1 (plan-PR #302): for type='skip' variants 1+2 (plain skip / skip-without-append) the metadata carries outbound_emission to record whether an outbound SF cancel was enqueued. Variant 3 (move-to-date) omits outbound_emission entirely until Phase 2 lands rescheduleTask.",
     metadataNotes:
-      "subscription_id (uuid), exception_id (uuid), type (enum — see subscription_exceptions_type_check), target_date (YYYY-MM-DD — start_date of the exception), compensating_date (YYYY-MM-DD or null — populated only for type='skip' without skip_without_append), correlation_id (uuid).",
+      "subscription_id (uuid), exception_id (uuid), type (enum — see subscription_exceptions_type_check), target_date (YYYY-MM-DD — start_date of the exception), compensating_date (YYYY-MM-DD or null — populated only for type='skip' without skip_without_append), correlation_id (uuid). Day-29 §D(2) Phase-1 addition: outbound_emission ({ kind: 'cancel', task_id: uuid } | { kind: 'none' }) is present for type='skip' variants 1+2; absent for type='skip' variant 3 (move-to-date) and all non-skip types. kind='cancel' means enqueueCancelTask was invoked post-commit with the recorded task_id; kind='none' means no outbound (task not materialized or no external_tracking_number). Phase 2 will extend the kind enum to include 'reschedule'.",
     systemOnly: false,
   },
 

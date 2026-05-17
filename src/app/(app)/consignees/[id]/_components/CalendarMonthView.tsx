@@ -195,6 +195,7 @@ export function CalendarMonthView({
                           permissions={permissions}
                           availableAddresses={availableAddresses}
                           addressLabel={null}
+                          outboundSyncState={task.outboundSyncState}
                         />
                       </li>
                     );

@@ -23,6 +23,7 @@ import "server-only";
 
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 import { NextResponse } from "next/server";
+import { sql as sqlTag } from "drizzle-orm";
 
 import { withServiceRole } from "@/shared/db";
 import { CredentialError, ValidationError } from "@/shared/errors";
@@ -188,9 +189,49 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
     throw err;
   }
 
+  // Day-29 §D(2) Phase-1 (plan-PR #302 §6.3 + §3.6 OQ-7 ruling Option A):
+  // flip outbound_sync_state to 'synced' on SF 2xx. The SKIPPED-row
+  // case (set 'pending_cancel' by markTaskSkipped during the skip
+  // service tx) converges here — the inbound webhook applier is
+  // guarded against overwriting internal_status='SKIPPED' (§6.2), so
+  // the QStash success path is the load-bearing convergence signal
+  // for outbound_sync_state. Also flips rows that were previously
+  // 'failed' (a successful retry implies SF caught up).
+  // Operator-initiated cancelTask rows are 'synced' by default;
+  // restricting the WHERE-clause to ('pending_cancel','failed') keeps
+  // this a no-op for them. 'pending_reschedule' is Phase 2 territory
+  // and is intentionally not converged here.
+  try {
+    await withServiceRole(
+      `queue:cancel_task_mark_synced ${taskId}`,
+      async (tx) =>
+        tx.execute(sqlTag`
+          UPDATE tasks
+          SET outbound_sync_state = 'synced'
+          WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND outbound_sync_state IN ('pending_cancel', 'failed')
+        `),
+    );
+  } catch (err) {
+    // Convergence write failure must NOT fail the QStash message —
+    // SF already accepted the cancel; rolling back the ack would
+    // trigger a duplicate PATCH on retry. Log + Sentry; ops triage
+    // can reconcile the stuck 'pending_cancel' row via SQL.
+    requestLog.error(
+      { error: err instanceof Error ? err.message : String(err) },
+      "cancel-task: outbound_sync_state convergence write failed — SF cancel already accepted, leaving state for ops triage",
+    );
+    captureException(err, {
+      component: "queue_cancel_task",
+      operation: "mark_outbound_sync_state_synced",
+      tenant_id: tenantId,
+      task_id: taskId,
+    });
+  }
+
   requestLog.info(
     { outcome: "success" satisfies Outcome, sf_latency_ms: Date.now() - startMs },
-    "cancel-task: success — webhook will converge local state",
+    "cancel-task: success — outbound_sync_state converged; webhook will reflect internal_status (gated for SKIPPED)",
   );
   return NextResponse.json({ outcome: "success" }, { status: 200 });
 });

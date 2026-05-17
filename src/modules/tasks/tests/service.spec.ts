@@ -197,6 +197,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     addressId: null,
     podPhotos: null,
     addressLabel: null,
+    outboundSyncState: "synced",
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     packages: [],

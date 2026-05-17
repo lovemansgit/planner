@@ -30,7 +30,7 @@
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 
-import type { TaskInternalStatus } from "@/modules/tasks/types";
+import type { TaskInternalStatus, TaskOutboundSyncState } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
 import {
@@ -77,6 +77,15 @@ interface DayActionPopoverProps {
   readonly availableAddresses: readonly ConsigneeAddressRow[];
   /** Day-20 §3.3.3 — Home/Office/Other label, rendered below status pill in day cell. */
   readonly addressLabel: "home" | "office" | "other" | null;
+  /**
+   * Day-29 §D(2) Phase-1 (plan-PR #302 §6.3): per-task outbound sync
+   * lifecycle marker. Non-'synced' values surface a pending/failed
+   * badge on the calendar trigger AND a "SuiteFleet sync" row inside
+   * the open popover dialog. Honours the product-owner-locked UI
+   * requirement: skip commits must NOT silently optimistic-success;
+   * the operator sees the in-flight SF state.
+   */
+  readonly outboundSyncState: TaskOutboundSyncState;
 }
 
 type PopoverMode =
@@ -589,6 +598,37 @@ function AddNotePanel({
 // DayActionPopover (default export — wires everything together)
 // -----------------------------------------------------------------------------
 
+/**
+ * Day-29 §D(2) Phase-1 — copy + classes for the outbound_sync_state
+ * UI badge. Returns null for 'synced' (no badge rendered). Plain stone
+ * palette per the existing AddressIndicator pattern; pending uses the
+ * stone-100 fill, failed uses the warning-tinted fill.
+ */
+function outboundSyncStateBadge(
+  state: TaskOutboundSyncState,
+): { readonly label: string; readonly classes: string } | null {
+  switch (state) {
+    case "pending_cancel":
+      return {
+        label: "SF cancel pending",
+        classes: "bg-stone-100 text-stone-700",
+      };
+    case "pending_reschedule":
+      // Phase 2 — defensive render; Phase 1 code does not write this state.
+      return {
+        label: "SF reschedule pending",
+        classes: "bg-stone-100 text-stone-700",
+      };
+    case "failed":
+      return {
+        label: "SF sync failed — see ops",
+        classes: "bg-amber-50 text-amber-900",
+      };
+    case "synced":
+      return null;
+  }
+}
+
 export function DayActionPopover({
   consigneeId,
   subscriptionId,
@@ -602,6 +642,7 @@ export function DayActionPopover({
   permissions,
   availableAddresses,
   addressLabel,
+  outboundSyncState,
 }: DayActionPopoverProps) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<PopoverMode>("menu");
@@ -673,6 +714,10 @@ export function DayActionPopover({
   // arrives as HH:MM:SS from postgres-js.
   const timeWindow = `${deliveryStartTime.slice(0, 5)}–${deliveryEndTime.slice(0, 5)}`;
 
+  // Day-29 §D(2) Phase-1 — outbound sync state badge derivation. null
+  // when 'synced'; explicit copy + classes for pending / failed.
+  const syncBadge = outboundSyncStateBadge(outboundSyncState);
+
   return (
     <>
       <button
@@ -684,6 +729,13 @@ export function DayActionPopover({
         <span className="block truncate">{statusLabel}</span>
         <span className="block tabular-nums opacity-70">{timeWindow}</span>
         <AddressIndicator label={addressLabel} />
+        {syncBadge !== null ? (
+          <span
+            className={`mt-0.5 block truncate rounded-sm px-1 py-px text-[8px] font-medium uppercase tracking-[0.08em] ${syncBadge.classes}`}
+          >
+            {syncBadge.label}
+          </span>
+        ) : null}
       </button>
 
       {open ? (
@@ -717,6 +769,18 @@ export function DayActionPopover({
                 <dt className="text-[color:var(--color-text-secondary)]">Window</dt>
                 <dd className="tabular-nums text-navy">{timeWindow}</dd>
               </div>
+              {syncBadge !== null ? (
+                <div className="flex items-center justify-between">
+                  <dt className="text-[color:var(--color-text-secondary)]">SuiteFleet sync</dt>
+                  <dd>
+                    <span
+                      className={`inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${syncBadge.classes}`}
+                    >
+                      {syncBadge.label}
+                    </span>
+                  </dd>
+                </div>
+              ) : null}
               <div className="flex items-center justify-between">
                 <dt className="text-[color:var(--color-text-secondary)]">Task ID</dt>
                 <dd className="font-mono text-xs text-[color:var(--color-text-tertiary)]">
