@@ -56,15 +56,15 @@ const consigneeSchema = z.object({
 });
 
 const deliveryInformationSchema = z.object({
-  recipientName: z.string().optional(),
-  signature: z.string().optional(),
-  consigneeRating: z.number().optional(),
-  consigneeComment: z.string().optional(),
-  driverComment: z.string().optional(),
-  numberOfAttempts: z.number().optional(),
+  recipientName: z.string().nullable().optional(),
+  signature: z.string().nullable().optional(),
+  consigneeRating: z.number().nullable().optional(),
+  consigneeComment: z.string().nullable().optional(),
+  driverComment: z.string().nullable().optional(),
+  numberOfAttempts: z.number().nullable().optional(),
   failureReasonComment: z.string().nullable().optional(),
-  completionLatitude: z.number().optional(),
-  completionLongitude: z.number().optional(),
+  completionLatitude: z.number().nullable().optional(),
+  completionLongitude: z.number().nullable().optional(),
 });
 
 const webhookEditPayloadSchema = z.object({
@@ -329,21 +329,24 @@ function extractEditFields(parsed: WebhookEditPayload): ExtractedFields {
   // diff. Post-fix the value comes off the parsed shape (Zod-typed
   // camelCase) so a future snake_case typo would not compile.
   const di = parsed.deliveryInformation;
+  // All deliveryInformation leaves are `.nullable().optional()` in the schema
+  // (SF empirically emits the block present-and-all-null for any
+  // not-yet-delivered task — Day-29 forensic, 12-payload corpus). Coerce
+  // null → undefined here to preserve diffField's "field absent → leave
+  // column alone" semantic uniformly across all 9 leaves.
   return {
     delivery_date: parsed.deliveryDate,
     delivery_start_time: parsed.deliveryStartTime,
     delivery_end_time: parsed.deliveryEndTime,
-    recipient_name: di?.recipientName,
-    signature: di?.signature,
-    consignee_rating: di?.consigneeRating,
-    consignee_comment: di?.consigneeComment,
-    driver_comment: di?.driverComment,
-    number_of_attempts: di?.numberOfAttempts,
-    // Zod schema allows null for failureReasonComment; coerce null → undefined
-    // to preserve "field absent" semantics for diffField.
+    recipient_name: di?.recipientName ?? undefined,
+    signature: di?.signature ?? undefined,
+    consignee_rating: di?.consigneeRating ?? undefined,
+    consignee_comment: di?.consigneeComment ?? undefined,
+    driver_comment: di?.driverComment ?? undefined,
+    number_of_attempts: di?.numberOfAttempts ?? undefined,
     failure_reason_comment: di?.failureReasonComment ?? undefined,
-    completion_latitude: di?.completionLatitude,
-    completion_longitude: di?.completionLongitude,
+    completion_latitude: di?.completionLatitude ?? undefined,
+    completion_longitude: di?.completionLongitude ?? undefined,
   };
 }
 

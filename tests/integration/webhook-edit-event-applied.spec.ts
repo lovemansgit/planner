@@ -39,12 +39,14 @@ const AWB_FULL_FIELDS = `WEE-${RUN_ID}-FULL`;
 const AWB_ADDRESS_AUDIT = `WEE-${RUN_ID}-ADDR`;
 const AWB_DEPRECATED = `WEE-${RUN_ID}-DEPR`;
 const AWB_NO_DIFF = `WEE-${RUN_ID}-NODIFF`;
+const AWB_NULL_TOL = `WEE-${RUN_ID}-NULL`;
 
 const TASK_TIME_EDIT = randomUUID() as Uuid;
 const TASK_FULL_FIELDS = randomUUID() as Uuid;
 const TASK_ADDRESS_AUDIT = randomUUID() as Uuid;
 const TASK_DEPRECATED = randomUUID() as Uuid;
 const TASK_NO_DIFF = randomUUID() as Uuid;
+const TASK_NULL_TOL = randomUUID() as Uuid;
 
 // Numeric placeholders for tasks.external_id — production stores SF numeric
 // IDs here while AWB strings live on tasks.external_tracking_number.
@@ -54,6 +56,7 @@ const EXT_ID_FULL_FIELDS = String(EXT_ID_BASE + 2);
 const EXT_ID_ADDRESS_AUDIT = String(EXT_ID_BASE + 3);
 const EXT_ID_DEPRECATED = String(EXT_ID_BASE + 4);
 const EXT_ID_NO_DIFF = String(EXT_ID_BASE + 5);
+const EXT_ID_NULL_TOL = String(EXT_ID_BASE + 50);
 
 function buildEditEvent(awb: string, occurredAt: string, raw: Record<string, unknown>): WebhookEvent {
   return {
@@ -566,5 +569,188 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
     const addressEntry = changedFields.find((c) => c.field === "address");
     expect(addressEntry?.previous).toBeNull();
     expect(addressEntry?.new).toMatchObject({ addressLine1: "Tower 7, Marina" });
+  });
+
+  // ---------------------------------------------------------------------------
+  // D29-NULL (plan #303 §6.1 + §6.2) — null-tolerance regression fixture.
+  //
+  // Behavioural anchor: PR #298's webhookEditPayloadSchema declared the 8
+  // non-failureReasonComment deliveryInformation leaves as `.optional()` only;
+  // SF empirically emits the block PRESENT-and-all-null for any
+  // not-yet-delivered task, so each null leaf raised invalid_type and the
+  // entire parse failed with zod_issue_count=8. Day-29 Phase-1.5 forensic
+  // proved this from 12 real production webhook_events raw_payloads (10
+  // historical TASK_HAS_BEEN_UPDATED + 2 cancel-twins).
+  //
+  // Fixture below is the VERBATIM SF wire shape from the corpus, with the
+  // AWB rebranded to AWB_NULL_TOL per the existing test-pattern at the top
+  // of this file. The load-bearing element — deliveryInformation present
+  // with all 8 non-failureReasonComment leaves null + failureReasonComment
+  // null — is byte-faithful to the AWB DMB-17621675 / 2026-05-19 wire shape
+  // captured during the forensic pull.
+  //
+  // DO NOT "normalize" this fixture (replace nulls with strings, omit the
+  // block, etc.). The all-null shape is the only shape that exercises the
+  // regression. See memory/followup_inbound_webhook_null_tolerance_regression.md
+  // for the full ground-truth narrative.
+  // ---------------------------------------------------------------------------
+
+  it("D29-NULL — all-null deliveryInformation block parses + delivery_date applies + 8 null columns untouched", async () => {
+    const occurredAt = "2026-05-09T16:00:00.000Z";
+
+    await withServiceRole("seed D29-NULL task (DMB-17621675 surrogate)", async (tx) => {
+      await tx.execute(sqlTag`
+        INSERT INTO tasks (
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
+          internal_status, delivery_date, delivery_start_time, delivery_end_time,
+          recipient_name, signature, consignee_rating, consignee_comment,
+          driver_comment, number_of_attempts,
+          completion_latitude, completion_longitude,
+          created_via
+        ) VALUES (
+          ${TASK_NULL_TOL}, ${TENANT}, ${CONSIGNEE}, ${`WEE-NULL-${RUN_ID}`},
+          ${EXT_ID_NULL_TOL}, ${AWB_NULL_TOL},
+          'CREATED', '2026-05-17', '08:00:00', '10:00:00',
+          'Pre-Existing Recipient', 'data:base64,preexisting', 4, 'Pre-existing rating',
+          'Pre-existing driver note', 0,
+          25.100, 55.200,
+          'manual_admin'
+        )
+      `);
+    });
+
+    // Verbatim wire shape — deliveryInformation present with all 8 non-
+    // failureReasonComment leaves null + failureReasonComment null (9 nulls
+    // total). This is what SF actually sends.
+    const event = buildEditEvent(AWB_NULL_TOL, occurredAt, {
+      deliveryDate: "2026-05-19",
+      deliveryStartTime: "08:00:00",
+      deliveryEndTime: "10:00:00",
+      deliveryInformation: {
+        recipientName: null,
+        signature: null,
+        consigneeRating: null,
+        consigneeComment: null,
+        driverComment: null,
+        numberOfAttempts: null,
+        failureReasonComment: null,
+        completionLatitude: null,
+        completionLongitude: null,
+      },
+    });
+
+    const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
+
+    // Assertion 1 — safeParse passes (negative-test framing: if §3 not
+    // applied, this fails first; outcome would be payload_validation_failed).
+    // Assertion 2 — outcome.applied === true.
+    expect(result.applied).toBe(true);
+
+    // Assertion 3 — exactly one column moved (delivery_date). The 8 null
+    // leaves do NOT contribute to columnsToUpdate because the extractor
+    // coerces them to undefined and diffField short-circuits.
+    if (result.applied) {
+      expect(result.changedFieldCount).toBe(1);
+    }
+
+    // Assertion 4 + 5 — tasks.delivery_date moved + updated_at advanced.
+    // Assertion 6 — none of the 8 nullable columns moved (load-bearing safety:
+    // null-leniency must NOT cause Planner columns to be nulled out).
+    const [task] = await withServiceRole("verify D29-NULL row state", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT delivery_date, delivery_start_time, delivery_end_time, updated_at, created_at,
+               recipient_name, signature, consignee_rating, consignee_comment,
+               driver_comment, number_of_attempts,
+               completion_latitude, completion_longitude
+        FROM tasks WHERE id = ${TASK_NULL_TOL} LIMIT 1
+      `),
+    );
+    const t = task as Record<string, unknown>;
+    expect((t.delivery_date as string).slice(0, 10)).toBe("2026-05-19");
+    const updatedAt = new Date(t.updated_at as string);
+    const createdAt = new Date(t.created_at as string);
+    expect(updatedAt.getTime()).toBeGreaterThan(createdAt.getTime());
+
+    expect(t.recipient_name).toBe("Pre-Existing Recipient");
+    expect(t.signature).toBe("data:base64,preexisting");
+    expect(t.consignee_rating).toBe(4);
+    expect(t.consignee_comment).toBe("Pre-existing rating");
+    expect(t.driver_comment).toBe("Pre-existing driver note");
+    expect(t.number_of_attempts).toBe(0);
+    expect(Number(t.completion_latitude)).toBe(25.1);
+    expect(Number(t.completion_longitude)).toBe(55.2);
+
+    // Assertion 7 — audit row with single delivery_date changed_fields entry;
+    // 8 null leaves do NOT appear (diffField short-circuited on undefined
+    // before push, so no metadata pollution).
+    const audits = await withServiceRole("verify D29-NULL audit shape", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT metadata FROM audit_events
+        WHERE event_type = 'task.edit_applied_via_webhook'
+          AND tenant_id = ${TENANT}
+          AND resource_id = ${TASK_NULL_TOL}
+      `),
+    );
+    expect(audits).toHaveLength(1);
+    const meta = (audits[0] as { metadata: Record<string, unknown> }).metadata;
+    const changedFields = meta.changed_fields as readonly { field: string; previous: unknown; new: unknown }[];
+    expect(changedFields).toHaveLength(1);
+    expect(changedFields[0].field).toBe("delivery_date");
+    expect(changedFields[0].new).toBe("2026-05-19");
+
+    // Assertion 8 — webhook_events row preserved with verbatim raw payload
+    // including the all-null deliveryInformation block (forensic discipline).
+    const webhookRows = await withServiceRole("verify D29-NULL webhook_events preserved", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT raw_payload FROM webhook_events
+        WHERE tenant_id = ${TENANT}
+          AND suitefleet_task_id = ${AWB_NULL_TOL}
+          AND action = 'TASK_HAS_BEEN_UPDATED'
+      `),
+    );
+    expect(webhookRows).toHaveLength(1);
+    const raw = (webhookRows[0] as { raw_payload: Record<string, unknown> }).raw_payload;
+    const di = raw.deliveryInformation as Record<string, unknown>;
+    expect(di.recipientName).toBeNull();
+    expect(di.signature).toBeNull();
+    expect(di.consigneeRating).toBeNull();
+    expect(di.completionLatitude).toBeNull();
+    expect(di.completionLongitude).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // D29-NULL-DUP (plan #303 OQ-2) — negative-replay against the dedup gate.
+  //
+  // Confirms the null-tolerance widening did NOT route around the
+  // webhook_events UNIQUE-constraint dedup. The all-null shape is the only
+  // place this combination is exercised; mirrors test 7's pattern of
+  // replaying the same (awb, occurredAt) tuple post-success.
+  // ---------------------------------------------------------------------------
+
+  it("D29-NULL-DUP — replaying the all-null fixture against the dedup gate returns reason='duplicate'", async () => {
+    const occurredAt = "2026-05-09T16:00:00.000Z"; // same as D29-NULL
+    const event = buildEditEvent(AWB_NULL_TOL, occurredAt, {
+      deliveryDate: "2026-05-19",
+      deliveryStartTime: "08:00:00",
+      deliveryEndTime: "10:00:00",
+      deliveryInformation: {
+        recipientName: null,
+        signature: null,
+        consigneeRating: null,
+        consigneeComment: null,
+        driverComment: null,
+        numberOfAttempts: null,
+        failureReasonComment: null,
+        completionLatitude: null,
+        completionLongitude: null,
+      },
+    });
+
+    const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(result.reason).toBe("duplicate");
+    }
   });
 });
