@@ -265,6 +265,78 @@ function buildConsignee(consignee: ConsigneeSnapshot): {
   };
 }
 
+// =============================================================================
+// Day-30 / Fix-A3 (Aqib UAT 2026-05-18) — outbound time-window UTC conversion
+// =============================================================================
+//
+// SuiteFleet receives `deliveryStartTime` / `deliveryEndTime` as HH:MM:SS
+// strings and interprets them as UTC (Love-confirmed SF contract). Planner
+// stores time-of-day in `tasks.delivery_start_time` / `delivery_end_time`
+// (postgres `time` columns, TZ-naive) as Dubai-local — that's how operators
+// enter them and how all merchant-facing surfaces render them. Without
+// conversion, SF renders every window +4h from operator intent (10:00 Dubai
+// → SF shows 14:00 Dubai).
+//
+// Fix per reviewer ruling on the A3 diagnosis:
+//   - Convert the TIME from Dubai-local to UTC on outbound (subtract 4h, wrap).
+//   - `deliveryDate` is the cross-system operational anchor (calendars, cron,
+//     dispatch) and STAYS Dubai-local. Even on cross-midnight wrap, the date
+//     is NOT decremented — the time wraps to the prior-UTC-day's clock value
+//     but the deliveryDate field holds the Dubai-local delivery day.
+//   - If conversion produces an inverted window (end < start numerically
+//     after conversion), throw ValidationError rather than silently emit.
+//
+// Asia/Dubai is permanent UTC+04:00 (no DST), so the conversion is a fixed
+// −4h shift. Hard-coded — not pulled from runtime TZ libs.
+
+const DUBAI_UTC_OFFSET_HOURS = 4;
+const HMS_TIME_REGEX = /^(\d{2}):(\d{2}):(\d{2})$/;
+
+function dubaiLocalTimeToUtc(time: string): string {
+  const match = HMS_TIME_REGEX.exec(time);
+  if (match === null) {
+    throw new ValidationError(
+      `Day-30 A3: time string must be HH:MM:SS, got: ${time}`,
+    );
+  }
+  const localHour = Number(match[1]);
+  const minutes = match[2];
+  const seconds = match[3];
+  if (localHour < 0 || localHour > 23) {
+    throw new ValidationError(
+      `Day-30 A3: time string hour out of range 00-23, got: ${time}`,
+    );
+  }
+  const utcHour = (localHour - DUBAI_UTC_OFFSET_HOURS + 24) % 24;
+  return `${String(utcHour).padStart(2, "0")}:${minutes}:${seconds}`;
+}
+
+function buildWireWindow(window: {
+  date: string;
+  startTime: string;
+  endTime: string;
+}): {
+  deliveryDate: string;
+  deliveryStartTime: string;
+  deliveryEndTime: string;
+} {
+  const deliveryStartTime = dubaiLocalTimeToUtc(window.startTime);
+  const deliveryEndTime = dubaiLocalTimeToUtc(window.endTime);
+  if (deliveryEndTime < deliveryStartTime) {
+    throw new ValidationError(
+      `Day-30 A3: post-UTC-conversion window is inverted (end < start). ` +
+        `Dubai-local start=${window.startTime} → UTC ${deliveryStartTime}; ` +
+        `Dubai-local end=${window.endTime} → UTC ${deliveryEndTime}; ` +
+        `deliveryDate=${window.date} (unchanged per reviewer ruling).`,
+    );
+  }
+  return {
+    deliveryDate: window.date,
+    deliveryStartTime,
+    deliveryEndTime,
+  };
+}
+
 /**
  * Day 21 / Phase 1. Build the merge-patch body for `updateTask`.
  * RFC 7396 semantics — only present fields land on the wire. Date +
@@ -280,12 +352,10 @@ function buildConsignee(consignee: ConsigneeSnapshot): {
 export function buildSuiteFleetUpdatePatchBody(
   patch: TaskUpdatePatchRequest,
 ): Record<string, unknown> {
+  // Day-30 A3: time fields shift Dubai-local → UTC; date stays Dubai-local.
+  // See buildWireWindow JSDoc above.
   return {
-    ...(patch.window !== undefined && {
-      deliveryDate: patch.window.date,
-      deliveryStartTime: patch.window.startTime,
-      deliveryEndTime: patch.window.endTime,
-    }),
+    ...(patch.window !== undefined && buildWireWindow(patch.window)),
     ...(patch.consignee !== undefined && {
       consignee: buildConsignee(patch.consignee),
     }),
@@ -356,9 +426,9 @@ export function buildSuiteFleetTaskBody(
     ...(request.deliverToCustomerOnly !== undefined && {
       deliverToCustomerOnly: request.deliverToCustomerOnly,
     }),
-    deliveryDate: request.window.date,
-    deliveryStartTime: request.window.startTime,
-    deliveryEndTime: request.window.endTime,
+    // Day-30 A3: time fields shift Dubai-local → UTC; date stays Dubai-local.
+    // See buildWireWindow JSDoc above.
+    ...buildWireWindow(request.window),
     deliveryType: "STANDARD",
     paymentMethod: request.paymentMethod,
     ...(request.notes !== undefined && { notes: request.notes }),
