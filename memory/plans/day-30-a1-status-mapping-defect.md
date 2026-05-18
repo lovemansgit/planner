@@ -85,6 +85,84 @@ This hypothesis is **consistent with** all evidence read:
 
 ---
 
+## §2.5 — Inbound timezone symmetry (BINDING ADDITION from §3.6 review of plan #306 v1)
+
+**Context:** A3 / PR #307 (`382d79b`, "outbound TZ — shift Dubai-local TIME → UTC, deliveryDate stays Dubai-local") shipped the outbound half of a TZ contract: SF wire times are UTC, Planner storage is Dubai-local-TZ-naive (`postgres time` column, no zone). The #307 commit message explicitly routes the symmetric inbound concern here: "The symmetric inbound TZ bug in `apply-webhook-edit-event.ts` (SF sends UTC; Planner writes verbatim into Dubai-local TIME column → also drifts) is confirmed and routed to the A1 lane (Session A). Not touched here." The §3.6 reviewer of plan #306 v1 made resolution of this symmetry a BINDING addition before code-PR opens.
+
+### §2.5.1 — Trace at b86466a — which inbound apply paths write SF-supplied time fields?
+
+| File | Writes `tasks.delivery_start_time` / `delivery_end_time` from SF wire? | UTC→Dubai-local conversion present? |
+|---|---|---|
+| [`apply-webhook-status-event.ts`](src/modules/integration/providers/suitefleet/apply-webhook-status-event.ts) | **NO.** Only writes `tasks.internal_status` + `tasks.pod_photos` ([lines 154-169](src/modules/integration/providers/suitefleet/apply-webhook-status-event.ts#L154-L169)). Zero time-field references in the file. | N/A — not applicable. |
+| [`apply-webhook-edit-event.ts`](src/modules/integration/providers/suitefleet/apply-webhook-edit-event.ts) | **YES.** Three sites at b86466a (post-#304 file shape). | **NO** — confirmed absent. See §2.5.2. |
+
+**The three inbound time-write sites in `apply-webhook-edit-event.ts` at b86466a:**
+
+1. **Schema accept** (lines 72-73):
+   ```ts
+   deliveryStartTime: z.string().regex(HMS_TIME_REGEX).optional(),
+   deliveryEndTime: z.string().regex(HMS_TIME_REGEX).optional(),
+   ```
+   `HMS_TIME_REGEX` = `/^\d{2}:\d{2}:\d{2}$/` (line 50). Validates the literal HH:MM:SS shape; performs ZERO conversion of any kind.
+
+2. **Extractor** (lines 339-340):
+   ```ts
+   delivery_start_time: parsed.deliveryStartTime,
+   delivery_end_time: parsed.deliveryEndTime,
+   ```
+   Verbatim passthrough of the Zod-parsed string into the `ExtractedFields` shape (interface at [lines 310-323](src/modules/integration/providers/suitefleet/apply-webhook-edit-event.ts#L310-L323)).
+
+3. **UPDATE write** (`buildSetFragment`, lines 497-500):
+   ```ts
+   case "delivery_start_time":
+     return sqlTag`delivery_start_time = ${value}::time`;
+   case "delivery_end_time":
+     return sqlTag`delivery_end_time = ${value}::time`;
+   ```
+   Casts the string to PostgreSQL `time` (TZ-naive type). No `AT TIME ZONE` clause, no helper call — the wire string lands directly in the column.
+
+The diff site at [lines 363-364](src/modules/integration/providers/suitefleet/apply-webhook-edit-event.ts#L363-L364) compares the extracted value against the current row value via `diffField`'s string `===` equality, which only suppresses a write when the two strings already match — irrelevant to the TZ-conversion concern.
+
+### §2.5.2 — Conversion-helper search (b86466a, repo-wide)
+
+Searched the repo at b86466a for any `utcTimeToDubaiLocal` / `utcToDubai` / inverse-of-`dubaiLocalTimeToUtc` helper. **Result: none exists.** A3 introduced only the outbound direction:
+
+- `dubaiLocalTimeToUtc` — defined at `src/modules/integration/providers/suitefleet/task-client.ts` (introduced in #307 at SHA `382d79b`); subtracts `DUBAI_UTC_OFFSET_HOURS = 4` with `(localHour - 4 + 24) % 24` wrap.
+- No `utcTimeToDubaiLocal` / `+4h` inverse exists anywhere in `src/modules/integration/`, `src/shared/`, or any inbound-apply module.
+
+**Confirmed:** the inbound apply path lacks the UTC→Dubai-local conversion that the symmetric TZ contract requires.
+
+### §2.5.3 — Verdict — symmetric bug CONFIRMED LATENT in code; activation depends on Phase-0
+
+**Bug is latent in code:** `apply-webhook-edit-event.ts` writes whatever string SF sends as `deliveryStartTime` / `deliveryEndTime` directly into the Dubai-local TZ-naive `time` columns. If SF wire is UTC (per A3's Love-confirmed SF contract — same contract on both directions, deliveryDate stays Dubai-local, time fields are UTC), then a wire value of `"06:00:00"` (Dubai 10:00) writes as `06:00:00` into the Dubai-local column → operator-facing display shows `06:00`, not `10:00`. Net: −4h drift on every inbound time reflection — the exact mirror of the pre-A3 outbound bug Aqib's UAT surfaced on 2026-05-18.
+
+**Activation depends on Phase-0 evidence (Q-C):** the bug fires IFF SF actually emits the time fields on inbound webhooks. Q-C is added to the §6 OQ-1 Phase-0 SQL below.
+
+### §2.5.4 — Fix scope — IN THIS LANE (per §3.6 reviewer ruling)
+
+- **Add `utcTimeToDubaiLocal(time: string): string`** helper — inverse of A3's `dubaiLocalTimeToUtc`: `(utcHour + 4) % 24` wrap, same `HMS_TIME_REGEX` validation, same `ValidationError` posture on malformed input. Single helper, ~20 LOC mirroring A3's helper.
+- **Call site** — inside `extractEditFields` ([apply-webhook-edit-event.ts:325-348](src/modules/integration/providers/suitefleet/apply-webhook-edit-event.ts#L325-L348)) — convert `parsed.deliveryStartTime` and `parsed.deliveryEndTime` via the new helper BEFORE returning into `ExtractedFields`. This is the same boundary location A3 picked for the outbound side (helper at the wire-boundary deserializer); keeps the rest of the apply path TZ-unaware.
+- **deliveryDate UNCHANGED** — per A3 ruling, `deliveryDate` stays Dubai-local cross-system. Inbound `deliveryDate` passthrough at [line 338](src/modules/integration/providers/suitefleet/apply-webhook-edit-event.ts#L338) (`delivery_date: parsed.deliveryDate`) is correct.
+- **Cross-midnight wrap inversion handling** — same concern as A3 outbound (post-conversion `end < start` is possible, e.g., SF wire 18:00-22:00 UTC → Dubai 22:00-02:00 → numerically inverted). A3 throws `ValidationError`. Inbound mirror options:
+  - **(i)** Throw `ValidationError` → routes to `payload_validation_failed` outcome (existing inbound vocabulary); webhook_events row preserved as forensic; no UPDATE; ops-visible. Consistent with A3's stance.
+  - **(ii)** Accept wrap as semantic "window spans midnight"; store both times as-converted; UI layer disambiguates. More complex; defers the wrap-semantic decision.
+
+**Builder's recommendation:** **(i) — throw `ValidationError`** — symmetric with A3's outbound stance, reuses the existing `payload_validation_failed` outcome (no new vocabulary), webhook_events row preserves the offending payload for ops triage. Reviewer rules in OQ-10.
+
+### §2.5.5 — Integration spec additions (extends §7.1 set)
+
+- **I6 (mandatory iff Phase-0 Q-C shows ≥1 inbound time-field arrival):** real SF-shaped TASK_HAS_BEEN_UPDATED payload with `deliveryInformation.deliveryStartTime: "06:00:00"` (the UTC value matching Aqib's Dubai 10:00 case from the A3 UAT). Assert `tasks.delivery_start_time = '10:00:00'` post-apply (NOT `06:00:00`); `updated_at` advanced; audit metadata `changed_fields` shows the column moved.
+- **I7 (symmetric to A3 (c)):** SF wire 18:00:00–22:00:00 UTC → post-conversion 22:00:00–02:00:00 Dubai → `ValidationError` per OQ-10 (i) ruling; webhook_events row preserved; no UPDATE; no audit emit on this task.
+- **I8 (no-op when SF doesn't send time fields):** TASK_HAS_BEEN_UPDATED with `deliveryInformation` absent of `deliveryStartTime` / `deliveryEndTime` → extractor returns `undefined` for both → diffField short-circuits → no UPDATE on those columns, no conversion called.
+
+(Numbering note: I6/I7/I8 are appended to §7.1's existing I1-I5; no renumbering of the earlier specs.)
+
+### §2.5.6 — If Phase-0 Q-C shows SF NEVER sends time fields on inbound — symmetry closes (conditional)
+
+If Q-C returns zero rows where `raw_payload->'deliveryInformation'->>'deliveryStartTime' IS NOT NULL` OR `raw_payload->'deliveryInformation'->>'deliveryEndTime' IS NOT NULL`, then **SF does not send inbound time fields and the symmetric bug is not-applicable in production**. The helper is still recommended as defense-in-depth (so future SF behavior change doesn't silently activate the drift), but I6+I7 become unit-test-only coverage rather than load-bearing integration regression. Reviewer rules in OQ-10 whether to ship the helper in either evidence outcome (recommended) or skip if SF demonstrably never emits times.
+
+---
+
 ## §3 — The mapping contract (full SF-status → Planner-status table)
 
 This is the reviewed contract. ALL SF webhook status event types currently coded in the project, with target Planner internal_status, target drawer label, and DELIVERED-→POD coupling row. Reviewer rules deltas in §6 OQ-2.
@@ -185,19 +263,56 @@ POD extraction is in the SAME function as the status write, in the SAME UPDATE s
 
 ## §6 — Open questions (number every reviewer decision)
 
-**OQ-1 — Phase 0 evidence is mandatory before code-PR.** Builder's recommendation: yes — without production webhook_events sample we cannot pin which SF action codes are actually arriving and in what proportions. Proposed SQL (Love runs):
+**OQ-1 — Phase 0 evidence is mandatory before code-PR.** **§3.6 RULING: APPROVED (a) — non-negotiable.** SQL reviewer-tightened to THREE queries (Q-A action distribution, Q-B TASK_HAS_BEEN_UPDATED status enrichment — decisive for OQ-2, Q-C inbound time-field presence — decisive for OQ-10 §2.5). Love runs all three against production:
+
+**Q-A — action distribution, all tenants, 7-day window** (wider than 72h because demo-tenant traffic is thin):
 
 ```sql
 SELECT action, COUNT(*) AS event_count,
-       MIN(received_at) AS first_seen,
-       MAX(received_at) AS last_seen
+       COUNT(DISTINCT suitefleet_task_id) AS distinct_tasks,
+       MIN(received_at) AS first_seen, MAX(received_at) AS last_seen
 FROM webhook_events
-WHERE received_at >= NOW() - INTERVAL '72 hours'
-GROUP BY action
-ORDER BY event_count DESC;
+WHERE received_at >= NOW() - INTERVAL '7 days'
+GROUP BY action ORDER BY event_count DESC;
 ```
 
-Reviewer rules: (a) run Phase 0 first (recommended), (b) skip Phase 0 and code-PR fixes hypothesis-blind, or (c) different SQL scope (e.g., longer window, specific tenant filter).
+**Q-B — does SF carry a real status INSIDE TASK_HAS_BEEN_UPDATED payloads?** (LOAD-BEARING for OQ-2):
+
+```sql
+SELECT
+  raw_payload->>'action' AS action,
+  raw_payload->'deliveryInformation'->>'status' AS delivery_info_status,
+  COUNT(*) AS cnt
+FROM webhook_events
+WHERE action = 'TASK_HAS_BEEN_UPDATED'
+  AND received_at >= NOW() - INTERVAL '7 days'
+GROUP BY 1, 2 ORDER BY cnt DESC;
+```
+
+Q-B is decisive for OQ-2: if `delivery_info_status` is consistently populated with real statuses → OQ-2 ruling will be (b) enrich; if null/absent → OQ-2 ruling will be (a) suppress-twin. **Do NOT pre-build for either** — wait for evidence.
+
+**Q-C — does SF carry deliveryStartTime / deliveryEndTime in inbound webhooks?** (LOAD-BEARING for §2.5 OQ-10 — TZ symmetry):
+
+```sql
+SELECT
+  action,
+  CASE
+    WHEN raw_payload->'deliveryInformation'->>'deliveryStartTime' IS NOT NULL
+     AND raw_payload->'deliveryInformation'->>'deliveryEndTime'   IS NOT NULL THEN 'both_present'
+    WHEN raw_payload->'deliveryInformation'->>'deliveryStartTime' IS NOT NULL THEN 'start_only'
+    WHEN raw_payload->'deliveryInformation'->>'deliveryEndTime'   IS NOT NULL THEN 'end_only'
+    ELSE 'neither'
+  END AS time_field_presence,
+  raw_payload->'deliveryInformation'->>'deliveryStartTime' AS sample_start,
+  raw_payload->'deliveryInformation'->>'deliveryEndTime'   AS sample_end,
+  COUNT(*) AS cnt
+FROM webhook_events
+WHERE received_at >= NOW() - INTERVAL '7 days'
+GROUP BY 1, 2, 3, 4
+ORDER BY cnt DESC;
+```
+
+Q-C is decisive for OQ-10: if `time_field_presence != 'neither'` for any row, the inbound TZ helper from §2.5.4 lands as load-bearing fix (I6+I7 integration specs); if all rows are `'neither'`, the helper is defense-in-depth only and I6+I7 become unit-test-only (per §2.5.6).
 
 **OQ-2 — TASK_HAS_BEEN_UPDATED twin-routing.** When SF emits a TASK_STATUS_UPDATED_TO_* event AND a TASK_HAS_BEEN_UPDATED twin for the same operator action (Day-29 cancel-twin precedent), the drawer surfaces both — and the "Updated" twin is misleading. Reviewer rules: (a) drawer suppresses "Updated" entries when a sibling status-event exists within a small time window (e.g., ±30s) for the same task, (b) edit-event applier extracts a more specific label from `deliveryInformation.status` if present, (c) leave both visible and rely on operator interpretation, (d) other. Builder's recommendation: (a) — least intrusive, cleanest UX, no schema or applier code change.
 
@@ -212,6 +327,10 @@ Reviewer rules: (a) run Phase 0 first (recommended), (b) skip Phase 0 and code-P
 **OQ-7 — Brief amendment.** Does any §3 mapping contract change force a brief v1.16 entry? Builder's preliminary read: NO — the brief commits to "SF status → internal_status" semantically (DELIVERED→DELIVERED, etc.) but does NOT enumerate the wire-vocabulary action codes. The fix is at the action-code wire vocabulary, not the semantic mapping. Reviewer confirms or rules amendment is required.
 
 **OQ-8 — Companion followup memo.** Per the post-#303 OQ-4 precedent, file `memory/followup_inbound_webhook_action_vocabulary_drift.md` in the code-PR summarizing: the three-vocabulary design (§2.2), Phase-0 evidence findings, the canonical action-code vocabulary post-fix, drawer fallback policy, and the ground-truth contract for FUTURE inbound-webhook vocabulary changes. Builder's recommendation: yes.
+
+**OQ-10 — Inbound TZ symmetry — wrap-inversion handling + ship-helper-unconditionally.** Two sub-rulings (per §2.5):
+- (a) Cross-midnight wrap inversion (post-UTC→Dubai-local `end < start`): **(i)** throw `ValidationError` → `payload_validation_failed` outcome, webhook_events preserved (symmetric to A3 outbound); **(ii)** accept as semantic "window spans midnight," store as-converted. Builder's recommendation: **(i)** — symmetric posture, no new vocabulary, ops-visible.
+- (b) Ship the `utcTimeToDubaiLocal` helper unconditionally, OR skip if Phase-0 Q-C shows SF never sends inbound time fields. Builder's recommendation: **ship unconditionally** — defense-in-depth against future SF wire-shape change; small (~20 LOC). I6+I7 integration specs become mandatory iff Q-C shows ≥1 inbound time-field arrival; otherwise become unit-test-only.
 
 ---
 
@@ -282,4 +401,43 @@ When the code-PR opens (after §3.6 on this plan-PR + Phase-0 evidence + OQ ruli
 
 ---
 
-**End of plan.** Awaiting §3.6 ruling on §6 OQs (1–9), §3 mapping contract, and §7 schema-drift posture.
+**End of plan v1.** Awaiting §3.6 ruling on §6 OQs (1–9), §3 mapping contract, and §7 schema-drift posture.
+
+---
+
+## §10 — Reviewer rulings locked (post-§3.6 v1 — 2026-05-18, plan PR #306)
+
+§3.6 RULING on plan v1 at SHA `4b35b9170619f524227d3656979d9b4dda1aea76`: APPROVED with rulings + one binding addition. Root-cause refutation (3-vocabulary drift + literal-string dispatch + §2.4 TASK_HAS_BEEN_UPDATED-twin hypothesis) accepted as correct and well-evidenced. The "static code cannot prove WHY everything renders Updated; Phase-0 evidence gates the code-PR" posture is ratified.
+
+**Locked rulings (do not re-open):**
+
+| OQ | Ruling | Notes |
+|---|---|---|
+| **OQ-1** | **APPROVED (a)** — Phase-0 evidence MANDATORY before code-PR. Non-negotiable. | SQL reviewer-tightened to Q-A + Q-B + Q-C (see §6 OQ-1 above). |
+| **OQ-2** | **RULING DEFERRED — Phase-0-gated.** Do NOT pre-decide (a) suppress. | Correct answer depends on Q-B: if SF emits status-specific codes WITH an Updated twin → suppress; if ONLY TASK_HAS_BEEN_UPDATED with status inside `deliveryInformation.status` → enrich is the ONLY option (suppress would destroy the only event). Wait for evidence. |
+| **OQ-3** | **APPROVED** — yes, move webhook_events INSERT before mapper null-check. | In-scope for code-PR. |
+| **OQ-4** | **APPROVED** — SAME LANE for POD. Locked. | Splitting manufactures Aqib's exact bug. |
+| **OQ-5** | **APPROVED IN-SCOPE with hard requirement.** | At code-PR-open SHA, read the actual current §6.2 #305 guard and explicitly determine whether the SKIPPED/DELIVERED no-op collateral-damages the `pod_photos` write. If a DELIVERED twin can no-op the POD write, the guard-narrowing fix (allow `pod_photos` write even when `internal_status` already DELIVERED) is IN THIS LANE. Reviewer will body-read this specific interaction at code-PR §3.6 — highest-risk surface in the lane. |
+| **OQ-6** | **APPROVED (a)** — raw-code fallback. | Visible drift is the correct failure mode. |
+| **OQ-7** | **CONFIRMED** — no brief v1.16. | Fix is at wire-vocabulary layer, below the brief's semantic abstraction. |
+| **OQ-8** | **APPROVED** — file `followup_inbound_webhook_action_vocabulary_drift.md` in the code-PR. | |
+| **OQ-9** | **APPROVED (a)** — single shared canonical action-code vocabulary, exported from one module, imported by parser + mapper + drawer. The structural fix. | CI-guard (b) explicitly rejected as weaker. |
+| **OQ-10** | **BINDING ADDITION** — see §2.5 for the trace + scope. Sub-rulings: (a) wrap-inversion handling + (b) ship-helper-unconditionally — awaiting §3.6 re-read of §2.5. | Phase-0 Q-C answers whether I6+I7 are mandatory or unit-test-only. |
+
+**Next steps (reviewer-defined):**
+
+1. ✅ DONE — plan revised with §2.5 inbound-TZ-symmetry section + Q-C added to OQ-1 SQL + OQ-10 added + this §10 rulings-locked section. **Revised plan-PR pinned SHA in §11 below.**
+2. Love runs Phase-0 Q-A + Q-B + Q-C against production; pastes results to reviewer.
+3. Reviewer rules OQ-2 + OQ-10 (a)+(b) from the evidence.
+4. THEN code-PR opens (T3 hard-stop #2). No code, no Phase-0 SQL run by builder, no self-merge.
+
+---
+
+## §11 — Revision history
+
+| Revision | SHA | Filed | Notes |
+|---|---|---|---|
+| v1 | `4b35b9170619f524227d3656979d9b4dda1aea76` | 2026-05-18 (Day-30 AM) | Initial plan — §1-§9. |
+| v2 | (this commit — see push output) | 2026-05-18 (Day-30 PM) | Post-§3.6: locks OQ-1/3/4/5/6/7/8/9 rulings; defers OQ-2 to Phase-0; adds OQ-10 (TZ symmetry) + §2.5 trace; tightens §6 OQ-1 SQL to Q-A + Q-B + Q-C. **Reviewer re-reads §2.5 + §6 OQ-1 + OQ-10 + §10 ONLY** — the 9 OQ rulings stand and do not re-open. |
+
+**End of plan v2.** Awaiting §3.6 re-read on §2.5 + revised §6 OQ-1 + OQ-10 ONLY.
