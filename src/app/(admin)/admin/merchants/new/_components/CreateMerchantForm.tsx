@@ -22,7 +22,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect } from "react";
 
 import { createMerchantAction, type CreateActionResult } from "../../_actions";
 
@@ -41,20 +41,6 @@ export function CreateMerchantForm() {
       router.push("/admin/merchants");
     }
   }, [actionResult.kind, router]);
-
-  // Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — form remount counter.
-  // React 19's `<form action={formAction}>` resets uncontrolled inputs
-  // after the action completes; `defaultValue` is mount-only, so a
-  // bare prop change does not re-populate the input. Bumping this
-  // counter on every actionResult identity change forces the form to
-  // remount, re-applying defaultValue from the new submittedValues.
-  // useEffect fires once on initial mount (idle → 1) and once per
-  // subsequent action invocation; the double-render cost is
-  // acceptable for the preservation UX win.
-  const [formGeneration, setFormGeneration] = useState(0);
-  useEffect(() => {
-    setFormGeneration((g) => g + 1);
-  }, [actionResult]);
 
   const fieldErrors =
     actionResult.kind === "validation" ? actionResult.fieldErrors : {};
@@ -92,7 +78,17 @@ export function CreateMerchantForm() {
         </p>
       ) : null}
 
-      <form action={formAction} className="space-y-8" key={formGeneration}>
+      {/*
+        Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — form value preservation.
+        Each Field below receives `defaultValue` from `submittedValues`
+        (echoed back by createMerchantAction on validation / conflict /
+        forbidden). React 19's `<form action={formAction}>` calls
+        form.reset() after the action completes; reset restores each
+        input to its `defaultValue` (HTML semantic), so populating
+        defaultValue from the action's submittedValues preserves the
+        operator's input. No form remount needed.
+      */}
+      <form action={formAction} className="space-y-8">
         <Field
           label="Merchant name"
           name="name"
