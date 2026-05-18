@@ -44,6 +44,20 @@ export function CreateMerchantForm() {
 
   const fieldErrors =
     actionResult.kind === "validation" ? actionResult.fieldErrors : {};
+
+  // Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — preserve submitted values
+  // across validation / conflict / forbidden round-trips. React 19
+  // server actions reset uncontrolled inputs on submit by default;
+  // echoing `defaultValue` from the action result is the canonical
+  // preservation path. Empty fallback ({}) covers idle (first render)
+  // and `created` (post-success, form unmounts via the useEffect above).
+  const submittedValues: Readonly<Record<string, string>> =
+    actionResult.kind === "validation" ||
+    actionResult.kind === "conflict" ||
+    actionResult.kind === "forbidden"
+      ? actionResult.submittedValues
+      : {};
+
   const formError =
     actionResult.kind === "conflict"
       ? actionResult.message
@@ -64,12 +78,23 @@ export function CreateMerchantForm() {
         </p>
       ) : null}
 
+      {/*
+        Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — form value preservation.
+        Each Field below receives `defaultValue` from `submittedValues`
+        (echoed back by createMerchantAction on validation / conflict /
+        forbidden). React 19's `<form action={formAction}>` calls
+        form.reset() after the action completes; reset restores each
+        input to its `defaultValue` (HTML semantic), so populating
+        defaultValue from the action's submittedValues preserves the
+        operator's input. No form remount needed.
+      */}
       <form action={formAction} className="space-y-8">
         <Field
           label="Merchant name"
           name="name"
           placeholder="Demo Bistro"
           error={fieldErrors.name}
+          defaultValue={submittedValues.name}
           required
         />
 
@@ -79,6 +104,7 @@ export function CreateMerchantForm() {
           placeholder="demo-bistro"
           hint="Lowercase letters, numbers, and hyphens (1-60 characters). Forms part of the merchant URL prefix."
           error={fieldErrors.slug}
+          defaultValue={submittedValues.slug}
           required
         />
 
@@ -95,6 +121,7 @@ export function CreateMerchantForm() {
             name="pickup_line"
             placeholder="Building 4, Sheikh Zayed Road"
             error={fieldErrors.pickup_line}
+            defaultValue={submittedValues.pickup_line}
             required
           />
 
@@ -103,6 +130,7 @@ export function CreateMerchantForm() {
             name="pickup_district"
             placeholder="Al Quoz"
             error={fieldErrors.pickup_district}
+            defaultValue={submittedValues.pickup_district}
             required
           />
 
@@ -111,6 +139,7 @@ export function CreateMerchantForm() {
             name="pickup_emirate"
             placeholder="Dubai"
             error={fieldErrors.pickup_emirate}
+            defaultValue={submittedValues.pickup_emirate}
             required
           />
         </fieldset>
@@ -130,6 +159,7 @@ export function CreateMerchantForm() {
             placeholder="000"
             hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
             error={fieldErrors.suitefleet_customer_code}
+            defaultValue={submittedValues.suitefleet_customer_code}
             required
           />
         </fieldset>
@@ -161,9 +191,29 @@ interface FieldProps {
   readonly hint?: string;
   readonly error?: string;
   readonly required?: boolean;
+  /**
+   * Day-30 / Fix-A4 — preserved across server-action round-trips via
+   * the parent's `submittedValues` (echoed back from createMerchantAction
+   * on validation / conflict / forbidden). React 19's
+   * `<form action={formAction}>` calls form.reset() after the action
+   * returns; HTML's form.reset() semantic restores each <input> to its
+   * `defaultValue` attribute, so populating defaultValue from
+   * submittedValues preserves the operator's input. No form remount,
+   * no `key=` on the <form>. See the inline comment block above the
+   * <form> element for the same mechanism stated at the call site.
+   */
+  readonly defaultValue?: string;
 }
 
-function Field({ label, name, placeholder, hint, error, required }: FieldProps) {
+function Field({
+  label,
+  name,
+  placeholder,
+  hint,
+  error,
+  required,
+  defaultValue,
+}: FieldProps) {
   const id = `merchant-${name}`;
   return (
     <div>
@@ -177,6 +227,7 @@ function Field({ label, name, placeholder, hint, error, required }: FieldProps) 
         id={id}
         name={name}
         type="text"
+        defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}
         aria-invalid={error ? "true" : undefined}
