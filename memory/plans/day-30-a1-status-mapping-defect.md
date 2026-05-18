@@ -328,9 +328,9 @@ Q-C is decisive for OQ-10: if `time_field_presence != 'neither'` for any row, th
 
 **OQ-8 — Companion followup memo.** Per the post-#303 OQ-4 precedent, file `memory/followup_inbound_webhook_action_vocabulary_drift.md` in the code-PR summarizing: the three-vocabulary design (§2.2), Phase-0 evidence findings, the canonical action-code vocabulary post-fix, drawer fallback policy, and the ground-truth contract for FUTURE inbound-webhook vocabulary changes. Builder's recommendation: yes.
 
-**OQ-10 — Inbound TZ symmetry — wrap-inversion handling + ship-helper-unconditionally.** Two sub-rulings (per §2.5):
-- (a) Cross-midnight wrap inversion (post-UTC→Dubai-local `end < start`): **(i)** throw `ValidationError` → `payload_validation_failed` outcome, webhook_events preserved (symmetric to A3 outbound); **(ii)** accept as semantic "window spans midnight," store as-converted. Builder's recommendation: **(i)** — symmetric posture, no new vocabulary, ops-visible.
-- (b) Ship the `utcTimeToDubaiLocal` helper unconditionally, OR skip if Phase-0 Q-C shows SF never sends inbound time fields. Builder's recommendation: **ship unconditionally** — defense-in-depth against future SF wire-shape change; small (~20 LOC). I6+I7 integration specs become mandatory iff Q-C shows ≥1 inbound time-field arrival; otherwise become unit-test-only.
+**OQ-10 — Inbound TZ symmetry — wrap-inversion handling + ship-helper-unconditionally.** Two sub-rulings (per §2.5). **§3.6 RULED (2026-05-18 PM, plan-PR #306 v2 re-read):**
+- (a) **RULED (i)** — throw `ValidationError` on post-conversion wrap-inversion. Symmetric with A3 outbound (reviewer-ruled + body-read in #307). Same TZ contract → same failure mode → same forensic behavior. Option (ii) accept-as-cross-midnight-semantic explicitly rejected as a bug vector (different wrap philosophy on inbound vs outbound for the same contract).
+- (b) **RULED — ship UNCONDITIONALLY** (not Q-C-gated). The correct wire-boundary conversion is correct regardless of whether currently exercised; gating it on current vendor behavior is the exact anti-pattern that produced this defect class. Q-C still determines I6/I7 load-bearing-vs-unit-only (per §2.5.6), but the helper ships either way. ~20 LOC.
 
 ---
 
@@ -422,7 +422,8 @@ When the code-PR opens (after §3.6 on this plan-PR + Phase-0 evidence + OQ ruli
 | **OQ-7** | **CONFIRMED** — no brief v1.16. | Fix is at wire-vocabulary layer, below the brief's semantic abstraction. |
 | **OQ-8** | **APPROVED** — file `followup_inbound_webhook_action_vocabulary_drift.md` in the code-PR. | |
 | **OQ-9** | **APPROVED (a)** — single shared canonical action-code vocabulary, exported from one module, imported by parser + mapper + drawer. The structural fix. | CI-guard (b) explicitly rejected as weaker. |
-| **OQ-10** | **BINDING ADDITION** — see §2.5 for the trace + scope. Sub-rulings: (a) wrap-inversion handling + (b) ship-helper-unconditionally — awaiting §3.6 re-read of §2.5. | Phase-0 Q-C answers whether I6+I7 are mandatory or unit-test-only. |
+| **OQ-10(a)** | **RULED (i)** — throw `ValidationError` on post-conversion wrap-inversion. | Symmetric with A3's outbound stance (reviewer-ruled + body-read in #307). Same TZ contract → same failure mode → same forensic behavior (`payload_validation_failed` outcome, `webhook_events` row preserved, no silent emit). Option (ii) accept-as-cross-midnight-semantic rejected: a different wrap philosophy on inbound vs outbound for the same contract is a bug vector. |
+| **OQ-10(b)** | **RULED** — ship the `utcTimeToDubaiLocal` helper **UNCONDITIONALLY** (not gated on Q-C). | ~20 LOC defense-in-depth. The correct wire-boundary conversion is correct regardless of whether currently exercised; the I8 no-time-field-path no-op spec proves it's harmless when unused; gating it on current vendor behavior is the exact anti-pattern that produced this defect class. Q-C still determines whether I6/I7 are load-bearing integration regression (SF emits times) vs unit-test-only (SF doesn't) per §2.5.6 — but the helper ships either way. |
 
 **Next steps (reviewer-defined):**
 
@@ -438,6 +439,7 @@ When the code-PR opens (after §3.6 on this plan-PR + Phase-0 evidence + OQ ruli
 | Revision | SHA | Filed | Notes |
 |---|---|---|---|
 | v1 | `4b35b9170619f524227d3656979d9b4dda1aea76` | 2026-05-18 (Day-30 AM) | Initial plan — §1-§9. |
-| v2 | (this commit — see push output) | 2026-05-18 (Day-30 PM) | Post-§3.6: locks OQ-1/3/4/5/6/7/8/9 rulings; defers OQ-2 to Phase-0; adds OQ-10 (TZ symmetry) + §2.5 trace; tightens §6 OQ-1 SQL to Q-A + Q-B + Q-C. **Reviewer re-reads §2.5 + §6 OQ-1 + OQ-10 + §10 ONLY** — the 9 OQ rulings stand and do not re-open. |
+| v2 | `af7c05a32f8c9a7992b7e156c27b2a9f1a1d6800` | 2026-05-18 (Day-30 PM) | Post-§3.6: locks OQ-1/3/4/5/6/7/8/9 rulings; defers OQ-2 to Phase-0; adds OQ-10 (TZ symmetry) + §2.5 trace; tightens §6 OQ-1 SQL to Q-A + Q-B + Q-C. Reviewer re-reads §2.5 + §6 OQ-1 + OQ-10 + §10. |
+| v3 | (this commit — see push output) | 2026-05-18 (Day-30 PM-late) | Post-v2 re-read: §2.5 + §6 OQ-1 + §10 ACCEPTED. OQ-10(a) RULED (i) ValidationError; OQ-10(b) RULED ship-unconditionally. §10 + §6 OQ-10 updated to record reviewer-locked rulings. **Record update only — no §3.6 re-read required.** A1 plan-PR #306 FULLY RULED — all 10 OQs locked; T3 hard-stop #1 CLEARED. Code-PR gated on Phase-0 evidence + OQ-2 + I6/I7 load-bearing confirmation. |
 
-**End of plan v2.** Awaiting §3.6 re-read on §2.5 + revised §6 OQ-1 + OQ-10 ONLY.
+**End of plan v3.** A1 plan-PR #306 fully ruled. **STOP — do NOT open code-PR.** Sequenced next steps: (1) Love runs Phase-0 Q-A + Q-B + Q-C against production; (2) reviewer rules OQ-2 from Q-B + confirms I6/I7 load-bearing-vs-unit-only from Q-C; (3) THEN A1 code-PR opens (T3 hard-stop #2).
