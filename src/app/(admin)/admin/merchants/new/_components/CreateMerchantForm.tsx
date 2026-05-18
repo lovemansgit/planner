@@ -194,9 +194,13 @@ interface FieldProps {
   /**
    * Day-30 / Fix-A4 — preserved across server-action round-trips via
    * the parent's `submittedValues` (echoed back from createMerchantAction
-   * on validation / conflict / forbidden). The parent's `key=` on the
-   * <form> remounts the entire form on each action invocation so this
-   * defaultValue takes effect (React's defaultValue is mount-only).
+   * on validation / conflict / forbidden). React 19's
+   * `<form action={formAction}>` calls form.reset() after the action
+   * returns; HTML's form.reset() semantic restores each <input> to its
+   * `defaultValue` attribute, so populating defaultValue from
+   * submittedValues preserves the operator's input. No form remount,
+   * no `key=` on the <form>. See the inline comment block above the
+   * <form> element for the same mechanism stated at the call site.
    */
   readonly defaultValue?: string;
 }
