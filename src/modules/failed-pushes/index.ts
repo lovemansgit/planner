@@ -13,6 +13,7 @@ export type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
 export type { PushSingleTaskFn, RetryFailedPushResult } from "./service";
 
 export {
+  listFailedPushTaskIdsForTenant,
   listUnresolvedFailedPushes,
   markFailedPushResolved,
   recordFailedPush,

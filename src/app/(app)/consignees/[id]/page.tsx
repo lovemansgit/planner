@@ -52,6 +52,7 @@ import {
   getTasksForSubscription,
 } from "@/modules/tasks";
 import type { Task } from "@/modules/tasks/types";
+import { listFailedPushTaskIdsForTenant } from "@/modules/failed-pushes";
 
 import { Toast } from "@/components/Toast";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
@@ -157,11 +158,22 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let calendarExceptions: readonly SubscriptionException[] = [];
   let calendarYearCounts: readonly DayBucketCount[] = [];
   let calendarAddresses: readonly ConsigneeAddressRow[] = [];
+  // Day-30 / Fix-A2 (Aqib UAT 2026-05-18) — tenant-scoped set of task IDs
+  // with unresolved failed_pushes. Fetched only on calendar week/month
+  // tabs (the per-task render surfaces); empty set when the operator
+  // lacks the new `failed_pushes:read` permission so the badge silently
+  // omits rather than 500-ing the page.
+  let calendarFailedPushTaskIds: ReadonlySet<string> = new Set();
   let subscriptionGroups: readonly SubscriptionDetailGroup[] = [];
   let canChangeState = false;
   let canEditConsignee = false;
   let canCreateSubscription = false;
   let canAddAdHocTask = false;
+  // Day-30 / Fix-A2 — read-side gate for the new `failed_pushes:read`
+  // permission. Read inside the user-kind check below; consumed at the
+  // calendar fetch branch to decide whether to enqueue the failed-push
+  // ID query alongside the tasks/exceptions/addresses fetches.
+  let canReadFailedPushes = false;
   // Day-25 / brief v1.12 §3.3.3 — Overview-tab empty-state detection.
   // When both subscription and task counts are zero, the Overview tab
   // renders prominent Create-subscription + Add-ad-hoc-task CTAs.
@@ -209,6 +221,10 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
       );
       calendarPermissions.canAddNote = perms.has("task:add_note");
       calendarPermissions.canViewTimeline = perms.has("task:view_timeline");
+      // Day-30 / Fix-A2 — read-only failed-push visibility for the
+      // calendar badge. Auto-pickup gives Tenant Admin (TENANT_SCOPED),
+      // explicit-list gives Ops Manager + CS Agent.
+      canReadFailedPushes = perms.has("failed_pushes:read");
     }
 
     // Day-25 / brief v1.12 §3.3.3 — onboarding stats fetched on every
@@ -269,28 +285,43 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
         calendarPermissions.canChangeAddressOneOff ||
         calendarPermissions.canChangeAddressForward;
 
+      // Day-30 / Fix-A2 — gate the failed-push read on the new
+      // `failed_pushes:read` permission. Read-side permission split
+      // from `failed_pushes:retry` (which stays Tenant-Admin-only).
+      // Empty set when the operator lacks the perm — silently omits
+      // the badge rather than 500-ing the calendar.
+      const needsFailedPushRead = canReadFailedPushes;
+
       if (activeView === "week") {
         const weekEnd = addDays(weekStart, 6);
-        const [tasks, exceptions, addresses] = await Promise.all([
+        const [tasks, exceptions, addresses, failedPushIds] = await Promise.all([
           getConsigneeTasksForDateRange(ctx, id as Uuid, weekStart, weekEnd),
           getConsigneeCalendarExceptions(ctx, id as Uuid, weekStart, weekEnd),
           needsAddresses ? listConsigneeAddresses(ctx, id as Uuid) : Promise.resolve([]),
+          needsFailedPushRead
+            ? listFailedPushTaskIdsForTenant(ctx)
+            : Promise.resolve(new Set<string>() as ReadonlySet<string>),
         ]);
         calendarTasks = tasks;
         calendarExceptions = exceptions;
         calendarAddresses = addresses;
+        calendarFailedPushTaskIds = failedPushIds;
       } else if (activeView === "month") {
         const monthEnd = computeMonthEnd(new Date(`${monthStart}T00:00:00Z`));
         const gridStart = computeMonthGridStart(monthStart);
         const gridEnd = computeMonthGridEnd(monthEnd);
-        const [tasks, exceptions, addresses] = await Promise.all([
+        const [tasks, exceptions, addresses, failedPushIds] = await Promise.all([
           getConsigneeTasksForDateRange(ctx, id as Uuid, gridStart, gridEnd),
           getConsigneeCalendarExceptions(ctx, id as Uuid, gridStart, gridEnd),
           needsAddresses ? listConsigneeAddresses(ctx, id as Uuid) : Promise.resolve([]),
+          needsFailedPushRead
+            ? listFailedPushTaskIdsForTenant(ctx)
+            : Promise.resolve(new Set<string>() as ReadonlySet<string>),
         ]);
         calendarTasks = tasks;
         calendarExceptions = exceptions;
         calendarAddresses = addresses;
+        calendarFailedPushTaskIds = failedPushIds;
       } else {
         const yearEnd = computeYearEnd(new Date(`${yearStart}T00:00:00Z`));
         [calendarYearCounts, calendarExceptions] = await Promise.all([
@@ -435,6 +466,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                   exceptions={calendarExceptions}
                   permissions={calendarPermissions}
                   availableAddresses={calendarAddresses}
+                  failedPushTaskIds={calendarFailedPushTaskIds}
                 />
               ) : null}
               {activeView === "month" ? (
@@ -445,6 +477,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                   exceptions={calendarExceptions}
                   permissions={calendarPermissions}
                   availableAddresses={calendarAddresses}
+                  failedPushTaskIds={calendarFailedPushTaskIds}
                 />
               ) : null}
               {activeView === "year" ? (

@@ -113,6 +113,12 @@ const ROLES_DRAFT = {
       // belongs to OM same as TA. Explicit add because ops-manager doesn't
       // auto-pickup tenant/webhook_config-resource perms.
       "webhook_config:read",
+      // Day-30 / Fix-A2 — read-only failed-push visibility for the merchant
+      // task views. Parallels webhook_config:read (operational-debugging
+      // surface that Ops Manager needs without retry-tier authority).
+      // No corresponding `failed_pushes:retry` add here — retry stays
+      // Tenant-Admin-only per the existing failed_pushes:retry posture.
+      "failed_pushes:read",
     ]),
   },
 
@@ -171,6 +177,13 @@ const ROLES_DRAFT = {
       // Manager but not CS Agent.
       "task:add_note",
       "task:view_timeline",
+      // Day-30 / Fix-A2 — read-only failed-push visibility for the
+      // merchant calendar surface. CS Agent needs the failure signal
+      // during case investigation (operator-reported "where's my
+      // delivery?" → CS sees the failed-push indicator instead of an
+      // unhelpful "Created" state). Read-only — retry stays
+      // Tenant-Admin-only via the unchanged failed_pushes:retry gate.
+      "failed_pushes:read",
     ]),
   },
 

@@ -337,6 +337,63 @@ describe("failed_pushes:retry permission (Day 8 / D8-5)", () => {
   });
 });
 
+describe("failed_pushes:read permission (Day-30 / Fix-A2 — Aqib UAT 2026-05-18)", () => {
+  // Pins the auto-pickup behaviour for the new read-only failed-push
+  // visibility permission. Split from failed_pushes:retry (which stays
+  // Tenant-Admin-only) so the consignee calendar can surface the
+  // failed-push badge to all three merchant roles. The split was
+  // pre-blessed in the failed_pushes:retry registration ("If we later
+  // want a CS-readable surface (no retry button), split into two perms").
+  //
+  // Distribution (load-bearing):
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup
+  //   - Ops Manager:  EXPLICIT-list addition (parallels webhook_config:read)
+  //   - CS Agent:     EXPLICIT-list addition (CS needs the failure signal
+  //                   during case investigation)
+  //
+  // The retry split is the inverted distribution: read is widely
+  // available, retry stays admin-only. This test pins both halves —
+  // any future PR that conflates the two permissions trips here.
+
+  it("registers failed_pushes:read in the catalogue, not systemOnly", () => {
+    expect(PERMISSIONS["failed_pushes:read"]).toBeDefined();
+    expect(PERMISSIONS["failed_pushes:read"].systemOnly).toBe(false);
+  });
+
+  it("derives from resource:action correctly (resource=failed_pushes, action=read)", () => {
+    expect(PERMISSIONS["failed_pushes:read"].resource).toBe("failed_pushes");
+    expect(PERMISSIONS["failed_pushes:read"].action).toBe("read");
+  });
+
+  it("Tenant Admin holds it (TENANT_SCOPED auto-pickup)", () => {
+    const perms = ROLES[TENANT_ADMIN_ROLE_SLUG].permissions;
+    expect(perms.has("failed_pushes:read")).toBe(true);
+  });
+
+  it("Ops Manager holds it (explicit-list addition — read-only operational signal)", () => {
+    const perms = ROLES["ops-manager"].permissions;
+    expect(perms.has("failed_pushes:read")).toBe(true);
+  });
+
+  it("CS Agent holds it (explicit-list addition — failure signal for case investigation)", () => {
+    const perms = ROLES["cs-agent"].permissions;
+    expect(perms.has("failed_pushes:read")).toBe(true);
+  });
+
+  it("CS Agent + Ops Manager retain the retry-vs-read split (read yes, retry NO)", () => {
+    // Load-bearing: read should be widely available, retry stays
+    // Tenant-Admin-only. If a future PR auto-grants retry to lower
+    // roles, this test trips and forces a conscious decision.
+    const csPerms = ROLES["cs-agent"].permissions;
+    expect(csPerms.has("failed_pushes:read")).toBe(true);
+    expect(csPerms.has("failed_pushes:retry")).toBe(false);
+
+    const omPerms = ROLES["ops-manager"].permissions;
+    expect(omPerms.has("failed_pushes:read")).toBe(true);
+    expect(omPerms.has("failed_pushes:retry")).toBe(false);
+  });
+});
+
 describe("task:print_labels permission (Day 8 / D8-6)", () => {
   // Pins the auto-pickup behaviour for the new SuiteFleet label-print
   // permission. Per memory/followup_suitefleet_label_endpoint.md the

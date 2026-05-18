@@ -514,6 +514,32 @@ const PERMISSIONS_DRAFT = {
     systemOnly: false,
   },
 
+  // Day-30 / Fix-A2 (Aqib UAT 2026-05-18) — read-only failed-push
+  // visibility for the merchant operator's task views. Aqib observed
+  // a task that failed to push to SF (e.g. credentials not configured)
+  // showing on the merchant calendar as plain "Created" with no failure
+  // indicator — the failed_pushes row IS persisted tenant-scoped, but
+  // every read surface was gated on `failed_pushes:retry`
+  // (Tenant-Admin-only). Ops Manager + CS Agent need the read signal
+  // without the retry capability. The permission split was pre-blessed
+  // by the failed_pushes:retry registration above ("If we later want a
+  // CS-readable surface (no retry button), split into two perms").
+  //
+  // Auto-pickup distribution:
+  //   - Tenant Admin: TENANT_SCOPED auto-pickup
+  //   - Ops Manager:  EXPLICIT-list addition (read-only operational
+  //                   signal parallels webhook_config:read)
+  //   - CS Agent:     EXPLICIT-list addition (CS hand-rolled list; needs
+  //                   the failure signal during case investigation)
+  "failed_pushes:read": {
+    id: "failed_pushes:read",
+    resource: "failed_pushes",
+    action: "read",
+    description:
+      "Read-only listing of unresolved failed_pushes for surfacing the failed-push indicator on merchant task views (consignee calendar, /tasks). Does NOT grant retry — the retry capability stays gated on failed_pushes:retry (Tenant-Admin-only). Auto-pickup by Tenant Admin via TENANT_SCOPED; explicit add for Ops Manager and CS Agent.",
+    systemOnly: false,
+  },
+
   // ---- webhook_config (Day 9 / P4a) --------------------------------------
   // Read-only view of the inbound webhook configuration page at
   // /admin/webhook-config: per-tenant URL display + Tier-2 mismatch

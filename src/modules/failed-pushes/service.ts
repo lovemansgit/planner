@@ -356,6 +356,41 @@ export async function listUnresolvedFailedPushes(
 }
 
 // =============================================================================
+// listFailedPushTaskIdsForTenant — Day-30 / Fix-A2 (Aqib UAT 2026-05-18)
+// =============================================================================
+
+/**
+ * Day-30 / Fix-A2 — read-only set of task IDs with unresolved
+ * failed_pushes rows for the tenant. Powers the failed-push indicator
+ * on merchant task views (consignee calendar, /tasks). Gated on the
+ * NEW `failed_pushes:read` permission — split from `failed_pushes:retry`
+ * (which stays Tenant-Admin-only). The split was pre-blessed in the
+ * failed_pushes:retry registration ("If we later want a CS-readable
+ * surface (no retry button), split into two perms").
+ *
+ * Returns a Set<Uuid> rather than the full row payload — call sites
+ * only need set-membership for badge rendering. Keeps the wire-shape
+ * minimal and avoids leaking failure_payload / failure_reason to
+ * roles that have read-but-not-retry authority (CS Agent / Ops
+ * Manager); those fields stay accessible only via the existing
+ * Tenant-Admin-gated listUnresolvedFailedPushes.
+ *
+ * Tenant-scoped via withTenant. Read-not-audited per R-4 (no state
+ * change; matches listUnresolvedFailedPushes posture).
+ */
+export async function listFailedPushTaskIdsForTenant(
+  ctx: RequestContext,
+): Promise<ReadonlySet<Uuid>> {
+  requirePermission(ctx, "failed_pushes:read");
+  assertTenantScoped(ctx, "failed_pushes:list_task_ids");
+  const tenantId = ctx.tenantId;
+  const rows = await withTenant(tenantId, async (tx) =>
+    listUnresolvedByTenant(tx, tenantId),
+  );
+  return new Set(rows.map((r) => r.taskId as Uuid));
+}
+
+// =============================================================================
 // retryFailedPush — Day 8 / D8-5
 // =============================================================================
 // Operator-driven manual retry of a failed_pushes row. The
