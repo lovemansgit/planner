@@ -22,7 +22,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 
 import { createMerchantAction, type CreateActionResult } from "../../_actions";
 
@@ -42,8 +42,36 @@ export function CreateMerchantForm() {
     }
   }, [actionResult.kind, router]);
 
+  // Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — form remount counter.
+  // React 19's `<form action={formAction}>` resets uncontrolled inputs
+  // after the action completes; `defaultValue` is mount-only, so a
+  // bare prop change does not re-populate the input. Bumping this
+  // counter on every actionResult identity change forces the form to
+  // remount, re-applying defaultValue from the new submittedValues.
+  // useEffect fires once on initial mount (idle → 1) and once per
+  // subsequent action invocation; the double-render cost is
+  // acceptable for the preservation UX win.
+  const [formGeneration, setFormGeneration] = useState(0);
+  useEffect(() => {
+    setFormGeneration((g) => g + 1);
+  }, [actionResult]);
+
   const fieldErrors =
     actionResult.kind === "validation" ? actionResult.fieldErrors : {};
+
+  // Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — preserve submitted values
+  // across validation / conflict / forbidden round-trips. React 19
+  // server actions reset uncontrolled inputs on submit by default;
+  // echoing `defaultValue` from the action result is the canonical
+  // preservation path. Empty fallback ({}) covers idle (first render)
+  // and `created` (post-success, form unmounts via the useEffect above).
+  const submittedValues: Readonly<Record<string, string>> =
+    actionResult.kind === "validation" ||
+    actionResult.kind === "conflict" ||
+    actionResult.kind === "forbidden"
+      ? actionResult.submittedValues
+      : {};
+
   const formError =
     actionResult.kind === "conflict"
       ? actionResult.message
@@ -64,12 +92,13 @@ export function CreateMerchantForm() {
         </p>
       ) : null}
 
-      <form action={formAction} className="space-y-8">
+      <form action={formAction} className="space-y-8" key={formGeneration}>
         <Field
           label="Merchant name"
           name="name"
           placeholder="Demo Bistro"
           error={fieldErrors.name}
+          defaultValue={submittedValues.name}
           required
         />
 
@@ -79,6 +108,7 @@ export function CreateMerchantForm() {
           placeholder="demo-bistro"
           hint="Lowercase letters, numbers, and hyphens (1-60 characters). Forms part of the merchant URL prefix."
           error={fieldErrors.slug}
+          defaultValue={submittedValues.slug}
           required
         />
 
@@ -95,6 +125,7 @@ export function CreateMerchantForm() {
             name="pickup_line"
             placeholder="Building 4, Sheikh Zayed Road"
             error={fieldErrors.pickup_line}
+            defaultValue={submittedValues.pickup_line}
             required
           />
 
@@ -103,6 +134,7 @@ export function CreateMerchantForm() {
             name="pickup_district"
             placeholder="Al Quoz"
             error={fieldErrors.pickup_district}
+            defaultValue={submittedValues.pickup_district}
             required
           />
 
@@ -111,6 +143,7 @@ export function CreateMerchantForm() {
             name="pickup_emirate"
             placeholder="Dubai"
             error={fieldErrors.pickup_emirate}
+            defaultValue={submittedValues.pickup_emirate}
             required
           />
         </fieldset>
@@ -130,6 +163,7 @@ export function CreateMerchantForm() {
             placeholder="000"
             hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
             error={fieldErrors.suitefleet_customer_code}
+            defaultValue={submittedValues.suitefleet_customer_code}
             required
           />
         </fieldset>
@@ -161,9 +195,25 @@ interface FieldProps {
   readonly hint?: string;
   readonly error?: string;
   readonly required?: boolean;
+  /**
+   * Day-30 / Fix-A4 — preserved across server-action round-trips via
+   * the parent's `submittedValues` (echoed back from createMerchantAction
+   * on validation / conflict / forbidden). The parent's `key=` on the
+   * <form> remounts the entire form on each action invocation so this
+   * defaultValue takes effect (React's defaultValue is mount-only).
+   */
+  readonly defaultValue?: string;
 }
 
-function Field({ label, name, placeholder, hint, error, required }: FieldProps) {
+function Field({
+  label,
+  name,
+  placeholder,
+  hint,
+  error,
+  required,
+  defaultValue,
+}: FieldProps) {
   const id = `merchant-${name}`;
   return (
     <div>
@@ -177,6 +227,7 @@ function Field({ label, name, placeholder, hint, error, required }: FieldProps) 
         id={id}
         name={name}
         type="text"
+        defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}
         aria-invalid={error ? "true" : undefined}

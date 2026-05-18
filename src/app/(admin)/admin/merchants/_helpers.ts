@@ -133,9 +133,27 @@ export interface ParsedCreateMerchantInput {
  *  field error rather than a round-trip ValidationError on submit. */
 const CLIENT_SUITEFLEET_CUSTOMER_CODE_RE = /^[1-9]\d*$/;
 
+/**
+ * Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — every parser result (success
+ * AND failure) carries `submittedValues`: the keyed snapshot of the
+ * trimmed raw form input. The action layer threads this back into the
+ * action result so the client form can echo `defaultValue` on each
+ * <input> after a validation/conflict/forbidden round-trip, avoiding
+ * the React 19 server-action reset that wipes uncontrolled inputs on
+ * submit. The map is keyed by the FormData field name (snake_case)
+ * so the Field component looks up by `name` prop verbatim.
+ */
 export type ParseCreateMerchantResult =
-  | { readonly ok: true; readonly value: ParsedCreateMerchantInput }
-  | { readonly ok: false; readonly fieldErrors: Readonly<Record<string, string>> };
+  | {
+      readonly ok: true;
+      readonly value: ParsedCreateMerchantInput;
+      readonly submittedValues: Readonly<Record<string, string>>;
+    }
+  | {
+      readonly ok: false;
+      readonly fieldErrors: Readonly<Record<string, string>>;
+      readonly submittedValues: Readonly<Record<string, string>>;
+    };
 
 /**
  * Parse + validate raw form data for the new-merchant form. Returns
@@ -143,12 +161,19 @@ export type ParseCreateMerchantResult =
  * touching the service layer when client-side input is invalid; the
  * field-error map keeps each message colocated with its input on
  * render.
+ *
+ * Day-30 / Fix-A4: both branches return `submittedValues` — the
+ * action threads this through to the form for `defaultValue`
+ * preservation across validation/conflict/forbidden round-trips.
  */
 export function parseCreateMerchantForm(formData: FormData): ParseCreateMerchantResult {
   const fieldErrors: Record<string, string> = {};
+  const submittedValues: Record<string, string> = {};
   const trimmed = (key: string): string => {
     const v = formData.get(key);
-    return typeof v === "string" ? v.trim() : "";
+    const out = typeof v === "string" ? v.trim() : "";
+    submittedValues[key] = out;
+    return out;
   };
 
   const name = trimmed("name");
@@ -183,11 +208,12 @@ export function parseCreateMerchantForm(formData: FormData): ParseCreateMerchant
   }
 
   if (Object.keys(fieldErrors).length > 0) {
-    return { ok: false, fieldErrors };
+    return { ok: false, fieldErrors, submittedValues };
   }
   return {
     ok: true,
     value: { name, slug, line, district, emirate, suitefleetCustomerCode },
+    submittedValues,
   };
 }
 

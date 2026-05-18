@@ -329,6 +329,97 @@ describe("parseCreateMerchantForm", () => {
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — submittedValues preservation
+  // ---------------------------------------------------------------------------
+  // Both result branches must echo the trimmed raw form input keyed by
+  // FormData field name so the action layer can pass it back to the form
+  // component for `defaultValue` preservation across server-action
+  // round-trips (React 19 resets uncontrolled inputs on submit).
+
+  describe("Day-30 A4 — submittedValues echoed in both branches", () => {
+    it("ok=true branch carries submittedValues (trimmed) keyed by FormData field name", () => {
+      const result = parseCreateMerchantForm(
+        makeForm({
+          name: "  Demo Bistro ",
+          slug: " DMB ",
+          pickup_line: " Line 1 ",
+          pickup_district: " District ",
+          pickup_emirate: " Dubai ",
+          suitefleet_customer_code: " 588 ",
+        }),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.submittedValues).toEqual({
+        name: "Demo Bistro",
+        slug: "DMB", // raw trimmed; case-folding is canonicalised on `value` only
+        pickup_line: "Line 1",
+        pickup_district: "District",
+        pickup_emirate: "Dubai",
+        suitefleet_customer_code: "588",
+      });
+    });
+
+    it("ok=false branch carries submittedValues — operator sees their input on re-render", () => {
+      // Aqib's UAT shape: most fields valid, one (suitefleet_customer_code)
+      // missing. Before A4 the failed render wiped all fields, including
+      // the four valid ones. After A4 the action sees and returns
+      // submittedValues so the form can echo defaultValue.
+      const result = parseCreateMerchantForm(
+        makeForm({
+          name: "Demo Bistro",
+          slug: "demo-bistro",
+          pickup_line: "Building 4, Sheikh Zayed Road",
+          pickup_district: "Al Quoz",
+          pickup_emirate: "Dubai",
+          // suitefleet_customer_code intentionally missing
+        }),
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.fieldErrors.suitefleet_customer_code).toMatch(/required/i);
+        expect(result.submittedValues).toEqual({
+          name: "Demo Bistro",
+          slug: "demo-bistro",
+          pickup_line: "Building 4, Sheikh Zayed Road",
+          pickup_district: "Al Quoz",
+          pickup_emirate: "Dubai",
+          suitefleet_customer_code: "",
+        });
+      }
+    });
+
+    it("submittedValues includes every read field, even when validation fails on multiple", () => {
+      const result = parseCreateMerchantForm(
+        makeForm({
+          name: "",
+          slug: "BAD_SLUG",
+          pickup_line: "",
+          pickup_district: "",
+          pickup_emirate: "",
+          suitefleet_customer_code: "abc",
+        }),
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        // Every field key the parser reads is present in submittedValues,
+        // regardless of validation outcome. The form preserves all of them.
+        expect(Object.keys(result.submittedValues).sort()).toEqual([
+          "name",
+          "pickup_district",
+          "pickup_emirate",
+          "pickup_line",
+          "slug",
+          "suitefleet_customer_code",
+        ]);
+        // Slug is echoed verbatim (raw-trimmed); normaliseSlug applies on
+        // the parsed `value` path only, not on the preserved-form echo.
+        expect(result.submittedValues.slug).toBe("BAD_SLUG");
+        expect(result.submittedValues.suitefleet_customer_code).toBe("abc");
+      }
+    });
+  });
+
   it("treats whitespace-only fields as missing", () => {
     const result = parseCreateMerchantForm(
       makeForm({

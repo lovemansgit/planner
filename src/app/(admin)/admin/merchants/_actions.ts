@@ -109,14 +109,31 @@ function mapStatusError(err: unknown): StatusActionResult {
 // Create (new merchant form)
 // -----------------------------------------------------------------------------
 
+/**
+ * Day-30 / Fix-A4 (Aqib UAT 2026-05-18): every error result kind carries
+ * `submittedValues` so the client form can preserve operator-entered
+ * values across the round-trip. React 19 server actions reset uncontrolled
+ * inputs on submit; echoing `defaultValue` from the action result is the
+ * canonical preservation path. `created` does not carry submittedValues
+ * (the form unmounts after the redirect in the client useEffect).
+ */
 export type CreateActionResult =
   | { readonly kind: "created"; readonly tenantId: string }
   | {
       readonly kind: "validation";
       readonly fieldErrors: Readonly<Record<string, string>>;
+      readonly submittedValues: Readonly<Record<string, string>>;
     }
-  | { readonly kind: "conflict"; readonly message: string }
-  | { readonly kind: "forbidden"; readonly message: string };
+  | {
+      readonly kind: "conflict";
+      readonly message: string;
+      readonly submittedValues: Readonly<Record<string, string>>;
+    }
+  | {
+      readonly kind: "forbidden";
+      readonly message: string;
+      readonly submittedValues: Readonly<Record<string, string>>;
+    };
 
 export async function createMerchantAction(
   _prevState: CreateActionResult | { kind: "idle" },
@@ -125,8 +142,17 @@ export async function createMerchantAction(
   const requestId = randomUUID();
   const parsed = parseCreateMerchantForm(formData);
   if (!parsed.ok) {
-    return { kind: "validation", fieldErrors: parsed.fieldErrors };
+    return {
+      kind: "validation",
+      fieldErrors: parsed.fieldErrors,
+      submittedValues: parsed.submittedValues,
+    };
   }
+
+  // Parse succeeded — `parsed.submittedValues` carries the same trimmed
+  // snapshot the form rendered against. Reuse it across the service-side
+  // error branches below so the operator's input survives any failure.
+  const submittedValues = parsed.submittedValues;
 
   try {
     const ctx = await buildRequestContext("/admin/merchants/new", requestId);
@@ -144,21 +170,23 @@ export async function createMerchantAction(
     return { kind: "created", tenantId: result.tenantId };
   } catch (err) {
     if (err instanceof ConflictError) {
-      return { kind: "conflict", message: err.message };
+      return { kind: "conflict", message: err.message, submittedValues };
     }
     if (err instanceof ForbiddenError) {
       return {
         kind: "forbidden",
         message: "You don't have permission to create merchants.",
+        submittedValues,
       };
     }
     if (err instanceof ValidationError) {
       // Service-side validation differs from client-side (e.g.,
       // unicode-tricky names that pass our trim-only check).
-      // Surface as a single combined error on `name` so it's visible.
+      // Surface as a single combined error on `_form` so it's visible.
       return {
         kind: "validation",
         fieldErrors: { _form: err.message },
+        submittedValues,
       };
     }
     throw err;
