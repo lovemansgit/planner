@@ -63,6 +63,13 @@ export interface CalendarMonthViewProps {
   readonly permissions: CalendarActionPermissions;
   /** Day-22 / PR-B — consignee's addresses for the popover address-override actions (4 + 5). */
   readonly availableAddresses: readonly ConsigneeAddressRow[];
+  /**
+   * Day-30 / Fix-A2 (Aqib UAT 2026-05-18) — tenant-scoped set of task
+   * IDs with unresolved failed_pushes; threaded to DayActionPopover
+   * for the "Failed push" badge. Empty when the operator lacks
+   * `failed_pushes:read`.
+   */
+  readonly failedPushTaskIds: ReadonlySet<string>;
 }
 
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -74,6 +81,7 @@ export function CalendarMonthView({
   exceptions,
   permissions,
   availableAddresses,
+  failedPushTaskIds,
 }: CalendarMonthViewProps) {
   const monthEnd = computeMonthEnd(new Date(`${monthStart}T00:00:00Z`));
   const gridStart = computeMonthGridStart(monthStart);
@@ -196,6 +204,7 @@ export function CalendarMonthView({
                           availableAddresses={availableAddresses}
                           addressLabel={null}
                           outboundSyncState={task.outboundSyncState}
+                          failedPush={failedPushTaskIds.has(task.id)}
                         />
                       </li>
                     );

@@ -86,6 +86,16 @@ interface DayActionPopoverProps {
    * the operator sees the in-flight SF state.
    */
   readonly outboundSyncState: TaskOutboundSyncState;
+  /**
+   * Day-30 / Fix-A2 (Aqib UAT 2026-05-18): true iff this task has an
+   * unresolved failed_pushes row visible to the operator (gated on
+   * the new `failed_pushes:read` permission upstream). When true,
+   * surface a "Failed push" badge so the merchant operator sees the
+   * push-failure state instead of the local `internal_status`
+   * ("Created"). False both when there is no failure AND when the
+   * operator lacks the read permission — the badge omits silently.
+   */
+  readonly failedPush: boolean;
 }
 
 type PopoverMode =
@@ -643,6 +653,7 @@ export function DayActionPopover({
   availableAddresses,
   addressLabel,
   outboundSyncState,
+  failedPush,
 }: DayActionPopoverProps) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<PopoverMode>("menu");
@@ -736,6 +747,21 @@ export function DayActionPopover({
             {syncBadge.label}
           </span>
         ) : null}
+        {/*
+          Day-30 / Fix-A2 — "Failed push" badge. Distinct from the
+          outboundSyncState badge (which tracks operator-initiated
+          cancel/reschedule lifecycle): this badge tracks the cron's
+          INITIAL createTask push failure, surfaced from the
+          failed_pushes DLQ via the parent's failedPushTaskIds set.
+          Same warning palette as 'failed' outbound-sync.
+        */}
+        {failedPush ? (
+          <span
+            className="mt-0.5 block truncate rounded-sm bg-amber-50 px-1 py-px text-[8px] font-medium uppercase tracking-[0.08em] text-amber-900"
+          >
+            Failed push — see ops
+          </span>
+        ) : null}
       </button>
 
       {open ? (
@@ -777,6 +803,22 @@ export function DayActionPopover({
                       className={`inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${syncBadge.classes}`}
                     >
                       {syncBadge.label}
+                    </span>
+                  </dd>
+                </div>
+              ) : null}
+              {/*
+                Day-30 / Fix-A2 — "Failed push" row inside the open
+                popover dialog. Mirrors the trigger-side badge above
+                but in dl form. Same warning palette as the SuiteFleet
+                sync 'failed' state.
+              */}
+              {failedPush ? (
+                <div className="flex items-center justify-between">
+                  <dt className="text-[color:var(--color-text-secondary)]">SuiteFleet push</dt>
+                  <dd>
+                    <span className="inline-flex items-center rounded-sm bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-amber-900">
+                      Failed — see ops
                     </span>
                   </dd>
                 </div>

@@ -45,6 +45,15 @@ export interface CalendarWeekViewProps {
   readonly permissions: CalendarActionPermissions;
   /** Day-22 / PR-B — consignee's addresses for the popover address-override actions (4 + 5). */
   readonly availableAddresses: readonly ConsigneeAddressRow[];
+  /**
+   * Day-30 / Fix-A2 (Aqib UAT 2026-05-18) — tenant-scoped set of task
+   * IDs that have unresolved failed_pushes rows. Threaded to
+   * DayActionPopover for the "Failed push" badge render so the
+   * merchant operator sees the failure state instead of the local
+   * internal_status ("Created"). Empty when the operator lacks
+   * `failed_pushes:read`; the badge omits silently in that case.
+   */
+  readonly failedPushTaskIds: ReadonlySet<string>;
 }
 
 /** Display the day name + numeric date in header rows. */
@@ -62,6 +71,7 @@ export function CalendarWeekView({
   exceptions,
   permissions,
   availableAddresses,
+  failedPushTaskIds,
 }: CalendarWeekViewProps) {
   // Build 7-day window starting from weekStart.
   const days: readonly string[] = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -204,6 +214,7 @@ export function CalendarWeekView({
                             availableAddresses={availableAddresses}
                             addressLabel={task.addressLabel}
                             outboundSyncState={task.outboundSyncState}
+                            failedPush={failedPushTaskIds.has(task.id)}
                           />
                         )}
                       </li>
