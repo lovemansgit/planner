@@ -113,11 +113,17 @@ describe("buildSuiteFleetTaskBody — required fields and shape", () => {
     expect(body.status).toBe("ORDERED");
   });
 
-  it("splits the delivery window into deliveryDate / deliveryStartTime / deliveryEndTime", () => {
+  it("splits the delivery window: date stays Dubai-local, times shift Dubai→UTC (Day-30 A3)", () => {
+    // SAMPLE_REQUEST window = { date: 2026-04-30, start: 23:00, end: 02:00 } Dubai-local.
+    // Post-A3 contract:
+    //   - times shift −4h to UTC: 23:00 Dubai → 19:00 UTC; 02:00 Dubai → 22:00 UTC (wrap)
+    //   - deliveryDate STAYS Dubai-local 2026-04-30 (cross-system operational anchor;
+    //     reviewer ruling: do NOT decrement date even on cross-midnight wrap)
+    //   - post-conversion window is NOT inverted (19:00 < 22:00) — buildWireWindow accepts
     const body = buildSuiteFleetTaskBody(SAMPLE_REQUEST, 588);
     expect(body.deliveryDate).toBe("2026-04-30");
-    expect(body.deliveryStartTime).toBe("23:00:00");
-    expect(body.deliveryEndTime).toBe("02:00:00");
+    expect(body.deliveryStartTime).toBe("19:00:00");
+    expect(body.deliveryEndTime).toBe("22:00:00");
   });
 
   it("builds the consignee with name, contactPhone, and a nested location", () => {
@@ -364,9 +370,10 @@ describe("createTask — request wire shape", () => {
     expect(body.customerId).toBe(588);
     expect(body.creationSource).toBe("API");
     expect(body.status).toBe("ORDERED");
+    // Day-30 A3: wire body carries Dubai-local date + UTC-shifted times.
     expect(body.deliveryDate).toBe("2026-04-30");
-    expect(body.deliveryStartTime).toBe("23:00:00");
-    expect(body.deliveryEndTime).toBe("02:00:00");
+    expect(body.deliveryStartTime).toBe("19:00:00");
+    expect(body.deliveryEndTime).toBe("22:00:00");
   });
 });
 
@@ -818,14 +825,16 @@ describe("buildSuiteFleetUpdatePatchBody — RFC 7396 merge-patch shape", () => 
     expect(buildSuiteFleetUpdatePatchBody({})).toEqual({});
   });
 
-  it("splits window into deliveryDate / deliveryStartTime / deliveryEndTime", () => {
+  it("splits window: date stays Dubai-local, times shift Dubai→UTC (Day-30 A3)", () => {
+    // Dubai-local 09:00→11:00 on 2026-05-12.
+    // Post-A3: 09:00 Dubai → 05:00 UTC; 11:00 Dubai → 07:00 UTC; date unchanged.
     const body = buildSuiteFleetUpdatePatchBody({
       window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" },
     });
     expect(body).toEqual({
       deliveryDate: "2026-05-12",
-      deliveryStartTime: "09:00:00",
-      deliveryEndTime: "11:00:00",
+      deliveryStartTime: "05:00:00",
+      deliveryEndTime: "07:00:00",
     });
   });
 
@@ -847,18 +856,126 @@ describe("buildSuiteFleetUpdatePatchBody — RFC 7396 merge-patch shape", () => 
     expect((body.consignee as { name: string }).name).toBe("Sample Consignee");
   });
 
-  it("composes multiple patch fields without leaking absent keys", () => {
+  it("composes multiple patch fields without leaking absent keys (Day-30 A3 times in UTC)", () => {
     const body = buildSuiteFleetUpdatePatchBody({
       window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" },
       notes: "Updated note",
     });
     expect(body).toEqual({
       deliveryDate: "2026-05-12",
-      deliveryStartTime: "09:00:00",
-      deliveryEndTime: "11:00:00",
+      deliveryStartTime: "05:00:00",
+      deliveryEndTime: "07:00:00",
       notes: "Updated note",
     });
     expect(body).not.toHaveProperty("consignee");
+  });
+});
+
+// =============================================================================
+// Day-30 / Fix-A3 (Aqib UAT 2026-05-18) — outbound TZ conversion contract
+// =============================================================================
+// Asserts the reviewer-ruled contract: times shift Dubai→UTC, deliveryDate
+// stays Dubai-local (NEVER decremented even on cross-midnight wrap), and
+// post-conversion inverted windows throw ValidationError rather than emit
+// silently.
+
+describe("Day-30 A3 — outbound TZ conversion contract", () => {
+  // Construct a TaskCreateRequest fixture builder so each case below can
+  // pass its own window without re-declaring the full payload shape.
+  function requestWithWindow(window: {
+    date: string;
+    startTime: string;
+    endTime: string;
+  }): TaskCreateRequest {
+    return { ...SAMPLE_REQUEST, window };
+  }
+
+  describe("createTask wire body", () => {
+    it("(a) Aqib UAT case — 10:00-12:00 Dubai becomes 06:00-08:00 UTC; date unchanged", () => {
+      // The exact case Aqib pushed during UAT 2026-05-18. Load-bearing:
+      // it proves the time-shift + the date-stays-Dubai-local ruling
+      // simultaneously.
+      const body = buildSuiteFleetTaskBody(
+        requestWithWindow({ date: "2026-05-20", startTime: "10:00:00", endTime: "12:00:00" }),
+        588,
+      );
+      expect(body.deliveryDate).toBe("2026-05-20");
+      expect(body.deliveryStartTime).toBe("06:00:00");
+      expect(body.deliveryEndTime).toBe("08:00:00");
+    });
+
+    it("(b) cross-midnight — 22:00-23:30 Dubai → 18:00-19:30 UTC; date stays 2026-05-20", () => {
+      // Reviewer ruling check: even when conversion shifts both times into
+      // the prior UTC day's clock value, the deliveryDate (Dubai-local
+      // operational anchor) is NOT decremented.
+      const body = buildSuiteFleetTaskBody(
+        requestWithWindow({ date: "2026-05-20", startTime: "22:00:00", endTime: "23:30:00" }),
+        588,
+      );
+      expect(body.deliveryDate).toBe("2026-05-20");
+      expect(body.deliveryStartTime).toBe("18:00:00");
+      expect(body.deliveryEndTime).toBe("19:30:00");
+    });
+
+    it("(b2) cross-midnight wrap — 01:00-03:00 Dubai → 21:00-23:00 UTC; date stays 2026-05-20", () => {
+      // Both times wrap past midnight (subtracted hour is negative, +24).
+      // The date STAYS 2026-05-20 — even though the UTC clock values
+      // correspond to "2026-05-19 evening", we send the Dubai-local
+      // operational date verbatim per reviewer ruling.
+      const body = buildSuiteFleetTaskBody(
+        requestWithWindow({ date: "2026-05-20", startTime: "01:00:00", endTime: "03:00:00" }),
+        588,
+      );
+      expect(body.deliveryDate).toBe("2026-05-20");
+      expect(body.deliveryStartTime).toBe("21:00:00");
+      expect(body.deliveryEndTime).toBe("23:00:00");
+    });
+
+    it("(c) inverted-after-conversion window throws ValidationError (does NOT silently emit)", () => {
+      // Dubai-local 02:00-04:00: start wraps to 22:00 UTC, end becomes
+      // 00:00 UTC → numerically inverted (22:00 > 00:00). Reviewer ruling:
+      // surface the inversion, do NOT emit. ValidationError lands the
+      // row in DLQ via the cron failureCallback path for ops triage.
+      expect(() =>
+        buildSuiteFleetTaskBody(
+          requestWithWindow({ date: "2026-05-20", startTime: "02:00:00", endTime: "04:00:00" }),
+          588,
+        ),
+      ).toThrow(/post-UTC-conversion window is inverted/);
+    });
+
+    it("rejects malformed time string (defensive validator boundary)", () => {
+      // The TaskCreateRequest type carries `startTime: string` without HMS
+      // regex validation, so a malformed value can slip through at the
+      // type boundary. buildWireWindow catches it before it hits the wire.
+      expect(() =>
+        buildSuiteFleetTaskBody(
+          requestWithWindow({ date: "2026-05-20", startTime: "10:00", endTime: "12:00:00" }),
+          588,
+        ),
+      ).toThrow(/time string must be HH:MM:SS/);
+    });
+  });
+
+  describe("updateTask wire body", () => {
+    it("(a) Aqib UAT case mirrored on update patch", () => {
+      const body = buildSuiteFleetUpdatePatchBody({
+        window: { date: "2026-05-20", startTime: "10:00:00", endTime: "12:00:00" },
+      });
+      expect(body).toEqual({
+        deliveryDate: "2026-05-20",
+        deliveryStartTime: "06:00:00",
+        deliveryEndTime: "08:00:00",
+      });
+    });
+
+    it("(c) inverted-after-conversion window throws on update path", () => {
+      expect(() =>
+        buildSuiteFleetUpdatePatchBody({
+          window: { date: "2026-05-20", startTime: "02:00:00", endTime: "04:00:00" },
+        }),
+      ).toThrow(/post-UTC-conversion window is inverted/);
+    });
   });
 });
 
