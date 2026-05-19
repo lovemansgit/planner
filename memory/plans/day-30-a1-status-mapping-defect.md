@@ -69,6 +69,8 @@ The reviewer's brief framing — "single status-translation/display layer incomp
 
 ### §2.4 — Honest disclosure: WHY everything renders "Updated" is NOT fully provable from static code alone
 
+> [SUPERSEDED Day-31 — see Phase-0 results section below; lead hypothesis falsified by production evidence.]
+
 The strongest hypothesis grounded in code evidence (and which exactly matches Aqib's "ALL render as generic Updated" observation):
 
 **SF wire emits `TASK_HAS_BEEN_UPDATED` for most/all lifecycle changes in production.** Routed to `applyWebhookEditEvent` (per hop-3 literal-string dispatch) → webhook_events row inserted with `action='TASK_HAS_BEEN_UPDATED'` (always) → drawer renders "Updated" (per ACTION_LABELS[TASK_HAS_BEEN_UPDATED] = "Updated"). `tasks.internal_status` is never advanced by the edit path. `tasks.pod_photos` is never extracted by the edit path. The status-specific codes (TASK_STATUS_UPDATED_TO_*) either don't fire on this SF tenant config or fire with codes our mapper doesn't recognize (silent drop). **The Day-29 cancel-twin precedent shows SF emits BOTH a TASK_STATUS_UPDATED_TO_CANCELED event AND a TASK_HAS_BEEN_UPDATED twin for the same operator action; the cancel-twin survived to produce a CANCELED internal_status update, but the routing of every TASK_HAS_BEEN_UPDATED twin to the edit path inflates the "Updated" timeline rows.**
@@ -443,3 +445,54 @@ When the code-PR opens (after §3.6 on this plan-PR + Phase-0 evidence + OQ ruli
 | v3 | (this commit — see push output) | 2026-05-18 (Day-30 PM-late) | Post-v2 re-read: §2.5 + §6 OQ-1 + §10 ACCEPTED. OQ-10(a) RULED (i) ValidationError; OQ-10(b) RULED ship-unconditionally. §10 + §6 OQ-10 updated to record reviewer-locked rulings. **Record update only — no §3.6 re-read required.** A1 plan-PR #306 FULLY RULED — all 10 OQs locked; T3 hard-stop #1 CLEARED. Code-PR gated on Phase-0 evidence + OQ-2 + I6/I7 load-bearing confirmation. |
 
 **End of plan v3.** A1 plan-PR #306 fully ruled. **STOP — do NOT open code-PR.** Sequenced next steps: (1) Love runs Phase-0 Q-A + Q-B + Q-C against production; (2) reviewer rules OQ-2 from Q-B + confirms I6/I7 load-bearing-vs-unit-only from Q-C; (3) THEN A1 code-PR opens (T3 hard-stop #2).
+
+---
+
+## Phase-0 results + post-evidence rulings (Day-31)
+
+Filed: 2026-05-19 (Tue, Day-31). Phase-0 evidence executed; lead hypothesis from §2.4 (single empty mapping layer / routing-dispatch-on-raw-string) FALSIFIED by production data. Rulings on OQ-2 + I6/I7 + A1 fix shape are LOCKED below.
+
+### Phase-0 execution context
+
+Phase-0 was run Day-31 on production (Love-run, read-only, 4 queries). Schema confirmed: `webhook_events` keyed by `suitefleet_task_id`, time column `received_at`; `tasks` keyed by `external_id`, status `internal_status`, POD `pod_photos`. Join: `webhook_events.suitefleet_task_id = tasks.external_id` (both text).
+
+### Q-A — action distribution (last 14 days)
+
+| action | count |
+|---|---|
+| TASK_HAS_BEEN_UPDATED | 125 |
+| TASK_HAS_BEEN_ORDERED | 84 |
+| TASK_STATUS_UPDATED_TO_DELIVERED | 27 |
+| TASK_STATUS_UPDATED_TO_PICKED_UP | 9 |
+| TASK_STATUS_UPDATED_TO_CANCELED | 5 |
+
+**Specific status codes ARE present in production.** The original "single empty mapping layer / routing-dispatch-on-raw-string" lead hypothesis is FALSIFIED.
+
+### Q-B — action × resulting internal_status
+
+| action | resulting internal_status | count |
+|---|---|---|
+| TASK_STATUS_UPDATED_TO_DELIVERED | DELIVERED | 15 |
+| TASK_STATUS_UPDATED_TO_PICKED_UP | IN_TRANSIT | 7 |
+| TASK_HAS_BEEN_UPDATED | CREATED | 20 |
+
+**Conclusion:** parser + mapper are CORRECT for specific codes. Explicit DO-NOT-TOUCH on surfaces (A) `parser KNOWN_ACTIONS` and (B) `mapper ACTION_TO_INTERNAL_STATUS`.
+
+### Q-C — DELIVERED POD extraction
+
+15 events; **9 with_pod, 6 without_pod**. POD extraction is partially wired — there is a **data-shape defect on a 2nd SF payload shape** that the current `extractPodPhotos` does not handle.
+
+### Confirming query — current status of tasks that received a generic update (14d)
+
+**20 of 20 at CREATED.** The intentionally-enabled generic `TASK_HAS_BEEN_UPDATED` sync channel is regressing task status to CREATED rather than applying real state from `raw_payload`. Config intent confirmed by Love: **all webhooks (specific + generic) are deliberately enabled**; the generic event is an intended catch-all sync channel, NOT noise to suppress.
+
+### Rulings (locked Day-31, supersede prior placeholders)
+
+- **OQ-2 = ENRICH, suppress-twin REJECTED.** Locked on design intent (generic channel deliberately enabled) + Q-B data. The generic `TASK_HAS_BEEN_UPDATED` event stays recorded for the forensic trail; the drawer no longer keys off the raw `action`.
+- **A1 TZ spec weight I6/I7 = LOAD-BEARING CONFIRMED.** Q-C's 6/15 POD miss is the production evidence; the POD same-lane fix is **mandatory** at code-PR open, not optional.
+- **A1 fix shape = THREE planner-side defects, NO routing rewire, NO parser/mapper vocab change:**
+  1. **Drawer render fix (surface C).** Label resolves from `tasks.internal_status`, not raw `action`. Cosmetic.
+  2. **POD data-shape fix.** `extractPodPhotos` handles the 2nd `raw_payload` shape behind the 6/15 miss. Medium.
+  3. **[LEAD, HIGH / T3-weight] TASK_HAS_BEEN_UPDATED generic handler must apply real task state from `raw_payload`, never default/regress to CREATED.** Live data-correctness bug; demo-correctness exposure.
+- **No Aqib dependency on the A1 critical path.** The May-9 taper is explained as config (all webhooks on), NOT an SF behavior change — closed, no Aqib question needed on it.
+- **Exact `raw_payload` shapes for defect 2 (the 6 POD-miss rows) and defect 3 (TASK_HAS_BEEN_UPDATED rows)** to be read from `webhook_events.raw_payload` during the A1 code-PR build — scoped INTO the build, NOT a new Phase-0 gate.
