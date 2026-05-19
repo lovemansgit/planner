@@ -450,6 +450,8 @@ When the code-PR opens (after §3.6 on this plan-PR + Phase-0 evidence + OQ ruli
 
 ## Phase-0 results + post-evidence rulings (Day-31)
 
+> [SUPERSEDED Day-31 PM — see "Real-task end-to-end test (Day-31 PM)" section below. The Phase-0 data was non-representative test data; defects 2 and 3 are FALSIFIED as planner bugs; a new lead defect (inbound SF-edit propagation) is identified.]
+
 Filed: 2026-05-19 (Tue, Day-31). Phase-0 evidence executed; lead hypothesis from §2.4 (single empty mapping layer / routing-dispatch-on-raw-string) FALSIFIED by production data. Rulings on OQ-2 + I6/I7 + A1 fix shape are LOCKED below.
 
 ### Phase-0 execution context
@@ -496,3 +498,58 @@ Phase-0 was run Day-31 on production (Love-run, read-only, 4 queries). Schema co
   3. **[LEAD, HIGH / T3-weight] TASK_HAS_BEEN_UPDATED generic handler must apply real task state from `raw_payload`, never default/regress to CREATED.** Live data-correctness bug; demo-correctness exposure.
 - **No Aqib dependency on the A1 critical path.** The May-9 taper is explained as config (all webhooks on), NOT an SF behavior change — closed, no Aqib question needed on it.
 - **Exact `raw_payload` shapes for defect 2 (the 6 POD-miss rows) and defect 3 (TASK_HAS_BEEN_UPDATED rows)** to be read from `webhook_events.raw_payload` during the A1 code-PR build — scoped INTO the build, NOT a new Phase-0 gate.
+
+---
+
+## Real-task end-to-end test (Day-31 PM) — definitive re-ruling
+
+Filed: 2026-05-19 (Tue, Day-31 PM). The Phase-0 conclusions above were drawn from non-representative TEST data (tasks never cycled to delivered, no real POD, no real edits). A real end-to-end test — a subscription-linked task driven through the full SF lifecycle with a real POD and two real SF-side edits — INVERTS the diagnosis. Defects 2 and 3 are FALSIFIED. A new lead defect is identified (Finding A — inbound SF-edit propagation broken). Rulings below.
+
+### TEST
+
+Subscription-linked task **AWB MPL-80355079** (SF id `61137`, Planner task id `a4115023-056c-4244-9efd-b6f9aa541489`, MPL tenant / SF `customerId` 588) driven through the full real SF lifecycle:
+
+`TASK_HAS_BEEN_UPDATED(ORDERED) → TASK_HAS_BEEN_ORDERED → TASK_STATUS_UPDATED_TO_PICKED_UP → _ARRIVED_ON_DC → TASK_HAS_BEEN_ASSIGNED → _OUT_FOR_DELIVERY → _IN_TRANSIT → _DELIVERED`
+
+with a real POD photo, plus two SF-side edits (address change to "North Park"; `deliveryDate` 2026-05-20 → 21 → 19). All edits made on SuiteFleet; none on Planner.
+
+### DEFECT 3 (status "regresses to CREATED") — FALSIFIED, CLOSED, NOT A PLANNER BUG
+
+Planner task `internal_status` correctly = `DELIVERED` at end of real lifecycle. The 20/20-CREATED Phase-0 finding was a test-data artifact (tasks never cycled). The proposed status-resolution fix (extend `deliveryInformationSchema` with `status`, add status-enum map) is WITHDRAWN — it would have fixed a non-bug.
+
+### DEFECT 2 (POD extraction misses a 2nd shape) — FALSIFIED, CLOSED, NOT A PLANNER BUG
+
+Real DELIVERED webhook carried `photos: [s3-signed-url]`; Planner `pod_photos` extracted it correctly. The 6/15 Phase-0 miss was test fixtures with empty/absent photos. `extractPodPhotos` current behavior is correct.
+
+NOTE (not a code defect): POD is an AWS S3 signed URL with `X-Amz-Expires=604800` (7 days); demo-preflight must ensure the demo POD task is delivered within 7 days of the demo or the image link 403s. Logged as a preflight item, not a fix.
+
+### DEFECT 1 (drawer labels render generic "Updated") — CONFIRMED REAL BUG
+
+The real SF action vocabulary observed on the wire (authoritative list to key `ACTION_LABELS` against):
+
+- `TASK_HAS_BEEN_UPDATED`
+- `TASK_HAS_BEEN_ORDERED`
+- `TASK_HAS_BEEN_ASSIGNED`
+- `TASK_STATUS_UPDATED_TO_PICKED_UP`
+- `TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC`
+- `TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY`
+- `TASK_STATUS_UPDATED_TO_IN_TRANSIT`
+- `TASK_STATUS_UPDATED_TO_DELIVERED`
+
+**Ruling:** drawer preserves GRANULAR labels (Love decision Day-31) — each SF status renders its own distinct label, NOT collapsed to internal-status buckets. Surface C only; surfaces A (parser) + B (mapper) confirmed UNTOUCHED and CORRECT by the real test.
+
+### FINDING A (NEW LEAD DEFECT) — inbound SF-edit propagation broken
+
+Real evidence: SF-side address edit ("Warehouse 23/24, Al Quoz Industrial 1" → "North Park") and `deliveryDate` edit (→ 2026-05-19) were sent by SF (visible in PICKED_UP-onward `raw_payload` `consignee.location.addressLine1` and `deliveryDate`) but did NOT apply to the Planner task: `task.address_id` still resolves to the ORIGINAL address row (line "Warehouse 23/24, Al Quoz Industrial 1"); `task.delivery_date` still = 2026-05-20 (original). The inbound `TASK_HAS_BEEN_UPDATED` edit-apply path (`apply-webhook-edit-event.ts`) is not propagating address/date edits.
+
+This matches Aqib's original UAT symptom far better than the (falsified) status theory.
+
+**CONCRETE DIAGNOSTIC LEAD:** `consignee.id` shifts `33299 → 33364` across the edit boundary — SF creates a NEW consignee record on an address edit rather than mutating the existing one; the Planner inbound apply logic likely keys on the original consignee identity and never matches/applies.
+
+**Severity:** HIGH (T3-class — inbound apply path).
+
+**Lane shape decision (Love, Day-31):** Finding A is the new A1 LEAD, fixed BEFORE the demo (option (a)). Diagnosis-before-fix mandatory.
+
+### OUT OF SCOPE / FOLLOW-ON
+
+Planner→SF outbound edit propagation (the reverse direction) is untested; deferred to a separate test+lane AFTER Finding A is resolved (Love directive). Do NOT bundle.
