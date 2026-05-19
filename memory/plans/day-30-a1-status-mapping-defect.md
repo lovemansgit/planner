@@ -587,3 +587,33 @@ This section is FINAL and AUTHORITATIVE; supersedes prior sections where in conf
 5. **COMMITTED FOLLOW-ON LANE** (no longer "someday" — recorded as committed work, sequenced AFTER the inbound structural fix lands; do NOT bundle): Planner→SF OUTBOUND edit propagation — a real test in the reverse direction (edit a field in the Planner UI, verify it propagates to SF) plus whatever fix that surfaces. Inbound-then-outbound order per Love directive.
 
 6. **PHASE SEQUENCE** (no demo clock; full discipline, no compression): **(Step 1)** this amendment, reviewer-verified. **(Step 2)** Love-run supplementary real multi-field test. **(Step 3)** Session A: structural `applyWebhookStatusEvent` field-capture fix (all fields except address) + Defect 1 drawer fix, ONE T3 commit, §3.6 hard-stop #2 on the diff at pinned SHA, green CI, no `--admin`. **(Step 4)** outbound symmetry lane per item 5.
+
+---
+
+## A1 root cause refinement — second-task wire evidence (Day-31 PM, supplementary multi-field test)
+
+This section is FINAL and AUTHORITATIVE; it REFINES (does not falsify) the confirmed root cause in the prior section. Driver: a second real end-to-end test (task AWB MPL-38610276, SF id 61089, MPL tenant / SF customerId 588), driven through the full SF lifecycle with real SF-side edits to `deliveryDate` (20→21→20→19) and the delivery window, captured from production `webhook_events.raw_payload` (Love-run read-only) and the resulting Planner `tasks` row.
+
+### 1. IDENTIFIER MODEL — recorded finding (cost three queries; not a bug)
+
+`webhook_events.suitefleet_task_id` is keyed by AWB (e.g. `"MPL-38610276"`). `tasks.external_id` is keyed by the SF NUMERIC id (e.g. `"61089"`). These are DIFFERENT fields for the same task. Any `webhook_events × tasks` correlation must map AWB↔SF-id explicitly; a naive equi-join on a shared key returns zero rows and falsely reads as "no events." This is the same identifier-layer confusion the lane has hit before. Recorded so future diagnosis does not re-burn the queries.
+
+### 2. TIMESLOT NOW PROVEN ON REAL WIRE — evidence boundary CLOSED
+
+The 4th-fold evidence-boundary paragraph stated timeslot/non-date fields were schema-only, unobserved on real wire, pending this supplementary test. This test CLOSES that gap for the delivery window. On the wire, top-level `deliveryEndTime` moved `09:10:00` (create, 12/05) → `13:10:00` (first edit event 16:20:36 on 19/05) and held through DELIVERED. The window edit DID propagate on the wire and DID land on the Planner `tasks` row (Planner `delivery_end_time = 13:10:00` = the EDITED value, not the `09:10:00` create value). Timeslot delta application is therefore CONFIRMED ON REAL WIRE. The SF-UI field label `"deliveryBeforeTime"` does NOT exist on the wire; `after_time` / `before_time` are null in every row; the wire window vocabulary is exclusively top-level `deliveryStartTime` / `deliveryEndTime`.
+
+### 3. ROOT-CAUSE REFINEMENT — the loss mechanism is INTERLEAVING, not "all deltas ignored"
+
+The 4th-fold root cause (`applyWebhookStatusEvent` applies `internal_status` + `pod_photos` only, never embedded field deltas) is corroborated for DATE and must be SHARPENED. Observed asymmetry on this task: the window edit (changed EARLY, while standalone `TASK_HAS_BEEN_UPDATED` edit events were still flowing at 16:20–16:22) APPLIED to the Planner row; the date edit (`top_date` 2026-05-20 → 2026-05-19 first appeared LATE, at 16:23:35 on `TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY` — a STATUS event — after the last standalone edit event) did NOT apply (Planner `delivery_date` stale at 2026-05-20). Refined mechanism: a changed field is LOST iff its new value rides ONLY a status-event payload (because the change occurred after the last standalone edit event); fields that change while standalone edit events are still flowing survive via the edit-apply path. The structural fix (status events must reconcile embedded deltas — 4th-fold ruling, UNCHANGED and correct) is the right fix; the refinement governs the INTEGRATION SPEC: it MUST reproduce the late-change-rides-status-event sequence (change a field AFTER the last standalone edit event, only a status event carries it), not merely "edit then deliver" — the latter would pass while the real bug survives (single-diagnostic-surprise: the coarse test shows date stale and looks like clean confirmation while the window silently applied).
+
+### 4. NAMED §3.6 #2 HARD-STOP SURFACE — top-level vs deliveryInformation source
+
+The DELIVERED payload carries TWO date/time families: (a) TOP-LEVEL `deliveryDate` / `deliveryStartTime` / `deliveryEndTime` = the task's SCHEDULED window (the values the fix must reconcile); (b) NESTED `deliveryInformation.deliveryDate` / `deliveryStartTime` / `deliveryEndTime` = DRIVER ACTUAL-COMPLETION timestamps (e.g. 16:23:00 / 16:24:00 — when the driver actually started/finished; `deliveryInformation` is null until delivered). The structural fix MUST read scheduled-window deltas from PAYLOAD TOP LEVEL and MUST NEVER read them from `deliveryInformation.*`. A fix that reads `deliveryInformation.*` would pass a green integration test and write the driver's completion clock into the scheduled window in production. This is a NAMED §3.6 #2 body-read hard-stop surface, peer to OQ-5's collision-guard interaction.
+
+### 5. DISTINCT FINDING — inbound TZ symmetric bug, confirmed live (NOT folded into the embedded-delta gap)
+
+Planner `delivery_start_time = 07:10:00` faithfully stores wire top-level `deliveryStartTime = 07:10:00`, which is create-time `deliveryAfterTime 11:10` minus 4h — the inbound UTC→Dubai-local conversion gap (§2.5 / T1-followon-1 surface), now confirmed on real production wire. This is a DISTINCT defect on the write path that DID run (value stored, wrong by −4h), separate from the embedded-delta gap (value not stored at all). Already covered by OQ-10(b) ship-unconditionally. Remains a named separate finding; explicitly NOT folded into the confirmed root cause.
+
+### 6. NET EFFECT ON LANE STATE
+
+4th-fold ruling stands, verified-faithful, core diagnosis corroborated on a second independent task AND its evidence-boundary gap (timeslot) now CLOSED. No re-ruling. Build scope unchanged: structural `applyWebhookStatusEvent` field-capture fix (all fields except address) + Defect 1 drawer granular labels, one T3 commit, §3.6 hard-stop #2. The integration spec is now CONSTRAINED by items 3 (interleaving sequence mandatory) and 4 (top-level source mandatory). #306 stays OPEN (plan-PR-persistence).
