@@ -33,26 +33,31 @@ interface TaskTimelineDrawerProps {
 
 /**
  * Human-readable label map for SF action codes + the synthetic
- * TASK_CREATED entry. Codes not in the map render their raw code
- * (rare — surfaces new SF event types so reviewer can add a mapping).
+ * TASK_CREATED entry. Day-31 A1 (plan #306 final lane shape item 4):
+ * the map keys against EXACTLY the 8 SF action strings confirmed on
+ * real wire by the MPL-80355079 + MPL-38610276 end-to-end tests, plus
+ * the TASK_CREATED synthetic source. Granular labels — NOT collapsed
+ * to internal-status buckets (Love decision, explicit). Surfaces A
+ * (parser KNOWN_ACTIONS) + B (mapper ACTION_TO_INTERNAL_STATUS)
+ * confirmed correct by both real tests and are NOT modified here.
+ *
+ * Wire-vocabulary correction vs prior map: the previous entry used
+ * `TASK_STATUS_UPDATED_TO_ASSIGNED` (drawer-only vocabulary); the
+ * real wire emits `TASK_HAS_BEEN_ASSIGNED` (matches parser + mapper).
+ *
+ * Codes not in this map render their raw SF code per OQ-6(a) ruling
+ * — visible drift is the correct failure mode.
  */
 const ACTION_LABELS: Readonly<Record<string, string>> = {
   TASK_CREATED: "Created",
   TASK_HAS_BEEN_ORDERED: "Ordered",
   TASK_HAS_BEEN_UPDATED: "Updated",
-  TASK_STATUS_UPDATED_TO_ASSIGNED: "Assigned to driver",
-  TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC: "Arrived at DC",
+  TASK_HAS_BEEN_ASSIGNED: "Assigned to driver",
   TASK_STATUS_UPDATED_TO_PICKED_UP: "Picked up",
-  TASK_STATUS_UPDATED_TO_IN_TRANSIT: "In transit",
-  TASK_STATUS_UPDATED_TO_HUB_TRANSFER: "Hub transfer",
+  TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC: "Arrived at DC",
   TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY: "Out for delivery",
+  TASK_STATUS_UPDATED_TO_IN_TRANSIT: "In transit",
   TASK_STATUS_UPDATED_TO_DELIVERED: "Delivered",
-  TASK_STATUS_UPDATED_TO_FAILED: "Failed",
-  TASK_STATUS_UPDATED_TO_REATTEMPT: "Reattempt scheduled",
-  TASK_STATUS_UPDATED_TO_RESCHEDULED: "Rescheduled",
-  TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN: "Processing for return",
-  TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER: "Returned to shipper",
-  TASK_STATUS_UPDATED_TO_CANCELED: "Cancelled",
 };
 
 function formatTimestamp(iso: string): string {
