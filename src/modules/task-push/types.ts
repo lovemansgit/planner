@@ -6,6 +6,8 @@
 // §1.3 retirement table; only SinglePushOutcome below remains as the
 // canonical task-push outcome shape.
 
+import type { FailureReason } from "../failed-pushes/types";
+
 /**
  * Day 8 / D8-5 — single-task push outcome from `pushSingleTask`.
  *
@@ -39,6 +41,12 @@
  *   - 'task_already_pushed'    task already has pushed_to_external_at
  *                              set; idempotent no-op
  *   - 'task_not_found'         task id resolved to no row in this tenant
+ *   - 'past_dated_no_push'     Day-32 PR-A / F-5: pushSingleTask guard
+ *                              fired because task.delivery_date <
+ *                              CURRENT_DATE at push-time (Dubai-local
+ *                              via Postgres clock). Adapter NOT
+ *                              invoked; failed_pushes row written via
+ *                              W1 with failure_reason='past_dated'.
  */
 export type SinglePushOutcome =
   | {
@@ -59,7 +67,11 @@ export type SinglePushOutcome =
     }
   | {
       readonly kind: "failed_to_dlq";
-      readonly failureReason: "network" | "server_5xx" | "client_4xx" | "timeout" | "unknown";
+      // Day-32 PR-A / F-5: 'past_dated' carries its own outcome kind
+      // (past_dated_no_push) and never flows through this branch. Use
+      // Exclude so future FailureReason additions auto-narrow correctly
+      // here unless they explicitly route through failed_to_dlq.
+      readonly failureReason: Exclude<FailureReason, "past_dated">;
       readonly httpStatus?: number;
       readonly failureDetail: string;
     }
@@ -77,4 +89,8 @@ export type SinglePushOutcome =
     }
   | {
       readonly kind: "task_not_found";
+    }
+  | {
+      readonly kind: "past_dated_no_push";
+      readonly deliveryDate: string;
     };

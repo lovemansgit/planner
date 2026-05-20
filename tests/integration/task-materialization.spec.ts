@@ -712,6 +712,16 @@ describe("§7.1 — task-materialization integration", () => {
       // Seed 3 reconciliation candidates (pushed_to_external_at IS NULL,
       // address_id IS NOT NULL) + 1 already-pushed (should NOT appear) +
       // 1 with null address_id (quarantined; should NOT appear).
+      //
+      // Day-32 PR-A / F-5 (Plan #317 §3.5 + OQ-3 ruling (a)):
+      // listReconciliationCandidatesByTenant filters
+      // `AND delivery_date >= CURRENT_DATE`. The 3 reconciliation
+      // candidates must use today-or-future delivery_date values to
+      // survive the new filter; SQL-side `CURRENT_DATE [+ INTERVAL]`
+      // is clock-deterministic against Postgres time (NOT JS Date).
+      // The created_at ordering (08:00 / 09:00 / 10:00) is independent
+      // of delivery_date and continues to drive the ORDER BY
+      // created_at ASC assertion at line 791.
       const taskIds = await withServiceRole("seed recon", async (tx) => {
         const earliest = "2026-04-01T08:00:00Z";
         const middle = "2026-04-01T09:00:00Z";
@@ -726,7 +736,7 @@ describe("§7.1 — task-materialization integration", () => {
             address_id, created_at
           ) VALUES (
             ${t.tenantId}, ${sub.consigneeId}, ${sub.subscriptionId},
-            'REC-A', '2026-04-01', '09:00', '11:00',
+            'REC-A', CURRENT_DATE, '09:00', '11:00',
             ${sub.primaryAddressId}, ${earliest}::timestamptz
           ) RETURNING id
         `);
@@ -737,7 +747,7 @@ describe("§7.1 — task-materialization integration", () => {
             address_id, created_at
           ) VALUES (
             ${t.tenantId}, ${sub.consigneeId}, ${sub.subscriptionId},
-            'REC-B', '2026-04-02', '09:00', '11:00',
+            'REC-B', CURRENT_DATE + INTERVAL '1 day', '09:00', '11:00',
             ${sub.primaryAddressId}, ${middle}::timestamptz
           ) RETURNING id
         `);
@@ -748,13 +758,15 @@ describe("§7.1 — task-materialization integration", () => {
             address_id, created_at
           ) VALUES (
             ${t.tenantId}, ${sub.consigneeId}, ${sub.subscriptionId},
-            'REC-C', '2026-04-03', '09:00', '11:00',
+            'REC-C', CURRENT_DATE + INTERVAL '2 days', '09:00', '11:00',
             ${sub.primaryAddressId}, ${latest}::timestamptz
           ) RETURNING id
         `);
         // Already-pushed: should be excluded by `pushed_to_external_at IS NULL`.
         // subscription_id NULL with created_via='manual_admin' satisfies
-        // tasks_creation_source_invariant CHECK.
+        // tasks_creation_source_invariant CHECK. delivery_date moved to a
+        // future value for consistency — the primary filter
+        // (pushed_to_external_at IS NOT NULL) excludes this row anyway.
         await tx.execute(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, subscription_id, customer_order_number,
@@ -763,11 +775,13 @@ describe("§7.1 — task-materialization integration", () => {
             address_id, pushed_to_external_at, created_at
           ) VALUES (
             ${t.tenantId}, ${sub.consigneeId}, NULL,
-            'PUSHED', 'manual_admin', '2026-04-04', '09:00', '11:00',
+            'PUSHED', 'manual_admin', CURRENT_DATE + INTERVAL '3 days', '09:00', '11:00',
             ${sub.primaryAddressId}, now(), ${pushed}::timestamptz
           )
         `);
         // Null-address: should be excluded by `address_id IS NOT NULL`.
+        // delivery_date moved to a future value for consistency — the
+        // primary filter (address_id IS NULL) excludes this row anyway.
         await tx.execute(sqlTag`
           INSERT INTO tasks (
             tenant_id, consignee_id, subscription_id, customer_order_number,
@@ -776,7 +790,7 @@ describe("§7.1 — task-materialization integration", () => {
             address_id, created_at
           ) VALUES (
             ${t.tenantId}, ${sub.consigneeId}, NULL,
-            'NULL-ADDR', 'manual_admin', '2026-04-05', '09:00', '11:00',
+            'NULL-ADDR', 'manual_admin', CURRENT_DATE + INTERVAL '4 days', '09:00', '11:00',
             NULL, ${nullAddr}::timestamptz
           )
         `);

@@ -176,16 +176,33 @@ function stubWithServiceRoleHappy(cfg: ServiceRoleStubConfig = {}) {
     serviceRoleCall += 1;
     const tx = {
       execute: vi.fn(async () => {
+        // pushSingleTask withServiceRole call sequence (Day-32 PR-A
+        // shifted call 3+ by one when Step 2.5 past-dated guard
+        // landed; see plan-PR #317 + the new SQL roundtrip at
+        // src/modules/task-push/service.ts Step 2.5):
+        //   call 1: load_config         (tx.execute → customer_code)
+        //   call 2: load_task           (handled via mockFindTask,
+        //                                NOT through tx.execute, but
+        //                                still increments the counter)
+        //   call 3: past_dated_check    (NEW Day-32 PR-A — return
+        //                                past_dated:false so every
+        //                                pre-existing fixture, all of
+        //                                which use realistic non-past
+        //                                delivery_date values, continues
+        //                                exercising downstream code
+        //                                paths; the past-dated guard
+        //                                itself has its own dedicated
+        //                                integration spec at
+        //                                tests/integration/past-dated-task-no-push.spec.ts)
+        //   call 4: load_consignee      (was call 3 pre-Day-32)
+        //   call 5+: mark_pushed etc.   (return [] default)
         if (serviceRoleCall === 1) {
           return [{ suitefleet_customer_code: customerCode }];
         }
-        // 2nd call (load_task) is handled via mockFindTask, NOT
-        // tx.execute — so this stub is for any subsequent
-        // tx.execute calls. Per pushSingleTask sequence:
-        //   call 3: load_consignee
-        //   call 4: mark_pushed (succeeded path)
-        // We return consignee on call 3 and empty on call 4.
         if (serviceRoleCall === 3) {
+          return [{ past_dated: false }];
+        }
+        if (serviceRoleCall === 4) {
           return [
             {
               id: CONSIGNEE_ID,

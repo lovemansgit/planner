@@ -59,15 +59,16 @@ const adapter = createSuiteFleetLastMileAdapter({
 });
 
 /**
- * 10-value observability outcome enum. Emitted in the per-handler
+ * 11-value observability outcome enum. Emitted in the per-handler
  * structured log at handler exit alongside sf_latency_ms. Maps:
  *   - 3 pre-pushSingleTask guard outcomes (tenant_mismatch, address_id_null,
  *     task_already_pushed_pre_check)
  *   - 1 task-not-found defensive outcome (pre-call task lookup)
- *   - 6 of 8 SinglePushOutcome kinds mapped to terminal HTTP+log paths
- *     (the 7th kind 'awb_exists' throws for QStash retry; the 8th kind
+ *   - 7 of 9 SinglePushOutcome kinds mapped to terminal HTTP+log paths
+ *     (the 8th kind 'awb_exists' throws for QStash retry; the 9th kind
  *     'task_not_found' from pushSingleTask collapses to the same outcome
- *     as the pre-call task-not-found case)
+ *     as the pre-call task-not-found case). Day-32 PR-A added the 7th
+ *     terminal outcome 'past_dated_no_push'.
  */
 type Outcome =
   | "tenant_mismatch_rejected"
@@ -80,7 +81,8 @@ type Outcome =
   | "skipped_district"
   | "tenant_skipped_no_credentials"
   | "task_already_pushed_in_push"
-  | "task_not_found";
+  | "task_not_found"
+  | "past_dated_no_push";
 
 export const POST = verifySignatureAppRouter(async (request: Request) => {
   const sfStartMs = Date.now();
@@ -366,6 +368,28 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
       );
       return NextResponse.json(
         { outcome: "task_not_found" },
+        { status: 200 },
+      );
+
+    case "past_dated_no_push":
+      // Day-32 PR-A / F-5 — pushSingleTask's past-dated guard fired
+      // (task.delivery_date < CURRENT_DATE). The W1 writer already
+      // recorded a failed_pushes row with failure_reason='past_dated'
+      // inside pushSingleTask. Return 200 to ack the QStash message;
+      // no retry — the row is in the DLQ for ops triage via
+      // /admin/failed-pushes, and the upstream
+      // listReconciliationCandidatesByTenant filter will skip
+      // re-enqueueing this task on subsequent cron ticks.
+      requestLog.info(
+        {
+          outcome: "past_dated_no_push" satisfies Outcome,
+          sf_latency_ms: sfLatencyMs,
+          delivery_date: result.deliveryDate,
+        },
+        "queue handler — past_dated_no_push guard short-circuited push",
+      );
+      return NextResponse.json(
+        { outcome: "past_dated_no_push" },
         { status: 200 },
       );
   }
