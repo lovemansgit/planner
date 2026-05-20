@@ -69,6 +69,7 @@ const VALID_FAILURE_REASONS: ReadonlySet<FailureReason> = new Set<FailureReason>
   "client_4xx",
   "timeout",
   "unknown",
+  "past_dated",
 ]);
 
 /**

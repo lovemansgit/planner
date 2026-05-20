@@ -281,6 +281,8 @@ function humanizeOutcome(outcome: SinglePushOutcome): string {
       return `Already pushed (${outcome.externalId})`;
     case "task_not_found":
       return `Task not found`;
+    case "past_dated_no_push":
+      return `Skipped — past-dated (${outcome.deliveryDate})`;
   }
 }
 

@@ -244,7 +244,15 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
       // satisfies the tasks_creation_source_invariant CHECK; the partial
       // UNIQUE on (subscription_id, delivery_date) doesn't apply for
       // subscription_id IS NULL.
-      const backlogDate = isoDubaiDatePlus(NOW_AT_SETUP, -30);
+      //
+      // Day-32 PR-A / F-5 (Plan #317 §3.5 + OQ-3 ruling (a)):
+      // listReconciliationCandidatesByTenant filters
+      // `AND delivery_date >= CURRENT_DATE`. The backlog-task fixture
+      // must use a today-or-future delivery_date to survive the new
+      // filter; SQL-side `CURRENT_DATE + INTERVAL '1 day'` is
+      // clock-deterministic against Postgres time (NOT JS Date).
+      // Semantically: "task minted yesterday for tomorrow's delivery"
+      // — preserves the "1 backlog + 21 new = 22 enqueued" intent.
       const t = await tx.execute<{ id: Uuid }>(sqlTag`
         INSERT INTO tasks (
           tenant_id, consignee_id, subscription_id, customer_order_number,
@@ -255,7 +263,7 @@ describe("§7.4 — cron decoupling happy-path E2E", () => {
           ${TENANT_ID}, ${consigneeId}, NULL,
           ${`E2E-BACKLOG-${RUN_ID}`},
           'manual_admin',
-          ${backlogDate}::date, '09:00', '11:00',
+          CURRENT_DATE + INTERVAL '1 day', '09:00', '11:00',
           ${primaryAddressId}
         ) RETURNING id
       `);

@@ -1085,6 +1085,15 @@ export async function listReconciliationCandidatesByTenant(
   tx: DbTx,
   tenantId: Uuid,
 ): Promise<readonly Uuid[]> {
+  // Day-32 PR-A / F-5 (plan #317 §3.5 Surface 3 + §6 OQ-3 ruling (a)):
+  // exclude past-dated tasks from the reconciliation re-enqueue. SF
+  // rejects strictly-past delivery dates (production MPL 400 row
+  // confirms); past-dated rows stay in DLQ awaiting operator triage
+  // (CLEANUP-1 in PR-D) rather than being re-enqueued every cron tick.
+  // Evaluated via Postgres CURRENT_DATE (not parameterised JS Date)
+  // per OQ-3 ruling. The push-time guard in pushSingleTask is the
+  // belt-and-braces partner — this filter is the upstream cron-side
+  // gate that prevents enqueue in the first place.
   type IdRow = { id: Uuid };
   const rows = await tx.execute<IdRow>(sqlTag`
     SELECT id
@@ -1092,6 +1101,7 @@ export async function listReconciliationCandidatesByTenant(
     WHERE tenant_id = ${tenantId}
       AND pushed_to_external_at IS NULL
       AND address_id IS NOT NULL
+      AND delivery_date >= CURRENT_DATE
     ORDER BY created_at ASC
   `);
   return rows.map((row) => row.id);

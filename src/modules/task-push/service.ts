@@ -183,8 +183,12 @@ function assertSystemActor(ctx: RequestContext, op: string): void {
  * shape inline via `classifyReconcileError` so the failure_detail
  * carries the load-bearing `awb_exists_reconcile_failed:` prefix.
  */
+// Day-32 PR-A / F-5: return type narrowed via Exclude so 'past_dated'
+// (a planner-side guard reason, NOT an adapter-error class) is not in
+// the adapter-classifier surface. Every branch below produces one of
+// the five adapter-error reasons; the narrow union is exhaustive.
 function classifyAdapterError(err: unknown): {
-  reason: FailureReason;
+  reason: Exclude<FailureReason, "past_dated">;
   detail: string;
   httpStatus?: number;
 } {
@@ -195,7 +199,7 @@ function classifyAdapterError(err: unknown): {
     // message. Categorise as 'unknown' — operators see the
     // failure_detail for the actual cause.
     const msg = err.message;
-    const reason: FailureReason = msg.includes("network error")
+    const reason: Exclude<FailureReason, "past_dated"> = msg.includes("network error")
       ? "network"
       : msg.includes("5") && msg.includes("0") // 500/502/503/504 — sloppy but adequate
         ? "server_5xx"
@@ -230,7 +234,7 @@ function classifyAdapterError(err: unknown): {
  * detail string carries the explicit parse-error message regardless.
  */
 function classifyReconcileError(awb: string, err: unknown): {
-  reason: FailureReason;
+  reason: Exclude<FailureReason, "past_dated">;
   detail: string;
   httpStatus?: number;
 } {
@@ -420,6 +424,58 @@ export async function pushSingleTask(
       "push_single_task task_already_pushed — idempotent no-op",
     );
     return { kind: "task_already_pushed", externalId: task.externalId };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 2.5: past-dated guard (Day-32 PR-A / F-5)
+  // ---------------------------------------------------------------------------
+  // Plan-PR #317 §3.5 Surface 1 + §6 OQ-3 ruling (a) at SHA f0ef560:
+  // short-circuit when task.delivery_date < CURRENT_DATE (Dubai-local
+  // via Postgres clock; NOT JS Date per §8 R-4 — avoids edge-clock vs
+  // Postgres-clock skew on midnight-Dubai mints). Fires BEFORE
+  // adapter.authenticate (Step 4) so the credentials resolve, token
+  // cache, and SF auth round-trip are all skipped on past-dated rows.
+  // SF rejects strict past-dated with 400 ("deliveryDate must be a
+  // date in the present or in the future"); the production MPL
+  // 2026-05-11 row is the load-bearing observation. Recorded to DLQ
+  // via the W1 writer with failure_reason='past_dated' so ops triage
+  // at /admin/failed-pushes can separate planner-side guard-rejects
+  // from SF-side 4xx-rejects.
+  const pastDated = await withServiceRole(
+    `task-push:single past_dated_check for task ${task.id}`,
+    async (tx) => {
+      const rows = await tx.execute<{ past_dated: boolean }>(sqlTag`
+        SELECT (${task.deliveryDate}::date < CURRENT_DATE) AS past_dated
+      `);
+      return rows[0]?.past_dated ?? false;
+    },
+  );
+  if (pastDated) {
+    taskLog.warn(
+      { reason: "past_dated_no_push", delivery_date: task.deliveryDate },
+      "push_single_task past-dated guard fired — skipping SF push",
+    );
+    try {
+      await recordFailedPushAttempt(ctx, {
+        taskId: task.id,
+        taskPayload: {
+          skipped_pre_flight: true,
+          reason: "past_dated",
+          delivery_date: task.deliveryDate,
+        },
+        failureReason: "past_dated",
+        failureDetail:
+          "Task delivery_date is in the past at push-time (Dubai-local). SF rejects past-dated tasks. Skipped to avoid SF 400.",
+      });
+    } catch (err) {
+      captureException(err, {
+        component: "task_push_service",
+        operation: "single_task_past_dated_dlq_write",
+        tenant_id: tenantId,
+        task_id: task.id,
+      });
+    }
+    return { kind: "past_dated_no_push", deliveryDate: task.deliveryDate };
   }
 
   // ---------------------------------------------------------------------------
