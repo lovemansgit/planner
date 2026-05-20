@@ -29,8 +29,8 @@
 // tasks ≈ 20s wall-clock).
 //
 // QStash conventions mirrored from queue.ts (do NOT diverge):
-//   - deduplicationId — for cancel: `${taskId}:cancel:${correlationId}`;
-//     for update: `${taskId}:update:${correlationId}`. Correlation_id is
+//   - deduplicationId — for cancel: `${taskId}_cancel_${correlationId}`;
+//     for update: `${taskId}_update_${correlationId}`. Correlation_id is
 //     the load-bearing dedup tail per cancellation/update — operator
 //     re-clicks within the QStash dedup window collapse cleanly.
 //   - flowControl — same env-resolved `QSTASH_FLOW_CONTROL_KEY` per §6.3
@@ -147,7 +147,7 @@ export async function enqueueCancelTask(payload: CancelTaskPayload): Promise<voi
       // Dedup by (task_id, correlation_id). Operator re-clicks within
       // the QStash dedup window collapse to one message; cross-correlation
       // re-cancels (rare) get a separate message.
-      deduplicationId: `${payload.task_id}:cancel:${payload.correlation_id}`,
+      deduplicationId: `${payload.task_id}_cancel_${payload.correlation_id}`,
       flowControl: {
         key: flowControlKey,
         rate: QSTASH_FLOW_CONTROL_RATE,
@@ -208,7 +208,7 @@ export async function enqueueUpdateTask(payload: UpdateTaskPayload): Promise<voi
     await client.publishJSON({
       url,
       body: payload,
-      deduplicationId: `${payload.task_id}:update:${payload.correlation_id}`,
+      deduplicationId: `${payload.task_id}_update_${payload.correlation_id}`,
       flowControl: {
         key: flowControlKey,
         rate: QSTASH_FLOW_CONTROL_RATE,
@@ -296,7 +296,7 @@ export async function enqueueBulkCancelTasks(
     const messages = chunk.map((payload) => ({
       url,
       body: payload,
-      deduplicationId: `${payload.task_id}:cancel:${payload.correlation_id}`,
+      deduplicationId: `${payload.task_id}_cancel_${payload.correlation_id}`,
       flowControl: {
         key: flowControlKey,
         rate: QSTASH_FLOW_CONTROL_RATE,
@@ -371,7 +371,7 @@ export async function enqueueBulkUpdateTasks(
     const messages = chunk.map((payload) => ({
       url,
       body: payload,
-      deduplicationId: `${payload.task_id}:update:${payload.correlation_id}`,
+      deduplicationId: `${payload.task_id}_update_${payload.correlation_id}`,
       flowControl: {
         key: flowControlKey,
         rate: QSTASH_FLOW_CONTROL_RATE,
