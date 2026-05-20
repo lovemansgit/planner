@@ -463,9 +463,41 @@ This plan-PR stays OPEN until the eventual code-PR (or last code-PR in the split
 
 ---
 
-## §10 — Reviewer rulings
+## §10 — Reviewer rulings (locked Day-32 PM)
 
-*Empty — to be filled at §3.6 hard-stop #1 review of this plan-PR.*
+§3.6 hard-stop #1 RULING on plan v1 at SHA d7ba651: APPROVED with rulings. Root-cause diagnosis (Session B's Day-31 read) accepted as correct and well-evidenced. Six-defect scope + CLEANUP-1 accepted as the right boundary. Plan-PR persistence holds — stays OPEN until eventual code-PR(s) ship.
+
+**Locked rulings (do not re-open):**
+
+| OQ | Ruling | Notes |
+|---|---|---|
+| **OQ-1** | **RULED (a)** — extend `rejectClientError` to take optional `responseText`. | Narrow signature change, no cross-cutting refactor. (c) explicitly rejected — premature abstraction; (b) inline pattern duplicates the body-read at two call sites where extracting the helper is the cleaner shape. |
+| **OQ-2** | **RULED (b)** — migration changes default to `'pending'`. | The column either reflects reality or it doesn't; defaulting to `'synced'` on rows that have never pushed is the bug. Hard requirement for the code-PR: enumerate ALL readers of `outbound_sync_state` at code-PR-open SHA and confirm none treat `'synced'` as load-bearing-truthful (named §3.6 #2 body-read surface — peer to F-4's attempt_count check). |
+| **OQ-2.1** | **RULED** — backfill via the CASE expression in §8 R-3: `external_id NOT NULL → 'synced'`; `unresolved failed_pushes row → 'failed'`; `else → 'pending'`. | One deterministic UPDATE; folds into the 0028 migration. |
+| **OQ-3** | **RULED (a)** — strict `delivery_date < CURRENT_DATE` (Dubai-local via Postgres clock). | MPL 400 row in production confirms SF rejects strict past-dated. Grace window (b) and per-tenant config (c) both rejected — scope additions without product evidence. Use Postgres `CURRENT_DATE` (not JS Date) per R-4. |
+| **OQ-4** | **RULED (a) + (b)** — admin UI button + CLI tool combined. (c) SQL-only explicitly rejected — audit-ledger blind spot. | Both ship in PR-D. Audit emit `failed_push.bulk_resolved` is mandatory; not optional. |
+| **OQ-5** | **RULED (a)** — four-PR split (PR-A, PR-B, PR-C, PR-D). | PR-A small + urgent (stops the bleed); PR-B is the structural fix; PR-C depends on OQ-2's migration; PR-D depends on PR-B's stable failure_reason enum. Each PR is independently §3.6-reviewable. The unified (b) bundle was tempting but the four splits each carry distinct design surface; bundling would carry one over-broad §3.6 #2 hard-stop instead of four focused ones. |
+| **OQ-6** | **RULED — accept divergence.** W1 carries SF wire body; W2 carries QStash metadata snapshot; `task_payload.source` discriminates. | Different debugging axes; both useful. Operator-facing UI on /admin/failed-pushes branches rendering on the `source` key (separate scope inside PR-D if rendering improvements are wanted). |
+
+**Hard requirements for code-PR(s) (locked):**
+
+1. **F-4's `attempt_count` increment spec (§7.4) is load-bearing** — the §3.6 #2 body-read on PR-B will check this spec exists, exercises the QStash → service-layer-write path end-to-end, and asserts attempt_count moves 1→2 across retries. Not a unit test; a real-Postgres integration test per brief v1.13 §7.1.
+
+2. **OQ-2 reader-enumeration is a hard §3.6 #2 surface** — PR-C's body-read will check all consumers of `outbound_sync_state` at code-PR-open SHA. Any reader that treats `'synced'` as truthful-implying-AWB-exists is a defect surfaced by the migration and must be addressed in the same PR.
+
+3. **Migration ordering** — 0027 (failed_pushes failure_reason CHECK extension for `'past_dated'`) lands in PR-A. 0028 (outbound_sync_state default change + backfill) lands in PR-C. PR-B does NOT carry migrations.
+
+4. **Four PRs open sequentially, not in parallel.** PR-A opens first → §3.6 #2 clears → merge + promote → PR-B opens (rebased on the now-current main). Each PR gates the next. Plan-PR #317 stays OPEN across all four; closes only when PR-D ships end-to-end.
+
+5. **No `--admin` on any of the four PRs.** No self-merge. Branch protection mandatory.
+
+**Next steps (reviewer-defined):**
+
+1. ✅ DONE — plan #317 §3.6 cleared with §10 rulings folded.
+2. Session A (or fresh builder session per context budget) opens PR-A: F-5 past-dated guard + reconciliation filter + 0027 migration. Single commit, T2-tier per OQ-5 ruling.
+3. §3.6 #2 body-read on PR-A diff at the pinned SHA.
+4. Merge PR-A → inspect-then-promote → smoke green → THEN PR-B opens.
+5. Sequence continues through PR-C and PR-D.
 
 ---
 
