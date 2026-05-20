@@ -91,10 +91,10 @@ describe("enqueueCancelTask — single message wire shape", () => {
     expect(args.body).toEqual(SAMPLE_CANCEL_PAYLOAD);
   });
 
-  it("uses deduplicationId format `${task_id}:cancel:${correlation_id}`", async () => {
+  it("uses deduplicationId format `${task_id}_cancel_${correlation_id}`", async () => {
     await enqueueCancelTask(SAMPLE_CANCEL_PAYLOAD);
     const args = mockPublishJSON.mock.calls[0][0];
-    expect(args.deduplicationId).toBe(`${TASK_ID}:cancel:${CORRELATION_ID}`);
+    expect(args.deduplicationId).toBe(`${TASK_ID}_cancel_${CORRELATION_ID}`);
   });
 
   it("threads flowControl rate=5 period=1s with the resolved env-var key", async () => {
@@ -132,10 +132,10 @@ describe("enqueueUpdateTask — single message wire shape", () => {
     expect((args.body as UpdateTaskPayload).patch).toEqual(SAMPLE_UPDATE_PAYLOAD.patch);
   });
 
-  it("uses deduplicationId format `${task_id}:update:${correlation_id}`", async () => {
+  it("uses deduplicationId format `${task_id}_update_${correlation_id}`", async () => {
     await enqueueUpdateTask(SAMPLE_UPDATE_PAYLOAD);
     const args = mockPublishJSON.mock.calls[0][0];
-    expect(args.deduplicationId).toBe(`${TASK_ID}:update:${CORRELATION_ID}`);
+    expect(args.deduplicationId).toBe(`${TASK_ID}_update_${CORRELATION_ID}`);
   });
 
   it("uses /api/queue/update-task-failed as failureCallback", async () => {
@@ -204,8 +204,8 @@ describe("enqueueBulkCancelTasks — fan-out + chunking", () => {
     ] as CancelTaskPayload[];
     await enqueueBulkCancelTasks(payloads);
     const messages = mockBatchJSON.mock.calls[0][0];
-    expect(messages[0].deduplicationId).toBe(`${TASK_ID}:cancel:c1`);
-    expect(messages[1].deduplicationId).toBe(`t2:cancel:c2`);
+    expect(messages[0].deduplicationId).toBe(`${TASK_ID}_cancel_c1`);
+    expect(messages[1].deduplicationId).toBe(`t2_cancel_c2`);
   });
 });
 
@@ -221,14 +221,14 @@ describe("enqueueBulkUpdateTasks — fan-out + chunking", () => {
     expect(result.enqueuedCount).toBe(25);
   });
 
-  it("each message uses :update: dedup format + update-task URL/failureCallback", async () => {
+  it("each message uses _update_ dedup format + update-task URL/failureCallback", async () => {
     await enqueueBulkUpdateTasks([SAMPLE_UPDATE_PAYLOAD]);
     const messages = mockBatchJSON.mock.calls[0][0];
     expect(messages[0].url).toBe("https://planner.test/api/queue/update-task");
     expect(messages[0].failureCallback).toBe(
       "https://planner.test/api/queue/update-task-failed",
     );
-    expect(messages[0].deduplicationId).toBe(`${TASK_ID}:update:${CORRELATION_ID}`);
+    expect(messages[0].deduplicationId).toBe(`${TASK_ID}_update_${CORRELATION_ID}`);
   });
 
   it("returns zero counts on empty input without invoking batchJSON", async () => {
