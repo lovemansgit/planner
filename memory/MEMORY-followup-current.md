@@ -6,142 +6,133 @@
 > current state of in-flight architectural work. Rotated lane-by-lane
 > as code-PRs land and new lanes open.
 >
-> **Last updated:** Day-30 EOD (18 May 2026 PM).
-> **Active lane:** A1 — SF status-mapping defect on the inbound
-> webhook ingest path (BRD §4.1). Plan-PR #306 v3 FULLY RULED, all 10
-> OQs locked; code-PR Phase-0-evidence-gated.
+> **Last updated:** Day-32 EOD (20 May 2026, consolidated Day-31+32 EOD).
+> **Active lane:** Plan #317 — T3 outbound push pipeline structural
+> defects (F-1..F-6 + CLEANUP-1). Plan-PR OPEN at `f0ef560`; §10 ruling
+> fold complete; PR-A shipped end-to-end via #318. PR-B (F-1 + F-2 + F-4
+> + F-6), PR-C (F-3 + migration 0028), PR-D (CLEANUP-1) all queued
+> sequential, NOT parallel.
 
 ---
 
 ## Active lane summary
 
-Aqib UAT (Slides 7, 8-reflect, 10) confirmed: SF status webhook events (Picked Up, Cancelled, Delivered, In Transit, Failed, …) are captured by the inbound webhook receiver but ALL render as generic "Updated" in the consignee-detail Task Timeline drawer; DELIVERED does not surface POD.
+Day-31 Session B ran a structural-defects diagnosis pass on the operator-initiated outbound SF push pipeline (cancel + update flows landing Day-21 PR #227 / Day-22 `ed5963b9`; Phase-1 §D(2) skip → SF cancel landing Day-29 PR #305). Diagnosis surfaced **6 defects + 1 cleanup** across the queue infrastructure + the integration layer.
 
-Static-code investigation at SHA `b86466a` (D29 §D(2) Phase-1, the prior prod base) refuted the single-mapping-layer hypothesis:
+The plan-PR (#317) was filed Day-32 AM (`createdAt: 2026-05-20T04:53:21Z` — body-write completed post-midnight Dubai); §10 ruling fold cleared at `f0ef560` with 7 ruling rows + 5 hard requirements locked. PR-A (#318) shipped F-5 + migration 0027 + production promote on Day-32 AM-late after two §3.6 #2 reject-back cycles.
 
-- The mapping IS present in **THREE separate, independently-maintained action-code vocabularies** — NOT a single empty/unwired layer.
-- **(A) Parser `KNOWN_ACTIONS`** — 15 entries (`src/modules/integration/providers/suitefleet/webhook-parser.ts`).
-- **(B) Status-mapper `ACTION_TO_INTERNAL_STATUS`** — 14 entries with **silent null-drop for unknowns** (`status-mapper.ts:59-90`).
-- **(C) Drawer `ACTION_LABELS`** — 16 entries (`TaskTimelineDrawer.tsx:39-56`).
-- **Code-evidence-grounded vocabulary drift:** drawer expects `TASK_STATUS_UPDATED_TO_ASSIGNED`; parser+mapper expect `TASK_HAS_BEEN_ASSIGNED`. One side is wrong about SF wire reality; static code alone can't say which.
-
-Strongest hypothesis (NOT static-provable, hence the Phase-0 gate): SF wire emits `TASK_HAS_BEEN_UPDATED` for most/all lifecycle changes in production. Receiver dispatches on literal raw-string → all land in `applyWebhookEditEvent` → `webhook_events.action = "TASK_HAS_BEEN_UPDATED"` → drawer renders "Updated". `tasks.internal_status` never advances. `tasks.pod_photos` never extracts. Status-specific codes either don't fire or use vocabulary the mapper doesn't know — silent drop via `apply-webhook-status-event.ts:81-83` early return BEFORE the `webhook_events` INSERT, so there's **no forensic trail**.
-
-Day-29 cancel-twin precedent confirmed SF emits BOTH a status code AND a `TASK_HAS_BEEN_UPDATED` twin for the same operator action — but the question is whether the same holds for non-cancel lifecycle transitions on the production SF tenant config. That's the Phase-0 evidence question.
+**Plan-PR persistence pattern:** #317 stays OPEN until PR-D ships end-to-end. PR-B + PR-C + PR-D are the remaining code-PRs; they ship sequentially, not in parallel, per the §10 hard requirement.
 
 ## Source documents
 
-- **Plan-PR (in flight, v3 fully ruled, OPEN at SHA `72bbf8e`):**
-  - PR #306 — [`memory/plans/day-30-a1-status-mapping-defect.md`](plans/day-30-a1-status-mapping-defect.md)
-- **Diagnosis ground-truth followups (pre-existing surfaces touched by this lane):**
-  - [`memory/followup_inbound_webhook_edit_apply_two_bugs.md`](followup_inbound_webhook_edit_apply_two_bugs.md) — Day-27/28 prior diagnosis on the same webhook receiver (first single-diagnostic-surprise live application; foundation for the 3-vocabulary refutation).
-  - [`memory/followup_internal_task_status_lossiness.md`](followup_internal_task_status_lossiness.md) — pre-existing PROCESS_FOR_RETURN / RETURNED_TO_SHIPPER lossiness; explicitly OUT of A1 scope per plan §5.
-- **Prior production code-PR providing the SHA baseline:**
-  - PR #305 (D29 §D(2) Phase-1, merged `b86466a`).
-- **Brief sections to read (v1.15 on main; A1 lane does NOT trigger a brief amendment per OQ-7):**
-  - §3.6 four-layer identifier model (for vocabulary alignment context)
-  - §3.1.10 webhook payload format
-  - §3.3.6 consignee detail Task Timeline (the rendering surface)
-  - §3.3.8 cache-from-webhook commitment (POD remains the canonical example)
+- **Plan-PR (OPEN at `f0ef560`):**
+  - [PR #317](https://github.com/lovemansgit/planner/pull/317) — outbound push pipeline structural defects (F-1..F-6 + CLEANUP-1). §3.5 5 surface diagnostics + §6 7 OQs ruled in fold.
+- **Shipped code-PR (PR-A):**
+  - [PR #318](https://github.com/lovemansgit/planner/pull/318) (merged `c5995ee`) — F-5 past-dated guard on push path + reconciliation filter + migration 0027. The reject-back history on PR-A is captured in the Day-31+32 consolidated EOD §C.1.
+- **Adjacent T2 fix (NOT in #317 scope):**
+  - [PR #319](https://github.com/lovemansgit/planner/pull/319) (merged `d41da88`) — QStash deduplicationId colon-rejection latent bug. Surfaced during PR-A smoke but pre-dates PR-A (Day-22 `ed5963b9`). Separate lane.
+- **Brief sections to read (v1.15 on main; Plan #317 does NOT trigger a brief amendment per §10 ruling):**
+  - §3.1.4 — outbound push optimistic-ack pattern
+  - §3.1.10 webhook payload format (inbound symmetry context)
+  - §5.2 retries=3 (audit context for F-4 attempt_count race)
+  - §6.3 QSTASH_FLOW_CONTROL_KEY env-var resolution
 
-## Current state (Day-30 EOD)
+## Current state (Day-32 EOD)
 
-- **Main HEAD:** `8ff4462` (post-merge of EOD PR #311 — Session B fixes-lane handoff).
-- **Production HEAD:** `18b5f7d` on `dpl_GNcgn1LAZWKvVZzvWqWwKFReKzXr` (Day-30 fixes-lane cumulative LIVE). Production is one commit BEHIND main because #311 is memory-only.
-- **Rollback anchor:** `dpl_JDJs8LCyiD4nZ4vJzGKnR8emFC3j` (source `b86466a`, D29 §D(2) Phase-1).
-- **Brief on main:** **v1.15**. v1.16 cutoff-drift append pending in B2 PR #312.
-- **Schema:** UNCHANGED from D29; migration 0026 still latest applied.
-- **A1 plan-PR status:** v3 OPEN at SHA `72bbf8e`, FULLY RULED, all 10 OQs locked. §3.6 hard-stop #1 CLEARED.
-- **No code shipped yet** for the A1 lane. Awaiting Phase-0 SQL results.
+- **Main HEAD:** `0e43c87` (post-merge of PR #320 calendar followup memo).
+- **Production HEAD:** `d41da88` on `dpl_H7uovYd48i5Di5jzdfAaP5hD1ptz` (PR #319 promoted Day-32 PM). Production is one commit BEHIND main because PR #320 is memory-only and intentionally not promoted.
+- **Rollback anchor (one-swap):** `dpl_7qv1V9EqscKYYVUHWpA8cAUciuf9` (PR-A's prod, source `c5995ee`). Prior anchor `dpl_5LqazeMMqxxMfkaLvqD1tMiEWiz3` rolled off the window.
+- **Brief on main:** **v1.15** (unchanged Day-31 and Day-32; no amendment filed).
+- **Schema:** migration 0027 applied to production Day-32 AM (extends `failed_pushes.failure_reason` CHECK to admit `'past_dated'`). Migration 0028 stays unbuilt; sequenced under PR-C.
+- **Plan #317 §10 ruling fold:** COMPLETE at `f0ef560`. 7 ruling rows + 5 hard requirements locked.
+- **PR-A (#318):** SHIPPED end-to-end (merged + promoted + smoke verified).
 
 ## Blockers (status snapshot)
 
-### Blocker 1 — Phase-0 evidence SQL (Love-run on production)
+### Blocker 1 — none currently
 
-**Status:** OPEN (gating — code-PR cannot start until results land).
-**Scope:** Three read-only SQL queries against the production DB project. Disambiguates the hypothesis space (parser/mapper vocab realignment vs routing rewire vs both).
+Plan #317 has no external blockers. PR-B is ready to start on a fresh Session B off main HEAD `0e43c87`.
 
-What to run (verbatim per plan §2, code-PR build is downstream of this):
+### Adjacent (NOT a blocker for #317)
 
-- **Q-A** — DISTINCT `action` values in `webhook_events` over the last 14 days, with counts. Disambiguates whether SF wire is dominated by `TASK_HAS_BEEN_UPDATED` (status-code twin theory) or includes status-specific codes that the mapper currently silent-drops.
-- **Q-B** — JOIN sample (`webhook_events` × `tasks`) on the same action-value population to check whether `tasks.internal_status` advanced post-event (indicator that mapper IS firing for some codes vs none).
-- **Q-C** — DELIVERED-action sample with `tasks.pod_photos` column read, to verify whether POD extraction is wired at all on the production data.
+**HEM 403 single-tenant credential failure** — surfaced Day-31 during the MPL credential outage triage. Different tenant (HEM), different region binding. Needs Aqib coordination. **Recommend filing as durable T1 memo in next session housekeeping** — currently tracked verbally only. Does NOT block Plan #317 work.
 
-**Impact on code-PR:** code-PR fix shape depends on Q-A/Q-B/Q-C results:
-- If Q-A shows `TASK_HAS_BEEN_UPDATED` dominant + status-specific codes absent → fix is routing rewire (give status-specific lifecycle events their own dispatch path; current single-dispatch on raw-string is wrong).
-- If Q-A shows status-specific codes present but Q-B shows they silent-drop → fix is parser/mapper vocab realignment (close the drift between drawer expectations + parser+mapper expectations).
-- If Q-C shows POD extraction wired but data populates nothing → fix is data-shape (extractPodPhotos reads the wrong wire key).
-- Combined results most likely indicate **both** routing + vocab fixes (the plan's recommended same-lane combined posture).
+## Success criteria for the remaining code-PRs
 
-### Blocker 2 — none
+### PR-B (F-1 + F-2 + F-4 + F-6) — next major piece
 
-No vendor blocker on this lane (this is a planner-side observability + dispatch fix, no SF protocol change required). The Aqib API-key auth-header followup ([`memory/followup_aqib_api_key_auth_header_pending.md`](followup_aqib_api_key_auth_header_pending.md)) remains the institutional-level load-bearing pointer but does NOT block A1.
+Per Plan #317 §10 hard requirements:
 
-## Success criteria for the code-PR (T3 §3.6 hard-stop #2)
-
-Per plan #306 §7 + §9:
-
-- [ ] **Phase-0 SQL results landed.** Q-A/Q-B/Q-C run on production, results pasted into the code-PR body, fix-shape selection justified against the results.
-- [ ] **Mapping contract realignment** (if Phase-0 shows vocab drift). 15-row table (per plan §3) wired through: parser KNOWN_ACTIONS / mapper ACTION_TO_INTERNAL_STATUS / drawer ACTION_LABELS all in lockstep with the SF wire vocabulary.
-- [ ] **Routing rewire** (if Phase-0 shows routing-dispatch-on-raw-string is the bug). Each status-specific lifecycle event gets its own dispatch path; `apply-webhook-status-event.ts:81-83` silent-drop early return either deletes (forensic trail required) or stays-with-instrumentation (per Phase-0 ruling).
-- [ ] **POD same-lane fix** (builder recommendation in plan §4). DELIVERED extracts `tasks.pod_photos`; same lane unless OQ-5 collision-guard interaction with #305's `outbound_sync_state` write path surfaces an issue.
-- [ ] **Integration specs I1-I5 at PR open** (per plan §7).
+- [ ] **F-1 push outcome routing race** — narrative + integration spec covering the local-commit-vs-webhook-ack window. Highest-risk §3.6 #2 surface.
+- [ ] **F-2 DLQ failure path normalization** — single normalized writer for `outbound_push_failures.failure_reason` across the three current call-sites.
+- [ ] **F-4 attempt_count increment race** — `SELECT … FOR UPDATE` on the read-modify-write cycle. **F-4 attempt_count increment spec is load-bearing for PR-B per §10 ruling.**
+- [ ] **F-6 CI smoke check absent** — end-to-end test exercising the full outbound queue lifecycle (publish → consume → outcome → DLQ-or-success). Lightweight; SQL fixtures + mocked QStash.
 - [ ] **CI green** per brief v1.13 §7.1.
-- [ ] **Post-merge Aqib UAT loop closed** — Aqib re-walks Slides 7, 8-reflect, 10 on the patched receiver; sign-off captured.
+- [ ] **§3.6 #1 hard-stop + #2 hard-stop** both cleared at pinned head SHA via paste-back body-read.
 
-## Out of scope for the A1 lane (do NOT collide)
+### PR-C (F-3 + migration 0028) — sequenced after PR-B
 
-- **B1** address-edit display lane (separate Session A lane, not yet opened).
-- **B2** merchant-cancel display lane → handled by PR #312 (B2 /tasks-page cancel + edit, OPEN, §3.6 #2 NOT yet performed — see [`memory/handoffs/day-30-eod.md`](handoffs/day-30-eod.md) §B.3).
-- [`memory/followup_internal_task_status_lossiness.md`](followup_internal_task_status_lossiness.md) (PROCESS_FOR_RETURN / RETURNED_TO_SHIPPER collapse) — pre-existing, post-demo follow-on.
-- `webhook_events` UNIQUE-shape flag — Day-29 §D(2) Phase-1 forensic §2 surface; explicitly out of A1.
-- Outbound SF push path — Session B's lane; A1 stays inbound-only.
-- **OQ-7 ruled: NO brief v1.16** for the A1 status-mapping fix. (B2 #308's OQ-6 = v1.16 brief append is a scope-distinct ruling; both coexist.)
+- [ ] **F-3 failed_pushes tenant_id RLS gap** on the admin retry-queue surface. **OQ-2 reader-enumeration is the §3.6 #2 surface for PR-C per §10 ruling.**
+- [ ] **Migration 0028** sequenced after 0027 per §10 migration ordering ruling.
 
-## T1 follow-ons (post-merge of A1 code-PR)
+### PR-D (CLEANUP-1) — sequenced last
 
-These DO NOT block the A1 code-PR but land in a small T1 doc + ops sequence afterward.
+- [ ] **Bulk-resolve tooling for `failed_pushes` rows** — service-layer surface for ops triage (the Day-31 9-row MPL backlog cleanup had to be done row-by-row via SQL).
 
-### T1-followon-1: apply-webhook-edit-event.ts inbound TZ symmetric bug
+## Out of scope for the Plan #317 lane (do NOT collide)
 
-Confirmed real Day-30 during Session B's A3 diagnosis (outbound was `buildSuiteFleetTaskBody` missing Dubai-local→UTC; the inbound `apply-webhook-edit-event.ts` has the symmetric inverse — it doesn't convert SF's UTC back to Dubai-local when applying the edit). **Routed to A1 lane per Session B's hand-off.** Treat as a follow-on plan-PR off the A1 code-PR landing — same Phase-0-evidence-driven posture if the bug touches the routing/mapper paths the A1 fix also touches; otherwise a thin T2 fix-PR.
+- **Calendar-management full-resolution lane** — filed Day-32 as PR #320 followup memo. Sequenced AFTER Plan #317 completes. Aqib-coordinated for SF `rescheduleTask` half of move-to-date.
+- **Outbound-symmetry follow-on** (Planner→SF EDIT propagation) — separate lane committed in Day-31 PM fold of #306 §5.
+- **HEM 403 credential follow-up** — Aqib coordination, separate lane.
+- **PR #319 QStash dedup-id colon fix** — already shipped end-to-end Day-32 PM. Not in #317 scope.
+- **A1 inbound webhook lane (#306 + #316)** — CLOSED end-to-end Day-31 via PR #316 merge.
 
-Trigger: A1 code-PR lands + Aqib UAT closes.
+## T1 follow-ons (post-lane)
 
-### T1-followon-2: Shared-canonical-vocabulary refactor (OQ-9)
+These DO NOT block Plan #317 PRs but land after PR-D ships.
 
-Plan §7 OQ-9 ruled YES (recommend the refactor): collapse parser KNOWN_ACTIONS + mapper ACTION_TO_INTERNAL_STATUS + drawer ACTION_LABELS into a single canonical-vocabulary source-of-truth module so future SF wire additions can't drift again. **Not in the A1 code-PR scope** (scope-discipline — A1 fixes the observed defect; OQ-9 is a defence-in-depth follow-on).
+### T1-followon-1: HEM 403 credential follow-up — durable memo filing
 
-Trigger: A1 code-PR lands. Expected scope: 1 new module + 3 imports + 1 reorganization commit.
+Day-31 MPL credential outage triage surfaced HEM 403 single-tenant credential failure (different tenant, different region binding). Currently tracked verbally + Aqib coordination thread. **File as durable T1 memo** in next session housekeeping so the institutional record persists.
 
-### T1-followon-3: Cross-project Vercel boundary note for the `deploy-clean` project
+Trigger: next session housekeeping pass.
 
-Day-30 surfaced a false-alarm production scare on the `deploy-clean` separate Vercel project (bound to a different repo; no production deployment). Document the cross-project boundary in the operational runbook so the project isn't accidentally aliased onto a planner-shaped URL in the future.
+### T1-followon-2: Calendar-management lane diagnosis pass
 
-Trigger: next operational-runbook touch.
+Per Day-32 followup memo PR #320, the calendar-management lane scope includes a diagnosis pass enumerating ALL operator-action surfaces (skip variants, override variants, pause/resume, address overrides, anything in DayActionPopover and similar surfaces) and classifying which work end-to-end vs which have gaps. This pre-lane diagnosis can start AFTER Plan #317 PR-B ships (no resource conflict; pure diagnostic work).
+
+Trigger: Plan #317 PR-B merges.
+
+### T1-followon-3: Discipline lesson fold from Day-31+32 EOD §F
+
+Six discipline learnings recorded in Day-31+32 EOD §F. Two could be promoted to durable feedback memos if not already:
+- "Diagnose-before-rollback when no demo clock + minimal user impact" (Day-32 PR #319 surface).
+- "First-time production verification surfaces real latent bugs" (Day-32 calendar lane surface — the Phase-2 placeholder discovery).
+
+Trigger: next housekeeping sweep. Cross-check against existing `feedback_*.md` memos before filing duplicates.
 
 ## Followup memos in flight
 
-These memos are referenced by the A1 lane and should be re-read by anyone working in this area:
+These memos are referenced by or adjacent to the Plan #317 lane and should be re-read by anyone working in this area:
 
-- [`memory/followup_inbound_webhook_edit_apply_two_bugs.md`](followup_inbound_webhook_edit_apply_two_bugs.md) — **🔴 LOAD-BEARING for the A1 plan §2 hop chain** (Day-27/28 ground-truth on the receiver; A1's 3-vocabulary refutation builds on this).
-- [`memory/followup_single_diagnostic_surprise_discipline.md`](followup_single_diagnostic_surprise_discipline.md) — **third live application** on A1 plan-PR's 3-vocabulary refutation (after Day-27 webhook + Day-28 appendWithoutSkip).
-- [`memory/followup_ci_bypass_justification_requires_confirmed_diagnosis.md`](followup_ci_bypass_justification_requires_confirmed_diagnosis.md) — BINDING institutional discipline; A1 code-PR's CI gate inherits this for any `--admin` consideration.
-- [`memory/decision_review_discipline_ci_gate.md`](decision_review_discipline_ci_gate.md) — §3.6 hard-stop with CI gate (brief §7.1 codification); A1 code-PR's CI must be green before §3.6 #2 clears.
-- [`memory/followup_aqib_api_key_auth_header_pending.md`](followup_aqib_api_key_auth_header_pending.md) — institutional-level load-bearing pointer (production-region credential provisioning). Does NOT block A1; sandbox-region demo flow runs on OAuth.
+- [`memory/followup_calendar_management_full_resolution.md`](followup_calendar_management_full_resolution.md) — **🟡 NEXT LANE, sequenced after #317.** Captures the Day-32 PM calendar surface gaps + Love directive.
+- [`memory/followup_aqib_api_key_auth_header_pending.md`](followup_aqib_api_key_auth_header_pending.md) — institutional-level load-bearing pointer (production-region credential provisioning). MPL was resolved Day-31; HEM 403 remains as separate adjacent surface. Does NOT block #317; #317 lane is queue-infrastructure-only.
+- [`memory/decision_review_discipline_ci_gate.md`](decision_review_discipline_ci_gate.md) — §3.6 hard-stop with CI gate (brief §7.1 codification); all #317 code-PRs inherit this.
+- [`memory/feedback_force_push_requires_pre_authorization.md`](feedback_force_push_requires_pre_authorization.md) — standing rule reinforced across PR #316 + #318 + #319 reject-back cycles. Load-bearing for all #317 code-PR force-pushes.
+- [`memory/feedback_brief_amendment_log_append_only.md`](feedback_brief_amendment_log_append_only.md) — brief at v1.15 unchanged across both days; #317 ruling explicitly skips a brief amendment per §10.
 
-## Decommissioned (Day-30 PM)
+## Decommissioned (Day-32 EOD)
 
-These items previously appeared in the prior digest (per-merchant SF credentials lane, Day-25 EOD baseline) but are now retired from the active-lane focus:
+These items previously appeared in the prior digest (A1 status-mapping defect lane, Day-30 EOD baseline) but are now retired from the active-lane focus:
 
-- ~~Per-merchant SF credentials lane (v1.14 + v1.15)~~ — code-PR shipped end-to-end Day-26 + production cutover Day-27. Lane CLOSED.
-- ~~Aqib SF API Key + Secret Key auth-header reply (Blocker 1 of prior digest)~~ — NOT closed (Aqib has not replied), but no longer the active-lane blocker. Sandbox-region OAuth path is the demo flow; production-region (transcorp/transcorpuae/transcorpqatar) provisioning remains gated, but A1 lane is inbound-only and unaffected. The Aqib pointer demotes from active-lane blocker to institutional-level load-bearing followup (filed at [`memory/followup_aqib_api_key_auth_header_pending.md`](followup_aqib_api_key_auth_header_pending.md)).
-- ~~Vault availability verification on production DB (Blocker 2 of prior digest)~~ — verified clean Day-27 (Vault v0.3.1 present per audit findings memo at PR #288).
-- ~~Vercel env-var retirement (T1 follow-on of prior digest)~~ — separate small ops PR, deferred to housekeeping queue; not load-bearing for any active lane.
-- ~~`migrateRegionAuthMethod` flow (T1 follow-on 3 of prior digest)~~ — still future; not load-bearing.
+- ~~A1 status-mapping defect lane (plan #306, Phase-0-gated)~~ — code-PR shipped end-to-end Day-31 via PR #316. Lane CLOSED.
+- ~~Phase-0 evidence SQL (Love-run on production) Blocker 1~~ — completed Day-31; results drove PR #316 fix shape (combined routing + vocab fixes per "Q-A status-specific codes present, Q-B shows silent-drop" path). Lane CLOSED.
+- ~~T1-followon-1 (apply-webhook-edit-event.ts inbound TZ symmetric bug) — routed to A1's lane Day-30~~ — A1 lane closed Day-31 without touching this surface; the inbound TZ symmetric bug remains as a separate post-demo T2 follow-on. Recommend re-filing at next housekeeping pass if it didn't ride along on #316's surface.
+- ~~T1-followon-2 (shared-canonical-vocabulary refactor OQ-9)~~ — Plan #306 §7 OQ-9 deferred. Not in current active lane focus.
+- ~~T1-followon-3 (cross-project Vercel boundary note for `deploy-clean`)~~ — Day-30 housekeeping item; defer to next operational-runbook touch.
 
 ---
 
 ## Meta: file lifecycle
 
-This file rotates whenever the active substantive lane transitions. Prior rotation: Day-25 EOD (per-merchant SF credentials lane, code-PR pre-build state). This rotation: Day-30 EOD, A1 status-mapping defect lane (plan-PR #306 v3 fully ruled, code-PR Phase-0-gated). The historical per-day record stays in [`MEMORY.md`](MEMORY.md); this file is the always-current "active followups" digest.
+This file rotates whenever the active substantive lane transitions. Prior rotation: Day-30 EOD (A1 status-mapping defect lane). This rotation: Day-32 EOD (consolidated Day-31+32), Plan #317 outbound push structural defects (plan-PR OPEN at `f0ef560`, PR-A shipped, PR-B/C/D queued). The historical per-day record stays in [`MEMORY.md`](MEMORY.md); this file is the always-current "active followups" digest.
