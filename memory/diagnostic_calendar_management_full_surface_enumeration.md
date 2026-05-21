@@ -1,6 +1,6 @@
 ---
 name: Calendar management full-surface diagnostic enumeration (Day-33 read-only pass)
-description: Complete inventory + classification of every operator-facing surface that touches the calendar in the Transcorp Subscription Planner. Two axes (views + actions), five classification buckets (works end-to-end / cron-deferred-invisible / Phase-2-placeholder / unimplemented / visual-gap). Surfaces several gaps NOT documented in the Day-32 followup memo (notably pauseSubscription has zero SF outbound push, address overrides do not affect already-materialized tasks, addNoteToDriver is local-only). Filed Day-33 as a T1 docs-only PR to drive the eventual calendar-management lane T3 plan-PR scoping. Read-only diagnostic; proposes nothing.
+description: Complete inventory + classification of every operator-facing surface that touches the calendar in the Transcorp Subscription Planner. Two axes (views + actions), five classification buckets (works end-to-end / cron-deferred-invisible / Phase-2-placeholder / unimplemented / visual-gap). Surfaces several gaps NOT documented in the Day-32 followup memo (notably pauseSubscription has zero SF outbound push, address overrides do not affect already-materialized tasks, addNoteToDriver is local-only). Filed Day-33 as a T1 docs-only PR to drive the eventual calendar-management lane T3 plan-PR scoping. Read-only diagnostic; proposes nothing. Amended Day-33 PM with two additional ruling items surfaced by Love during PR-B production eyeball: R6 (Tasks page lacks consignee context + cross-surface navigation to TaskTimelineDrawer) and R7 (consignee detail default landing tab — Overview → Calendar).
 type: diagnostic
 ---
 
@@ -443,6 +443,113 @@ Service + schema + audit registered; no operator-facing button. Reviewer call:
 
 The badge correctly surfaces `outbound_sync_state='pending_cancel'` / `'pending_reschedule'` / `'failed'`. The skip path populates `pending_cancel`. The pause path does not. If R2 is resolved with Option A (pause should push SF cancels), the upstream `markTasksCanceledInWindow` change will populate `pending_cancel` and the badge will light up — no badge-side change needed. If R2 is resolved differently, the badge's coverage definition may need explicit scoping.
 
+## R6 — Tasks page lacks consignee context + cross-surface navigation to TaskTimelineDrawer
+
+**Origin:** Day-33 PM Love production eyeball during PR-B verification. Surface NOT enumerated in the original Day-33 AM diagnostic — that pass scoped to calendar surfaces (the consignee detail Calendar tab + the consolidated `/calendar` + the admin `/admin/calendar`). The `/tasks` page is the cross-merchant task-list surface (an operator's working list), and although Action 8 (view task timeline) is the existing entry to TaskTimelineDrawer, the drawer is reachable only from the consignee calendar today.
+
+**Current behavior** (verified at `src/app/(app)/tasks/client.tsx` and `src/modules/tasks/repository.ts` at main HEAD `57e5d9b`):
+
+- Tasks list table columns (client.tsx lines 266-275): checkbox · **Status** · **Order #** · **Delivery date** · **Window** · **AWB** · **Issues** · *(POD column, sr-only header)* · **Actions**. **No Consignee column.**
+- AWB cell rendering (client.tsx lines 347-358): `<span>{task.externalTrackingNumber}</span>` plus a "✓ Pushed to SuiteFleet" eyebrow. **Text-only — no onClick, no Link, no drawer wiring.** Rows with `task.externalTrackingNumber === null` render an em-dash placeholder.
+- Operator-visible consequence: from `/tasks`, the operator cannot (a) identify which consignee a task belongs to without clicking through the row's `Actions` column or running a separate consignee search, nor (b) reach the TaskTimelineDrawer that the diagnostic Action 8 documents as the canonical state-transition history surface.
+- Search input on `/tasks` page placeholder (page.tsx lines 160-161): *"Search by AWB, consignee name or order #"* — meaning **consignee context EXISTS in the search query, but is omitted from the result row display**. Asymmetric.
+
+**Data layer current state** (verified at `src/modules/tasks/repository.ts`):
+
+- Task row has `consignee_id` FK (line 89) projected to `Task.consigneeId` in the DTO (line 217). So the FK is already on the row — no schema delta needed for the relation.
+- `listTasksWithSearch` uses a **conditional** LEFT JOIN consignees (lines 610-611: `needsConsigneeJoin(searchTerm) ? sqlTag\`LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id\` : ...`). The join is added only when the search term needs it (for consignee-name-in-search matching). For the default Tasks list without a search term, **consignees is NOT joined** and `consignee_name` is not projected through.
+- `Task` DTO does not currently expose `consigneeName` (grep `consigneeName|consignee_name` in tasks/types.ts returns zero matches).
+
+**TaskTimelineDrawer current shape** (verified at `src/app/(app)/consignees/[id]/_components/TaskTimelineDrawer.tsx`):
+
+- Client component. Props: `consigneeId`, `taskId`, `deliveryDate`, `onClose` (lines 27-32). Straightforward to instantiate from any surface that has these four values.
+- Action import (line 22-25): `import { getTaskTimelineAction } from "../_calendar-actions"` — **relative import**, only resolvable from a sibling under `src/app/(app)/consignees/[id]/`. Reusing the drawer from `/tasks` will require either moving the action to a shared location (preferred — server actions are framework-portable) OR rewriting the relative import to an absolute `@/`-prefixed one (mechanical).
+- No mutation surface; permission gate is `task:view_timeline` (same as Action 8). No audit emit (R-4 read-not-audited).
+
+**Proposed change** (Love directive — read-only docs-only filing; does not propose how to ship):
+
+1. Add a Consignee column to the `/tasks` list table.
+2. Consignee name → clickable Link to that consignee's calendar tab (`/consignees/<id>?tab=calendar`).
+3. AWB cell → clickable; opens the existing TaskTimelineDrawer in place. Same drawer as Action 8 on the consignee calendar; this adds a second entry point.
+
+**Scope shape:**
+
+- UI-layer changes on `/tasks/client.tsx` + table column (+1).
+- Data-layer change to `listTasksWithSearch` and the Tasks DTO: make the consignees LEFT JOIN unconditional and project `consigneeName` (and optionally `consigneePhone` / `consigneeEmirate` per R6.1 ruling below) into the row shape.
+- Cross-surface refactor of `TaskTimelineDrawer` — either move + rename the action OR switch to absolute imports. The drawer itself needs no UI delta.
+- No service-layer or schema delta beyond the unconditional join.
+
+**Reviewer call options:**
+
+- **R6.1 — Column position.** Three plausible placements:
+  - Between Status and Order # (groups identity-of-delivery columns first).
+  - Replacing or alongside Order # (consignee + order are both "what is this" columns).
+  - As the leftmost data column after the checkbox (operator-mental-model-first).
+  - *Builder note: brief said "TBD by frontend judgment"; this is a layout ruling, not a behavior one.*
+- **R6.2 — Consignee display density.** UX tradeoff:
+  - Name only (lowest density, may need consignee disambiguation by phone for high-volume tenants).
+  - Name + phone (medium density; mirrors the search query semantics).
+  - Name + emirate / district (medium density; useful for ops dispatching by area).
+  - *Builder note: brief enumerated this as a tradeoff; reviewer call.*
+- **R6.3 — AWB click behavior when `external_tracking_number IS NULL`.** Two plausible shapes:
+  - **Option A:** disable the click — show plain em-dash as today; no drawer access until SF push completes.
+  - **Option B:** click opens the drawer in a partial state (Created entry only; no webhook events available). Same behavior as the existing `getTaskTimeline` service for null-AWB tasks (which returns a single TASK_CREATED entry per tasks/service.ts:1531-1539).
+  - *Builder note: Option B is closer to the documented service behavior; Option A reduces operator surprise. Reviewer call.*
+- **R6.4 — Tasks page row click target conflict.** The Actions column already provides Edit / Cancel / etc. Adding consignee-name Link + AWB Drawer adds two new interactive targets per row. Whole-row click behavior (if any) needs to be confirmed; current row does not have an onClick (rows are not Links). No further ruling needed if the row stays passive — the new entry points are cell-scoped.
+
+**Severity:** medium. Not data-corrupting. Operator friction (extra navigation hops per task triage). Surfacing as ruling item ensures this doesn't get folded into a different lane silently.
+
+## R7 — Consignee detail page default landing tab (Overview → Calendar)
+
+**Origin:** Day-33 PM Love production eyeball during PR-B verification. Surface IS enumerated in the original Day-33 AM diagnostic under Axis 1 ([`A1.1 — Page-level calendar views`](#consignee-detail-page-calendar-tab-consigneesidtabcalendar) — consignee detail page calendar tab), but the default-tab behavior was not called out as a gap. The diagnostic noted only "Calendar is one of four tabs" — left unsaid: which of the four is the default landing.
+
+**Current behavior** (verified at `src/app/(app)/consignees/[id]/page.tsx` at main HEAD `57e5d9b`):
+
+- Page header docstring (lines 9-15): *"Tab navigation is URL-based (`?tab=overview|history`) so the page stays server-rendered and operators can deep-link to a specific tab. **Default tab: overview.** Subscription + Calendar tabs are placeholders ('Coming in Day-17 surfaces'). Overview + History are the two tabs this PR ships."*
+- The docstring is **stale** — same drift pattern as the `/calendar/page.tsx` lines 5-6 docstring already flagged in this memo's `visual-gap` classification. Subscription + Calendar are **not** placeholders today — both are fully wired (Calendar tab data fetch at page.tsx line 278-330; Subscription tab data fetch at line 251-265). The diagnostic's Axis 1 enumeration correctly captures the Calendar tab as functional.
+- Valid tabs (line 92-93): `["overview", "subscription", "calendar", "history"]` — all four supported.
+- Default fallback (lines 129-131): `activeTab: TabName = (VALID_TABS as readonly string[]).includes(tabParam ?? "") ? (tabParam as TabName) : "overview"`. When `?tab=` is absent or invalid, defaults to `overview`.
+- Operator path-of-most-friction: clicking a consignee row from the consignees list goes to `/consignees/<id>` (no `?tab=` param), which lands on Overview. The operator must then click "Calendar" to reach the surface the diagnostic identifies as load-bearing for operator-action workflows.
+
+**Calendar tab default view mode** (verified at page.tsx line 132-136):
+
+- `activeView: CalendarViewName = (VALID_VIEWS as readonly string[]).includes(viewParam ?? "") ? (viewParam as CalendarViewName) : "week"`.
+- **Default view is `week`, not `month`.** This contradicts the R7 brief's premise ("View mode default stays Month — no change to the existing month-view default"). The existing default is week, not month. Surfaced here as R7.2 below for explicit reviewer ruling.
+
+**Proposed change** (Love directive):
+
+- Default landing tab Overview → Calendar (when no `?tab=` URL param is present).
+- All other tab behavior unchanged. Deep-links carrying explicit `?tab=overview` / `?tab=subscription` / `?tab=history` should continue to respect the explicit param (param-wins; expected behavior per the existing fallback logic shape).
+- View mode default per the brief's directive: **stays Month**. NOTE: brief assumes existing default is month, but actual code default is week — see R7.2.
+
+**Scope shape:**
+
+- Single change to `consignees/[id]/page.tsx` fallback (line 131): swap default from `"overview"` to `"calendar"`.
+- Stale docstring at page.tsx lines 9-15 updated in lock-step (Subscription + Calendar tabs are NOT placeholders — they ship today).
+- Brief `§3.3.3` amendment — default-landing-tab behavior is part of the documented surface; eventual T3 plan-PR shipping R7 should bump brief to v1.16. This memo amendment does NOT touch the brief; brief bump lives with the eventual T3 plan-PR per [`feedback_brief_amendment_log_append_only.md`](feedback_brief_amendment_log_append_only.md).
+- No service-layer, schema, or audit-event delta.
+
+**Reviewer call options:**
+
+- **R7.1 — Role scope of the default change.**
+  - **Option A:** universal default — all roles (Tenant Admin / Ops Manager / CS Agent) land on Calendar.
+  - **Option B:** role-conditional default — e.g., CS Agent lands on Calendar (operator-mental-model for handling skip/pause requests), Tenant Admin lands on Overview (which still surfaces the Day-25 onboarding CTAs for newly-created consignees with zero subscriptions and zero tasks).
+  - *Builder note: Option A is simpler and matches Love's brief phrasing as written. Option B would require permission-aware default-tab logic — added complexity. Reviewer call.*
+- **R7.2 — View mode default discrepancy.** Brief said "View mode default stays Month (no change to the existing month-view default)." But the current code defaults `activeView` to `week` (page.tsx line 136). Two possible interpretations:
+  - **Option A:** brief misstates the current default; intent is for the default to become Month alongside the tab change. → R7 ships with both changes: tab default → calendar AND view default → month.
+  - **Option B:** brief intent is "leave the view default unchanged" (i.e., stay on week, which is the actual current default). → R7 ships with only the tab default change; view default stays week.
+  - **Option C:** brief intent is to set view default to month and that change was already supposed to have happened in a prior PR (which would mean there's a separate code-drift bug elsewhere).
+  - *Builder note: cannot disambiguate without reviewer ruling. The discrepancy is verified — code says week. Reviewer should confirm intent before R7's T3 PR is scoped.*
+- **R7.3 — Explicit deep-link param behavior.** Expected: explicit `?tab=` always wins over the default. The existing fallback logic at line 129-131 already implements this shape — explicit valid param → use it; absent/invalid → default. No code-shape ruling needed; just confirmation that this behavior is preserved.
+- **R7.4 — Default tab when the consignee is newly-created with zero subscriptions + zero tasks (Day-25 onboarding empty-state).** The Overview tab currently surfaces the Day-25 onboarding CTAs (page.tsx lines 548-586: "Add work for this consignee" + Create subscription + Add ad-hoc task buttons). If default becomes Calendar, a newly-created consignee lands on an empty calendar with no obvious next-action. Either:
+  - **Option A:** preserve Calendar as default; surface a calendar-side empty-state with the same CTAs (mirrors the Day-25 onboarding rationale onto a different tab).
+  - **Option B:** conditional default — if `subscriptionCount === 0 && taskCount === 0`, default to Overview to surface the onboarding CTAs; otherwise default to Calendar. The empty-state detection at page.tsx lines 177-179 is already computed for the Overview empty-state — could be reused for the default-tab decision.
+  - *Builder note: Option B preserves the Day-25 onboarding flow more faithfully but adds branching. Option A is simpler but punts onboarding to a different surface. Reviewer call.*
+
+**Adjacent — stale docstring drift (already covered):** the lines 9-15 docstring claim that Subscription + Calendar tabs are placeholders is the same pattern as `/calendar/page.tsx` lines 5-6 already classified in this memo's `visual-gap` section. R7's T3 PR should fold the stale comment fix in lock-step with the default-tab change — same file, same minute, same author.
+
+**Severity:** low operationally (no data corruption, no SF divergence). High UX (the default-landing-tab is the operator's first impression on every consignee click; Love has explicitly flagged the calendar as the most important surface). Surfacing as a ruling item ensures the role-scope + view-default discrepancy + onboarding-empty-state interaction don't get silently decided by the implementer.
+
 # Out of scope for this enumeration
 
 - Plan #317 outbound push pipeline structural defects (queue-infrastructure-only) — Session A's lane. None of the surfaces enumerated here are in #317 scope; none of #317's surfaces are in this lane.
@@ -473,4 +580,6 @@ Its only job is to surface and classify every operator-facing calendar surface s
 
 # Meta
 
-Filed Day-33 (2026-05-21) as a T1 docs-only PR off main HEAD `5798a61`. Single commit, single file. Diagnostic-only — the institutional record is the classification + the R1-R5 ruling items. Branch: `docs/d33-calendar-management-full-surface-diagnostic`.
+Filed Day-33 AM (2026-05-21) as a T1 docs-only PR off main HEAD `5798a61`. Single commit, single file. Diagnostic-only — the institutional record is the classification + the R1-R5 ruling items. Branch: `docs/d33-calendar-management-full-surface-diagnostic`. Merged via PR #324 at main `57e5d9b`.
+
+**Day-33 PM amendment** — Love surfaced two additional ruling items (R6 + R7) during PR-B production eyeball. R6 covers the `/tasks` page surface (not enumerated in the original AM diagnostic — that pass scoped to calendar surfaces only) and is the first instance of the diagnostic touching a non-calendar surface; the rationale is that R6 proposes a new cross-surface entry point to TaskTimelineDrawer (the Action 8 drawer this memo already classifies as works end-to-end), so R6 belongs in this memo's ruling section rather than a fresh document. R7 covers the consignee detail page default landing tab — the diagnostic enumerated the Calendar tab under Axis 1 but did not call out the default-tab behavior as a gap. Both items append as new sub-sections under "Items needing operator/reviewer ruling" without re-classifying any existing axis surface. Frontmatter description amended in lock-step. Axis enumeration sections, classification matrix, R1-R5, Out of scope, Cross-references, Non-goals all unchanged. Filed Day-33 PM as a T1 docs-only amendment PR off main HEAD `57e5d9b`. Single commit. Branch: `docs/d33-calendar-diagnostic-r6-r7-amendment`.
