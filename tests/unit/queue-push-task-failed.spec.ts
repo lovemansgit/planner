@@ -4,8 +4,8 @@
 // PR #145 memory/plans/day-14-cron-decoupling.md §5.2 amendment 5.
 //
 // Row 11 — happy path: QStash POSTs failure metadata with base64-encoded
-//   sourceBody (the original PushTaskPayload). Handler decodes, INSERTs
-//   into failed_pushes via existing repo, returns 200 with the new
+//   sourceBody (the original PushTaskPayload). Handler decodes, calls the
+//   service-layer recordFailedPushAttempt, returns 200 with the new
 //   failed_push_id. Surfaces in /admin/failed-pushes UI without any
 //   operator-side change (per §5.2 amendment 5: failureCallback IS the
 //   canonical retry-exhaustion signal source).
@@ -14,6 +14,16 @@
 //   wraps its handler with verifySignatureAppRouter so unsigned POSTs
 //   are rejected by the SDK before the inner handler runs. Asserted
 //   structurally (verifySignatureAppRouter was called at module load).
+//
+// Plan #317 / F-4 update: pre-PR-B the route called repository
+// insertFailedPush directly, so this test mocked the repo. PR-B routes
+// the write through the service-layer recordFailedPushAttempt (which
+// handles SQLSTATE 23505 → updateFailedPushAttempt for the retry path
+// and emits task.push_failed audit). This test now mocks the service
+// function — route-handler shape (decode → service → 200) is what we
+// pin here; service internals are covered by failed-pushes/service tests
+// + the integration spec at
+// tests/integration/failed-push-callback-attempt-count-increments.spec.ts.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,27 +35,21 @@ vi.mock("@upstash/qstash/nextjs", () => ({
   ),
 }));
 
-vi.mock("../../src/shared/db", () => ({
-  withServiceRole: vi.fn(),
-}));
-
 vi.mock("../../src/shared/sentry-capture", () => ({
   captureException: vi.fn(),
 }));
 
-vi.mock("../../src/modules/failed-pushes/repository", () => ({
-  insertFailedPush: vi.fn(),
+vi.mock("../../src/modules/failed-pushes", () => ({
+  recordFailedPushAttempt: vi.fn(),
 }));
 
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 import { POST } from "../../src/app/api/queue/push-task-failed/route";
-import { withServiceRole } from "../../src/shared/db";
-import { insertFailedPush } from "../../src/modules/failed-pushes/repository";
+import { recordFailedPushAttempt } from "../../src/modules/failed-pushes";
 import type { FailedPush } from "../../src/modules/failed-pushes/types";
 
 const mockVerifySig = vi.mocked(verifySignatureAppRouter);
-const mockWithServiceRole = vi.mocked(withServiceRole);
-const mockInsertFailedPush = vi.mocked(insertFailedPush);
+const mockRecordFailedPushAttempt = vi.mocked(recordFailedPushAttempt);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const TASK_ID = "11111111-1111-1111-1111-111111111111";
@@ -101,12 +105,8 @@ function failedPushFixture(overrides: Partial<FailedPush> = {}): FailedPush {
 }
 
 beforeEach(() => {
-  mockWithServiceRole.mockReset();
-  mockWithServiceRole.mockImplementation(
-    async (_label: string, fn: (tx: never) => Promise<unknown>) => fn({} as never),
-  );
-  mockInsertFailedPush.mockReset();
-  mockInsertFailedPush.mockResolvedValue(failedPushFixture());
+  mockRecordFailedPushAttempt.mockReset();
+  mockRecordFailedPushAttempt.mockResolvedValue(failedPushFixture());
   // Silence logger noise during tests; structural log assertions are
   // covered in queue-push-task.spec.ts row 10. This file pins
   // failureCallback DB-write behavior, not log shape.
@@ -123,17 +123,31 @@ afterEach(() => {
 // ===========================================================================
 
 describe("§7.2 row 11 — failureCallback handler happy path", () => {
-  it("decodes base64 sourceBody → INSERTs failed_pushes row → 200 with failed_push_id", async () => {
+  it("decodes base64 sourceBody → routes through recordFailedPushAttempt → 200 with failed_push_id", async () => {
     const res = await POST(makeRequest(makeQStashFailurePayload()));
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { outcome: string; failed_push_id: string };
+    const body = (await res.json()) as {
+      outcome: string;
+      failed_push_id: string;
+      attempt_count: number;
+    };
     expect(body.outcome).toBe("recorded");
     expect(body.failed_push_id).toBe(FAILED_PUSH_ID);
+    expect(body.attempt_count).toBe(1);
 
-    expect(mockInsertFailedPush).toHaveBeenCalledTimes(1);
-    const [, tenantArg, inputArg] = mockInsertFailedPush.mock.calls[0];
-    expect(tenantArg).toBe(TENANT_ID);
+    expect(mockRecordFailedPushAttempt).toHaveBeenCalledTimes(1);
+    const [ctxArg, inputArg] = mockRecordFailedPushAttempt.mock.calls[0];
+    // Plan #317 / F-4: ctx is a system-actor RequestContext mirroring the
+    // /api/queue/push-task wiring (system: "queue:push_task"; same QStash
+    // queue). recordFailedPushAttempt asserts system actor + tenant context.
+    expect(ctxArg.actor.kind).toBe("system");
+    if (ctxArg.actor.kind === "system") {
+      expect(ctxArg.actor.system).toBe("queue:push_task");
+      expect(ctxArg.actor.tenantId).toBe(TENANT_ID);
+    }
+    expect(ctxArg.tenantId).toBe(TENANT_ID);
+    expect(ctxArg.path).toBe("/api/queue/push-task-failed");
     expect(inputArg.taskId).toBe(TASK_ID);
     // Status 503 → server_5xx per deriveFailureReason in route.
     expect(inputArg.failureReason).toBe("server_5xx");
@@ -166,14 +180,14 @@ describe("§7.2 row 11 — failureCallback handler happy path", () => {
     ];
 
     for (const { status, reason } of cases) {
-      mockInsertFailedPush.mockClear();
-      mockInsertFailedPush.mockResolvedValue(
+      mockRecordFailedPushAttempt.mockClear();
+      mockRecordFailedPushAttempt.mockResolvedValue(
         failedPushFixture({ failureReason: reason as FailedPush["failureReason"] }),
       );
       const res = await POST(makeRequest(makeQStashFailurePayload({ status })));
       expect(res.status, `status=${status} should yield 200`).toBe(200);
       expect(
-        mockInsertFailedPush.mock.calls[0][2].failureReason,
+        mockRecordFailedPushAttempt.mock.calls[0][1].failureReason,
         `status=${status} → reason=${reason}`,
       ).toBe(reason);
     }

@@ -152,6 +152,10 @@ export function createSuiteFleetAuthClient(
     const maxAttempts = retryDelays.length + 1;
     let lastNetworkError: unknown = null;
     let lastServerStatus: number | null = null;
+    // Plan #317 §3.1 / F-1: track the most recent 5xx body so the
+    // retry-exhaustion throw below carries SF's own error text into
+    // failure_detail downstream (via CredentialError.message).
+    let lastServerBody: string | null = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let response: Response | null = null;
@@ -173,14 +177,28 @@ export function createSuiteFleetAuthClient(
         }
         lastServerStatus = response.status;
         lastNetworkError = null;
-        log.warn({ operation, attempt, status: response.status, error_code: "server_5xx" });
+        // Read body once per 5xx attempt — Response is single-use so
+        // the read happens here and the body is discarded after the
+        // last attempt becomes the throw message.
+        try { lastServerBody = await response.text(); } catch { lastServerBody = ""; }
+        log.warn({
+          operation,
+          attempt,
+          status: response.status,
+          error_code: "server_5xx",
+          response_excerpt: (lastServerBody ?? "").slice(0, 400),
+        });
       }
 
       if (attempt === maxAttempts) {
         const cause = lastNetworkError instanceof Error ? lastNetworkError : undefined;
+        const bodyExcerpt =
+          lastServerBody !== null && lastServerBody.length > 0
+            ? `: ${lastServerBody.slice(0, 2000)}`
+            : "";
         const reason =
           lastServerStatus !== null
-            ? `SuiteFleet ${operation} returned ${lastServerStatus} after ${maxAttempts} attempts`
+            ? `SuiteFleet ${operation} returned ${lastServerStatus} after ${maxAttempts} attempts${bodyExcerpt}`
             : `SuiteFleet ${operation} unreachable after ${maxAttempts} attempts`;
         throw new CredentialError(reason, cause ? { cause } : undefined);
       }
@@ -201,12 +219,35 @@ export function createSuiteFleetAuthClient(
     }
   }
 
-  function rejectClientError(operation: "login" | "refresh", status: number): never {
-    log.warn({ operation, status, error_code: "client_4xx" });
+  // Plan #317 §3.1 / §6 OQ-1 ruling (a) at SHA f0ef560: extended signature
+  // takes optional responseText so 4xx call sites can read body once before
+  // calling. Threads the body excerpt into the thrown CredentialError so
+  // failure_detail downstream carries SF's own error text (e.g. credential
+  // rotation messages) rather than an opaque status-only string.
+  function rejectClientError(
+    operation: "login" | "refresh",
+    status: number,
+    responseText?: string,
+  ): never {
+    const excerpt = responseText !== undefined ? responseText.slice(0, 400) : "";
+    log.warn({
+      operation,
+      status,
+      error_code: "client_4xx",
+      response_excerpt: excerpt,
+    });
+    const bodyExcerpt =
+      responseText !== undefined && responseText.length > 0
+        ? `: ${responseText.slice(0, 2000)}`
+        : "";
     if (status === 401) {
-      throw new CredentialError(`SuiteFleet ${operation} rejected — credentials invalid`);
+      throw new CredentialError(
+        `SuiteFleet ${operation} rejected — credentials invalid${bodyExcerpt}`,
+      );
     }
-    throw new CredentialError(`SuiteFleet ${operation} rejected with status ${status}`);
+    throw new CredentialError(
+      `SuiteFleet ${operation} rejected with status ${status}${bodyExcerpt}`,
+    );
   }
 
   // -------------------------------------------------------------------
@@ -231,7 +272,14 @@ export function createSuiteFleetAuthClient(
       }),
     );
 
-    if (response.status >= 400) rejectClientError("login", response.status);
+    if (response.status >= 400) {
+      // Plan #317 §3.1 / F-1: read body once before invoking the
+      // signature-extended rejectClientError so SF's response text
+      // reaches downstream failure_detail.
+      let responseText: string;
+      try { responseText = await response.text(); } catch { responseText = ""; }
+      rejectClientError("login", response.status, responseText);
+    }
 
     const body = await readJson(response, "login");
     const tokens = parseTokenSet(body);
@@ -312,7 +360,13 @@ export function createSuiteFleetAuthClient(
         }),
       );
 
-      if (response.status >= 400) rejectClientError("refresh", response.status);
+      if (response.status >= 400) {
+        // Plan #317 §3.1 / F-1: read body once before invoking the
+        // signature-extended rejectClientError.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
+        rejectClientError("refresh", response.status, responseText);
+      }
 
       const body = await readJson(response, "refresh");
       const tokens = parseTokenSet(body);

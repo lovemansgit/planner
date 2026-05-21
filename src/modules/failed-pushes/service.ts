@@ -293,12 +293,45 @@ export async function recordFailedPushAttempt(
   const recorded = await withServiceRole(
     `task:push_failed_attempt for tenant ${tenantId} (task ${taskId})`,
     async (tx) => {
+      // Plan #317 §10 ruling addendum at f0ef560: wrap insertFailedPush
+      // in a SAVEPOINT (Drizzle nested transaction → postgres-js
+      // SAVEPOINT under the hood) so a 23505 from the partial UNIQUE
+      // rolls back ONLY the savepoint, not the outer service-role
+      // transaction. The pre-existing pattern (try/catch around
+      // insertFailedPush directly on the parent tx) was broken since
+      // Day-8: postgres-js marks the parent transaction as failed on
+      // the first 23505, and the subsequent updateFailedPushAttempt
+      // would fail with "current transaction is aborted, commands
+      // ignored until end of transaction block" — except in the
+      // observed CI failure the original 23505 surfaces instead.
+      //
+      // First exercised by PR-B's F-4 LOAD-BEARING integration spec at
+      // tests/integration/failed-push-callback-attempt-count-increments.spec.ts.
+      // Existing callers (past-dated guard at task-push/service.ts:459,
+      // unknown-district guard at :515, AWB-exists reconcile-fail at
+      // :576, non-AWB DLQ at :689) all hit this as a first-failure
+      // path — insertFailedPush succeeds inside the savepoint, catch
+      // never fires, behavior unchanged.
       try {
-        return await insertFailedPush(tx, tenantId, normalised);
+        return await tx.transaction(async (sp) =>
+          insertFailedPush(sp, tenantId, normalised),
+        );
       } catch (err) {
         // SQLSTATE 23505 from the partial UNIQUE: an unresolved row
-        // already exists for this task. Route to UPDATE-attempt path.
-        const code = (err as { code?: string }).code;
+        // already exists for this task. The savepoint above rolled
+        // back; route to UPDATE-attempt path on the parent tx (which
+        // is still healthy because the failure was contained inside
+        // the savepoint).
+        //
+        // Drizzle 0.45 wraps postgres-js errors in DrizzleQueryError
+        // with the original error on `.cause`; the legacy Day-8 check
+        // of `(err as { code?: string }).code === "23505"` never
+        // matched on the wrapper, which is the second half of why
+        // recordFailedPushAttempt's upsert path was silently broken
+        // pre-PR-B. Unwrap both layers defensively.
+        const code =
+          (err as { code?: string }).code ??
+          ((err as { cause?: { code?: string } }).cause?.code);
         if (code === "23505") {
           return updateFailedPushAttempt(tx, tenantId, normalised);
         }
