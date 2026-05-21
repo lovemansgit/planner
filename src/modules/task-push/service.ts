@@ -532,17 +532,33 @@ export async function pushSingleTask(
   // ---------------------------------------------------------------------------
   // Step 4: authenticate + push
   // ---------------------------------------------------------------------------
-  const session = await adapter.authenticate(tenantId);
-  const request = buildTaskCreateRequest(tenantId, task, consignee);
-
+  // Plan #317 §3.2 / F-2 fix at SHA f0ef560: hoist session + request as
+  // nullable lets and move adapter.authenticate + buildTaskCreateRequest
+  // INTO the try block. Previously both ran ungaurded above the try, so
+  // any throw from auth (5xx after retry exhaustion, network blip on the
+  // SF /auth endpoint, expired refresh token) or from buildTaskCreateRequest
+  // (malformed delivery_date) escaped pushSingleTask entirely, landed in
+  // the route handler's catch, and got re-thrown to QStash. QStash exhausted,
+  // failureCallback fired, the W2 writer at push-task-failed/route.ts wrote
+  // a DLQ row with QStash-snapshot taskPayload + no task.push_failed audit.
+  //
+  // Type invariant: SuiteFleetAwbExistsError is only thrown by
+  // adapter.createTask AFTER session + request both resolved, so both are
+  // guaranteed non-null when the AWB-exists branch enters. The non-AWB DLQ
+  // branch may see either or both still null (auth-throw or build-throw
+  // path) — uses a defensive pre-push stub for taskPayload in that case.
   let pushResult;
+  let session: Awaited<ReturnType<LastMileAdapter["authenticate"]>> | null = null;
+  let request: CronTaskCreateRequest | null = null;
   try {
+    session = await adapter.authenticate(tenantId);
+    request = buildTaskCreateRequest(tenantId, task, consignee);
     pushResult = await adapter.createTask(session, request as TaskCreateRequest);
   } catch (err) {
     // ---------------------------------------------------------------------
     // D8-4b reconcile branch (mirror of pushTasksForTenant)
     // ---------------------------------------------------------------------
-    if (err instanceof SuiteFleetAwbExistsError) {
+    if (err instanceof SuiteFleetAwbExistsError && session !== null && request !== null) {
       const reconcileLog = taskLog.with({ awb: err.awb });
       let reconcileResult;
       try {
@@ -644,18 +660,35 @@ export async function pushSingleTask(
     // ---------------------------------------------------------------------
     // Non-AWB push failure → DLQ
     // ---------------------------------------------------------------------
+    // Plan #317 §3.2 / F-2: request may be null here when authenticate or
+    // buildTaskCreateRequest threw (now caught inside the try block per
+    // F-2 fix). In that case record a pre-push stub payload that names
+    // the failure stage — ops triage at /admin/failed-pushes still gets a
+    // failure_detail (carried by classified.detail from the thrown error's
+    // message, including SF body excerpts via F-1) plus the task_id, and
+    // can correlate with the auth-side warning log line.
     const classified = classifyAdapterError(err);
     taskLog.warn(
       {
         failure_reason: classified.reason,
         http_status: classified.httpStatus,
+        pre_push_stage: request === null,
       },
       "push_single_task createTask failed — recording to DLQ",
     );
+    const dlqPayload: Record<string, unknown> =
+      request !== null
+        ? (request as unknown as Record<string, unknown>)
+        : {
+            stage: "pre_push_failure",
+            reason_class: classified.reason,
+            note:
+              "authenticate or buildTaskCreateRequest threw before SF createTask was attempted (Plan #317 / F-2 fix surface)",
+          };
     try {
       await recordFailedPushAttempt(ctx, {
         taskId: task.id,
-        taskPayload: request as unknown as Record<string, unknown>,
+        taskPayload: dlqPayload,
         failureReason: classified.reason,
         failureDetail: classified.detail,
         httpStatus: classified.httpStatus,

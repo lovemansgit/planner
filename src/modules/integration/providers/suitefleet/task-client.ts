@@ -634,15 +634,22 @@ export function createSuiteFleetTaskClient(
       }
 
       if (response.status >= 500) {
+        // Plan #317 §3.1 / F-1: read 5xx body before throwing — mirrors
+        // the 4xx branch below so failure_detail downstream (via
+        // CredentialError.message → classifyAdapterError) carries SF's
+        // own error text rather than an opaque status-only message.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
         log.warn({
           operation: "create_task",
           status: response.status,
           error_code: "server_5xx",
           tenant_id: session.tenantId,
           customer_order_number: request.customerOrderNumber,
+          response_excerpt: responseText.slice(0, 400),
         });
         throw new CredentialError(
-          `SuiteFleet createTask returned ${response.status} — single-attempt policy, no retry`,
+          `SuiteFleet createTask returned ${response.status} — single-attempt policy, no retry: ${responseText.slice(0, 2000)}`,
         );
       }
 
@@ -756,15 +763,19 @@ export function createSuiteFleetTaskClient(
       }
 
       if (response.status >= 500) {
+        // Plan #317 §3.1 / F-1: read 5xx body before throwing.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
         log.warn({
           operation: "get_task_by_awb",
           status: response.status,
           error_code: "server_5xx",
           tenant_id: session.tenantId,
           awb,
+          response_excerpt: responseText.slice(0, 400),
         });
         throw new CredentialError(
-          `SuiteFleet getTaskByAwb returned ${response.status} — single-attempt policy, no retry`,
+          `SuiteFleet getTaskByAwb returned ${response.status} — single-attempt policy, no retry: ${responseText.slice(0, 2000)}`,
         );
       }
 
@@ -855,15 +866,19 @@ export function createSuiteFleetTaskClient(
       }
 
       if (response.status >= 500) {
+        // Plan #317 §3.1 / F-1: read 5xx body before throwing.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
         log.warn({
           operation: "update_task",
           status: response.status,
           error_code: "server_5xx",
           tenant_id: session.tenantId,
           awb,
+          response_excerpt: responseText.slice(0, 400),
         });
         throw new CredentialError(
-          `SuiteFleet updateTask returned ${response.status} — single-attempt policy, no retry`,
+          `SuiteFleet updateTask returned ${response.status} — single-attempt policy, no retry: ${responseText.slice(0, 2000)}`,
         );
       }
 
@@ -950,9 +965,16 @@ export function createSuiteFleetTaskClient(
       }
 
       if (response.status >= 500) {
-        requestLog.warn({ status: response.status, error_code: "server_5xx" });
+        // Plan #317 §3.1 / F-1: read 5xx body before throwing.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
+        requestLog.warn({
+          status: response.status,
+          error_code: "server_5xx",
+          response_excerpt: responseText.slice(0, 400),
+        });
         throw new CredentialError(
-          `SuiteFleet cancelTask returned ${response.status} — single-attempt policy, no retry`,
+          `SuiteFleet cancelTask returned ${response.status} — single-attempt policy, no retry: ${responseText.slice(0, 2000)}`,
         );
       }
 
@@ -1040,9 +1062,16 @@ export function createSuiteFleetTaskClient(
       }
 
       if (response.status >= 500) {
-        requestLog.warn({ status: response.status, error_code: "server_5xx" });
+        // Plan #317 §3.1 / F-1: read 5xx body before throwing.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
+        requestLog.warn({
+          status: response.status,
+          error_code: "server_5xx",
+          response_excerpt: responseText.slice(0, 400),
+        });
         throw new CredentialError(
-          `SuiteFleet bulkCancelTasks returned ${response.status} — single-attempt policy, no retry`,
+          `SuiteFleet bulkCancelTasks returned ${response.status} — single-attempt policy, no retry: ${responseText.slice(0, 2000)}`,
         );
       }
 
