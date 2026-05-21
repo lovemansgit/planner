@@ -32,6 +32,8 @@
 //   - listUnresolvedByTenant — Day-7 cron iteration target; also
 //     post-MVP operator UI's queue view.
 
+import { sql as sqlTag } from "drizzle-orm";
+
 import { emit } from "../audit";
 import { requirePermission } from "../identity";
 import type { LastMileAdapter } from "../integration";
@@ -312,8 +314,9 @@ export async function recordFailedPushAttempt(
       // :576, non-AWB DLQ at :689) all hit this as a first-failure
       // path — insertFailedPush succeeds inside the savepoint, catch
       // never fires, behavior unchanged.
+      let row: FailedPush;
       try {
-        return await tx.transaction(async (sp) =>
+        row = await tx.transaction(async (sp) =>
           insertFailedPush(sp, tenantId, normalised),
         );
       } catch (err) {
@@ -333,13 +336,37 @@ export async function recordFailedPushAttempt(
           (err as { code?: string }).code ??
           ((err as { cause?: { code?: string } }).cause?.code);
         if (code === "23505") {
-          return updateFailedPushAttempt(tx, tenantId, normalised);
+          row = await updateFailedPushAttempt(tx, tenantId, normalised);
+        } else {
+          // 23503 (FK violation) / P0001 (tenant-match trigger) / etc.
+          // surface as-is — these are programming errors, not retry
+          // conditions.
+          throw err;
         }
-        // 23503 (FK violation) / P0001 (tenant-match trigger) / etc.
-        // surface as-is — these are programming errors, not retry
-        // conditions.
-        throw err;
       }
+
+      // Day-33 PR-C / F-3 (b) per plan-PR #317 §3.3: flip
+      // tasks.outbound_sync_state to 'failed' in the SAME withServiceRole
+      // tx as the failed_pushes write. Atomic with the row insert/update
+      // above — readers see either "no DLQ row + no 'failed' state" or
+      // "DLQ row + 'failed' state", never a partial split.
+      //
+      // Gated to PRESERVE the operator-cancel lane states ('pending_cancel'
+      // / 'pending_reschedule') — those are owned by the cancel-task /
+      // cancel-task-failed convergence writers (Day-29 §D(2) Phase-1)
+      // and the create-push DLQ writer must not override them. The push
+      // path's own state machine (pre-push → 'pending', failure → 'failed',
+      // success → 'synced') stays within {pending, synced, failed}; the
+      // gate's allowlist matches that domain. Plan §3.3 lifecycle note
+      // "skip / cancel paths UNCHANGED".
+      await tx.execute(sqlTag`
+        UPDATE tasks
+        SET outbound_sync_state = 'failed'
+        WHERE id = ${taskId} AND tenant_id = ${tenantId}
+          AND outbound_sync_state IN ('pending', 'synced', 'failed')
+      `);
+
+      return row;
     },
   );
 

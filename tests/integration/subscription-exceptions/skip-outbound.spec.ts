@@ -327,9 +327,12 @@ describe("Day-29 §D(2) Phase-1 — skip→SF outbound enqueue (variants 1+2)", 
     expect(result.status).toBe("inserted");
     expect(enqueueCancelTaskSpy).not.toHaveBeenCalled();
 
-    // Task SHOULD still be SKIPPED locally; outbound_sync_state stays 'synced'
-    // because the CASE expression in markTaskSkipped only sets 'pending_cancel'
-    // when external_tracking_number IS NOT NULL.
+    // Task SHOULD still be SKIPPED locally; outbound_sync_state stays at
+    // the insert-time DEFAULT because the CASE expression in markTaskSkipped
+    // only sets 'pending_cancel' when external_tracking_number IS NOT NULL.
+    // Post-Plan #317 PR-C / migration 0028 the DEFAULT is 'pending'
+    // (was 'synced' pre-0028); semantics unchanged, only the asserted
+    // starting-value literal drifted with the DEFAULT change.
     await withTenant(TENANT, async (tx) => {
       type Row = { internal_status: string; outbound_sync_state: string };
       const rows = (await tx.execute(sqlTag`
@@ -337,7 +340,7 @@ describe("Day-29 §D(2) Phase-1 — skip→SF outbound enqueue (variants 1+2)", 
         FROM tasks WHERE id = ${TASK_MATERIALIZED_UNPUSHED}
       `)) as readonly Row[];
       expect(rows[0].internal_status).toBe("SKIPPED");
-      expect(rows[0].outbound_sync_state).toBe("synced");
+      expect(rows[0].outbound_sync_state).toBe("pending");
     });
   });
 

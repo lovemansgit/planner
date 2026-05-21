@@ -610,9 +610,19 @@ function AddNotePanel({
 
 /**
  * Day-29 §D(2) Phase-1 — copy + classes for the outbound_sync_state
- * UI badge. Returns null for 'synced' (no badge rendered). Plain stone
- * palette per the existing AddressIndicator pattern; pending uses the
- * stone-100 fill, failed uses the warning-tinted fill.
+ * UI badge. Returns null for 'synced' (no badge rendered) and for
+ * 'pending' (also silent — see below). Plain stone palette per the
+ * existing AddressIndicator pattern; pending-cancel uses the stone-100
+ * fill, failed uses the warning-tinted fill.
+ *
+ * Day-33 PR-C / F-3 per plan-PR #317 OQ-2 ruling (b): 'pending' is the
+ * pre-push truthful default after migration 0028. Returns null because
+ * the pre-push window lasts seconds-to-minutes (cron tick → push) for
+ * normal flow; rendering a badge on every newly-minted task would be
+ * noise that doesn't serve operator triage. Tasks stuck in 'pending'
+ * past the expected push window surface via the existing failed-push
+ * surfaces (the partial-index DLQ list at /admin/failed-pushes) once
+ * the failure path runs — they don't need a calendar badge.
  */
 function outboundSyncStateBadge(
   state: TaskOutboundSyncState,
@@ -634,6 +644,7 @@ function outboundSyncStateBadge(
         label: "SF sync failed — see ops",
         classes: "bg-amber-50 text-amber-900",
       };
+    case "pending":
     case "synced":
       return null;
   }
