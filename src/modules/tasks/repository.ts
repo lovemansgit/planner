@@ -261,12 +261,17 @@ function mapAddressLabel(value: unknown): "home" | "office" | "other" | null {
 /**
  * Day-29 §D(2) Phase-1 — narrow tasks.outbound_sync_state (string at
  * the wire) to the TaskOutboundSyncState union at the boundary.
- * Defensive: unknown values collapse to 'synced' (the safest read-side
- * default — the column is NOT NULL DEFAULT 'synced' at the DB layer,
- * so the only path to an unknown value would be schema drift).
+ *
+ * Defensive: unknown values collapse to 'pending' post-Day-33 PR-C —
+ * 0028 changed the column DEFAULT from 'synced' to 'pending', so the
+ * read-side fallback follows the new safest default. The only path to
+ * an unknown value is schema drift (a future CHECK enum extension that
+ * code-side hasn't picked up); 'pending' surfaces such rows as
+ * needs-push-or-triage rather than as silently-synced.
  */
 function mapOutboundSyncState(value: unknown): TaskOutboundSyncState {
   if (
+    value === "pending" ||
     value === "synced" ||
     value === "pending_cancel" ||
     value === "pending_reschedule" ||
@@ -274,7 +279,7 @@ function mapOutboundSyncState(value: unknown): TaskOutboundSyncState {
   ) {
     return value;
   }
-  return "synced";
+  return "pending";
 }
 
 /**
@@ -1109,9 +1114,9 @@ export async function listReconciliationCandidatesByTenant(
 
 /**
  * Day 8 / D8-4a — mark a task as pushed to the external system.
- * Sets `external_id`, `external_tracking_number`, and
- * `pushed_to_external_at = now()` atomically. Defence-in-depth
- * tenant_id predicate.
+ * Sets `external_id`, `external_tracking_number`,
+ * `pushed_to_external_at = now()`, and `outbound_sync_state = 'synced'`
+ * atomically. Defence-in-depth tenant_id predicate.
  *
  * Idempotency posture: NO `WHERE pushed_to_external_at IS NULL`
  * guard. If a future caller re-attempts a push for a task that's
@@ -1119,6 +1124,17 @@ export async function listReconciliationCandidatesByTenant(
  * UPDATEs with the new external_id. Caller is responsible for not
  * re-pushing already-pushed tasks (the cron's `listUnpushedTasksByTenant`
  * filter is the upstream gate).
+ *
+ * Day-33 PR-C / F-3 (a) per plan-PR #317 §3.3: the same UPDATE flips
+ * outbound_sync_state to 'synced' so the column reflects post-push
+ * truth without a second statement. Unconditional flip — a successful
+ * push from any prior state (pre-0028 'synced' default, post-0028
+ * 'pending', or 'failed' on retry) converges to 'synced'. Cancel-lane
+ * states ('pending_cancel' / 'pending_reschedule') are unreachable
+ * here because markTaskSkipped only sets 'pending_cancel' on rows that
+ * are already pushed (external_tracking_number IS NOT NULL), so a
+ * createTask push on a 'pending_cancel' row would be a state-machine
+ * violation upstream.
  *
  * Returns true if a row was updated, false otherwise (unknown id,
  * RLS-hidden cross-tenant, or tenant_id mismatch).
@@ -1134,7 +1150,8 @@ export async function markTaskPushed(
     UPDATE tasks
     SET external_id = ${externalId},
         external_tracking_number = ${externalTrackingNumber},
-        pushed_to_external_at = now()
+        pushed_to_external_at = now(),
+        outbound_sync_state = 'synced'
     WHERE id = ${taskId} AND tenant_id = ${tenantId}
   `);
   const count =

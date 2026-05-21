@@ -9,13 +9,17 @@
 //   - 0025 — outbound_push_failures.operation CHECK admits 'reschedule'
 //     (in addition to the existing 'update' / 'cancel' / 'bulk_cancel')
 //   - 0026 — tasks.outbound_sync_state column exists with the expected
-//     type, NOT NULL, DEFAULT 'synced', and CHECK on the 4-value enum
+//     type, NOT NULL, and CHECK admits the original 4-value enum (the
+//     post-0028 DEFAULT + 'pending'-extension assertions live in
+//     tests/integration/migration-0028-tasks-outbound-sync-state-pending-default.spec.ts)
 //   - 0026 — partial index tasks_outbound_sync_state_pending_idx exists
 //     with the WHERE predicate restricting to non-'synced' rows
-//   - 0026 — backfill UPDATE moved 'SKIPPED + pushed_to_external_at IS
-//     NOT NULL' rows to outbound_sync_state='failed'. The assertion is
-//     "no SKIPPED+pushed row left in 'synced' after migration" — robust
-//     to whether the test DB has any matching rows.
+//   - 0026 — original backfill UPDATE moved 'SKIPPED + pushed_to_external_at IS
+//     NOT NULL' rows out of 'synced'. Note: the 0028 backfill (Plan #317 §8 R-3
+//     CASE) reclassifies rows by external_id / failed_pushes presence, so a
+//     SKIPPED+pushed row with external_id NOT NULL is now 'synced' post-0028
+//     — the 0026 backfill assertion has been moved to the 0028 spec which
+//     asserts the post-CASE-backfill classification.
 // =============================================================================
 
 import { sql as sqlTag } from "drizzle-orm";
@@ -62,7 +66,7 @@ describe("Day-29 §D(2) Phase-1 — Migrations 0025 + 0026 schema-drift", () => 
 
   // --- 0026 — tasks.outbound_sync_state column ---
 
-  it("0026: tasks.outbound_sync_state column exists with text type, NOT NULL, DEFAULT 'synced'", async () => {
+  it("0026: tasks.outbound_sync_state column exists with text type, NOT NULL", async () => {
     interface ColumnRow {
       readonly column_name: string;
       readonly data_type: string;
@@ -84,12 +88,11 @@ describe("Day-29 §D(2) Phase-1 — Migrations 0025 + 0026 schema-drift", () => 
     expect(rows.length).toBe(1);
     expect(rows[0].data_type).toBe("text");
     expect(rows[0].is_nullable).toBe("NO");
-    // Postgres normalises DEFAULT 'synced' to 'synced'::text in the
-    // information_schema view.
-    expect(rows[0].column_default).toMatch(/'synced'/);
+    // DEFAULT post-0028 is 'pending'; the specific value assertion
+    // lives in migration-0028-...spec.ts.
   });
 
-  it("0026: tasks.outbound_sync_state CHECK admits the 4-value enum", async () => {
+  it("0026: tasks.outbound_sync_state CHECK admits the original 4-value enum (post-0028 also admits 'pending' — see 0028 spec)", async () => {
     interface CheckRow {
       readonly check_clause: string;
     }
@@ -140,24 +143,9 @@ describe("Day-29 §D(2) Phase-1 — Migrations 0025 + 0026 schema-drift", () => 
     expect(rows[0].indexdef).toMatch(/synced/);
   });
 
-  it("0026: backfill leaves no SKIPPED+pushed task in 'synced' state", async () => {
-    // Robust assertion: regardless of what's in the test DB, no row
-    // matching the backfill predicate should remain in 'synced'.
-    interface CountRow {
-      readonly count: number;
-    }
-    const rows = (await withServiceRole(
-      "0026 backfill verify",
-      async (tx) =>
-        tx.execute(sqlTag`
-          SELECT COUNT(*)::int AS count
-          FROM tasks
-          WHERE internal_status = 'SKIPPED'
-            AND pushed_to_external_at IS NOT NULL
-            AND outbound_sync_state = 'synced'
-        `),
-    )) as unknown as readonly CountRow[];
-
-    expect(rows[0].count).toBe(0);
-  });
+  // Note: the original 0026 backfill assertion (SKIPPED+pushed rows
+  // moved out of 'synced') is invalidated by the 0028 backfill which
+  // reclassifies by external_id NOT NULL → 'synced'. The post-0028
+  // backfill semantics are asserted in
+  // tests/integration/migration-0028-tasks-outbound-sync-state-pending-default.spec.ts.
 });
