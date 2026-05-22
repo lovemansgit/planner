@@ -54,6 +54,7 @@ import type { Uuid } from "../../shared/types";
 import type { SinglePushOutcome } from "../task-push";
 
 import {
+  bulkMarkUnresolvedAsResolved,
   findFailedPushById,
   insertFailedPush,
   listUnresolvedByTenant,
@@ -387,6 +388,143 @@ export async function recordFailedPushAttempt(
   });
 
   return recorded;
+}
+
+// =============================================================================
+// bulkResolveFailedPushes — Day-33 PR-D (Plan #317 §3.7 CLEANUP-1)
+// =============================================================================
+
+/**
+ * Discriminator for which entry point invoked the bulk-resolve. Stored
+ * verbatim in the audit event's `source` metadata field per the
+ * event-types.ts registration. The contract is the registration; this
+ * union is the runtime mirror.
+ */
+export type BulkResolveSource = "admin_ui" | "cli";
+
+export interface BulkResolveFailedPushesInput {
+  readonly failedPushIds: readonly Uuid[];
+  readonly resolutionNotes: string;
+  readonly source: BulkResolveSource;
+}
+
+export interface BulkResolveFailedPushesResult {
+  readonly resolved: readonly FailedPush[];
+  /** IDs submitted but NOT resolved (already-resolved, wrong-tenant, unknown). */
+  readonly notFoundIds: readonly Uuid[];
+}
+
+const RESOLUTION_NOTES_MAX_LEN = 500;
+const BULK_RESOLVE_MAX_BATCH = 200;
+
+/**
+ * Day-33 PR-D (Plan #317 §3.7 CLEANUP-1 + §6 OQ-4 ruling (a)+(b) at
+ * SHA f0ef560). Atomically resolve up to BULK_RESOLVE_MAX_BATCH
+ * unresolved failed_pushes rows with one operator-provided reason.
+ *
+ * Permission: `failed_pushes:resolve` — distinct verb from `:retry`
+ * (retry tries SF again; resolve = give up without retrying). Tenant
+ * Admin holds it via TENANT_SCOPED auto-pickup; CS Agent + Ops Manager
+ * are excluded. Same posture as `:retry`.
+ *
+ * Atomicity: one withServiceRole tx wraps the UPDATE + the audit emit
+ * is fired AFTER tx commit (matches the recordFailedPushAttempt pattern).
+ * If the UPDATE succeeds but the emit fails, the rows ARE resolved and
+ * the emit failure surfaces via Sentry — the rows are still durable in
+ * the table; the audit gap is loud not silent.
+ *
+ * Single audit emit per bulk operation (mirrors task.bulk_created +
+ * consignee.bulk_created precedent — ONE meta-event with `count` +
+ * `failed_push_ids[]`, NOT N per-row events). The per-row durable
+ * record lives in failed_pushes.resolved_at + resolution_notes columns.
+ *
+ * Source discrimination: admin_ui vs cli. Carried into the audit
+ * metadata's `source` field per the event-types.ts registration.
+ *
+ * Partial-success reporting: any submitted ID that fails to UPDATE
+ * (already-resolved, wrong-tenant, unknown) is silently dropped from
+ * the RETURNING. The caller compares the resolved-set to the submitted-set
+ * to surface `notFoundIds` — the UI shows "3 of 5 resolved; 2 were
+ * already resolved or wrong tenant"; the CLI prints the same in its
+ * apply-mode output.
+ *
+ * Throws:
+ *   - ForbiddenError    caller lacks failed_pushes:resolve.
+ *   - ValidationError   empty failedPushIds, empty resolutionNotes,
+ *                       notes > 500 chars, > BULK_RESOLVE_MAX_BATCH IDs,
+ *                       or no tenant context.
+ */
+export async function bulkResolveFailedPushes(
+  ctx: RequestContext,
+  input: BulkResolveFailedPushesInput,
+): Promise<BulkResolveFailedPushesResult> {
+  requirePermission(ctx, "failed_pushes:resolve");
+  assertTenantScoped(ctx, "failed_pushes:bulk_resolve");
+
+  if (input.failedPushIds.length === 0) {
+    throw new ValidationError("failedPushIds must contain at least one id");
+  }
+  if (input.failedPushIds.length > BULK_RESOLVE_MAX_BATCH) {
+    throw new ValidationError(
+      `failedPushIds may contain at most ${BULK_RESOLVE_MAX_BATCH} ids per batch (got ${input.failedPushIds.length})`,
+    );
+  }
+  const trimmedNotes = input.resolutionNotes.trim();
+  if (trimmedNotes.length === 0) {
+    throw new ValidationError("resolutionNotes must be non-empty");
+  }
+  if (trimmedNotes.length > RESOLUTION_NOTES_MAX_LEN) {
+    throw new ValidationError(
+      `resolutionNotes must be ≤${RESOLUTION_NOTES_MAX_LEN} chars (got ${trimmedNotes.length})`,
+    );
+  }
+
+  // Deduplicate the submitted IDs before the SQL round-trip — a UI
+  // double-select or CLI input dupe shouldn't pad the partial-success
+  // accounting nor cost extra SQL parameter binding.
+  const uniqueIds = Array.from(new Set(input.failedPushIds));
+
+  // resolved_by is the userId when actor.kind === 'user' (UI path).
+  // For the CLI's synthetic system actor, resolved_by stays NULL —
+  // failed_pushes.resolved_by is a FK to users(id) and won't admit a
+  // 'cli:resolve_failed_pushes' string. The audit emit's actor identity
+  // carries the CLI attribution instead.
+  const resolvedBy: Uuid | null =
+    ctx.actor.kind === "user" ? (ctx.actor.userId as Uuid) : null;
+
+  const tenantId = ctx.tenantId;
+  const resolved = await withServiceRole(
+    `failed_push:bulk_resolved for tenant ${tenantId} (${uniqueIds.length} ids, source=${input.source})`,
+    async (tx) =>
+      bulkMarkUnresolvedAsResolved(tx, tenantId, uniqueIds, resolvedBy, trimmedNotes),
+  );
+
+  const resolvedIds = new Set(resolved.map((r) => r.id));
+  const notFoundIds = uniqueIds.filter((id) => !resolvedIds.has(id));
+
+  // Audit emit fires regardless of resolved-count (including 0) — the
+  // operator's action IS the auditable event, not just the side-effects.
+  // A 0-resolved bulk operation means every submitted ID was stale; the
+  // operator's intent is still recorded for forensic reconstruction.
+  // Metadata shape MUST match the event-types.ts registration verbatim
+  // per the §A registered-metadata-wins rule.
+  await emit({
+    eventType: "failed_push.bulk_resolved",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "failed_push",
+    metadata: {
+      failed_push_ids: resolved.map((r) => r.id),
+      count: resolved.length,
+      resolution_notes: trimmedNotes,
+      source: input.source,
+      not_found_count: notFoundIds.length,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return { resolved, notFoundIds };
 }
 
 // =============================================================================

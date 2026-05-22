@@ -22,7 +22,8 @@
     "teardown-merchant": "node scripts/teardown-merchant.mjs",
     "seed-subscriptions": "node scripts/seed-subscriptions.mjs",
     "seed-demo-personas": "node scripts/seed-demo-personas.mjs",
-    "backfill-subscription-materialization": "node scripts/backfill-subscription-materialization.mjs"
+    "backfill-subscription-materialization": "node scripts/backfill-subscription-materialization.mjs",
+    "resolve-failed-pushes": "node scripts/resolve-failed-pushes.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1037.0",

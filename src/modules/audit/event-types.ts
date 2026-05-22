@@ -536,6 +536,36 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: false,
   },
 
+  // Day-33 PR-D (Plan #317 §3.7 CLEANUP-1, §6 OQ-4 ruling (a)+(b) at
+  // SHA f0ef560). Operator-driven "give up on these rows without
+  // retrying" decision over multiple unresolved failed_pushes at once.
+  // Distinct from failed_push.retried — retry tries SF again; bulk_resolved
+  // accepts the failure and closes the DLQ row with an operator-provided
+  // reason (e.g. past-dated tasks ops decides to accept-leak rather than
+  // reschedule). ONE event per bulk operation (mirrors task.bulk_created
+  // and consignee.bulk_created precedent), not one per row — the per-row
+  // durable record lives in failed_pushes.resolved_at + resolution_notes.
+  //
+  // Two emit sources, discriminated by `source` field in metadata:
+  //   - 'admin_ui'  — /admin/failed-pushes' "Resolve selected" button.
+  //                   actorKind = 'user'.
+  //   - 'cli'       — scripts/resolve-failed-pushes.mjs --apply runs.
+  //                   actorKind = 'system'; actorId = 'cli:resolve_failed_pushes'.
+  //
+  // systemOnly = false because the UI path is the primary surface;
+  // the CLI path is for ops backlog-drain (rare; ops manager runs it
+  // under the same audit accountability via the synthetic system actor).
+  "failed_push.bulk_resolved": {
+    id: "failed_push.bulk_resolved",
+    resource: "failed_push",
+    action: "bulk_resolved",
+    description:
+      "Day-33 PR-D (Plan #317 §3.7 CLEANUP-1, §6 OQ-4 (a)+(b)). Bulk-resolve operator tooling for failed_pushes: an operator marked many unresolved DLQ rows as resolved in one atomic operation via either /admin/failed-pushes' Resolve-selected button OR scripts/resolve-failed-pushes.mjs CLI tool. Distinct from failed_push.retried — bulk_resolved is 'give up on these without retrying' (operator decided not to re-attempt SF push; row closes with the operator's reason). Per-row durable record lives in failed_pushes.resolved_at + resolution_notes; this event is the operator-attribution + bulk-operation observability.",
+    metadataNotes:
+      "failed_push_ids[] (uuid[] — IDs successfully resolved by this operation), count (int — failed_push_ids.length, denormalised for audit-log query convenience), resolution_notes (string — operator-provided reason, ≤500 chars), source (string union: 'admin_ui' | 'cli' — discriminates the entry point so forensic queries can isolate CLI-driven backlog drains from UI-driven ops triage), not_found_count (int — count of submitted IDs that were NOT resolved because they were already-resolved or wrong-tenant; surfaces partial-success). resourceId is omitted (multi-row event; per-row identity lives in failed_push_ids array — mirrors task.bulk_created precedent).",
+    systemOnly: false,
+  },
+
   // Day 7 / C-2 — nightly cron generation lifecycle. These are
   // META events (one per cron invocation per tenant), not per-task.
   // The cron also emits per-task `task.created` events for traceability;

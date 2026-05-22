@@ -10,9 +10,16 @@
 // gated surface.
 
 export type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
-export type { PushSingleTaskFn, RetryFailedPushResult } from "./service";
+export type {
+  BulkResolveFailedPushesInput,
+  BulkResolveFailedPushesResult,
+  BulkResolveSource,
+  PushSingleTaskFn,
+  RetryFailedPushResult,
+} from "./service";
 
 export {
+  bulkResolveFailedPushes,
   listFailedPushTaskIdsForTenant,
   listUnresolvedFailedPushes,
   markFailedPushResolved,

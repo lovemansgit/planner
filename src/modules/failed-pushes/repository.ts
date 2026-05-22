@@ -237,6 +237,52 @@ export async function markUnresolvedAsResolved(
 }
 
 /**
+ * Day-33 PR-D (Plan #317 §3.7 CLEANUP-1). Bulk-resolve up to N unresolved
+ * failed_pushes rows by `failed_pushes.id` (not task_id — operator
+ * selected rows from the admin UI which renders by row id, AND the
+ * CLI takes failed_push_ids in its JSON input).
+ *
+ * Tenant-scoped via the `tenant_id = $1` predicate alongside RLS. IDs
+ * that don't match (wrong tenant, already-resolved, unknown) are silently
+ * dropped from the RETURNING — the caller compares the returned set to
+ * the submitted IDs to surface partial-success ("3 of 5 resolved; 2
+ * were already resolved or wrong tenant").
+ *
+ * One UPDATE statement regardless of input length (bulk-friendly via
+ * `id = ANY($ids)`). Postgres handles the array via the postgres-js
+ * tagged template — the array binds as a single uuid[] parameter.
+ *
+ * Returns the affected rows ordered by id. Empty `failedPushIds` returns
+ * `[]` without a round-trip.
+ */
+export async function bulkMarkUnresolvedAsResolved(
+  tx: DbTx,
+  tenantId: Uuid,
+  failedPushIds: readonly Uuid[],
+  resolvedBy: Uuid | null,
+  resolutionNotes: string,
+): Promise<readonly FailedPush[]> {
+  if (failedPushIds.length === 0) return [];
+  // Pattern E per src/shared/sql-helpers.ts — Drizzle 0.45 + postgres-js
+  // splats `${jsArr}` into a record tuple, not a Postgres array; build
+  // the array literal server-side as a string. Safe for uuid[] (no
+  // delimiter conflicts).
+  const idsLiteral = "{" + failedPushIds.join(",") + "}";
+  const rows = await tx.execute<FailedPushRow>(sqlTag`
+    UPDATE failed_pushes
+    SET
+      resolved_at      = now(),
+      resolved_by      = ${resolvedBy},
+      resolution_notes = ${resolutionNotes}
+    WHERE id = ANY(${idsLiteral}::uuid[])
+      AND tenant_id = ${tenantId}
+      AND resolved_at IS NULL
+    RETURNING *
+  `);
+  return rows.map(mapRow);
+}
+
+/**
  * Day 8 / D8-5 — read path for the /admin/failed-pushes UI.
  *
  * Returns unresolved failed_pushes rows for the tenant, ordered by
