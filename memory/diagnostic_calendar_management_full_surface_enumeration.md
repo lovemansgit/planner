@@ -583,3 +583,223 @@ Its only job is to surface and classify every operator-facing calendar surface s
 Filed Day-33 AM (2026-05-21) as a T1 docs-only PR off main HEAD `5798a61`. Single commit, single file. Diagnostic-only — the institutional record is the classification + the R1-R5 ruling items. Branch: `docs/d33-calendar-management-full-surface-diagnostic`. Merged via PR #324 at main `57e5d9b`.
 
 **Day-33 PM amendment** — Love surfaced two additional ruling items (R6 + R7) during PR-B production eyeball. R6 covers the `/tasks` page surface (not enumerated in the original AM diagnostic — that pass scoped to calendar surfaces only) and is the first instance of the diagnostic touching a non-calendar surface; the rationale is that R6 proposes a new cross-surface entry point to TaskTimelineDrawer (the Action 8 drawer this memo already classifies as works end-to-end), so R6 belongs in this memo's ruling section rather than a fresh document. R7 covers the consignee detail page default landing tab — the diagnostic enumerated the Calendar tab under Axis 1 but did not call out the default-tab behavior as a gap. Both items append as new sub-sections under "Items needing operator/reviewer ruling" without re-classifying any existing axis surface. Frontmatter description amended in lock-step. Axis enumeration sections, classification matrix, R1-R5, Out of scope, Cross-references, Non-goals all unchanged. Filed Day-33 PM as a T1 docs-only amendment PR off main HEAD `57e5d9b`. Single commit. Branch: `docs/d33-calendar-diagnostic-r6-r7-amendment`.
+
+## Rulings (Day-33 PM session)
+
+Captured during reviewer-facilitated rulings session, Day-33 PM (2026-05-22 Dubai). All R-items walked one at a time; rulings reflect Love's product calls. Three new ruling items (R8/R9/R10) surfaced during the session and are folded in below. These rulings are the locked product decisions for the eventual T3 calendar-management plan-PR; engineering scoping (sequencing, sub-PRs, Aqib coordination if any) happens at plan-PR build time.
+
+---
+
+**R1 — Cron-deferred actions surface in real-time**
+RULED: (c) trigger cron on-demand for operator-initiated deferred actions
+
+Shape: when an operator triggers an action that today writes its effect into the next 16:00 Dubai cron tick, Planner invokes the relevant cron-equivalent logic immediately (synchronously or via a fast async dispatch). Calendar reflects the change on next page-load with no pending-state gap.
+
+Two known triggering actions:
+- Skip-with-tail-end reinsertion (Day-32 surface): tail-end delivery should materialize immediately, not at next cron tick.
+- Future-horizon address override per R5: future-dated tasks beyond the 14-day horizon get re-materialized with new address immediately.
+
+Open at lane plan-PR time:
+- Synchronous vs async-via-QStash dispatch shape (sync is simpler for the operator but blocks the action's API response; async is non-blocking but introduces sub-second-to-seconds delay between action and calendar reflection).
+- Concurrency guard between operator-trigger and the scheduled 16:00 cron tick — both could fire on the same subscription same day; idempotency must be preserved (the materializer cron is already idempotent per Day-14 Phase 5 design; lane plan-PR confirms this holds under on-demand invocation).
+- Rate-limit consideration: operator could trigger many actions rapidly across consignees. If sync, request latency stacks; if async, QStash flow control keeps it in check.
+- The 16:00 daily cron itself stays scheduled — on-demand invocation is additive, not replacing the daily tick.
+
+Sizing: T3 medium-large.
+Cross-reference: Day-32 PR #320 followup memo §1 "Skip-with-tail-end reinsertion" identified this as the architecture-driven UX gap. R1 ruling (c) resolves it at the architecture level, not just the visual surface.
+
+---
+
+**R2 — Pause has no SF outbound push**
+RULED: (a) build the fix
+
+Shape: extend existing operator-initiated cancel push pattern (single-task) to a window — all tasks in the pause window get SF cancel pushes, same QStash publisher + same DLQ path as today's single-cancel flow.
+
+Sizing: T3, structural — multiple tasks per operator action, batched fan-out via batchJSON (existing publish.ts pattern from Day-22 ed5963b9 / PR #319 dedup fix).
+Dependencies: none external — SF cancel API is the same wire contract already in production for single-task cancels.
+Operator promise restored: Pause button stops dispatch end-to-end.
+
+---
+
+**R3 — addNoteToDriver SF outbound (local-only despite UI promise)**
+RULED: (a) push to SF
+
+Shape: extend addNoteToDriver service path to publish a QStash outbound push alongside the existing local tasks.notes write — same publisher pattern as cancel/update. SF wire contract supports per-task driver-note field (already used on initial task create).
+
+Sizing: T3 small-medium — single-task push, no fan-out; reuses existing outbound publisher infra and DLQ path.
+Dependencies: none external — same SF contract as initial create.
+Operator promise restored: driver actually sees the note.
+
+---
+
+**R4 — One-off address override (task-level)**
+RULED: (a) build the fix
+
+Shape: operator overrides address on a single in-horizon task. Planner (i) updates that task row's address fields, (ii) pushes update to SF same outbound publisher pattern as cancel/note flows. Other tasks on the subscription untouched. No confirmation pop-up — scope is self-evident (one delivery).
+
+Sizing: T3 small-medium — single-task update + SF push.
+
+---
+
+**R5 — Forward-going address override (subscription-level)**
+RULED: (a) build the fix, scoped to subscription not consignee
+
+Shape: operator overrides address forward-going on ONE subscription. Planner (i) updates address on every in-horizon task on that subscription, (ii) pushes SF update for each, (iii) updates the subscription's stored address so future cron-materialized tasks pick it up.
+
+Confirmation pop-up REQUIRED: "Are you sure you want to update the address for all future tasks on this subscription?"
+
+Other subscriptions for the same consignee remain on their existing address.
+
+Sizing: T3 medium — fan-out across all in-horizon tasks on the subscription + subscription-level address update + cron materializer reads from subscription on future ticks.
+
+Out of R4/R5 scope (separate surface, edit-consignee page): consignee-level address change — would update every future task across ALL subscriptions for that consignee. Not part of this calendar-management lane unless Love rules it in separately.
+
+---
+
+**R6.1 + R6.2 — Tasks page column layout (combined; supersedes earlier R6.1 (b) ruling)**
+RULED: 9-column layout, Date-first scan axis
+
+Column order:
+1. Date
+2. AWB
+3. Status
+4. Consignee Name
+5. Address (street/building — from consignees.addressLine)
+6. District (neighborhood — from consignees.district)
+7. Emirate (region — from consignees.emirateOrRegion)
+8. Telephone
+9. Actions
+
+Notes:
+- Date first reflects operator scan pattern ("today's tasks") over AWB-first technical identifier order.
+- Address / District / Emirate are three distinct columns matching the schema's three address fields — no flattening into a single cell.
+- Consignee name + telephone come from the consignee record (joined on tasks.consignee_id).
+- Address fields reflect any task-level override per R4 ruling; for tasks without override, fall through to consignee's default address.
+- Supersedes earlier R6.1 (b) ruling: Date moves to col 1, AWB to col 2. R6.2 density question moot — content split across columns 5/6/7/8 instead of packed into one cell.
+
+Deferred to lane plan-PR time:
+- Mobile/tablet responsive behavior (which columns collapse on small screens, row-expand pattern, etc).
+
+Sizing: T2 medium — column reorder + 4 new column data fetches + address-override fall-through logic.
+
+---
+
+**R6.3 — AWB click on null-AWB tasks**
+RULED: (b) partial-state drawer
+
+Shape: clicking an empty-AWB cell opens the same task-details drawer as a populated AWB. Drawer renders a banner at the top: "Task not yet pushed to SuiteFleet — AWB will be assigned once dispatch completes." Shows all available task fields (consignee, date, address, status); fields dependent on SF-side state (driver name, dispatched-at, POD, etc.) render as empty / not-yet-available.
+
+Sizing: T2 small — banner conditional + empty-field rendering on existing drawer.
+
+---
+
+**R6.4 — Row-click target on the consignee block**
+RULED: (b) entire consignee block is one click target → consignee detail page
+
+Shape: columns 4-8 (Consignee Name · Address · District · Emirate · Telephone) render as a single contiguous click target. Clicking anywhere across those five columns navigates to the consignee detail page (/consignees/[id]). Hover state spans the full block to make the affordance visible.
+
+Other row click targets:
+- Date · AWB · Status (cols 1-3): clicking AWB opens task drawer (per R6.3 + R8); date/status not click targets today, stay non-interactive.
+- Actions (col 9): individual action buttons (override, cancel, etc).
+- Result: three distinct interactive zones per row — AWB cell, consignee block, action buttons. Visible affordances keep them un-ambiguous.
+
+Sizing: T2 small — span-wide click target + hover state styling.
+
+Note on telephone column: ruling (b) means clicking the telephone cell navigates to consignee page, NOT a tel: dialer link. If Love later wants tel: behavior on telephone specifically, that becomes a separate ruling — exception inside the consignee-block click target.
+
+---
+
+**R7.1 — Default tab on consignee detail page**
+RULED: (a) Calendar for all roles, uniformly — modified by R7.4 conditional below
+
+Shape: any operator landing on /consignees/[id] (without an explicit ?tab= query param) sees the Calendar tab as the default UNLESS the consignee is in an empty state per R7.4 (zero subscriptions AND zero tasks → default to Overview instead). No role-aware branching. Consistent across operator, Tenant Admin, Transcorp sysadmin.
+
+Sizing: T2 trivial in isolation; combined with R7.4 the branching logic adds small server-side check.
+
+---
+
+**R7.2 — Default view mode on consignee Calendar tab**
+RULED: Month (no code change needed — reality already matches)
+
+Reality check: prior reviewer's diagnostic (Day-33 R6/R7 amendment) framed the code as defaulting to "week" at consignees/[id]/page.tsx:136. Operator screenshot (Day-33 PM, consignee "Toufic") shows MONTH is the active default. Brief assertion was correct; prior diagnostic was incorrect.
+
+Discipline lesson worth recording: this is the second reviewer-side paraphrase-into-symptom-framing error on R7.2 specifically — Day-32 framed "month default", Day-33 corrected to "week default", reality is "month default". The discipline rule is "verify against the running product, not against prior framing."
+
+Sizing: T0 — no code change.
+
+---
+
+**R7.3 — Deep-link URL parameter wins over default**
+RULED: confirmed (no behavior change beyond R9 fallback)
+
+Shape: ?tab=overview / ?tab=subscription / ?tab=history opens the named tab, overriding the Calendar default (R7.1). ?view=month / ?view=year opens the named view mode, overriding the Month default (R7.2). Invalid params from R9 removal: ?view=week falls back silently to Month — no error banner, no warning toast. Old bookmarks and email links keep working, just on the new default view.
+
+Sizing: T1-T2 — fallback logic in the view-mode parser; rest is existing behavior.
+
+---
+
+**R7.4 — Default tab on consignee detail page (empty-state branching)**
+RULED: (b) conditional default based on consignee state
+
+Shape:
+- If consignee has zero subscriptions AND zero tasks (incl. ad-hoc): default tab = Overview. Surfaces the "Create subscription" + "Add ad-hoc task" CTAs cleanly on a tab designed for that.
+- If consignee has ≥1 subscription OR ≥1 task: default tab = Calendar (per R7.1).
+- Explicit ?tab= param still wins over both branches (per R7.3).
+
+Open at lane plan-PR time:
+- Server-side vs client-side branching decision (page-load default needs the consignee's subscription + task count at SSR time; likely a small additional fetch on the consignee detail loader).
+- Threshold definition: "zero" is unambiguous; if Love later wants "zero-active" (e.g. cancelled subscriptions don't count), that's a separate scope refinement.
+- Empty-state on Calendar tab still needs design — operator may navigate to Calendar manually even when conditional default sent them to Overview. R7.4 (b) does not eliminate the empty-Calendar surface; it just makes it not the default landing.
+
+Sizing: T2 small-medium — additional fetch on consignee detail loader + branching logic on the default-tab resolver.
+
+---
+
+**R8 (NEW) — Audit timeline added to AWB-click task-details drawer**
+RULED: build
+
+Shape: existing AWB-click drawer gains a new "Audit timeline" section (placement + density TBD at lane plan-PR time). Server fetches audit_events filtered to this task_id, ordered most-recent-first. Each row renders event_type + actor (operator or system) + timestamp + relevant metadata.
+
+Open at lane plan-PR time:
+- Which event types render (all task.* events? include subscription.* events that affected this task? include failed_push.* events?)
+- Metadata expansion shape (always-on vs click-to-expand)
+- Pagination / cap on event count rendered
+- Whether the timeline is collapsible vs always-visible in the drawer
+
+Sizing: T2-T3 — depends on filter/render decisions above. Audit-event infra already exists; this is the first operator-facing audit surface in Planner (cross-ref the Path C alternative for resolved-rows visibility memo PR #329 — adjacent scope question; lane plan-PR considers whether R8's task-scoped timeline is a stepping stone toward broader audit-viewer surface or a one-off).
+
+---
+
+**R9 (NEW) — Remove Week view from consignee Calendar**
+RULED: full removal (not UI-hide)
+
+Shape: delete Week toggle from view-mode switcher; delete week-view render path; any deep-link with ?view=week falls back to Month (the new default per R7.2). No operators using Week today (Love confirmed Day-33).
+
+Sizing: T2 small — UI button removal + render-path deletion + deep-link fallback.
+
+---
+
+**R10 (NEW) — Year view heatmap properly rendered**
+RULED: (b) build the heatmap properly
+
+Origin: operator screenshot Day-33 PM showed Year view as an empty 12-month grid — no density color-coding, no failure highlights, no skipped/appended marks. Legend at top (LESS ▢▢▢▢ MORE · FAILURES ▢▢▢ · SKIPPED · APPENDED) implies the design intent, but the renderer is not filling cells. Today Year view is a placeholder, not a feature.
+
+Shape: each day-cell in the Year view renders with:
+- color intensity proportional to delivery count on that day (LESS → MORE gradient per existing legend)
+- distinct color for FAILED deliveries
+- distinct mark for SKIPPED days
+- distinct mark for APPENDED days
+
+Open at lane plan-PR time:
+- exact color palette (likely already in design tokens — brand-team confirm)
+- cell hover/click behavior (tooltip with date + counts? click to drill into Month view of that month?)
+- server fetch shape (year-aggregate query vs day-by-day aggregate done server-side)
+- performance ceiling on the aggregate query — Year covers up to 365 days × number of subscriptions on the consignee
+
+Sizing: T3 medium — new aggregate query + heatmap render + interaction handling. Backend infra exists (tasks table has all the data); this is rendering work + a server query.
+
+---
+
+**End of Day-33 PM rulings section.**
+
+> All 15 R-items now have rulings. Items deferred to lane plan-PR build time are noted inline; no R-item is left ambiguous. Aqib-coordination dependencies were assessed during the rulings session — none required (all rulings build against SF wire contracts already in production). Next step: open the calendar-management T3 plan-PR against these locked product decisions.
