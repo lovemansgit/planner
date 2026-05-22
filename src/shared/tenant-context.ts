@@ -53,7 +53,16 @@ export type SystemActor =
   // correlation_id. Per row, calls resumeSubscription with
   // is_auto_resume=true so the service-layer assertSystemActor branch
   // skips the user-permission check.
-  | "cron:auto_resume";
+  | "cron:auto_resume"
+  // Day-33 PR-D — synthetic system actor used by the
+  // scripts/resolve-failed-pushes.mjs CLI tool. The CLI is operator-
+  // run (not cron / not webhook), but bulkResolveFailedPushes runs
+  // through the service layer that requires an actor identity for
+  // the audit emit. Operator attribution on the CLI path lives in
+  // the failed_push.bulk_resolved event's actor_id ("cli:resolve_failed_pushes")
+  // and in the resolution_notes the operator supplied via the JSON
+  // input file (per PR-D's `source: "cli"` discriminator).
+  | "cli:resolve_failed_pushes";
 
 /** Two-kind actor: human user (JWT) or system (cron / webhook / queue). */
 export type Actor =

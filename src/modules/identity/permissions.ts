@@ -514,6 +514,23 @@ const PERMISSIONS_DRAFT = {
     systemOnly: false,
   },
 
+  // Day-33 PR-D (Plan #317 §3.7 CLEANUP-1). Operator-driven bulk-resolve
+  // for unresolved failed_pushes rows — the "give up without retrying"
+  // verb, distinct from :retry. Used by both the /admin/failed-pushes
+  // bulk-resolve UI button AND the scripts/resolve-failed-pushes.mjs
+  // CLI tool. Same auto-pickup distribution as failed_pushes:retry —
+  // Tenant Admin via TENANT_SCOPED; CS Agent + Ops Manager excluded
+  // (the operational-write surface stays Tenant-Admin-only per the
+  // Day 8 D8-5 precedent).
+  "failed_pushes:resolve": {
+    id: "failed_pushes:resolve",
+    resource: "failed_pushes",
+    action: "resolve",
+    description:
+      "Bulk-resolve unresolved failed_pushes rows with an operator-provided reason — the 'give up without retrying' verb. Tenant-Admin-only — same posture as failed_pushes:retry; CS Agent + Ops Manager excluded from the operational-write surface.",
+    systemOnly: false,
+  },
+
   // Day-30 / Fix-A2 (Aqib UAT 2026-05-18) — read-only failed-push
   // visibility for the merchant operator's task views. Aqib observed
   // a task that failed to push to SF (e.g. credentials not configured)
