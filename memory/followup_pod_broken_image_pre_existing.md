@@ -79,6 +79,64 @@ When Love runs the real-browser Network diagnostic (open dev tools on a consigne
 
 In all cases, post-resolution housekeeping: verify a previously-broken row renders correctly, append the resolution path to this memo, and decommission it from any active-followup digest if/when filed there.
 
+# Day-33 PM amendment — Network diagnostic findings
+
+The trigger above ("Love runs the real-browser Network diagnostic") fired Day-33 PM. Operator-browser capture on the consignee detail Calendar tab (Marwan consignee, May 20 DELIVERED cell) under Network filter = **Img** (not Fetch/XHR — prior eyeballs missed this) surfaced the actual failing image request. Diagnosis below.
+
+## Captured failing image URL (verbatim from operator browser)
+
+```
+https://s3.eu-central-1.amazonaws.com/reseource-tracking-transcorpsb/image/task/image_lQ0z8BIzhQEjbkxlwpVbpAVhLoS6XR.jpg?X-Amz-Security-Token=…&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260519T082824Z&X-Amz-SignedHeaders=host&X-Amz-Expires=604800&X-Amz-Credential=ASIA2JW2OEETTA6Z7PWR%2F20260519%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Signature=df1827021a153510dd5cd2f0e87b8c145fac7427085ebb13a1a888ab0c736030
+```
+
+**Browser-reported failure:** `(failed) net::ERR_BLOCKED_BY_RESPONSE`.
+
+## Diagnosis — AWS S3 pre-signed GET URL (SigV4)
+
+The URL is an AWS S3 pre-signed GET URL using Signature Version 4. Three decisive query parameters determine signature validity:
+
+- `X-Amz-Date=20260519T082824Z` — signature **generated** at 2026-05-19 08:28:24 UTC.
+- `X-Amz-Expires=604800` — TTL = 7 days = 604,800 seconds.
+- **Signature absolute expiry:** 2026-05-26 08:28:24 UTC.
+
+Today (Day-33, 2026-05-22) the link is **technically still inside its TTL** — the signature is valid for another ~4 days. The failure surface is therefore NOT a simple "signature expired" case (which would manifest as a 403 with an `AccessDenied` / `SignatureExpired` XML body). Instead the failure is the **structural mismatch** between SF's signed-URL contract and Planner's storage model:
+
+- Pre-signed URLs are inherently short-lived (AWS designed for "click within minutes," not "store and render forever").
+- Planner stores the SF-supplied URL **verbatim** in `tasks.pod_photos` (a `jsonb` column populated by `extractPodPhotos` at [`src/modules/integration/providers/suitefleet/apply-webhook-status-event.ts:540-561`](../src/modules/integration/providers/suitefleet/apply-webhook-status-event.ts)).
+- The calendar renders the URL as-is via `<img src={photos[0]}>` in [`CalendarPodCard`](../src/app/%28app%29/consignees/%5Bid%5D/_components/CalendarPodCard.tsx) (~line 56).
+
+When the signature is past expiry — OR when any browser-side condition makes S3 return the XML error envelope instead of image bytes (e.g., CORP / COEP-related browser rules, a transient region-level edge condition, or other) — the browser blocks the response with `ERR_BLOCKED_BY_RESPONSE` (browser shorthand for "S3 returned an XML error body, not an image"). The image tag renders the standard broken-image glyph.
+
+Today's exact failure path (within-TTL but still blocked) implies the response body shape OR a browser-policy reaction, not a simple signature timeout. Either way, Planner's verbatim-storage-and-direct-render model is structurally mismatched against SF's short-TTL signed-URL contract — the fix shape needs to address the storage/retrieval architecture, not just refresh a single stale URL.
+
+## Reclassification within the original 4-shape enumeration
+
+The Day-33 AM memo enumerated 4 plausible upstream shapes: (a) CDN URL expired (404), (b) CDN behind auth Planner doesn't have (403), (c) wrong-domain CORS rejection (200 with CORS block), (d) other/unknown. Findings reclassify as a **5th narrower shape**:
+
+- **(e) S3 pre-signed URL signature stale relative to render time** — OR a browser-policy reaction to the response body — rooted in the structural mismatch between SF's short-TTL signed-URL contract and Planner's verbatim-storage-and-render model.
+
+Closest in the original four was **(a) "404 expired"**, but the distinction matters for fix shape: the underlying S3 object is **not** deleted, and even within-TTL renders can fail. The Planner-side fix needs to bridge the storage/retrieval gap, not just retry on expiry.
+
+## Three fix shapes (enumerated, NOT picked — eventual lane plan-PR rules)
+
+1. **Proxy POD images through Planner.** Server-side route fetches from SF (or re-signs locally) at render time. Planner becomes an authenticated proxy.
+   - *Pros:* durable forever; works across signature expiry; no DB rewrites needed; bypasses the storage-vs-signed-URL mismatch entirely.
+   - *Cons:* bandwidth + latency cost on every POD render; new authenticated `/api/pod-images/[task_id]/[index]` route shape needed; tenant-scoped auth on the proxy route required.
+2. **Re-sign on read.** When the calendar loads, Planner checks the stored URL's `X-Amz-Date` + `X-Amz-Expires` and, if past a threshold (e.g., 1 day before expiry), refreshes by re-calling SF.
+   - *Pros:* simpler than proxying; preserves S3 direct-fetch architecture.
+   - *Cons:* requires SF API support for re-issuing a pre-signed URL on an existing photo (**not confirmed available** — Aqib question, see below); Planner needs the SF call shape; cache layer needed to avoid re-signing on every render.
+3. **Download + re-host on webhook receipt.** On `TASK_STATUS_UPDATED_TO_DELIVERED` webhook, Planner downloads the photo from SF and re-uploads to a Planner-owned S3 bucket with a permanent URL (or long-lived signed URL). DB stores the Planner-bucket URL.
+   - *Pros:* complete independence from SF; URLs durable; existing POD photos can be backfilled (one-shot migration job).
+   - *Cons:* storage cost (POD photos accumulate); bandwidth cost; bucket lifecycle policy needed; webhook handler latency increases (download + upload synchronously, or async via QStash).
+
+**Aqib coordination note.** Shape 2 (re-sign on read) is gated on SF answering: *"Does the SF API expose a re-sign endpoint for an existing task's POD photo, given the AWB + photo index?"* Recommend filing as an Aqib-coordination thread if shape 2 surfaces as the preferred direction. Shapes 1 and 3 are Planner-side only and do NOT require Aqib coordination.
+
+## Standing post-amendment
+
+- **NOT load-bearing for any current lane** (unchanged from original).
+- **Demo posture:** flagged Day-33 as not blocking demo — demo personas do not navigate to past DELIVERED dates with broken POD photos. Refinement: even if they did, the failure is browser-side ERR_BLOCKED_BY_RESPONSE (no Planner crash, no data corruption, no other-surface contagion); the broken-image glyph is the worst case.
+- **Lane-membership decision unchanged.** [`memory/diagnostic_calendar_management_full_surface_enumeration.md`](diagnostic_calendar_management_full_surface_enumeration.md) is the candidate parent lane if Love folds this; alternatively stand-alone T2/T3 PR. This amendment narrows the diagnostic question from "what is the shape?" (answered) to "which of the three fix paths?" (lane-open ruling).
+
 # Cross-references
 
 - [`memory/diagnostic_calendar_management_full_surface_enumeration.md`](diagnostic_calendar_management_full_surface_enumeration.md) — Day-33 calendar full-surface diagnostic. Axis 1.5 → POD photo thumbnail (`CalendarPodCard`) classified as works end-to-end. This memo extends that classification at the upstream-dependency layer.
@@ -90,7 +148,10 @@ In all cases, post-resolution housekeeping: verify a previously-broken row rende
 - Plan #317 plan-PR: [`lovemansgit/planner#317`](https://github.com/lovemansgit/planner/pull/317) at `f0ef560` — out-of-scope cross-reference; POD photo issue is NOT in the #317 lane.
 - PR #323 (PR-B eyeball pass) + PR #326 (PR-C eyeball pass) — both eyeball passes missed this row class because POD photo on a DELIVERED day was not in either's verification checklist. Discipline lesson, NOT a rule to add now: the post-T3-PR eyeball checklist should include a DELIVERED-day POD click-through.
 - Day-33 housekeeping precedent: [`memory/followup_hem_403_credential_failure.md`](followup_hem_403_credential_failure.md) — same shape of memo (durable anchor for a verified-but-unresolved issue surfaced during production eyeball; resolution scope unknown without further triage; NOT load-bearing).
+- Day-33 reviewer handoff §4-B (POD Network diagnostic) — Day-33 PM amendment trigger context; operator-browser Network capture on 2026-05-22, Marwan consignee, May 20 DELIVERED cell.
 
 # Meta
 
-Filed Day-33 PM (2026-05-21) as a T1 docs-only PR off main HEAD `d25e812`. Single commit, single file. Memo-only — the institutional record is the diagnostic context preservation + the trigger-for-next-action enumeration. Branch: `docs/d33-followup-pod-broken-image-pre-existing`.
+Filed Day-33 PM (2026-05-21) as a T1 docs-only PR off main HEAD `d25e812`. Single commit, single file. Memo-only — the institutional record is the diagnostic context preservation + the trigger-for-next-action enumeration. Branch: `docs/d33-followup-pod-broken-image-pre-existing`. Merged via PR #327 at main `3a3e2ea`.
+
+**Day-33 PM amendment** — Love ran the real-browser Network diagnostic (the trigger documented above) and captured the failing image request. Findings reclassify the 4-shape enumeration to a 5th narrower shape (e) S3 pre-signed URL signature stale relative to render time — OR a browser-policy reaction to the response body — rooted in the structural mismatch between SF's short-TTL signed-URL contract and Planner's verbatim-storage-and-render model. Memo amended with a new "Day-33 PM amendment — Network diagnostic findings" section between "Trigger for next-action" and "Cross-references"; cross-reference entry added for the reviewer handoff §4-B + operator browser capture anchor. Original sections (Origin, Status at filing, Scope of resolution unknown-shape enumeration, Standing, Non-goals, Trigger for next-action, Cross-references' prior entries) all unchanged. Three fix shapes enumerated with explicit tradeoffs (proxy / re-sign on read / download + re-host); memo does NOT pick — eventual lane plan-PR decides. Filed Day-33 PM as a T1 docs-only amendment PR off main HEAD `557126b`. Single commit. Branch: `docs/d33-pod-broken-image-network-diagnostic-amendment`.
