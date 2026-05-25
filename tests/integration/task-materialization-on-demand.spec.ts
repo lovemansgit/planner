@@ -56,6 +56,7 @@ interface SeededTenant {
   tenantId: Uuid;
   slug: string;
   userId: Uuid;
+  userEmail: string;
 }
 
 async function seedTenant(label: string): Promise<SeededTenant> {
@@ -63,41 +64,46 @@ async function seedTenant(label: string): Promise<SeededTenant> {
   const tenantId = randomUUID() as Uuid;
   const slug = `d36-r1-${label}-${runId}`;
   const userId = randomUUID() as Uuid;
+  const userEmail = `r1-${runId}@example.test`;
   await withServiceRole(`R1 on-demand seed tenant ${label}`, async (tx) => {
     await tx.execute(sqlTag`
       INSERT INTO tenants (id, slug, name)
       VALUES (${tenantId}, ${slug}, ${`R1 on-demand ${label}`})
     `);
-    // Operator-actor user row for audit emit's actor_id FK
-    // (audit_events.actor_id is text, no FK; this row exists so
-    // the user-actor path is realistic).
+    // Operator-actor seed — pattern matches bulk-resolve-failed-pushes.spec.ts.
+    // users.id is FK to auth.users(id); INSERT auth row first.
     await tx.execute(sqlTag`
-      INSERT INTO users (id, tenant_id, email, role)
-      VALUES (${userId}, ${tenantId}, ${`r1-${runId}@example.test`}, 'ops_manager')
+      INSERT INTO auth.users (id, email)
+      VALUES (${userId}, ${userEmail})
+    `);
+    await tx.execute(sqlTag`
+      INSERT INTO users (id, tenant_id, email, display_name)
+      VALUES (${userId}, ${tenantId}, ${userEmail}, ${`r1-${runId}`})
     `);
   });
-  return { tenantId, slug, userId };
+  return { tenantId, slug, userId, userEmail };
 }
 
-async function teardownTenant(tenantId: Uuid): Promise<void> {
+async function teardownTenant(tenant: SeededTenant): Promise<void> {
   // audit_events_no_delete RULE breaks DELETE CASCADE from tenants when
   // audit rows exist; try/catch keeps test cleanup hygienic anyway.
   try {
     await withServiceRole("R1 on-demand teardown", async (tx) => {
-      await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${tenantId}`);
+      await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${tenant.tenantId}`);
       await tx.execute(sqlTag`
-        DELETE FROM subscription_exceptions WHERE tenant_id = ${tenantId}
+        DELETE FROM subscription_exceptions WHERE tenant_id = ${tenant.tenantId}
       `);
       await tx.execute(sqlTag`
-        DELETE FROM subscription_materialization WHERE tenant_id = ${tenantId}
+        DELETE FROM subscription_materialization WHERE tenant_id = ${tenant.tenantId}
       `);
-      await tx.execute(sqlTag`DELETE FROM subscriptions WHERE tenant_id = ${tenantId}`);
-      await tx.execute(sqlTag`DELETE FROM addresses WHERE tenant_id = ${tenantId}`);
-      await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${tenantId}`);
+      await tx.execute(sqlTag`DELETE FROM subscriptions WHERE tenant_id = ${tenant.tenantId}`);
+      await tx.execute(sqlTag`DELETE FROM addresses WHERE tenant_id = ${tenant.tenantId}`);
+      await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${tenant.tenantId}`);
       await tx.execute(sqlTag`
-        DELETE FROM task_generation_runs WHERE tenant_id = ${tenantId}
+        DELETE FROM task_generation_runs WHERE tenant_id = ${tenant.tenantId}
       `);
-      await tx.execute(sqlTag`DELETE FROM users WHERE tenant_id = ${tenantId}`);
+      await tx.execute(sqlTag`DELETE FROM users WHERE tenant_id = ${tenant.tenantId}`);
+      await tx.execute(sqlTag`DELETE FROM auth.users WHERE id = ${tenant.userId}`);
     });
   } catch {
     /* audit RULE; ignore */
@@ -211,18 +217,19 @@ const REQUEST_ID = "r1-test-request";
 // ---------------------------------------------------------------------------
 
 describe("R1 / invokeOnDemandMaterialization — integration spec", () => {
-  const seededTenants: Uuid[] = [];
+  const seededTenants: SeededTenant[] = [];
 
   afterEach(async () => {
     while (seededTenants.length > 0) {
-      const id = seededTenants.pop();
-      if (id) await teardownTenant(id);
+      const t = seededTenants.pop();
+      if (t) await teardownTenant(t);
     }
   });
 
   it("(1) happy path — synchronously materializes tail tasks for a skip-extended subscription", async () => {
-    const { tenantId, userId } = await seedTenant("happy");
-    seededTenants.push(tenantId);
+    const seeded = await seedTenant("happy");
+    const { tenantId, userId } = seeded;
+    seededTenants.push(seeded);
     const { subscriptionId } = await seedSubscription(tenantId);
     const tasksBefore = await countTasks(tenantId, subscriptionId);
 
@@ -243,8 +250,9 @@ describe("R1 / invokeOnDemandMaterialization — integration spec", () => {
   });
 
   it("(2) emits cron.on_demand_invoked audit event with correct metadata", async () => {
-    const { tenantId, userId } = await seedTenant("audit");
-    seededTenants.push(tenantId);
+    const seeded = await seedTenant("audit");
+    const { tenantId, userId } = seeded;
+    seededTenants.push(seeded);
     const { subscriptionId } = await seedSubscription(tenantId);
 
     const result = await invokeOnDemandMaterialization({
@@ -273,8 +281,9 @@ describe("R1 / invokeOnDemandMaterialization — integration spec", () => {
   });
 
   it("(3) concurrency-guard — parallel on-demand invocations produce no duplicate task INSERTs", async () => {
-    const { tenantId, userId } = await seedTenant("concurrency");
-    seededTenants.push(tenantId);
+    const seeded = await seedTenant("concurrency");
+    const { tenantId, userId } = seeded;
+    seededTenants.push(seeded);
     const { subscriptionId } = await seedSubscription(tenantId);
 
     // Two parallel invocations for the same tenant + same wall-clock
@@ -310,8 +319,9 @@ describe("R1 / invokeOnDemandMaterialization — integration spec", () => {
   });
 
   it("(4) idempotency — repeated single-caller invocation inserts 0 new rows after first", async () => {
-    const { tenantId, userId } = await seedTenant("idempotency");
-    seededTenants.push(tenantId);
+    const seeded = await seedTenant("idempotency");
+    const { tenantId, userId } = seeded;
+    seededTenants.push(seeded);
     const { subscriptionId } = await seedSubscription(tenantId);
 
     const args = {
