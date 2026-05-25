@@ -1,9 +1,11 @@
-# Day-34 T3 plan-PR — calendar-management lane Phase 1 (outbound symmetry: R1+R2+R3+R4+R5)
+# Day-36 T3 plan-PR — calendar-management lane Phase 1 (outbound symmetry: R1+R2+R3+R4+R5)
 
 **Tier:** T3 plan-PR (docs-only).  Plan-PR persistence — stays OPEN until all five Phase-1 code-PRs (R1, R2, R3, R4, R5) ship end-to-end.
 **Pinned head SHA:** `9b9f7ba82b146e5c4ea3a594434a3748efb7f9ac` (main HEAD at plan-PR open).
-**Branch:** `plan/d34-calendar-management-phase-1`.
-**Lane source-of-truth:** [`memory/diagnostic_calendar_management_full_surface_enumeration.md`](../diagnostic_calendar_management_full_surface_enumeration.md) — 17 R-items locked as product decisions across PR #324 (AM diagnostic), PR #325 (R6/R7 amendment), PR #331 (R1-R10 + sub-rulings), plus R11 (POD-shape-e fold) + R12 (resolved-rows visibility fold) ruled at lane-open Day-34.
+**Branch:** `plan/d36-calendar-management-phase-1`.
+**Lane source-of-truth:** [`memory/diagnostic_calendar_management_full_surface_enumeration.md`](../diagnostic_calendar_management_full_surface_enumeration.md) — 17 R-items locked as product decisions across PR #324 (AM diagnostic), PR #325 (R6/R7 amendment), PR #331 (R1-R10 + sub-rulings), plus R11 (POD-shape-e fold) + R12 (resolved-rows visibility fold) ruled at lane-open Day-36.
+
+> **Day-anchor note.** This plan-PR was initially mis-anchored as "Day-34" carrying the framing forward from the Day-33 EOD handoff §G ("Tomorrow's open thread" text), without reality-checking against the calendar. Actual calendar: Day-34 = 2026-05-23 (Sat); Day-35 = 2026-05-24 (Sun); **Day-36 = 2026-05-25 (Mon, today)**. Branch + filename + day-references re-anchored on commit immediately following the original plan body commit (`3c14fcd`). Discipline lesson: this is a second reviewer-side "Verify framing against the running product, not against prior framing" failure (Rule B per Session B's framing-discipline memo — cross-reference TBD when Session B's memo lands).
 
 ---
 
@@ -228,7 +230,7 @@ C. **Operator-facing audit log viewer** — broader scope; tangents R8's task-sc
 - [`memory/followup_pod_broken_image_pre_existing.md`](../followup_pod_broken_image_pre_existing.md) — R11 origin memo + 3 fix paths (Path 1 picked).
 - [`memory/followup_resolved_rows_visibility_gap.md`](../followup_resolved_rows_visibility_gap.md) — R12 origin memo + 3 resolution paths (Path B picked).
 - [`memory/MEMORY-followup-current.md`](../MEMORY-followup-current.md) — active-lane digest.
-- [`memory/handoffs/day-33-eod.md`](../handoffs/day-33-eod.md) §G — Day-34 open thread context + §F discipline lessons.
+- [`memory/handoffs/day-33-eod.md`](../handoffs/day-33-eod.md) §G — lane-open thread context + §F discipline lessons. (§G text uses "Day-34" framing — that is the mis-anchor surfaced post-PR-#335-open; see day-anchor note in header.)
 
 ### Brief sections
 
@@ -263,7 +265,7 @@ C. **Operator-facing audit log viewer** — broader scope; tangents R8's task-sc
 
 - [`memory/feedback_brief_amendment_log_append_only.md`](../feedback_brief_amendment_log_append_only.md) — brief amendment carries v1.15 → v1.16 if OQ-5 ruled yes (see §5).
 - [`memory/decision_review_discipline_ci_gate.md`](../decision_review_discipline_ci_gate.md) — §3.6 hard-stop with CI gate; all 5 Phase-1 code-PRs inherit.
-- [`memory/feedback_parallel_sessions_use_git_worktree.md`](../feedback_parallel_sessions_use_git_worktree.md) — this plan-PR opened from worktree at `/Users/lovemans/Code/planner-d34-calendar-management-phase-1` (off origin/main HEAD `9b9f7ba`).
+- [`memory/feedback_parallel_sessions_use_git_worktree.md`](../feedback_parallel_sessions_use_git_worktree.md) — this plan-PR opened from a dedicated worktree off origin/main HEAD `9b9f7ba`.
 - [`memory/feedback_sha_derive_from_git_output_not_prefix.md`](../feedback_sha_derive_from_git_output_not_prefix.md) — pinned head SHA in this plan-PR header is the verbatim `git rev-parse HEAD` output, not extended from a prefix.
 - Day-33 EOD §F lesson #4 — migrations apply via Supabase SQL editor manually BEFORE Vercel promote of dependent code-PR; migration 0029 (if OQ-1 ruled yes) follows this convention.
 
@@ -291,4 +293,4 @@ Per [`memory/decision_review_discipline_ci_gate.md`](../decision_review_discipli
 
 ---
 
-**End of Day-34 Phase 1 plan-PR.** Plan-PR persistence — stays OPEN until PR-5 ships end-to-end. PRs 2 and 3 of the calendar-management lane open after Phase 1 closes; this plan-PR enumerates them for visibility but does not scope them.
+**End of Day-36 Phase 1 plan-PR.** Plan-PR persistence — stays OPEN until PR-5 ships end-to-end. PRs 2 and 3 of the calendar-management lane open after Phase 1 closes; this plan-PR enumerates them for visibility but does not scope them.
