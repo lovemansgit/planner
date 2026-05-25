@@ -49,6 +49,23 @@ vi.mock("@/modules/task-outbound-queue", () => ({
   enqueueCancelTask: vi.fn(async () => undefined),
 }));
 
+// R1 (calendar-management Phase 1) — on-demand materializer invocation
+// is wired into addSubscriptionException's skip-tail-extension post-commit
+// block. The real primitive opens a withServiceRole connection, which the
+// @/shared/db mock above doesn't expose. Mock to no-op so the existing
+// unit fixtures (which exercise the local-write + audit-emit surface, not
+// the on-demand consumer) continue to pass. The R1 surface is exercised
+// end-to-end by tests/integration/task-materialization-on-demand.spec.ts.
+vi.mock("@/modules/task-materialization/service", () => ({
+  invokeOnDemandMaterialization: vi.fn(async () => ({
+    newInsertedTaskIds: [],
+    addressResolutionFailedCount: 0,
+    advancedSubscriptionIds: [],
+    runRowOutcome: { kind: "inserted" },
+    cappedByGate: false,
+  })),
+}));
+
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/shared/errors";
 import type { RequestContext } from "@/shared/tenant-context";
 import type { Uuid } from "@/shared/types";

@@ -49,6 +49,7 @@ import { emit } from "@/modules/audit";
 import { requirePermission } from "@/modules/identity";
 import type { PermissionId } from "@/modules/identity/permissions";
 import { enqueueCancelTask } from "@/modules/task-outbound-queue";
+import { invokeOnDemandMaterialization } from "@/modules/task-materialization/service";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
 // Day 16 / Block 4-E §B B1 — shared cross-consignee address
@@ -706,6 +707,70 @@ export async function addSubscriptionException(
         tenant_id: tenantId,
         task_id: skippedTask.taskId,
         exception_id: exception.id,
+      });
+      throw err;
+    }
+  }
+
+  // R1 (calendar-management lane Phase 1, plan-PR #337 §2.R1):
+  // on-demand materializer invocation for the skip-tail-extension case.
+  // Pre-R1 the tail task waited for the next 16:00 Dubai cron tick
+  // (calendar gave no signal during the gap). Post-R1 the tail task
+  // materializes synchronously in this request so the operator sees
+  // it on the next page-load.
+  //
+  // Gated on the same conditions that mean "end_date was extended and
+  // the cron's forward-walk would have materialized a new tail task":
+  //   input.type === 'skip' && endDateExtended && compensatingDate !== null
+  //
+  // skipWithoutAppend skips this path (compensatingDate is null);
+  // move-to-date skips this path when target is inside the existing
+  // end_date window (endDateExtended is false).
+  //
+  // Mirrors enqueueCancelTask's try/catch posture: local DB already
+  // committed; on-demand failure logged + Sentry + re-thrown so the
+  // form action surfaces "saved locally; on-demand materialization
+  // failed (will retry next 16:00 tick)" to the operator. The
+  // scheduled 16:00 cron tick is the natural fallback.
+  //
+  // Phase 5 outbound push for newly-materialized tasks is NOT coupled
+  // here (per plan-PR #337 §8 Q-1 ruling: stay materializer-only for
+  // PR-1). The newly-INSERTed tail task picks up SF push on the next
+  // scheduled cron tick — same pattern as scheduled materialization
+  // since Day-14 Phase 5.
+  if (
+    input.type === "skip" &&
+    endDateExtended &&
+    exception.compensatingDate !== null
+  ) {
+    try {
+      await invokeOnDemandMaterialization({
+        tenantId,
+        triggeredBy: "skip_tail_end",
+        subscriptionId,
+        correlationId: exception.correlationId,
+        actor: ctx.actor,
+        requestId: ctx.requestId,
+      });
+    } catch (err) {
+      logger.error(
+        {
+          operation: "skip_invoke_on_demand_materialization",
+          tenant_id: tenantId,
+          subscription_id: subscriptionId,
+          exception_id: exception.id,
+          correlation_id: exception.correlationId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "addSubscriptionException: local DB committed; on-demand materialization failed (will retry next 16:00 tick; caller surfaces)",
+      );
+      captureException(err, {
+        component: "subscription_exceptions_service_add_exception",
+        operation: "invoke_on_demand_materialization",
+        tenant_id: tenantId,
+        subscription_id: subscriptionId,
+        exception_id: exception.id,
+        correlation_id: exception.correlationId,
       });
       throw err;
     }

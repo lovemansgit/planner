@@ -909,6 +909,17 @@ const EVENT_TYPES_DRAFT = {
       "tenant_id (uuid), classifier ('initial-set' | 'rotation'). NEVER contains plaintext credentials or Vault UUIDs. SHAPE DIVERGENCE (per Day-25 §A discipline + ratified OQ-8): this event deliberately diverges from the merchant.updated / region.updated flat-diff convention — payload is { tenant_id, classifier } only, NOT a { changes: { <field>: { before, after } } } diff. Rationale: credentials are sensitive-by-class; any per-field before/after shape risks leaking partial plaintext or rotation-vintage metadata into the audit body. auth_method is deliberately NOT in the payload either — recoverable forensically via tenant_id → region_id → auth_method for queries that need it. Forensic queries filter on classifier for rotation history.",
     systemOnly: true,
   },
+
+  "cron.on_demand_invoked": {
+    id: "cron.on_demand_invoked",
+    resource: "cron",
+    action: "on_demand_invoked",
+    description:
+      "The on-demand materializer was invoked synchronously by an operator action that would otherwise have deferred to the next scheduled 16:00 Dubai cron tick. Emitted after materializeTenant returns successfully. triggered_by names the originating action. Scheduled cron continues unchanged; on-demand is additive.",
+    metadataNotes:
+      "tenant_id (uuid), triggered_by (enum: 'skip_tail_end' | 'forward_address_override'), subscription_id (uuid — the subscription whose exception triggered the invocation), correlation_id (uuid — shared with the originating subscription.exception.created event), target_date (YYYY-MM-DD — the materialization horizon date computed for this invocation), new_inserted_task_count (int — Phase 2 newInsertedTaskIds.length), capped_by_gate (boolean — true if the materializer cap-gate fired and Phases 2-3 were SKIPPED).",
+    systemOnly: false,
+  },
 } as const satisfies Record<string, EventTypeDef>;
 
 /**
