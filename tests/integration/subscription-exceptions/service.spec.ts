@@ -257,10 +257,15 @@ describe("Service A (subscription-exceptions) — integration", () => {
           AND (metadata->>'correlation_id') = ${result.correlationId}
         ORDER BY occurred_at ASC
       `);
-      expect(rows.length).toBe(2);
+      // R1 (calendar-management lane Phase 1) post-commit hook emits a
+      // third audit event for the skip-tail-end case: cron.on_demand_invoked
+      // shares the same correlation_id as the exception + end_date events.
+      // Pre-R1 this was 2 events.
+      expect(rows.length).toBe(3);
       const eventTypes = rows.map((r) => r.event_type);
       expect(eventTypes).toContain("subscription.exception.created");
       expect(eventTypes).toContain("subscription.end_date.extended");
+      expect(eventTypes).toContain("cron.on_demand_invoked");
     });
   });
 
