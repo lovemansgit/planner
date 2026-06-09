@@ -1151,7 +1151,7 @@ Edge case: if an operator sets a pause-end-date such that the resume must take e
 
 Scope reversion path: if Vercel is upgraded back to Pro tier in future, revert this entry by restoring `*/15` in `vercel.json`.
 
-NOT a brief version bump. This is an operational degradation log, not a scope change. The v1.16 bump still happens with the first net-new outbound shape in calendar-management Phase 1 (PR-2 or PR-3) per the prior reviewer ruling.
+NOT a brief version bump. This is an operational degradation log, not a scope change. The v1.17 bump still happens with the first net-new outbound shape in calendar-management Phase 1 (PR-2 or PR-3) per the prior reviewer ruling — note that prior reviewer ruling framed it as "v1.16 bump" but v1.16 was already shipped on Day-30 via PR #308, so the next bump is v1.17.
 
 ---
 
