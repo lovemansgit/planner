@@ -127,6 +127,10 @@ import {
   markTasksRestoredInWindow,
 } from "../tasks";
 import {
+  enqueueBulkCancelTasks,
+  type CancelTaskPayload,
+} from "../task-outbound-queue";
+import {
   computeTodayInDubai,
   isCutOffElapsedForDate,
 } from "../task-materialization/dubai-date";
@@ -771,8 +775,10 @@ export async function pauseSubscription(
       createdBy: actorIdFor(ctx.actor) as Uuid,
     });
 
-    // Bulk-cancel tasks in window.
-    const canceledTaskCount = await markTasksCanceledInWindow(
+    // Bulk-cancel tasks in window. Returns the canceled rows (id +
+    // external_tracking_number) so the post-commit R2 fan-out can drive
+    // SF cancels for the pushed subset; the count derives from the rows.
+    const canceledTasks = await markTasksCanceledInWindow(
       tx,
       tenantId,
       id,
@@ -805,7 +811,7 @@ export async function pauseSubscription(
       exception,
       newEndDate,
       previousEndDate: subscription.endDate,
-      canceledTaskCount,
+      canceledTasks,
     } as const;
   });
 
@@ -822,7 +828,8 @@ export async function pauseSubscription(
     };
   }
 
-  const { exception, newEndDate, previousEndDate, canceledTaskCount } = txResult;
+  const { exception, newEndDate, previousEndDate, canceledTasks } = txResult;
+  const canceledTaskCount = canceledTasks.length;
 
   // Post-commit audit emission with shared correlation_id.
   const baseEmit = {
@@ -862,6 +869,52 @@ export async function pauseSubscription(
         correlation_id: exception.correlationId,
       },
     });
+  }
+
+  // R2 (plan-PR #337 §2.R2): fan out SF cancels for the PUSHED tasks in
+  // the pause window. Only rows with a live SF AWB (external_tracking_
+  // number) need an outbound cancel; unpushed rows were canceled
+  // locally only. Post-commit, mirroring the Day-29 single-skip cancel
+  // posture: the local DB is already committed, so a publisher failure
+  // does NOT roll back. Per the Q5 ruling we emit-then-re-throw on
+  // partial failure (failedChunks > 0) so the caller surfaces "saved
+  // locally; SF cancels pending"; the pushed rows stay in
+  // outbound_sync_state='pending_cancel' (queryable via the partial
+  // index) until a webhook ack or ops triage resolves them. DLQ-on-
+  // chunk-failure is a deferred follow-on (plan ⑤.2).
+  const pushedCancelPayloads: CancelTaskPayload[] = canceledTasks
+    .filter((t) => t.external_tracking_number !== null)
+    .map((t) => ({
+      tenant_id: tenantId,
+      task_id: t.id,
+      awb: t.external_tracking_number as string,
+      correlation_id: exception.correlationId,
+    }));
+
+  if (pushedCancelPayloads.length > 0) {
+    const bulkResult = await enqueueBulkCancelTasks(pushedCancelPayloads);
+
+    await emit({
+      ...baseEmit,
+      eventType: "subscription.pause_cancels_pushed",
+      resourceType: "subscription",
+      resourceId: id,
+      metadata: {
+        subscription_id: id,
+        correlation_id: exception.correlationId,
+        pushed_task_count: pushedCancelPayloads.length,
+        enqueued_count: bulkResult.enqueuedCount,
+        failed_chunks: bulkResult.failedChunks,
+        pause_start: input.pause_start,
+        pause_end: input.pause_end,
+      },
+    });
+
+    if (bulkResult.failedChunks > 0) {
+      throw new Error(
+        `pauseSubscription: SF cancel fan-out partially failed — ${bulkResult.failedChunks} chunk(s) of ${pushedCancelPayloads.length} cancel payload(s) did not enqueue. Tasks are canceled locally and marked pending_cancel; SF cancels are pending ops follow-up.`,
+      );
+    }
   }
 
   return {

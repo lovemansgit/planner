@@ -803,3 +803,21 @@ Sizing: T3 medium — new aggregate query + heatmap render + interaction handlin
 **End of Day-33 PM rulings section.**
 
 > All 15 R-items now have rulings. Items deferred to lane plan-PR build time are noted inline; no R-item is left ambiguous. Aqib-coordination dependencies were assessed during the rulings session — none required (all rulings build against SF wire contracts already in production). Next step: open the calendar-management T3 plan-PR against these locked product decisions.
+
+---
+
+# Day-51 addendum — R16 surfaced during PR-2 (R2) build
+
+Appended Day-51 (2026-06-09) while building plan-PR #337 PR-2 (R2 — pause SF cancel fan-out). Does not alter the Day-33 rulings above. One new R-item surfaced, sibling to R2.
+
+## R16 — Resume-side SF re-activation push (sibling to R2)
+
+**Surfaced by:** PR-2 (R2) build. R2 makes pause flip pushed in-window tasks to `outbound_sync_state='pending_cancel'` and fan out SF cancels. That introduces a new asymmetry on the **resume** side that did not exist pre-R2.
+
+**The gap:** when an operator resumes a paused subscription EARLY (before `pause_end`), `markTasksRestoredInWindow` flips the canceled in-window tasks back to `internal_status='CREATED'`. PR-2 ships the **safe-state half** of the reconcile — it also resets `outbound_sync_state` `pending_cancel`→`synced` on restore, so a restored task is not left dangling in `pending_cancel`. But PR-2 does **NOT** re-activate the task on SuiteFleet: if the cancel was already pushed (or is pending) on SF, the SF row stays canceled while Planner shows the task active again → the driver is **not** dispatched on the un-paused day. Symmetric to the R2 gap, on the opposite transition.
+
+**Why not in PR-2:** R2's scope (reviewer-ruled) is the pause→cancel fan-out. The resume→re-activate push is a distinct outbound shape (it needs an SF re-create/re-open contract, not a cancel), with its own wire-contract question (does SF support re-opening a canceled task, or must Planner create a fresh SF task and re-link `external_id`/`external_tracking_number`?). That is a separate ruling + build.
+
+**Severity:** lower than R2 in practice — early manual resume is rarer than pause, and the safe-state reconcile (shipped in PR-2) prevents the corrupt `pending_cancel`-on-active-task state. But the operator-promise gap ("I resumed but the driver still didn't come") is real and should be scoped before the lane closes.
+
+**Status:** OPEN, deferred. Needs its own ruling (SF re-open vs re-create contract) at lane plan-PR build time. Not Aqib-gated for the cancel side; the re-activation wire contract may need an SF-side check.
