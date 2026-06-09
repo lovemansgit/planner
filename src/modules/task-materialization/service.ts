@@ -35,15 +35,19 @@
 
 import { sql as sqlTag } from "drizzle-orm";
 
-import type { DbTx } from "@/shared/db";
+import { type DbTx, withServiceRole } from "@/shared/db";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
+import type { Actor } from "@/shared/tenant-context";
 import type { Uuid } from "@/shared/types";
+
+import { emit } from "@/modules/audit/emit";
 
 import {
   buildCandidateAndEligibleDatesCte,
   buildResolvedAddressesCte,
 } from "./cte-builder";
+import { computeTargetDateInDubai } from "./dubai-date";
 import type { RunRowOutcome } from "./run-row";
 import { writeRunRowPhase4 } from "./run-row";
 
@@ -668,4 +672,133 @@ export async function materializeSubscriptionForDateRange(
     newInsertedTaskIds,
     addressResolutionFailedCount: quarantinedRows.length,
   };
+}
+
+// ===========================================================================
+// On-demand materializer invocation (R1 — calendar-management lane Phase 1)
+// ===========================================================================
+
+/**
+ * Triggering operator action for an on-demand materializer invocation.
+ *
+ * The full union is declared here from R1's first ship so downstream
+ * consumers (R5 forward-address-override in PR-5) don't introduce a
+ * retroactive metadata schema change. Only 'skip_tail_end' is wired in
+ * PR-1; 'forward_address_override' becomes a wiring change in PR-5.
+ */
+export type OnDemandMaterializationTrigger =
+  | "skip_tail_end"
+  | "forward_address_override";
+
+export interface InvokeOnDemandMaterializationInput {
+  tenantId: Uuid;
+  triggeredBy: OnDemandMaterializationTrigger;
+  /** Subscription whose exception row triggered the invocation. */
+  subscriptionId: Uuid;
+  /** Shared with the originating subscription.exception.created audit event. */
+  correlationId: Uuid;
+  /** Operator (or system, on programmatic paths) who originated the action. */
+  actor: Actor;
+  requestId: string;
+}
+
+/**
+ * Synchronously invoke the materializer for one tenant, off-cycle from the
+ * scheduled 16:00 Dubai cron tick. Operator actions that today defer to
+ * the next cron tick call this so the calendar reflects the change on
+ * the next page-load instead of waiting up to ~24h.
+ *
+ * Pattern mirrors the cron handler exactly (computeTargetDateInDubai +
+ * windowStart/windowEnd + withServiceRole + materializeTenant); the
+ * cron-vs-on-demand difference is the post-call audit emission
+ * (cron.on_demand_invoked here vs the cron handler's per-tenant
+ * summary). Phase 5 enqueue is NOT coupled here — newly-materialized
+ * tasks pick up SF push on the next scheduled cron tick, same as the
+ * scheduled-materialization → next-tick-push pattern that has held
+ * since Day-14 Phase 5.
+ *
+ * Concurrency-guard rests on the materializer's existing idempotency
+ * (partial UNIQUE on (subscription_id, delivery_date) per migration
+ * 0012; ON CONFLICT DO NOTHING in Phase 2's INSERT…SELECT). Concurrent
+ * on-demand + scheduled invocations for the same tenant + same target
+ * date converge to a single row set; the integration spec exercises
+ * this directly.
+ */
+export async function invokeOnDemandMaterialization(
+  input: InvokeOnDemandMaterializationInput,
+): Promise<MaterializeTenantResult> {
+  const { tenantId, triggeredBy, subscriptionId, correlationId, actor, requestId } = input;
+  const invocationLog = log.with({
+    tenant_id: tenantId,
+    subscription_id: subscriptionId,
+    correlation_id: correlationId,
+    triggered_by: triggeredBy,
+    request_id: requestId,
+    invocation_kind: "on_demand",
+  });
+
+  const now = new Date();
+  const targetDate = computeTargetDateInDubai(now);
+  const windowStart = now.toISOString();
+  const windowEnd = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+
+  invocationLog.info(
+    { target_date: targetDate, window_start: windowStart, window_end: windowEnd },
+    "on-demand materialization invocation",
+  );
+
+  let result: MaterializeTenantResult;
+  try {
+    result = await withServiceRole(
+      `on-demand:materialize for tenant ${tenantId} (${triggeredBy})`,
+      async (tx) =>
+        materializeTenant(tx, {
+          tenantId,
+          targetDate,
+          windowStart,
+          windowEnd,
+          requestId,
+        }),
+    );
+  } catch (err) {
+    invocationLog.error(
+      { error: err instanceof Error ? err.message : String(err) },
+      "on-demand materialization threw",
+    );
+    captureException(err, {
+      component: "task_materialization_on_demand",
+      operation: "materialize",
+      tenant_id: tenantId,
+      subscription_id: subscriptionId,
+      correlation_id: correlationId,
+      triggered_by: triggeredBy,
+      request_id: requestId,
+    });
+    // No audit emit on failure path — only successful invocations
+    // get a cron.on_demand_invoked row. Caller surfaces the throw to
+    // the operator ("saved locally; on-demand materialization failed
+    // (will retry next 16:00 tick)").
+    throw err;
+  }
+
+  await emit({
+    eventType: "cron.on_demand_invoked",
+    actorKind: actor.kind,
+    actorId: actor.kind === "user" ? actor.userId : actor.system,
+    tenantId,
+    resourceType: "task_materialization",
+    resourceId: subscriptionId,
+    requestId,
+    metadata: {
+      tenant_id: tenantId,
+      triggered_by: triggeredBy,
+      subscription_id: subscriptionId,
+      correlation_id: correlationId,
+      target_date: targetDate,
+      new_inserted_task_count: result.newInsertedTaskIds.length,
+      capped_by_gate: result.cappedByGate,
+    },
+  });
+
+  return result;
 }
