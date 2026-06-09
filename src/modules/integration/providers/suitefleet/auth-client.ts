@@ -314,11 +314,13 @@ export function createSuiteFleetAuthClient(
   // (30-day access / 180-day refresh vs OAuth's 24h / 6mo — a value, not a
   // shape change).
   //
-  // ⚠️ PROBE-GATED: the verified header names/casing matched NEITHER
-  // candidate in the pending memo, so this shape is documentation-asserted
-  // until scripts/probe-sf-api-key-auth.mjs confirms it against a live
-  // api_key-region endpoint (bulk-cancel-AWB precedent). Merge is gated on
-  // that probe per the decision memo's Rule-A caveat.
+  // ⚠️ PROBE-GATED ON PRODUCTION PROVISIONING (not on merge): the verified
+  // header names/casing matched NEITHER candidate in the pending memo, so
+  // this shape is documentation-asserted until scripts/probe-sf-api-key-auth.mjs
+  // confirms it against a live api_key-region endpoint (bulk-cancel-AWB
+  // precedent). This code is merged; that does NOT make api_key auth
+  // production-ready — no production-region merchant may be credential-
+  // provisioned until the probe passes. See the decision memo's Rule-A caveat.
   // -------------------------------------------------------------------
   async function loginApiKey(
     credentials: SuiteFleetCredentials & { auth_method: "api_key" },

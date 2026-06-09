@@ -1,10 +1,10 @@
 # Decision · SuiteFleet API-Key auth-header — Aqib-verified, probe-gated
 
-**Status:** Decided, **PROBE-GATED before merge.** The header shape below is documentation-asserted from Aqib's reply; empirical confirmation via `scripts/probe-sf-api-key-auth.mjs` is a HARD merge gate (bulk-cancel-AWB precedent — see §"Rule-A caveat").
+**Status:** Decided. Code merges to main now (code-only). **PROBE-GATED ON FIRST PRODUCTION-REGION PROVISIONING, NOT ON MERGE.** The header shape below is documentation-asserted from Aqib's reply; empirical confirmation via `scripts/probe-sf-api-key-auth.mjs` is a HARD GATE on provisioning the first production-region api_key merchant — it is **not** a code-merge gate (bulk-cancel-AWB precedent — see §"Rule-A caveat"). **Merged ≠ production-ready.**
 **Decision date:** 9 June 2026.
 **Lane:** API-key auth-unblock (Phase-1 sub-PR A). Closes the `loginApiKey` blocker narrowed by brief v1.15.
 **Decided by:** Reviewer counter-session + Aqib's SF OpsPortal API-key reply.
-**Source:** Aqib's API-key documentation, delivered Day-51 (2026-06-09) per [`handoffs/day-51-eod.md`](handoffs/day-51-eod.md) §G ("Aqib delivered API key docs Day-51"; "docs are durable in a shared location"). ⚠️ **Exact delivery medium + link — PENDING reviewer fill** (recorded as a placeholder rather than fabricated; reviewer completes at §3.6 #2).
+**Source:** Aqib's API-key documentation, delivered Day-51 (2026-06-09) per [`handoffs/day-51-eod.md`](handoffs/day-51-eod.md) §G ("Aqib delivered API key docs Day-51"; "docs are durable in a shared location"). ⚠️ PENDING reviewer fill — Aqib delivery medium/link to be confirmed and patched. (Recorded as a placeholder; NOT fabricated — known open item, tracked.)
 
 ## Summary
 
@@ -48,9 +48,11 @@ The verified shape (`clientId` + `clientApiKey` + `clientSecretKey`) matches **n
 - candidate (a): `Clientid` + `X-Api-Key` + `X-Api-Secret`
 - candidate (b): `Authorization: Bearer base64(api_key:secret_key)` + `Clientid`
 
-It is a **third shape**. Per the bulk-cancel-AWB precedent — where a Day-20 doc-verified claim ("comma-separated AWBs") was **empirically refuted** (HTTP 500, Java `NumberFormatException`) on Day-21 and corrected to numeric SF ids — a documented-but-unprobed shape is NOT merge-eligible. **HARD GATE:** `scripts/probe-sf-api-key-auth.mjs` must empirically confirm the header names/casing + a 200 + the token body against a live api_key-region endpoint before merge.
+It is a **third shape**. Per the bulk-cancel-AWB precedent — where a Day-20 doc-verified claim ("comma-separated AWBs") was **empirically refuted** (HTTP 500, Java `NumberFormatException`) on Day-21 and corrected to numeric SF ids — a documented-but-unprobed shape MUST NOT reach a live production merchant. **HARD GATE (on provisioning, not merge):** before the first production-region api_key merchant is credential-provisioned, `scripts/probe-sf-api-key-auth.mjs` must empirically confirm the header names/casing + a 200 + the token body against a live api_key-region endpoint. The code merges to main without this; production provisioning does not.
 
-### Probe-gate status (as of this PR open) — NOT YET RUN
+### Probe-gate status — NOT YET RUN (gates production provisioning, not merge)
+
+**This code is merged to main. That does NOT make api_key auth production-ready.** No production-region (`transcorp` / `transcorpuae` / `transcorpqatar`) merchant may be credential-provisioned until the probe confirms the header shape against a live api_key endpoint — until then `loginApiKey()` is unverified against the real wire and the first provisioning attempt could fail exactly like the Day-21 bulk-cancel 500. **"Merged" ≠ "production-ready."**
 
 Two blockers in the build environment:
 
@@ -77,4 +79,4 @@ Closing the gate requires production-region api_key test credentials **plus** ex
 
 ## Meta
 
-Filed 9 June 2026 as part of the API-key auth-unblock T2 (branch `fix/d36-a-api-key-auth-header`, off main `3beb33c`). Companion to the `loginApiKey()` implementation in the same PR. Merge gated on the probe per the Rule-A caveat. Rotates `followup_aqib_api_key_auth_header_pending.md` from load-bearing to resolved.
+Filed 9 June 2026 as part of the API-key auth-unblock T2 (branch `fix/d36-a-api-key-auth-header`, off main `3beb33c`). Companion to the `loginApiKey()` implementation in the same PR. Production provisioning (NOT merge) is gated on the probe per the Rule-A caveat. Rotates `followup_aqib_api_key_auth_header_pending.md` from load-bearing to resolved.
