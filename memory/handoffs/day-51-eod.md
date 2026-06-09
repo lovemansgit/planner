@@ -12,7 +12,7 @@ Canonical Day-51 record. Single session today (Session B only): the operator ret
 - **Rollback anchor (one-swap):** `dpl_EVLvUQovnQza6ZK2ogRZzp64M6UT` (source `2db99ea`, Day-33 EOD state — Plan #317 PR-D CLEANUP-1 production).
 - **Brief on main:** v1.16 (last table row Day-30 PR #308; new §9 Day-51 operational-degradation subsection appended via PR #339, explicitly NOT a version bump).
 - **Plan-PR #337 (calendar-management Phase 1):** OPEN. PR-1 of 5 shipped today via PR #338. PR-2 through PR-5 queued for Day-52+.
-- **Stale-PR triage:** 5 closed via brief-supplied comments (#301, #302, #303, #306, #308). Note: all 5 close comments carry "Day-49 stale-PR triage ruling" framing per the source brief; Day-51 correction comment appended to each — see §F #1-#2.
+- **Stale-PR triage:** 5 closed (#301, #302, #303, #306, #308). Closed via brief-supplied close comments; comments durable as "Day-49 stale-PR triage ruling" per the Rule B drift documented in §F #1-#2; Day-51 correction follow-up comment appended to each. Close ruling itself stands as ruled.
 - **R1 smoke:** passed end-to-end with one horizon-UX carry-forward finding. See §D.
 
 ---
@@ -67,7 +67,7 @@ R1 (on-demand cron-equivalent materializer) smoke ran end-to-end on production a
   - `triggered_by='skip_tail_end'`
   - `correlation_id` `bffe2398-0e58-4676-b935-88c73e8137f6` (same as the originating exception event — correlation chain verified).
   - `new_inserted_task_count=0`.
-- **Why `new_inserted_task_count=0` is correct:** Jun 29 tail (the new end_date after extension) is OUTSIDE the 14-day Phase-5 materialization horizon today (2026-06-09 + 14 days = 2026-06-23 < 2026-06-29). Materializer was invoked, evaluated the horizon, found no rows to insert, exited cleanly. R1 fired correctly; horizon-gate worked correctly. The audit row is the durable observability — operator can see R1 fired even though no calendar change is yet visible.
+- **Why `new_inserted_task_count=0` is correct:** the materializer was invoked synchronously via R1, evaluated the subscription against the Phase-5 horizon (`MATERIALIZATION_HORIZON_DAYS = 21` at [`src/modules/task-materialization/dubai-date.ts:48`](../../src/modules/task-materialization/dubai-date.ts#L48) — bumped from 14 → 21 on Day-28 per the in-file code comment), and exited with 0 rows inserted. Multiple mechanisms could produce this on this subscription: the original tail at Jun 29 was already materialized by prior cron runs (Phase-5 idempotency via `ON CONFLICT DO NOTHING` on `(subscription_id, delivery_date)` per migration 0012); the post-skip end-date extension may also have landed outside the 21-day clamp from today (today 2026-06-09 + 21 = 2026-06-30) depending on skip-compensation arithmetic. Either way, R1 fired correctly — the materializer was invoked, the audit row was emitted, the existing horizon/idempotency machinery worked as designed. The audit row is the durable observability — operator can see R1 fired even though no calendar change is yet visible.
 
 ### D.2 — Negative case (middle-skip on a non-tail date)
 
@@ -77,7 +77,7 @@ R1 (on-demand cron-equivalent materializer) smoke ran end-to-end on production a
 
 ### D.3 — Carry-forward finding (filed in §G)
 
-**Tail-outside-horizon UX gap.** R1 fires correctly when end_date extends, but if the new tail falls outside the current 14-day horizon, operator sees no on-surface calendar change. The audit row is durable; the visual signal isn't. Pre-R1 behavior was identical for this edge (tail materialized on next 16:00 Dubai cron tick OR next operator action that triggered any materializer pull). R1 doesn't make this worse, but it doesn't fix it either. Decision needed Day-52 on whether this is a new R-item or a standalone followup.
+**Tail-outside-horizon UX gap.** R1 fires correctly when end_date extends, but if the new tail falls outside the current 21-day horizon (`MATERIALIZATION_HORIZON_DAYS = 21` at [`src/modules/task-materialization/dubai-date.ts:48`](../../src/modules/task-materialization/dubai-date.ts#L48)), operator sees no on-surface calendar change. The audit row is durable; the visual signal isn't. Pre-R1 behavior was identical for this edge (tail materialized on next 16:00 Dubai cron tick OR next operator action that triggered any materializer pull). R1 doesn't make this worse, but it doesn't fix it either. Decision needed Day-52 on whether this is a new R-item or a standalone followup.
 
 ---
 
