@@ -90,8 +90,8 @@ export function projectDayDisplayStatus(
  * Visual map — 6 legend-visible statuses + CANCELED muted treatment.
  * Reuses brand-canon tokens: green (success), amber (in-progress),
  * stone-tertiary (neutral), red (alarm). Matches the existing palette
- * established by CalendarWeekView's previous local STATUS_VISUALS map
- * + TASK_STATUS_FILTERS in the operator /tasks chrome.
+ * established by the calendar views' STATUS_VISUALS map + the
+ * TASK_STATUS_FILTERS in the operator /tasks chrome.
  *
  * `inLegend: false` for CANCELED — renders muted+strikethrough on the
  * day cell but is excluded from the legend block per Day-20 ruling.

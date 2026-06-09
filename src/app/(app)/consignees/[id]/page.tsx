@@ -61,12 +61,10 @@ import type { Permission } from "@/shared/types";
 import type { Uuid } from "@/shared/types";
 
 import {
-  addDays,
   computeMonthEnd,
   computeMonthGridEnd,
   computeMonthGridStart,
   computeMonthStart,
-  computeWeekStart,
   computeYearEnd,
   computeYearStart,
 } from "./_components/calendar-dates";
@@ -74,8 +72,8 @@ import { CalendarMonthView } from "./_components/CalendarMonthView";
 import {
   type CalendarViewName,
   CalendarViewToggle,
+  resolveCalendarView,
 } from "./_components/CalendarViewToggle";
-import { CalendarWeekView } from "./_components/CalendarWeekView";
 import { CalendarYearView } from "./_components/CalendarYearView";
 import { AdHocTaskDialog } from "./_components/AdHocTaskDialog";
 import { CrmStateBadge, CRM_STATE_LABELS } from "./_components/CrmStateBadge";
@@ -92,14 +90,11 @@ export const revalidate = 0;
 type TabName = "overview" | "subscription" | "calendar" | "history";
 const VALID_TABS: readonly TabName[] = ["overview", "subscription", "calendar", "history"];
 
-const VALID_VIEWS: readonly CalendarViewName[] = ["week", "month", "year"];
-
 interface PageProps {
   readonly params: Promise<{ readonly id: string }>;
   readonly searchParams: Promise<{
     readonly tab?: string;
     readonly view?: string;
-    readonly week?: string;
     readonly month?: string;
     readonly year?: string;
     readonly created?: string;
@@ -121,7 +116,6 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   const {
     tab: tabParam,
     view: viewParam,
-    week: weekParam,
     month: monthParam,
     year: yearParam,
     created: createdParam,
@@ -129,20 +123,15 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   const activeTab: TabName = (VALID_TABS as readonly string[]).includes(tabParam ?? "")
     ? (tabParam as TabName)
     : "overview";
-  const activeView: CalendarViewName = (VALID_VIEWS as readonly string[]).includes(
-    viewParam ?? "",
-  )
-    ? (viewParam as CalendarViewName)
-    : "week";
+  // R9: Week view removed; resolveCalendarView falls back to Month for
+  // any unknown value (including the retired `?view=week`) — silent, no
+  // error (R7.2 default, R7.3 deep-link fallback).
+  const activeView: CalendarViewName = resolveCalendarView(viewParam);
 
   // Calendar anchors — each view computes its own. Defaults pin to the
   // anchor for "today" in UTC (brief §3.3.3 + tenant-tz Phase 2 caveat
   // per memory/followup_label_tz_offset_per_tenant.md).
   const today = new Date();
-  const explicitWeek = parseIsoDateParam(weekParam);
-  const weekStart = explicitWeek
-    ? computeWeekStart(new Date(`${explicitWeek}T00:00:00Z`))
-    : computeWeekStart(today);
   const explicitMonth = parseIsoDateParam(monthParam);
   const monthStart = explicitMonth
     ? computeMonthStart(new Date(`${explicitMonth}T00:00:00Z`))
@@ -159,8 +148,8 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let calendarYearCounts: readonly DayBucketCount[] = [];
   let calendarAddresses: readonly ConsigneeAddressRow[] = [];
   // Day-30 / Fix-A2 (Aqib UAT 2026-05-18) — tenant-scoped set of task IDs
-  // with unresolved failed_pushes. Fetched only on calendar week/month
-  // tabs (the per-task render surfaces); empty set when the operator
+  // with unresolved failed_pushes. Fetched only on the calendar month
+  // tab (the per-task render surface); empty set when the operator
   // lacks the new `failed_pushes:read` permission so the badge silently
   // omits rather than 500-ing the page.
   let calendarFailedPushTaskIds: ReadonlySet<string> = new Set();
@@ -269,7 +258,6 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     }
     // Only fetch calendar data when the Calendar tab is active. View
     // dispatch picks the fetch range:
-    //   - week:  weekStart..weekStart+6 (7 days)
     //   - month: month-grid range (Mon-of-first-week..Sun-of-last-week)
     //   - year:  yearStart..yearEnd (~365 days; aggregator-only fetch
     //            per DECISION-1 (b))
@@ -292,21 +280,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
       // the badge rather than 500-ing the calendar.
       const needsFailedPushRead = canReadFailedPushes;
 
-      if (activeView === "week") {
-        const weekEnd = addDays(weekStart, 6);
-        const [tasks, exceptions, addresses, failedPushIds] = await Promise.all([
-          getConsigneeTasksForDateRange(ctx, id as Uuid, weekStart, weekEnd),
-          getConsigneeCalendarExceptions(ctx, id as Uuid, weekStart, weekEnd),
-          needsAddresses ? listConsigneeAddresses(ctx, id as Uuid) : Promise.resolve([]),
-          needsFailedPushRead
-            ? listFailedPushTaskIdsForTenant(ctx)
-            : Promise.resolve(new Set<string>() as ReadonlySet<string>),
-        ]);
-        calendarTasks = tasks;
-        calendarExceptions = exceptions;
-        calendarAddresses = addresses;
-        calendarFailedPushTaskIds = failedPushIds;
-      } else if (activeView === "month") {
+      if (activeView === "month") {
         const monthEnd = computeMonthEnd(new Date(`${monthStart}T00:00:00Z`));
         const gridStart = computeMonthGridStart(monthStart);
         const gridEnd = computeMonthGridEnd(monthEnd);
@@ -453,22 +427,10 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                 <CalendarViewToggle
                   consigneeId={consignee.id}
                   activeView={activeView}
-                  weekAnchor={weekStart}
                   monthAnchor={monthStart}
                   yearAnchor={yearStart}
                 />
               </div>
-              {activeView === "week" ? (
-                <CalendarWeekView
-                  consigneeId={consignee.id}
-                  weekStart={weekStart}
-                  tasks={calendarTasks}
-                  exceptions={calendarExceptions}
-                  permissions={calendarPermissions}
-                  availableAddresses={calendarAddresses}
-                  failedPushTaskIds={calendarFailedPushTaskIds}
-                />
-              ) : null}
               {activeView === "month" ? (
                 <CalendarMonthView
                   consigneeId={consignee.id}

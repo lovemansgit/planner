@@ -1,44 +1,59 @@
-// Day-21 PR-A2 / Session B — Week / Month / Year view toggle (server
-// component). Renders a 3-segment pill button group that switches
-// between CalendarWeekView, CalendarMonthView, and CalendarYearView.
+// Day-21 PR-A2 / Session B — Month / Year view toggle (server
+// component). Renders a 2-segment pill button group that switches
+// between CalendarMonthView and CalendarYearView.
 //
-// URL state: `?view=week|month|year` (default `week`). State survives
-// browser back/forward navigation because the pills are <Link>
-// components — Next.js push-state preserves the URL on transition,
-// and back/forward triggers a re-render with the previous URL's
+// Day-51 / R9: the Week view was removed (calendar-management lane
+// diagnostic R9). `?view=month|year` (default `month`); any unknown
+// value — including the retired `?view=week` — falls back SILENTLY to
+// Month via `resolveCalendarView` (R7.2 default, R7.3 deep-link
+// fallback). Old `?view=week` bookmarks keep working, on Month.
+//
+// URL state survives browser back/forward navigation because the pills
+// are <Link> components — Next.js push-state preserves the URL on
+// transition, and back/forward re-renders with the previous URL's
 // `view` param. No client-side state, no React Context.
 //
 // Brand-pass restraint per brief §3.3.11: hairline border, sentence
 // case, no shadow. Active segment uses navy/paper inversion (filled
 // pill); inactive uses paper/navy outline (matches the chip-button
 // pattern from /tasks filter pills at status.ts:21-29 + the prev/next
-// nav buttons inside Week/Month/Year views). Group sits top-right of
+// nav buttons inside the Month/Year views). Group sits top-right of
 // the calendar surface per brief §3.3.3 line 484.
 
 import Link from "next/link";
 
-export type CalendarViewName = "week" | "month" | "year";
+export type CalendarViewName = "month" | "year";
+
+export const VALID_CALENDAR_VIEWS: readonly CalendarViewName[] = ["month", "year"];
+
+/**
+ * Resolve the `?view=` URL param to a calendar view. R9 (Day-51): the
+ * Week view was removed; any unknown value — including the retired
+ * `week` — falls back SILENTLY to the Month default (no error, no
+ * toast), preserving old `?view=week` bookmarks per R7.2 / R7.3.
+ */
+export function resolveCalendarView(viewParam: string | undefined): CalendarViewName {
+  return (VALID_CALENDAR_VIEWS as readonly string[]).includes(viewParam ?? "")
+    ? (viewParam as CalendarViewName)
+    : "month";
+}
 
 export interface CalendarViewToggleProps {
   readonly consigneeId: string;
   readonly activeView: CalendarViewName;
   /**
-   * Anchor params per view. Each is the ISO YYYY-MM-DD anchor for
-   * that view (week's Monday, month's first day, year's Jan 1). The
-   * toggle preserves the matching anchor when the user switches,
-   * so toggling Week→Month at a Monday in May 2026 lands on May 2026's
-   * month grid (instead of resetting to today).
+   * Anchor params per view. Each is the ISO YYYY-MM-DD anchor for that
+   * view (month's first day, year's Jan 1). The toggle preserves the
+   * matching anchor when the user switches between Month and Year.
    */
-  readonly weekAnchor: string;
   readonly monthAnchor: string;
   readonly yearAnchor: string;
 }
 
-const SEGMENTS: ReadonlyArray<{
+export const CALENDAR_VIEW_SEGMENTS: ReadonlyArray<{
   readonly name: CalendarViewName;
   readonly label: string;
 }> = [
-  { name: "week", label: "Week" },
   { name: "month", label: "Month" },
   { name: "year", label: "Year" },
 ];
@@ -46,13 +61,11 @@ const SEGMENTS: ReadonlyArray<{
 export function CalendarViewToggle({
   consigneeId,
   activeView,
-  weekAnchor,
   monthAnchor,
   yearAnchor,
 }: CalendarViewToggleProps) {
   function hrefFor(view: CalendarViewName): string {
     const base = `/consignees/${consigneeId}?tab=calendar&view=${view}`;
-    if (view === "week") return `${base}&week=${weekAnchor}`;
     if (view === "month") return `${base}&month=${monthAnchor}`;
     return `${base}&year=${yearAnchor}`;
   }
@@ -61,7 +74,7 @@ export function CalendarViewToggle({
       aria-label="Calendar view"
       className="inline-flex overflow-hidden rounded-sm border border-stone-200"
     >
-      {SEGMENTS.map((seg, idx) => {
+      {CALENDAR_VIEW_SEGMENTS.map((seg, idx) => {
         const isActive = seg.name === activeView;
         const sep = idx > 0 ? "border-l border-stone-200" : "";
         const tone = isActive

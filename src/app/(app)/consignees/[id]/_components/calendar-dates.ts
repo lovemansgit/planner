@@ -1,6 +1,6 @@
 // Day-21 PR-A2 / Session B — calendar date helpers shared across
-// CalendarWeekView (existing), CalendarMonthView (new this PR), and
-// CalendarYearView (new this PR). Pure functions, no I/O — exported
+// CalendarMonthView and CalendarYearView (and the consolidated
+// /calendar via computeWeekStart). Pure functions, no I/O — exported
 // for unit-test coverage.
 //
 // All inputs/outputs use ISO date strings (YYYY-MM-DD) at UTC for

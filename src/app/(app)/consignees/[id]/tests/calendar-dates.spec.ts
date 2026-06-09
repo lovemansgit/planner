@@ -1,8 +1,8 @@
 // Day-21 PR-A2 / Session B — calendar date helper unit tests.
 //
-// Covers the helpers consumed by CalendarWeekView (existing) and the
-// new CalendarMonthView + CalendarYearView surfaces. Pure functions —
-// no I/O, no fixtures beyond ISO date strings.
+// Covers the helpers consumed by the CalendarMonthView + CalendarYearView
+// surfaces (and the consolidated /calendar via computeWeekStart). Pure
+// functions — no I/O, no fixtures beyond ISO date strings.
 //
 // Boundary coverage:
 //   - DST-irrelevant (UTC-only date math; no clock offset)
