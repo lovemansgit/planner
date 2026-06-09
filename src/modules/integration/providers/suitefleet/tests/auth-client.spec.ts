@@ -262,6 +262,118 @@ describe("SuiteFleet auth client — response validation", () => {
   });
 });
 
+describe("SuiteFleet auth client — api_key login wire shape", () => {
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleLogSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
+
+  // Aqib-verified shape (decision_aqib_api_key_auth_header_verified.md,
+  // PROBE-GATED): POST /api/auth/authenticate; credentials in the headers
+  // clientId + clientApiKey + clientSecretKey; 30d access / 180d refresh.
+  const API_KEY_CREDENTIALS = {
+    auth_method: "api_key" as const,
+    clientId: "transcorpuae",
+    customerId: 4021,
+    apiKey: "sf_live_api_key_value",
+    secretKey: "sf_live_secret_key_value",
+  };
+
+  // FIXED_NOW = 2026-04-29T09:00:00Z → +30d access, +180d refresh.
+  const API_KEY_VALID_RESPONSE = {
+    accessToken: "eyJ.apikey.access",
+    refreshToken: "eyJ.apikey.refresh",
+    accessTokenExpiration: "2026-05-29T09:00:00.000000",
+    refreshTokenExpiration: "2026-10-26T09:00:00.000000",
+    email: "planner@transcorp-intl.com",
+    role: { name: "CUSTOMER_ADMIN", permissions: [] },
+  };
+
+  it("POSTs to /api/auth/authenticate with credentials in headers (no query string, no body) and parses 30d/180d token TTLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(API_KEY_VALID_RESPONSE));
+    const tokens = await makeClient(fetchMock).login(API_KEY_CREDENTIALS);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as URL).toString();
+    expect(urlStr).toBe("https://api.suitefleet.com/api/auth/authenticate");
+    expect(urlStr).not.toContain("?"); // no query string — unlike the OAuth path
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeUndefined();
+
+    expect(tokens.accessToken).toBe(API_KEY_VALID_RESPONSE.accessToken);
+    expect(tokens.refreshToken).toBe(API_KEY_VALID_RESPONSE.refreshToken);
+    expect(tokens.accessTokenExpiresAt.toISOString()).toBe("2026-05-29T09:00:00.000Z");
+    expect(tokens.refreshTokenExpiresAt.toISOString()).toBe("2026-10-26T09:00:00.000Z");
+    // 30-day access / 180-day refresh deltas from FIXED_NOW (2026-04-29T09:00:00Z).
+    const dayMs = 86_400_000;
+    expect(
+      Math.round((tokens.accessTokenExpiresAt.getTime() - FIXED_NOW.getTime()) / dayMs),
+    ).toBe(30);
+    expect(
+      Math.round((tokens.refreshTokenExpiresAt.getTime() - FIXED_NOW.getTime()) / dayMs),
+    ).toBe(180);
+  });
+
+  it("sends exact header names/casing (clientId + clientApiKey + clientSecretKey) and does NOT leak OAuth-style query params or the Clientid header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(API_KEY_VALID_RESPONSE));
+    await makeClient(fetchMock).login(API_KEY_CREDENTIALS);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.clientId).toBe(API_KEY_CREDENTIALS.clientId);
+    expect(headers.clientApiKey).toBe(API_KEY_CREDENTIALS.apiKey);
+    expect(headers.clientSecretKey).toBe(API_KEY_CREDENTIALS.secretKey);
+    // OAuth conventions must not bleed into the api_key path.
+    expect(headers).not.toHaveProperty("Clientid");
+    const parsed = new URL(typeof url === "string" ? url : (url as URL).toString());
+    expect(parsed.searchParams.get("username")).toBeNull();
+    expect(parsed.searchParams.get("password")).toBeNull();
+    expect(parsed.searchParams.get("apiKey")).toBeNull();
+  });
+
+  it("rejects with CredentialError on 401 without retrying", async () => {
+    const sleep = vi.fn(async () => {});
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("invalid api key", 401));
+    const client = makeClient(fetchMock, { sleep });
+
+    await expect(client.login(API_KEY_CREDENTIALS)).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // 4xx never retried
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("retries on 5xx across the configured delay sequence, then throws CredentialError", async () => {
+    const sleep = vi.fn(async () => {});
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("upstream boom", 503));
+    const client = makeClient(fetchMock, { sleep });
+
+    await expect(client.login(API_KEY_CREDENTIALS)).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
+    expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects with CredentialError when the returned access token is already expired", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ...API_KEY_VALID_RESPONSE,
+        accessTokenExpiration: "2026-04-29T08:00:00.000000", // before FIXED_NOW
+      }),
+    );
+    await expect(makeClient(fetchMock).login(API_KEY_CREDENTIALS)).rejects.toMatchObject({
+      code: "CREDENTIAL",
+      message: expect.stringMatching(/expiration is in the past/),
+    });
+  });
+});
+
 describe("SuiteFleet auth client — logging hygiene", () => {
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
