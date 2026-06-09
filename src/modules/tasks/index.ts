@@ -42,6 +42,7 @@ export type {
 
 export {
   addNoteToDriver,
+  DriverNotePushPendingError,
   BulkValidationError,
   bulkCreateTasks,
   countTasks,

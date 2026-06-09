@@ -1399,6 +1399,24 @@ export async function cancelTask(ctx: RequestContext, taskId: Uuid): Promise<Tas
 //                       chars, cutoff elapsed
 //   NotFoundError     — task not found / RLS-hidden cross-tenant
 
+/**
+ * R3 (plan-PR #337 §2.R3). Soft signal for the driver-note form actions:
+ * the note was committed locally, but the post-commit SF outbound push
+ * enqueue failed. Deliberately NOT an AppError — it must not map to an
+ * HTTP error response; the note-add form actions catch it and surface the
+ * honest two-step state ("note saved; sending to driver failed, will
+ * retry") because the note IS durably saved. The underlying enqueue error
+ * is preserved as `cause` (already logged + Sentry-captured at throw site).
+ */
+export class DriverNotePushPendingError extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super("driver note saved locally; SF outbound push enqueue failed");
+    this.name = "DriverNotePushPendingError";
+    this.cause = cause;
+  }
+}
+
 const ADD_NOTE_MAX_LENGTH = 1000;
 
 export async function addNoteToDriver(
@@ -1458,6 +1476,67 @@ export async function addNoteToDriver(
     },
     requestId: ctx.requestId,
   });
+
+  // R3 (plan-PR #337 §2.R3): push the driver note to SF for an already-
+  // dispatched task. Post-commit — the local note is committed above, so an
+  // enqueue failure does NOT roll back. Mirrors updateTaskAndPushOutbound's
+  // tail + R2's outbound posture. The §3.6 #1 / OQ-4 ruling registers an
+  // enqueue-time, fire-and-forget event (no note text — PII stays on
+  // tasks.notes).
+  //
+  // emit-then-throw note: unlike R2's bulk event (which carries
+  // failed_chunks), the plan §4 single-task event shape has no failure
+  // field — so it can only honestly mean "push enqueued". It therefore
+  // fires on a SUCCESSFUL enqueue; the failure path re-throws (wrapped in
+  // DriverNotePushPendingError so the form action surfaces "saved; sending
+  // failed, will retry") WITHOUT emitting a false "pushed" event. Unpushed
+  // tasks (no SF AWB) are local-only — the create/cron push carries the
+  // note later.
+  const awb = result.row.externalTrackingNumber;
+  if (awb !== null && awb !== undefined) {
+    const correlationId = crypto.randomUUID() as Uuid;
+    try {
+      await enqueueUpdateTask({
+        tenant_id: tenantId,
+        task_id: taskId,
+        awb,
+        patch: { notes: trimmed },
+        correlation_id: correlationId,
+      });
+    } catch (err) {
+      logger.error(
+        {
+          operation: "add_note_to_driver_enqueue",
+          tenant_id: tenantId,
+          task_id: taskId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "addNoteToDriver: local DB committed; QStash note-push enqueue failed (caller surfaces)",
+      );
+      captureException(err, {
+        component: "tasks_service_add_note_to_driver",
+        operation: "enqueue_update_task",
+        tenant_id: tenantId,
+        task_id: taskId,
+      });
+      throw new DriverNotePushPendingError(err);
+    }
+
+    await emit({
+      eventType: "task.note_pushed_to_external",
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId,
+      resourceType: "task",
+      resourceId: taskId,
+      metadata: {
+        task_id: taskId,
+        awb,
+        correlation_id: correlationId,
+      },
+      requestId: ctx.requestId,
+    });
+  }
 
   return result.row;
 }

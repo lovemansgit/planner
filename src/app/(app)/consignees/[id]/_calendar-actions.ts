@@ -30,7 +30,12 @@ import { randomUUID } from "node:crypto";
 
 import { addSubscriptionException } from "@/modules/subscription-exceptions";
 import { pauseSubscription } from "@/modules/subscriptions";
-import { addNoteToDriver, getTaskTimeline, type TaskTimeline } from "@/modules/tasks";
+import {
+  addNoteToDriver,
+  DriverNotePushPendingError,
+  getTaskTimeline,
+  type TaskTimeline,
+} from "@/modules/tasks";
 import {
   ConflictError,
   ForbiddenError,
@@ -451,8 +456,17 @@ export async function addNoteToDriverAction(
 
     revalidatePath(`/consignees/${consigneeId}`, "page");
 
-    return { kind: "success", message: "Driver note saved." };
+    return { kind: "success", message: "Note saved; sending to driver." };
   } catch (err) {
+    if (err instanceof DriverNotePushPendingError) {
+      // Note committed locally; only the SF push enqueue failed. Reflect
+      // the saved note and surface the honest two-step state.
+      revalidatePath(`/consignees/${consigneeId}`, "page");
+      return {
+        kind: "success",
+        message: "Note saved — sending to driver failed, will retry.",
+      };
+    }
     return mapErrorToResult(err, "Task");
   }
 }
