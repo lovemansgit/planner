@@ -24,6 +24,7 @@ vi.mock("server-only", () => ({}));
 
 const mockExecute = vi.fn();
 const mockEmit = vi.fn();
+const mockEnqueueBulkCancelTasks = vi.fn();
 
 vi.mock("@/shared/db", () => ({
   withTenant: vi.fn(async (_tenantId: string, fn: (tx: unknown) => Promise<unknown>) => {
@@ -39,6 +40,10 @@ vi.mock("@/modules/audit", () => ({
     mockEmit(input);
     return Promise.resolve();
   }),
+}));
+
+vi.mock("@/modules/task-outbound-queue", () => ({
+  enqueueBulkCancelTasks: (payloads: unknown) => mockEnqueueBulkCancelTasks(payloads),
 }));
 
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/shared/errors";
@@ -147,9 +152,51 @@ function activePauseWindowRow(
   };
 }
 
+// R2 fixtures — markTasksCanceledInWindow now RETURNs (id,
+// external_tracking_number). Unpushed rows (null AWB) get no SF fan-out;
+// pushed rows (non-null AWB) do.
+function unpushedCanceledRows(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `00000000-0000-0000-0000-00000000c0${String(i).padStart(2, "0")}` as Uuid,
+    external_tracking_number: null,
+  }));
+}
+
+function pushedCanceledRow(n: number) {
+  return {
+    id: `00000000-0000-0000-0000-00000000a0${String(n).padStart(2, "0")}` as Uuid,
+    external_tracking_number: `AWB-PAUSE-${n}`,
+  };
+}
+
+/**
+ * Best-effort introspection of a drizzle `sql` template for unit
+ * assertions (the DB layer is mocked, so SQL never executes). Joins the
+ * StringChunk literals so a test can assert a fragment is present —
+ * used by the R2 resume-reconcile regression to prove the
+ * pending_cancel→synced CASE is in the restore UPDATE.
+ */
+function sqlIncludes(arg: unknown, needle: string): boolean {
+  const chunks = (arg as { queryChunks?: unknown[] } | null)?.queryChunks;
+  if (!Array.isArray(chunks)) return false;
+  const text = chunks
+    .map((c) => {
+      const v = (c as { value?: unknown }).value;
+      return Array.isArray(v) ? v.join("") : "";
+    })
+    .join(" ");
+  return text.includes(needle);
+}
+
 beforeEach(() => {
   mockExecute.mockReset();
   mockEmit.mockReset();
+  mockEnqueueBulkCancelTasks.mockReset();
+  mockEnqueueBulkCancelTasks.mockResolvedValue({
+    enqueuedCount: 0,
+    failedChunks: 0,
+    totalCount: 0,
+  });
 });
 
 afterEach(() => {
@@ -255,12 +302,13 @@ describe("pauseSubscription — happy path + audit", () => {
     // 1. SELECT subscription FOR UPDATE
     // 2. SELECT idempotency replay (none)
     // 3. INSERT subscription_exceptions RETURNING *
-    // 4. UPDATE tasks → CANCELED (returns count)
+    // 4. UPDATE tasks → CANCELED RETURNING (id, external_tracking_number)
+    //    — 5 unpushed rows (null AWB) so no SF fan-out fires here.
     // 5. UPDATE subscriptions (paused + end_date)
     mockExecute.mockResolvedValueOnce([subscriptionRow()]);
     mockExecute.mockResolvedValueOnce([]); // replay none
     mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow()]);
-    mockExecute.mockResolvedValueOnce({ count: 5 } as unknown);
+    mockExecute.mockResolvedValueOnce(unpushedCanceledRows(5));
     mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
 
     const result = await pauseSubscription(
@@ -334,7 +382,7 @@ describe("pauseSubscription — happy path + audit", () => {
     mockExecute.mockResolvedValueOnce([subscriptionRow({ endDate: null })]);
     mockExecute.mockResolvedValueOnce([]); // replay none
     mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow()]);
-    mockExecute.mockResolvedValueOnce({ count: 5 } as unknown);
+    mockExecute.mockResolvedValueOnce(unpushedCanceledRows(5));
     mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
 
     const result = await pauseSubscription(
@@ -519,5 +567,210 @@ describe("resumeSubscription — auto + manual happy paths", () => {
     };
     expect(endDateEmit.metadata.previous_end_date).toBe(ORIGINAL_END);
     expect(endDateEmit.metadata.new_end_date).toBe("2026-05-26");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// pauseSubscription — R2 SF cancel fan-out (plan-PR #337 §2.R2)
+// -----------------------------------------------------------------------------
+
+describe("pauseSubscription — R2 SF cancel fan-out", () => {
+  const validInput = {
+    pause_start: PAUSE_START,
+    pause_end: PAUSE_END,
+    reason: "merchant on vacation",
+    idempotency_key: IDEMPOTENCY_KEY,
+  };
+
+  it("⑤.1 happy multi-task fan-out: pushes SF cancels for all pushed rows + emits pause_cancels_pushed", async () => {
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]); // replay none
+    mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow()]);
+    mockExecute.mockResolvedValueOnce([
+      pushedCanceledRow(1),
+      pushedCanceledRow(2),
+      pushedCanceledRow(3),
+    ]);
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockEnqueueBulkCancelTasks.mockResolvedValue({
+      enqueuedCount: 3,
+      failedChunks: 0,
+      totalCount: 3,
+    });
+
+    const result = await pauseSubscription(
+      userCtx(["subscription:pause"]),
+      SUBSCRIPTION_ID,
+      validInput,
+      { now: NOW },
+    );
+
+    expect(result.status).toBe("inserted");
+    expect(result.canceled_task_count).toBe(3);
+
+    // Publisher invoked once with one CancelTaskPayload per pushed row.
+    expect(mockEnqueueBulkCancelTasks).toHaveBeenCalledTimes(1);
+    const payloads = mockEnqueueBulkCancelTasks.mock.calls[0][0] as Array<{
+      tenant_id: string;
+      task_id: string;
+      awb: string;
+      correlation_id: string;
+    }>;
+    expect(payloads).toHaveLength(3);
+    expect(payloads.map((p) => p.awb)).toEqual(["AWB-PAUSE-1", "AWB-PAUSE-2", "AWB-PAUSE-3"]);
+    expect(payloads.every((p) => p.correlation_id === PAUSE_CORRELATION_ID)).toBe(true);
+    expect(payloads.every((p) => p.tenant_id === TENANT_ID)).toBe(true);
+
+    // 3 emits: paused, end_date.extended, pause_cancels_pushed.
+    const eventTypes = mockEmit.mock.calls.map((c) => (c[0] as { eventType: string }).eventType);
+    expect(eventTypes).toEqual([
+      "subscription.paused",
+      "subscription.end_date.extended",
+      "subscription.pause_cancels_pushed",
+    ]);
+    const pushedEmit = mockEmit.mock.calls[2][0] as {
+      metadata: {
+        pushed_task_count: number;
+        enqueued_count: number;
+        failed_chunks: number;
+        correlation_id: string;
+        pause_start: string;
+        pause_end: string;
+      };
+    };
+    expect(pushedEmit.metadata.pushed_task_count).toBe(3);
+    expect(pushedEmit.metadata.enqueued_count).toBe(3);
+    expect(pushedEmit.metadata.failed_chunks).toBe(0);
+    expect(pushedEmit.metadata.correlation_id).toBe(PAUSE_CORRELATION_ID);
+    expect(pushedEmit.metadata.pause_start).toBe(PAUSE_START);
+    expect(pushedEmit.metadata.pause_end).toBe(PAUSE_END);
+  });
+
+  it("⑤.2 partial-failure: emits pause_cancels_pushed with failed_chunks THEN re-throws (Q5)", async () => {
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]); // replay none
+    mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow()]);
+    mockExecute.mockResolvedValueOnce([pushedCanceledRow(1), pushedCanceledRow(2)]);
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockEnqueueBulkCancelTasks.mockResolvedValue({
+      enqueuedCount: 1,
+      failedChunks: 1,
+      totalCount: 2,
+    });
+
+    await expect(
+      pauseSubscription(userCtx(["subscription:pause"]), SUBSCRIPTION_ID, validInput, {
+        now: NOW,
+      }),
+    ).rejects.toThrow(/partially failed/);
+
+    // emit-then-throw: the audit row records the partial failure BEFORE
+    // the re-throw. Local DB writes already committed (tx returned).
+    const pushedEmit = mockEmit.mock.calls.find(
+      (c) => (c[0] as { eventType: string }).eventType === "subscription.pause_cancels_pushed",
+    );
+    expect(pushedEmit).toBeDefined();
+    expect((pushedEmit![0] as { metadata: { failed_chunks: number } }).metadata.failed_chunks).toBe(
+      1,
+    );
+  });
+
+  it("⑤.3 idempotency replay: no fan-out, no pause_cancels_pushed", async () => {
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow()]); // replay hit
+
+    const result = await pauseSubscription(
+      userCtx(["subscription:pause"]),
+      SUBSCRIPTION_ID,
+      validInput,
+      { now: NOW },
+    );
+
+    expect(result.status).toBe("idempotent_replay");
+    expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("⑤.4 zero pushed tasks: cancels locally, no SF fan-out, no pause_cancels_pushed", async () => {
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]); // replay none
+    mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow()]);
+    mockExecute.mockResolvedValueOnce(unpushedCanceledRows(3));
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+
+    const result = await pauseSubscription(
+      userCtx(["subscription:pause"]),
+      SUBSCRIPTION_ID,
+      validInput,
+      { now: NOW },
+    );
+
+    expect(result.status).toBe("inserted");
+    expect(result.canceled_task_count).toBe(3);
+    expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
+    const eventTypes = mockEmit.mock.calls.map((c) => (c[0] as { eventType: string }).eventType);
+    expect(eventTypes).toEqual(["subscription.paused", "subscription.end_date.extended"]);
+  });
+
+  it("⑤.5 resume regression: early manual resume restores tasks + reconciles pending_cancel→synced", async () => {
+    // 4 execute calls: SELECT sub, SELECT pause window, UPDATE tasks
+    // (restore), UPDATE subscriptions. Mirrors the early-manual resume
+    // flow; guards that the R2 repository change did not break resume.
+    mockExecute.mockResolvedValueOnce([subscriptionRow({ status: "paused" })]);
+    mockExecute.mockResolvedValueOnce([activePauseWindowRow()]);
+    mockExecute.mockResolvedValueOnce({ count: 3 } as unknown); // markTasksRestoredInWindow
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // UPDATE subscriptions
+
+    const result = await resumeSubscription(
+      userCtx(["subscription:resume"]),
+      SUBSCRIPTION_ID,
+      { idempotency_key: IDEMPOTENCY_KEY },
+      { now: new Date("2026-05-13T09:00:00.000Z") }, // Wed = early manual
+    );
+
+    expect(result.status).toBe("resumed");
+    expect(result.restored_task_count).toBe(3);
+    expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
+
+    // The restore UPDATE (3rd execute call) carries the R2 resume-side
+    // reconcile: pending_cancel → synced.
+    const restoreSql = mockExecute.mock.calls[2][0];
+    expect(sqlIncludes(restoreSql, "pending_cancel")).toBe(true);
+    expect(sqlIncludes(restoreSql, "synced")).toBe(true);
+  });
+
+  it("⑤.6 mixed pushed + unpushed: only pushed rows fan out; count covers all", async () => {
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]); // replay none
+    mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow()]);
+    mockExecute.mockResolvedValueOnce([
+      pushedCanceledRow(1),
+      ...unpushedCanceledRows(3),
+      pushedCanceledRow(2),
+    ]);
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockEnqueueBulkCancelTasks.mockResolvedValue({
+      enqueuedCount: 2,
+      failedChunks: 0,
+      totalCount: 2,
+    });
+
+    const result = await pauseSubscription(
+      userCtx(["subscription:pause"]),
+      SUBSCRIPTION_ID,
+      validInput,
+      { now: NOW },
+    );
+
+    expect(result.canceled_task_count).toBe(5);
+    expect(mockEnqueueBulkCancelTasks).toHaveBeenCalledTimes(1);
+    const payloads = mockEnqueueBulkCancelTasks.mock.calls[0][0] as Array<{ awb: string }>;
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((p) => p.awb).sort()).toEqual(["AWB-PAUSE-1", "AWB-PAUSE-2"]);
+    const pushedEmit = mockEmit.mock.calls.find(
+      (c) => (c[0] as { eventType: string }).eventType === "subscription.pause_cancels_pushed",
+    )![0] as { metadata: { pushed_task_count: number; enqueued_count: number } };
+    expect(pushedEmit.metadata.pushed_task_count).toBe(2);
+    expect(pushedEmit.metadata.enqueued_count).toBe(2);
   });
 });

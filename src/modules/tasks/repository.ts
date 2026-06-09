@@ -1400,26 +1400,43 @@ export async function markTaskSkipped(
  *
  * Tenant-id predicate alongside RLS for defence in depth.
  */
+export type CanceledInWindowTaskRow = {
+  readonly id: Uuid;
+  /** SF AWB; non-null ⇒ task is pushed and has a live SF row to cancel. */
+  readonly external_tracking_number: string | null;
+} & Record<string, unknown>;
+
 export async function markTasksCanceledInWindow(
   tx: DbTx,
   tenantId: Uuid,
   subscriptionId: Uuid,
   pauseStart: string,
   pauseEnd: string,
-): Promise<number> {
-  const result = await tx.execute(sqlTag`
+): Promise<readonly CanceledInWindowTaskRow[]> {
+  // R2 (calendar-management lane Phase 1, plan-PR #337 §2.R2): two
+  // additions over the original local-only cancel:
+  //   (a) pushed rows (non-null external_tracking_number = live SF AWB)
+  //       flip to outbound_sync_state='pending_cancel' so the
+  //       outbound-sync badge lights up and the post-commit fan-out can
+  //       drive SF cancels. Unpushed rows keep their existing state.
+  //   (b) RETURNING (id, external_tracking_number) so pauseSubscription
+  //       can build CancelTaskPayload[] for enqueueBulkCancelTasks.
+  // Mirrors the Day-29 §D(2) single-skip cancel pattern
+  // (markTaskSkipped), generalised to the bounded-pause window.
+  const rows = await tx.execute<CanceledInWindowTaskRow>(sqlTag`
     UPDATE tasks
-    SET internal_status = 'CANCELED'
+    SET internal_status = 'CANCELED',
+        outbound_sync_state = CASE
+          WHEN external_tracking_number IS NOT NULL THEN 'pending_cancel'
+          ELSE outbound_sync_state
+        END
     WHERE tenant_id = ${tenantId}
       AND subscription_id = ${subscriptionId}
       AND delivery_date BETWEEN ${pauseStart} AND ${pauseEnd}
       AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+    RETURNING id, external_tracking_number
   `);
-  return typeof (result as { count?: number }).count === "number"
-    ? (result as { count: number }).count
-    : Array.isArray(result)
-      ? result.length
-      : 0;
+  return rows;
 }
 
 /**
@@ -1451,9 +1468,21 @@ export async function markTasksRestoredInWindow(
   restoreFromDate: string,
   restoreToDate: string,
 ): Promise<number> {
+  // R2 resume-side reconcile (plan-PR #337 §2.R2, ruling ②): once
+  // pause flips pushed rows to 'pending_cancel', an early manual resume
+  // must clear that flag back to the safe 'synced' state — otherwise a
+  // restored (now-active) task would linger in 'pending_cancel'. This
+  // is the *safe-state half only*; actively re-activating the SF row
+  // (re-push) on early resume is the separate R16 follow-on, NOT built
+  // here. The CASE leaves non-pending_cancel states ('failed' etc.)
+  // untouched.
   const result = await tx.execute(sqlTag`
     UPDATE tasks
-    SET internal_status = 'CREATED'
+    SET internal_status = 'CREATED',
+        outbound_sync_state = CASE
+          WHEN outbound_sync_state = 'pending_cancel' THEN 'synced'
+          ELSE outbound_sync_state
+        END
     WHERE tenant_id = ${tenantId}
       AND subscription_id = ${subscriptionId}
       AND delivery_date BETWEEN ${restoreFromDate} AND ${restoreToDate}

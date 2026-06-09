@@ -392,6 +392,17 @@ const EVENT_TYPES_DRAFT = {
       "subscription_id (uuid), failure_count (int — attempt_count on the failed_pushes row that triggered the pause), last_error (string — failure_detail or short summary, no credentials/PII), task_id (uuid — the task whose repeated failure tripped the threshold).",
     systemOnly: true,
   },
+  // Day-51 / R2 — calendar-management lane Phase 1, plan-PR #337 §2.R2.
+  "subscription.pause_cancels_pushed": {
+    id: "subscription.pause_cancels_pushed",
+    resource: "subscription",
+    action: "pause_cancels_pushed",
+    description:
+      "Day-51 / R2. After a `subscription.paused` transition, the pushed (SF-live) tasks in the pause window had outbound SF cancels fanned out via `enqueueBulkCancelTasks`. Paired with `subscription.paused` by a shared `correlation_id` (paused = local-cancel leg; this = outbound leg). Emitted only when ≥1 pushed task was in the window; a pure-local pause (no pushed tasks) does not emit it. `failed_chunks > 0` means partial fan-out failure — the service re-throws after this emit so the caller surfaces \"saved locally; SF cancels pending\".",
+    metadataNotes:
+      "subscription_id (uuid), correlation_id (uuid — shared with the paired subscription.paused), pushed_task_count (int — tasks with a live SF AWB enqueued for cancel), enqueued_count (int — BulkEnqueueResult.enqueuedCount), failed_chunks (int — chunks that failed to enqueue; >0 triggers the Q5 re-throw), pause_start (YYYY-MM-DD), pause_end (YYYY-MM-DD).",
+    systemOnly: false,
+  },
 
   // ---- task --------------------------------------------------------------
   "task.created": {
