@@ -6,10 +6,10 @@
 > current state of in-flight architectural work. Rotated lane-by-lane
 > as code-PRs land and new lanes open.
 >
-> **Last updated:** Day-33 EOD (22 May 2026).
-> **Active lane:** Calendar-management — T3 plan-PR opens Day-34
-> against the 15 locked product decisions from PR #331 (R1-R10 +
-> sub-rulings R6.1-R6.4 + R7.1-R7.4).
+> **Last updated:** Day-51 EOD (9 Jun 2026).
+> **Active lane:** Calendar-management — Phase 1 T3 plan-PR #337
+> OPEN; PR-1 of 5 shipped Day-51 via PR #338 (R1 on-demand cron);
+> PR-2 (R2 pause SF cancel fan-out) queued for Day-52.
 
 ---
 
@@ -42,15 +42,17 @@ Calendar-management was named the most important surface in Planner by Love duri
 
 ---
 
-## Current state (Day-33 EOD)
+## Current state (Day-51 EOD)
 
-- **Main HEAD:** `fcdb898` (post-merge of PR #332 Day-33 EOD doc).
-- **Production HEAD:** `2db99ea` on `dpl_EVLvUQovnQza6ZK2ogRZzp64M6UT` (Plan #317 PR-D promoted Day-33 PM-late). Production is intentionally 2+ commits behind main because PRs #329, #330, #331, #332, and this followup-rotation PR are all memo-only and not promoted, mirroring the Day-30 PR #311 / Day-32 PR #320 carve-out pattern.
-- **Rollback anchor (one-swap):** `dpl_5EHiBSWE1693hRJsN345voCrup7o` (PR-C's prod, source `d25e812`).
-- **Brief on main:** **v1.15** (unchanged across Day-33; no amendment filed).
-- **Plan #317:** CLOSED at `f0ef560` (manually closed Day-33 PM via `gh pr close 317` — `Closes #317` footer did not auto-fire from PR-D's commit body; discipline lesson recorded in Day-33 EOD §F #10).
-- **Migrations on production:** 0027 + 0028 both applied via Supabase SQL editor (manual, per Day-2 convention: schema change precedes dependent code).
-- **Calendar-management lane:** 15 R-items + sub-rulings locked as product decisions via PR #331 at `9d7b15b`. T3 plan-PR scoping pending Day-34 open.
+- **Main HEAD:** `48997a9` (post-merge of PR #339 vercel.json workaround; this EOD doc extends main one commit further after merge).
+- **Production HEAD:** `48997a9` on `dpl_9AHCpJEKDaz2J5MV46RZVQdRGNcW` (PR #338 R1 + PR #339 Vercel workaround promoted Day-51 11:42:20Z UTC). Production now current with main as of merge time.
+- **Rollback anchor (one-swap):** `dpl_EVLvUQovnQza6ZK2ogRZzp64M6UT` (source `2db99ea`, Day-33 EOD state — Plan #317 PR-D production).
+- **Brief on main:** **v1.16** (last table-row Day-30 PR #308; new §9 Day-51 operational-degradation subsection appended via PR #339, explicitly NOT a version bump per the operational-not-scope-change framing).
+- **Plan #317:** CLOSED at `f0ef560` (closed Day-33 PM; not active).
+- **Plan-PR #337 (calendar-management Phase 1):** OPEN. PR-1 of 5 shipped Day-51 via PR #338 (R1 on-demand cron-equivalent materializer primitive + skip-tail wiring). R1 smoke passed end-to-end on production with one carry-forward finding (tail-outside-horizon UX gap — see Day-51 EOD §D.3 and §G).
+- **Phase 1 PR-2 (R2 pause SF cancel fan-out):** queued for Day-52 open.
+- **Migrations on production:** 0027 + 0028 (Day-33 baseline; no new migration today).
+- **Calendar-management lane:** 15 R-items + sub-rulings locked as product decisions via PR #331 at `9d7b15b`. T3 plan-PR #337 OPEN with Phase 1 in flight.
 
 ---
 
