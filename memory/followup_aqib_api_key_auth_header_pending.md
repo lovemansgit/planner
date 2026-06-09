@@ -1,4 +1,6 @@
-# 🔴 LOAD-BEARING — Aqib SF API Key + Secret Key auth-header reply pending
+# ✅ RESOLVED — Aqib SF API Key + Secret Key auth-header reply landed
+
+> **Resolved 9 June 2026** by Aqib's API-key reply. Verified shape recorded in [`decision_aqib_api_key_auth_header_verified.md`](decision_aqib_api_key_auth_header_verified.md): `POST /api/auth/authenticate`; headers `clientId` + `clientApiKey` + `clientSecretKey`; 30-day access / 180-day refresh; same token body shape as OAuth. ⚠️ The verified shape matched **NEITHER** candidate (a)/(b) below, so it is **probe-gated before merge** (`scripts/probe-sf-api-key-auth.mjs`) per the bulk-cancel-AWB precedent. `loginApiKey()` implemented on branch `fix/d36-a-api-key-auth-header`. This followup is no longer load-bearing; retained below as the historical question ledger.
 
 **Filed:** Day-27 (15 May 2026), EOD — replaces `memory/followup_production_identity_schema_absent.md` as the active load-bearing lane followup. That prior memo was superseded by [PR #288](https://github.com/lovemansgit/planner/pull/288) and its lane (production schema reconciliation) closed Day-27 PM-late with the Vercel promote of `dpl_J7zoFC2zv8CKLbMMkksQxfNfwA8F`.
 

@@ -54,7 +54,7 @@
 // point in S-8.
 
 import type { SuiteFleetCredentials } from "../../../credentials";
-import { ConfigurationError, CredentialError } from "@/shared/errors";
+import { CredentialError } from "@/shared/errors";
 import { logger } from "@/shared/logger";
 
 import type {
@@ -303,29 +303,72 @@ export function createSuiteFleetAuthClient(
   }
 
   // -------------------------------------------------------------------
-  // API Key login — STUBBED per v1.15 amendment §5.3.
+  // API Key login — implemented per Aqib's SF OpsPortal reply (Day-52
+  // auth-unblock; see memory/decision_aqib_api_key_auth_header_verified.md
+  // and the now-resolved memory/followup_aqib_api_key_auth_header_pending.md).
   //
-  // The exact SF OpsPortal request-header shape is pending Aqib's reply
-  // (narrowed-scope blocker per v1.15 amendment §0.4). Production
-  // regions are seeded with auth_method='api_key'; any tenant routed
-  // through one of those regions fails closed here at runtime with
-  // ConfigurationError. The follow-on T2 PR lands the loginApiKey body
-  // + one integration spec once Aqib confirms.
+  // Mirrors loginOAuth, with one wire difference: credentials travel in
+  // the request HEADERS (clientId + clientApiKey + clientSecretKey), NOT
+  // the query string. Same POST /api/auth/authenticate endpoint; same
+  // response body shape (so parseTokenSet is reused unchanged); TTLs differ
+  // (30-day access / 180-day refresh vs OAuth's 24h / 6mo — a value, not a
+  // shape change).
   //
-  // The stub exists so the discriminated-union switch over auth_method
-  // is exhaustive at compile time — tsc rejects a missing case branch.
+  // ⚠️ PROBE-GATED: the verified header names/casing matched NEITHER
+  // candidate in the pending memo, so this shape is documentation-asserted
+  // until scripts/probe-sf-api-key-auth.mjs confirms it against a live
+  // api_key-region endpoint (bulk-cancel-AWB precedent). Merge is gated on
+  // that probe per the decision memo's Rule-A caveat.
   // -------------------------------------------------------------------
   async function loginApiKey(
-    _credentials: SuiteFleetCredentials & { auth_method: "api_key" },
+    credentials: SuiteFleetCredentials & { auth_method: "api_key" },
   ): Promise<SuiteFleetTokenSet> {
-    log.warn({
-      operation: "login",
-      auth_method: "api_key",
-      error_code: "configuration_not_yet_enabled",
-    });
-    throw new ConfigurationError(
-      "api_key auth not yet implemented; awaiting SF OpsPortal header confirmation",
+    const url = `${baseUrl}/api/auth/authenticate`;
+
+    const response = await callWithRetry("login", () =>
+      deps.fetch(url, {
+        method: "POST",
+        headers: {
+          clientId: credentials.clientId,
+          clientApiKey: credentials.apiKey,
+          clientSecretKey: credentials.secretKey,
+          Accept: "application/json",
+        },
+      }),
     );
+
+    if (response.status >= 400) {
+      // Read the body once before the signature-extended rejectClientError
+      // so SF's response text reaches downstream failure_detail (mirrors
+      // loginOAuth / Plan #317 §3.1 / F-1).
+      let responseText: string;
+      try {
+        responseText = await response.text();
+      } catch {
+        responseText = "";
+      }
+      rejectClientError("login", response.status, responseText);
+    }
+
+    const body = await readJson(response, "login");
+    const tokens = parseTokenSet(body);
+
+    const now = deps.clock().getTime();
+    if (tokens.accessTokenExpiresAt.getTime() <= now) {
+      throw new CredentialError(
+        "SuiteFleet login returned a token whose expiration is in the past",
+      );
+    }
+
+    log.info({
+      operation: "login",
+      status: response.status,
+      auth_method: "api_key",
+      access_expires_at: tokens.accessTokenExpiresAt.toISOString(),
+      refresh_expires_at: tokens.refreshTokenExpiresAt.toISOString(),
+    });
+
+    return tokens;
   }
 
   return {
