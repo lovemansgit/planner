@@ -23,6 +23,8 @@ vi.mock("../../../shared/db", () => ({
 
 vi.mock("../../audit", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
+  listAuditEventsForResource: vi.fn().mockResolvedValue([]),
+  listAuditEventsForSubscription: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../repository", () => ({
@@ -77,7 +79,12 @@ import type { Permission } from "../../../shared/types";
 
 import { logger } from "../../../shared/logger";
 
-import { emit } from "../../audit";
+import {
+  emit,
+  listAuditEventsForResource,
+  listAuditEventsForSubscription,
+  type AuditEventRecord,
+} from "../../audit";
 
 import {
   findTaskById,
@@ -97,11 +104,16 @@ import {
   cancelTask,
   createTask,
   getTask,
+  getTaskHistory,
   getTasksForSubscription,
   getTaskTimeline,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,
+  subscriptionEventAffectsTask,
+  buildPauseWindows,
+  TASK_HISTORY_BATCH_SIZE,
+  TASK_HISTORY_EXCLUDED_EVENT_TYPES,
   updateTask,
   updateTaskAndPushOutbound,
   DriverNotePushPendingError,
@@ -118,6 +130,8 @@ import type { CreateTaskInput, Task } from "../types";
 const mockWithTenant = vi.mocked(withTenant);
 const mockWithServiceRole = vi.mocked(withServiceRole);
 const mockEmit = vi.mocked(emit);
+const mockListAuditForResource = vi.mocked(listAuditEventsForResource);
+const mockListAuditForSubscription = vi.mocked(listAuditEventsForSubscription);
 const mockInsert = vi.mocked(insertTaskWithPackages);
 const mockFindById = vi.mocked(findTaskById);
 const mockListByTenant = vi.mocked(listTasksByTenant);
@@ -1591,5 +1605,362 @@ describe("getTasksForSubscription", () => {
     mockListBySubscription.mockResolvedValueOnce([] as never);
     await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getTaskHistory — Day-52 / R8 (drawer History section)
+// -----------------------------------------------------------------------------
+
+const HISTORY_SUBSCRIPTION_ID = "55555555-5555-5555-5555-555555555555";
+
+function auditEvent(
+  overrides: Partial<AuditEventRecord> & { eventType: string },
+): AuditEventRecord {
+  return {
+    id: "44444444-4444-4444-4444-444444444444",
+    occurredAt: "2026-06-01T10:00:00.000000Z",
+    actorKind: "user",
+    actorId: ACTOR_USER_ID,
+    resourceType: "task",
+    resourceId: TASK_ID,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+describe("getTaskHistory — Day-52 / R8", () => {
+  let mockExecute: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecute = vi.fn().mockResolvedValue([]);
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: mockExecute } as never),
+    );
+    mockListAuditForResource.mockResolvedValue([]);
+    mockListAuditForSubscription.mockResolvedValue([]);
+  });
+
+  it("rejects user without task:view_timeline with ForbiddenError (ruling 5: drawer gate, nothing stricter)", async () => {
+    await expect(
+      getTaskHistory(userCtx([]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("queries task events with the ruling-1 exclusion list and BATCH+1 limit", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+
+    expect(mockListAuditForResource).toHaveBeenCalledOnce();
+    const params = mockListAuditForResource.mock.calls[0][1];
+    expect(params.resourceType).toBe("task");
+    expect(params.resourceId).toBe(TASK_ID);
+    expect(params.excludeEventTypes).toEqual(TASK_HISTORY_EXCLUDED_EVENT_TYPES);
+    expect(params.limit).toBe(TASK_HISTORY_BATCH_SIZE + 1);
+    expect(TASK_HISTORY_EXCLUDED_EVENT_TYPES).toContain("task.push_failed");
+    expect(TASK_HISTORY_EXCLUDED_EVENT_TYPES).toContain("failed_push.retried");
+  });
+
+  it("does not fetch subscription events for a subscription-less task", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture({ subscriptionId: null }));
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockListAuditForSubscription).not.toHaveBeenCalled();
+  });
+
+  it("merges relevant subscription events into the task stream, newest first, and drops irrelevant ones", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({
+        subscriptionId: HISTORY_SUBSCRIPTION_ID as never,
+        deliveryDate: "2099-05-01",
+      }),
+    );
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "task.updated",
+        occurredAt: "2026-06-03T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000001",
+      }),
+    ]);
+    mockListAuditForSubscription.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "subscription.paused",
+        occurredAt: "2026-06-02T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000002",
+        resourceType: "subscription",
+        resourceId: HISTORY_SUBSCRIPTION_ID,
+        metadata: { pause_start: "2099-04-30", pause_end: "2099-05-02" },
+      }),
+      auditEvent({
+        eventType: "subscription.exception.created",
+        occurredAt: "2026-06-01T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000003",
+        resourceType: "subscription_exception",
+        metadata: { start_date: "2099-06-15", compensating_date: null },
+      }),
+    ]);
+
+    const result = await getTaskHistory(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries.map((e) => e.eventType)).toEqual([
+      "task.updated",
+      "subscription.paused",
+    ]);
+    expect(result.nextCursor).toBeNull();
+  });
+
+  it("returns a full batch + nextCursor when more task events exist", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    const events = Array.from({ length: TASK_HISTORY_BATCH_SIZE + 1 }, (_, i) =>
+      auditEvent({
+        eventType: "task.updated",
+        occurredAt: `2026-06-01T10:00:${String(59 - i).padStart(2, "0")}.000000Z`,
+        id: `44444444-4444-4444-4444-0000000000${String(10 + i)}`,
+      }),
+    );
+    mockListAuditForResource.mockResolvedValueOnce(events);
+
+    const result = await getTaskHistory(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries).toHaveLength(TASK_HISTORY_BATCH_SIZE);
+    const last = result.entries[result.entries.length - 1];
+    expect(result.nextCursor).toEqual({ occurredAt: last.occurredAt, id: last.id });
+  });
+
+  it("threads the before-cursor into the task-event query", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    const before = {
+      occurredAt: "2026-06-01T10:00:00.000000Z",
+      id: "44444444-4444-4444-4444-444444444444",
+    };
+
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never, {
+      before,
+    });
+
+    expect(mockListAuditForResource.mock.calls[0][1].before).toEqual(before);
+  });
+
+  it("resolves user actors to display names and labels system actors 'System'", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "task.note_added",
+        occurredAt: "2026-06-03T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000001",
+        actorKind: "user",
+        actorId: ACTOR_USER_ID,
+      }),
+      auditEvent({
+        eventType: "task.created",
+        occurredAt: "2026-06-02T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000002",
+        actorKind: "system",
+        actorId: "cron:generate_tasks",
+      }),
+    ]);
+    mockExecute.mockResolvedValueOnce([
+      { id: ACTOR_USER_ID, display_name: "Jane Operator", email: "jane@example.com" },
+    ]);
+
+    const result = await getTaskHistory(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries[0].actorLabel).toBe("Jane Operator");
+    expect(result.entries[1].actorLabel).toBe("System");
+    expect(result.entries[1].actorId).toBe("cron:generate_tasks");
+  });
+
+  it("does NOT emit an audit event (read path is not audited per R-4)", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// subscriptionEventAffectsTask + buildPauseWindows — Day-52 / R8 relevance
+// predicates (pure; derived from the actual emit-site metadata shapes)
+// -----------------------------------------------------------------------------
+
+describe("subscriptionEventAffectsTask — Day-52 / R8", () => {
+  const task = { taskId: TASK_ID, deliveryDate: "2099-05-01", isPushed: false };
+  const pushedTask = { ...task, isPushed: true };
+  const noWindows = new Map<string, { start: string; end: string }>();
+
+  function subEvent(eventType: string, metadata: Record<string, unknown>): AuditEventRecord {
+    return auditEvent({ eventType, metadata, resourceType: "subscription" });
+  }
+
+  it("subscription.paused: in-window matches, out-of-window does not", () => {
+    const inWindow = subEvent("subscription.paused", {
+      pause_start: "2099-04-30",
+      pause_end: "2099-05-02",
+    });
+    const outOfWindow = subEvent("subscription.paused", {
+      pause_start: "2099-06-01",
+      pause_end: "2099-06-10",
+    });
+    expect(subscriptionEventAffectsTask(inWindow, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(outOfWindow, task, noWindows)).toBe(false);
+  });
+
+  it("subscription.pause_cancels_pushed: requires the task to carry an AWB", () => {
+    const event = subEvent("subscription.pause_cancels_pushed", {
+      pause_start: "2099-04-30",
+      pause_end: "2099-05-02",
+    });
+    expect(subscriptionEventAffectsTask(event, pushedTask, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(event, task, noWindows)).toBe(false);
+  });
+
+  it("subscription.resumed: matches via the paired pause window and actual_resume_date", () => {
+    const paused = subEvent("subscription.paused", {
+      pause_start: "2099-04-30",
+      pause_end: "2099-05-02",
+      correlation_id: "corr-1",
+    });
+    const windows = buildPauseWindows([paused]);
+    const restoredTail = subEvent("subscription.resumed", {
+      correlation_id: "corr-1",
+      actual_resume_date: "2099-05-01",
+    });
+    const resumedAfterTask = subEvent("subscription.resumed", {
+      correlation_id: "corr-1",
+      actual_resume_date: "2099-05-02",
+    });
+    const unknownCorrelation = subEvent("subscription.resumed", {
+      correlation_id: "corr-other",
+      actual_resume_date: "2099-05-01",
+    });
+    expect(subscriptionEventAffectsTask(restoredTail, task, windows)).toBe(true);
+    expect(subscriptionEventAffectsTask(resumedAfterTask, task, windows)).toBe(false);
+    expect(subscriptionEventAffectsTask(unknownCorrelation, task, windows)).toBe(false);
+  });
+
+  it("subscription.auto_paused: matches only the tripping task", () => {
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.auto_paused", { task_id: TASK_ID }),
+        task,
+        noWindows,
+      ),
+    ).toBe(true);
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.auto_paused", { task_id: "other-task" }),
+        task,
+        noWindows,
+      ),
+    ).toBe(false);
+  });
+
+  it("subscription.exception.created: matches on start_date, move-to-date, compensating_date, or outbound cancel task_id", () => {
+    const byStartDate = subEvent("subscription.exception.created", {
+      start_date: "2099-05-01",
+    });
+    const byMoveTo = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      target_date_override: "2099-05-01",
+    });
+    const byCompensating = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      compensating_date: "2099-05-01",
+    });
+    const byOutbound = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      outbound_emission: { kind: "cancel", task_id: TASK_ID },
+    });
+    const unrelated = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      compensating_date: null,
+      outbound_emission: { kind: "none" },
+    });
+    expect(subscriptionEventAffectsTask(byStartDate, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(byMoveTo, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(byCompensating, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(byOutbound, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(unrelated, task, noWindows)).toBe(false);
+  });
+
+  it("subscription.end_date.extended: matches only the task materialized at the new end date", () => {
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.end_date.extended", { new_end_date: "2099-05-01" }),
+        task,
+        noWindows,
+      ),
+    ).toBe(true);
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.end_date.extended", { new_end_date: "2099-05-02" }),
+        task,
+        noWindows,
+      ),
+    ).toBe(false);
+  });
+
+  it("subscription.address_override.applied: one_off exact-date, forward from effective_from onward", () => {
+    const oneOffHit = subEvent("subscription.address_override.applied", {
+      scope: "one_off",
+      effective_from: "2099-05-01",
+    });
+    const oneOffMiss = subEvent("subscription.address_override.applied", {
+      scope: "one_off",
+      effective_from: "2099-04-30",
+    });
+    const forwardHit = subEvent("subscription.address_override.applied", {
+      scope: "forward",
+      effective_from: "2099-04-30",
+    });
+    const forwardMiss = subEvent("subscription.address_override.applied", {
+      scope: "forward",
+      effective_from: "2099-05-02",
+    });
+    expect(subscriptionEventAffectsTask(oneOffHit, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(oneOffMiss, task, noWindows)).toBe(false);
+    expect(subscriptionEventAffectsTask(forwardHit, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(forwardMiss, task, noWindows)).toBe(false);
+  });
+
+  it("events without a deterministic per-task effect never match (created / updated / ended)", () => {
+    for (const eventType of [
+      "subscription.created",
+      "subscription.updated",
+      "subscription.ended",
+    ]) {
+      expect(subscriptionEventAffectsTask(subEvent(eventType, {}), task, noWindows)).toBe(false);
+    }
+  });
+
+  it("buildPauseWindows: harvests only complete subscription.paused windows", () => {
+    const windows = buildPauseWindows([
+      subEvent("subscription.paused", {
+        correlation_id: "corr-1",
+        pause_start: "2099-04-30",
+        pause_end: "2099-05-02",
+      }),
+      subEvent("subscription.paused", { correlation_id: "corr-2", pause_start: "2099-06-01" }),
+      subEvent("subscription.resumed", { correlation_id: "corr-3" }),
+    ]);
+    expect(windows.get("corr-1")).toEqual({ start: "2099-04-30", end: "2099-05-02" });
+    expect(windows.has("corr-2")).toBe(false);
+    expect(windows.has("corr-3")).toBe(false);
   });
 });

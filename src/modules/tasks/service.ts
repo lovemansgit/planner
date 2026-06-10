@@ -65,7 +65,15 @@
 // run requirePermission + tenantId check — same auth surface as writes —
 // but skip the emit step.
 
-import { emit, type EmitInput } from "../audit";
+import {
+  emit,
+  listAuditEventsForResource,
+  listAuditEventsForSubscription,
+  type AuditActorKind,
+  type AuditEventCursor,
+  type AuditEventRecord,
+  type EmitInput,
+} from "../audit";
 import { withServiceRole, withTenant } from "../../shared/db";
 import {
   ForbiddenError,
@@ -1625,6 +1633,378 @@ export async function getTaskTimeline(
     }
 
     return { taskId, entries };
+  });
+}
+
+
+// =============================================================================
+// getTaskHistory — Day-52 / R8 (audit history section in the task drawer)
+// =============================================================================
+//
+// Reads the audit history for one task per the R8 rulings (Day-52,
+// memory/plan_r8_audit_timeline_drawer.md + Love's rulings 1–7):
+//
+//   Ruling 1 — events shown are this task's own audit events PLUS the
+//   subscription events that affected this task ("the what and why"),
+//   EXCLUDING the push-failure/retry machinery (operator-facing noise):
+//   task.push_failed, task.pushed_via_reconcile, failed_push.retried,
+//   failed_push.bulk_resolved.
+//
+//   Ruling 3 — newest-first batches with a cursor for older events.
+//
+//   Ruling 5 — same gate as the drawer itself (`task:view_timeline`);
+//   no extra role-gating.
+//
+//   Ruling 7 — the fetch is composed from the audit module's generic
+//   read functions (the reusable spine); only the per-task relevance
+//   filter below is R8-specific.
+//
+// Honesty constraint (followup_audit_failed_attempts.md): the audit
+// layer writes on SUCCESS only — denied/failed attempts are never
+// captured, so this history is "what happened", not an attempt log.
+// The UI copy must not promise more; this service cannot return more.
+//
+// Subscription-event linkage is deterministic per event type, derived
+// from the actual emit call sites (subscriptions/service.ts,
+// subscription-exceptions/service.ts) — see
+// subscriptionEventAffectsTask below. Subscription events with no
+// per-task effect (created / updated / ended — endSubscription touches
+// only the subscriptions row) are excluded by default.
+//
+// Per R-4 read-not-audited convention: no audit emit on view.
+//
+// Throws:
+//   ForbiddenError    — actor lacks `task:view_timeline`
+//   ValidationError   — tenant unscoped
+//   NotFoundError     — task not found / RLS-hidden cross-tenant
+
+/** Page size per ruling 3 — recent batch first, "show more" for older. */
+export const TASK_HISTORY_BATCH_SIZE = 15;
+
+/**
+ * Ruling 1 exclusion list: push-failure/retry plumbing. The failed_push.*
+ * events carry resource_type='task' at their emit sites, so they must be
+ * excluded by event_type, not by resource scoping.
+ */
+export const TASK_HISTORY_EXCLUDED_EVENT_TYPES: readonly string[] = [
+  "task.push_failed",
+  "task.pushed_via_reconcile",
+  "failed_push.retried",
+  "failed_push.bulk_resolved",
+];
+
+/**
+ * Guard rail on the subscription-family fetch (it is consumed whole —
+ * the relevance predicates need cross-event context, e.g. a resume's
+ * pause window lives on the paired paused event). Operator-action
+ * volume keeps real counts far below this; hitting the cap logs a
+ * warning so truncation is never silent.
+ */
+const SUBSCRIPTION_EVENT_FETCH_CAP = 500;
+
+export interface TaskHistoryEntry {
+  /** audit_events.id — stable key + cursor component. */
+  readonly id: string;
+  /** Fixed-width UTC ISO timestamp (lexicographically ordered). */
+  readonly occurredAt: string;
+  readonly eventType: string;
+  readonly actorKind: AuditActorKind;
+  /** Raw actor_id (user uuid / system actor name / api_key uuid). */
+  readonly actorId: string;
+  /** Operator-facing actor line, resolved server-side. */
+  readonly actorLabel: string;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface TaskHistoryPage {
+  readonly taskId: Uuid;
+  /** Newest-first. */
+  readonly entries: readonly TaskHistoryEntry[];
+  /** Cursor for the next (older) batch; null when exhausted. */
+  readonly nextCursor: AuditEventCursor | null;
+}
+
+/** The task facts the relevance predicates compare against. */
+interface TaskHistoryLinkage {
+  readonly taskId: string;
+  /** tasks.delivery_date, YYYY-MM-DD. */
+  readonly deliveryDate: string;
+  /** Whether the task has a live SF AWB (external_tracking_number). */
+  readonly isPushed: boolean;
+}
+
+function metaString(
+  metadata: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = metadata[key];
+  return typeof value === "string" ? value : null;
+}
+
+/** Inclusive YYYY-MM-DD range check (lexicographic == chronological). */
+function dateInRange(date: string, start: string | null, end: string | null): boolean {
+  return start !== null && end !== null && start <= date && date <= end;
+}
+
+/**
+ * Pause windows keyed by correlation_id, harvested from the
+ * subscription.paused events in the fetched family. The resume
+ * predicate needs them: subscription.resumed carries
+ * actual_resume_date + the shared correlation_id, but not the window.
+ */
+export function buildPauseWindows(
+  events: readonly AuditEventRecord[],
+): ReadonlyMap<string, { readonly start: string; readonly end: string }> {
+  const windows = new Map<string, { start: string; end: string }>();
+  for (const event of events) {
+    if (event.eventType !== "subscription.paused") continue;
+    const correlationId = metaString(event.metadata, "correlation_id");
+    const start = metaString(event.metadata, "pause_start");
+    const end = metaString(event.metadata, "pause_end");
+    if (correlationId !== null && start !== null && end !== null) {
+      windows.set(correlationId, { start, end });
+    }
+  }
+  return windows;
+}
+
+/**
+ * Ruling 1's "subscription events that affected this task", decided
+ * deterministically per event type from the emit-site metadata shapes:
+ *
+ *   paused                 — task's delivery date in the pause window
+ *                            (those tasks were locally CANCELED in the
+ *                            pause transaction).
+ *   pause_cancels_pushed   — in-window AND the task carries an AWB
+ *                            (the outbound leg only fanned out to
+ *                            pushed tasks). Approximation note: AWB
+ *                            presence today proxies "pushed at pause
+ *                            time"; a task restored by resume and
+ *                            pushed later would match spuriously —
+ *                            accepted, the grouped pause story stays
+ *                            truthful.
+ *   resumed                — task in the paired pause window (via
+ *                            correlation_id) on/after the actual
+ *                            resume date (those tasks were restored).
+ *   auto_paused            — metadata.task_id IS this task (the
+ *                            failure that tripped the threshold).
+ *   exception.created      — the exception's start_date, move-to-date
+ *                            (target_date_override) or
+ *                            compensating_date lands on this task's
+ *                            date, or the outbound cancel names this
+ *                            task.
+ *   end_date.extended      — the extension materialized this task
+ *                            (new_end_date == delivery date).
+ *   address_override.*     — one_off: effective_from == delivery date;
+ *                            forward: effective_from <= delivery date.
+ *   everything else        — false (no deterministic per-task effect).
+ */
+export function subscriptionEventAffectsTask(
+  event: AuditEventRecord,
+  task: TaskHistoryLinkage,
+  pauseWindows: ReadonlyMap<string, { readonly start: string; readonly end: string }>,
+): boolean {
+  const m = event.metadata;
+  const date = task.deliveryDate;
+
+  switch (event.eventType) {
+    case "subscription.paused":
+      return dateInRange(date, metaString(m, "pause_start"), metaString(m, "pause_end"));
+    case "subscription.pause_cancels_pushed":
+      return (
+        task.isPushed &&
+        dateInRange(date, metaString(m, "pause_start"), metaString(m, "pause_end"))
+      );
+    case "subscription.resumed": {
+      const correlationId = metaString(m, "correlation_id");
+      const window = correlationId !== null ? pauseWindows.get(correlationId) : undefined;
+      const resumeDate = metaString(m, "actual_resume_date");
+      return (
+        window !== undefined &&
+        resumeDate !== null &&
+        dateInRange(date, window.start, window.end) &&
+        resumeDate <= date
+      );
+    }
+    case "subscription.auto_paused":
+      return metaString(m, "task_id") === task.taskId;
+    case "subscription.exception.created": {
+      if (
+        metaString(m, "start_date") === date ||
+        metaString(m, "target_date_override") === date ||
+        metaString(m, "compensating_date") === date
+      ) {
+        return true;
+      }
+      const outbound = m["outbound_emission"];
+      return (
+        typeof outbound === "object" &&
+        outbound !== null &&
+        (outbound as Record<string, unknown>)["task_id"] === task.taskId
+      );
+    }
+    case "subscription.end_date.extended":
+      return metaString(m, "new_end_date") === date;
+    case "subscription.address_override.applied": {
+      const effectiveFrom = metaString(m, "effective_from");
+      if (effectiveFrom === null) return false;
+      return metaString(m, "scope") === "one_off"
+        ? effectiveFrom === date
+        : effectiveFrom <= date;
+    }
+    default:
+      return false;
+  }
+}
+
+function isBeforeCursor(record: AuditEventRecord, before: AuditEventCursor): boolean {
+  if (record.occurredAt !== before.occurredAt) {
+    return record.occurredAt < before.occurredAt;
+  }
+  return record.id < before.id;
+}
+
+/** Newest-first comparison on (occurredAt, id) — mirrors the SQL ORDER BY. */
+function compareDesc(a: AuditEventRecord, b: AuditEventRecord): number {
+  if (a.occurredAt !== b.occurredAt) {
+    return a.occurredAt < b.occurredAt ? 1 : -1;
+  }
+  if (a.id !== b.id) {
+    return a.id < b.id ? 1 : -1;
+  }
+  return 0;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type ActorNameRow = {
+  id: string;
+  display_name: string | null;
+  email: string;
+} & Record<string, unknown>;
+
+function actorLabelFor(
+  record: AuditEventRecord,
+  userNames: ReadonlyMap<string, { displayName: string | null; email: string }>,
+): string {
+  switch (record.actorKind) {
+    case "user": {
+      const user = userNames.get(record.actorId);
+      return user?.displayName ?? user?.email ?? "Operator";
+    }
+    case "api_key":
+      return "API key";
+    case "system":
+      return "System";
+  }
+}
+
+export async function getTaskHistory(
+  ctx: RequestContext,
+  taskId: Uuid,
+  opts?: { readonly before?: AuditEventCursor },
+): Promise<TaskHistoryPage> {
+  // Ruling 5: whoever can open the drawer sees the history — the gate
+  // is the drawer's own permission, nothing stricter.
+  requirePermission(ctx, "task:view_timeline");
+  assertTenantScoped(ctx, "task:view_timeline");
+
+  const tenantId = ctx.tenantId as Uuid;
+  const before = opts?.before;
+
+  return await withTenant(tenantId, async (tx) => {
+    const task = await findTaskById(tx, taskId);
+    if (!task) {
+      throw new NotFoundError(`task not found: ${taskId}`);
+    }
+
+    // Task's own events — SQL-side exclusion + cursor + limit. One
+    // extra row signals whether an older batch exists past the slice.
+    const taskEvents = await listAuditEventsForResource(tx, {
+      resourceType: "task",
+      resourceId: taskId,
+      excludeEventTypes: TASK_HISTORY_EXCLUDED_EVENT_TYPES,
+      before,
+      limit: TASK_HISTORY_BATCH_SIZE + 1,
+    });
+
+    // Affecting subscription events — fetched as a family (relevance
+    // needs cross-event context), filtered in application code, then
+    // cursor-trimmed to match the task stream's pagination frame.
+    let relevantSubscriptionEvents: readonly AuditEventRecord[] = [];
+    if (task.subscriptionId !== null && task.subscriptionId !== undefined) {
+      const family = await listAuditEventsForSubscription(tx, {
+        subscriptionId: task.subscriptionId,
+        limit: SUBSCRIPTION_EVENT_FETCH_CAP,
+      });
+      if (family.length === SUBSCRIPTION_EVENT_FETCH_CAP) {
+        logger.warn(
+          {
+            taskId,
+            subscriptionId: task.subscriptionId,
+            cap: SUBSCRIPTION_EVENT_FETCH_CAP,
+          },
+          "getTaskHistory: subscription event fetch hit cap — history may be truncated",
+        );
+      }
+      const pauseWindows = buildPauseWindows(family);
+      const linkage: TaskHistoryLinkage = {
+        taskId,
+        deliveryDate: task.deliveryDate,
+        isPushed:
+          task.externalTrackingNumber !== null && task.externalTrackingNumber !== undefined,
+      };
+      relevantSubscriptionEvents = family.filter(
+        (event) =>
+          (before === undefined || isBeforeCursor(event, before)) &&
+          subscriptionEventAffectsTask(event, linkage, pauseWindows),
+      );
+    }
+
+    // Merge the two newest-first streams and take one batch. The task
+    // stream holds BATCH+1 rows, so the slice can never need a task
+    // event older than its truncation point; the subscription stream
+    // is complete below the cursor.
+    const merged = [...taskEvents, ...relevantSubscriptionEvents].sort(compareDesc);
+    const page = merged.slice(0, TASK_HISTORY_BATCH_SIZE);
+    const hasMore = merged.length > TASK_HISTORY_BATCH_SIZE;
+
+    // Resolve operator display names for the page's user actors.
+    const userIds = [
+      ...new Set(
+        page
+          .filter((event) => event.actorKind === "user" && UUID_PATTERN.test(event.actorId))
+          .map((event) => event.actorId),
+      ),
+    ];
+    const userNames = new Map<string, { displayName: string | null; email: string }>();
+    if (userIds.length > 0) {
+      const rows = await tx.execute<ActorNameRow>(sqlTag`
+        SELECT id, display_name, email
+        FROM users
+        WHERE id = ANY(${"{" + userIds.join(",") + "}"}::uuid[])
+      `);
+      for (const row of rows) {
+        userNames.set(row.id, { displayName: row.display_name, email: row.email });
+      }
+    }
+
+    const entries: TaskHistoryEntry[] = page.map((event) => ({
+      id: event.id,
+      occurredAt: event.occurredAt,
+      eventType: event.eventType,
+      actorKind: event.actorKind,
+      actorId: event.actorId,
+      actorLabel: actorLabelFor(event, userNames),
+      metadata: event.metadata,
+    }));
+
+    const last = entries[entries.length - 1];
+    return {
+      taskId,
+      entries,
+      nextCursor: hasMore && last !== undefined ? { occurredAt: last.occurredAt, id: last.id } : null,
+    };
   });
 }
 
