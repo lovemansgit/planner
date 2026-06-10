@@ -16,10 +16,16 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
 
 - The pair runs **autonomously on agent-agreement**. Love does not approve
   technical correctness (Love does not blind-approve — it is not a gate).
-  No cutover gates. Pre-MVP, production promote is a normal deploy the pair
-  performs (builder executes); there is NO production go/no-go review
-  ceremony while pre-MVP — the named-authorization floor below is the only
-  production control until MVP-FINALIZED.
+  No cutover gates.
+- **Production, Option B (Love-ruled):** PRE-MVP, production promote (Vercel)
+  is part of the autonomous flow — the pair performs it on agent-agreement,
+  with NO per-promote Love authorization (pre-MVP promotes are reversible and
+  have no live users; up-to-MVP promote gating is theater — Love's ruling).
+  **CARVE-OUT that still parks pre-MVP: live DATABASE changes** —
+  `supabase/migrations/**` and any production SQL apply — ALWAYS park for
+  Love. That is Love-trigger #1 (risk to Love's own work/data), not a
+  user-protection gate: a bad migration is destructive to Love's work, so it
+  parks regardless of phase.
 - **The two-party seam is PERMANENT**: separate contexts, reviewer body-reads
   at pinned SHAs, reviewer posts its own verdicts. Never collapses, including
   within a single long session. The seam is the guardrail that enables the
@@ -35,14 +41,16 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
      gold-plating is flagged TO Love, not resolved builder↔reviewer.
   4. Cost — any new paid dependency, metered/paid API call, or new spend.
 - **MVP-FINALIZED placeholder (NOT active):** a future switch Love throws by
-  sentence. When thrown, the production floor returns: production promote +
-  live DB changes start PARKING for Love's go.
+  sentence. When thrown, the FULL production floor returns: promotes ALSO
+  start PARKING for Love's go (DB changes already park in every phase). Until
+  Love throws that switch, promotes flow.
   > PLACEHOLDER — Love defines "MVP finalized" here when he throws the switch.
-- **Unchanged floors regardless of phase:** production SQL and Vercel promote
-  are builder-EXECUTED but only on Love's explicit named authorization (Love
-  does nothing manually — Love authorizes by sentence, builder executes and
-  states the route). §3.6 body-reads. Verify-against-running-product.
-  Path-gate + merge-Action lock as built (docs-only auto-merge in v1).
+- **Unchanged floors regardless of phase:** production SQL / migrations park
+  in EVERY phase and are builder-EXECUTED only on Love's explicit named
+  authorization (Love does nothing manually — Love authorizes by sentence,
+  builder executes and states the route). §3.6 body-reads.
+  Verify-against-running-product. Path-gate + merge-Action lock as built
+  (docs-only auto-merge in v1).
 
 ## Pieces
 
@@ -120,9 +128,11 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
 - Merging anything off the docs allowlist — Layer 1 + Layer 2 both park it.
 - Draining the park queue without Love — no automation touches park labels
   except the Action's own park-on-failure.
-- Production SQL or Vercel promote without Love's explicit NAMED authorization —
-  Love authorizes by sentence, the builder executes and states the route.
-  Love performs nothing manually; unauthorized execution never happens.
+- Production SQL / migrations applied without Love's explicit NAMED
+  authorization — they park in every phase; Love authorizes by sentence, the
+  builder executes and states the route. Love performs nothing manually.
+  (Vercel promote: autonomous on agent-agreement pre-MVP per Option B; starts
+  parking at MVP-FINALIZED.)
 - One brain reviewing its own work — the reviewer is a separate context with
   fixed standing orders; the builder passes only a PR number.
 
