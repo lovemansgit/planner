@@ -49,6 +49,8 @@ The terminal pair runs autonomously between check-ins on routine / lower-risk wo
 > task. This memo encodes the *discipline*; the wiring is a *how* and is scoped
 > elsewhere. Until the orchestration is stood up, the discipline below still
 > governs — the relay simply remains manual in the interim.
+> *(Day-52 PM: the orchestration IS stood up and proven end-to-end; the manual
+> relay is retired. See §9.)*
 
 ### 1.2 claude.ai (reviewer) — once-a-day high-stakes reviewer
 
@@ -224,3 +226,65 @@ cleanup behind a Love authorization that added no safety.
 
 **End of decision memo. To be cross-referenced from the next EOD and indexed in
 MEMORY.md. The terminal orchestration plumbing is scoped as a separate build task.**
+
+---
+
+## 9. Day-52 PM amendment — orchestration LIVE + final pre-MVP autonomy ruling
+
+**Authority:** Love's Day-52 PM ruling, relayed in-session (Session A). This
+section is the repo record of that ruling. Because the repo held no record at
+encoding time, the PRs writing it down (this one and the runbook PR) PARKED
+under the four-triggers rule and were cleared only by Love's explicit named
+authorization — the clearance itself is the verification.
+
+**Orchestration status: LIVE.** Built per the ruled design
+(`memory/design_shape3_orchestration_surface.md` @ `f2226af`, Forks 1–6),
+merged in PR #348, and proven end-to-end on Day-52: agent-to-agent cross-review
+with a real caught bug and a real revision round (PR #349), a real park with
+verdict + desktop push + email (received), a live merge-Action auto-merge by
+the bot (PR #350), and SHA-pinned verdict invalidation verified. The manual
+relay — including the hand-relay and one-prompt ferrying this memo already cut
+on paper (§7) — is retired in practice.
+
+**The ruled autonomy model (pre-MVP):**
+
+- The pair runs autonomously on agent-agreement. Love does not approve
+  technical correctness (Love does not blind-approve — it is not a gate). No
+  cutover gates. Pre-MVP, production promote is a normal deploy the pair
+  performs (builder executes); there is NO production go/no-go review ceremony
+  while pre-MVP — the named-authorization floor below is the only production
+  control until MVP-FINALIZED.
+- The two-party seam is PERMANENT: separate contexts, reviewer body-reads at
+  pinned SHAs, reviewer posts its own verdicts. Never collapses, including
+  within a single long session. The seam is the guardrail that enables the
+  autonomy; it is not optional and not subject to streamlining.
+- Four Love-triggers park-and-email EVEN WHEN BOTH AGENTS AGREE (agreement
+  does NOT clear these):
+  1. Risk of breaking LOVE'S WORK or the build — repo corruption,
+     lost/overwritten commits, a wedged or unrecoverable build state. (NOT
+     live-customer risk — moot pre-MVP.)
+  2. Drift from the product brief (`memory/PLANNER_PRODUCT_BRIEF.md`;
+     claude.ai-side: MEMORY-product-brief.md).
+  3. Over-engineering the reviewer judges a Love ruling could streamline —
+     gold-plating is flagged TO Love, not resolved builder↔reviewer.
+  4. Cost — any new paid dependency, metered/paid API call, or new spend.
+- MVP-FINALIZED placeholder (NOT active): a future switch Love throws by
+  sentence. When thrown, the production floor returns: production promote +
+  live DB changes start PARKING for Love's go.
+  > PLACEHOLDER — Love defines "MVP finalized" here when he throws the switch.
+
+**Supersedence (narrative lives here, per the append-only discipline; older
+sections are left as written):**
+
+- §5's "Production SQL apply + Vercel promote: Love's, manual, always" is
+  SUPERSEDED: both are now builder-EXECUTED, but only on Love's explicit named
+  authorization — Love does nothing manually; Love authorizes by sentence, the
+  builder executes and states the route. This floor holds regardless of phase.
+- §3's once-a-day check-in framing is relaxed: park notification is now
+  event-driven (debounced desktop push + email per park-batch), and Love rules
+  by sentence whenever he arrives. The queue still NEVER auto-drains.
+- Unchanged floors: §3.6 body-reads at pinned SHAs;
+  verify-against-running-product; the path-gate + merge-Action lock as built
+  (docs-only auto-merge in v1); the two-party seam.
+
+**End of §9. The memo above this line is preserved as filed.**
