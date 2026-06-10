@@ -520,6 +520,23 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: false,
   },
 
+  // R3 (plan-PR #337 §2.R3) — outbound leg of the driver-note workflow.
+  // Mirrors subscription.pause_cancels_pushed (R2): a typed enqueue-time
+  // event paired with the local-write event (task.note_added) by a shared
+  // correlation_id. Fire-and-forget; enqueue failures re-throw (no emit) and
+  // the form action surfaces "saved; sending failed, will retry". Note text
+  // is NEVER in metadata (PII — lives on tasks.notes).
+  "task.note_pushed_to_external": {
+    id: "task.note_pushed_to_external",
+    resource: "task",
+    action: "note_pushed_to_external",
+    description:
+      "An operator-added driver note was enqueued for outbound push to the external fleet provider for a task already dispatched (a live external tracking number is present). Fire-and-forget at enqueue time; delivery failures route to the outbound DLQ. Paired with task.note_added by the note workflow (note_added = local write leg; this = outbound leg). Emitted only when the task had a live external AWB — a note on an unpushed task does not emit it.",
+    metadataNotes:
+      "task_id (uuid), awb (string — the task's external tracking number), correlation_id (uuid — shared with the QStash update-task message + DLQ row). Note text is NOT included (PII — the durable text lives on tasks.notes, read-accessible via task:read).",
+    systemOnly: false,
+  },
+
   // Day 8 / D8-5 — manual DLQ retry from /admin/failed-pushes. Operator-
   // driven: a Tenant Admin clicks the retry button on the admin UI;
   // the route handler authorizes via `failed_pushes:retry`, then a

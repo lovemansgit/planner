@@ -104,6 +104,7 @@ import {
   printLabelsForTasks,
   updateTask,
   updateTaskAndPushOutbound,
+  DriverNotePushPendingError,
 } from "../service";
 
 import {
@@ -1066,6 +1067,125 @@ describe("addNoteToDriver — Day-22 / PR-B", () => {
 
     expect(mockEmit).toHaveBeenCalledTimes(1);
     expect(mockEmit.mock.calls[0][0].metadata?.previous_notes_length).toBe(0);
+  });
+
+  // --- R3 (plan-PR #337 §2.R3): driver-note SF outbound push ---------------
+
+  it("pushed task (AWB present): enqueues notes-only update + emits task.note_pushed_to_external", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-NOTE",
+      notes: null,
+    });
+    const after = { ...before, notes: "Gate code 4521" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "Gate code 4521");
+
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(1);
+    const payload = mockEnqueueUpdateTask.mock.calls[0][0];
+    expect(payload.tenant_id).toBe(TENANT_ID);
+    expect(payload.task_id).toBe(TASK_ID);
+    expect(payload.awb).toBe("MPL-NOTE");
+    expect(payload.patch).toEqual({ notes: "Gate code 4521" });
+    expect(Object.keys(payload.patch)).toEqual(["notes"]); // no window/consignee bleed
+
+    // task.note_added (local leg) + task.note_pushed_to_external (outbound leg)
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    const pushEmit = mockEmit.mock.calls.find(
+      (c) => c[0].eventType === "task.note_pushed_to_external",
+    )?.[0];
+    expect(pushEmit).toBeDefined();
+    expect(pushEmit?.metadata?.task_id).toBe(TASK_ID);
+    expect(pushEmit?.metadata?.awb).toBe("MPL-NOTE");
+    expect(pushEmit?.metadata?.correlation_id).toBe(payload.correlation_id);
+    // Note text MUST NOT appear in the outbound event metadata (PII).
+    expect(JSON.stringify(pushEmit?.metadata)).not.toContain("Gate code");
+  });
+
+  it("unpushed task (no AWB): commits note + task.note_added only, NO enqueue, NO push event", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: null,
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "later" });
+
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "later");
+
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit.mock.calls[0][0].eventType).toBe("task.note_added");
+  });
+
+  it("enqueue failure: throws DriverNotePushPendingError; note committed; NO push event emitted", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-FAIL",
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "n" });
+    mockEnqueueUpdateTask.mockRejectedValueOnce(new Error("QStash down"));
+
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "n"),
+    ).rejects.toBeInstanceOf(DriverNotePushPendingError);
+
+    // local note write happened + task.note_added emitted; push event did NOT.
+    expect(mockUpdate).toHaveBeenCalled();
+    const pushEmitted = mockEmit.mock.calls.some(
+      (c) => c[0].eventType === "task.note_pushed_to_external",
+    );
+    expect(pushEmitted).toBe(false);
+  });
+
+  it("DriverNotePushPendingError carries the underlying enqueue error as cause", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-FAIL",
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "n" });
+    const underlying = new Error("QStash 503");
+    mockEnqueueUpdateTask.mockRejectedValueOnce(underlying);
+
+    const caught = await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "n",
+    ).catch((e) => e);
+    expect(caught).toBeInstanceOf(DriverNotePushPendingError);
+    expect((caught as DriverNotePushPendingError).cause).toBe(underlying);
+  });
+
+  it("uses a fresh correlation_id per call (distinct dedup identity)", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-CID",
+    });
+    mockFindById.mockResolvedValue(before);
+    mockUpdate.mockResolvedValue({ ...before, notes: "n" });
+
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "n");
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "n");
+
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(2);
+    const cid1 = mockEnqueueUpdateTask.mock.calls[0][0].correlation_id;
+    const cid2 = mockEnqueueUpdateTask.mock.calls[1][0].correlation_id;
+    expect(cid1).not.toBe(cid2);
+  });
+
+  it("past-cutoff pushed task: ValidationError, NO commit, NO enqueue, NO events", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ deliveryDate: STALE_PAST_DATE, externalTrackingNumber: "MPL-LATE" }),
+    );
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "too late"),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });
 

@@ -40,6 +40,7 @@ import { z } from "zod";
 import { addSubscriptionException } from "@/modules/subscription-exceptions";
 import {
   addNoteToDriver,
+  DriverNotePushPendingError,
   getTask,
   updateTask,
 } from "@/modules/tasks";
@@ -234,8 +235,16 @@ export async function editTaskNoteAction(
 
     revalidatePath("/tasks", "page");
 
-    return { kind: "success", message: "Driver note saved." };
+    return { kind: "success", message: "Note saved; sending to driver." };
   } catch (err) {
+    if (err instanceof DriverNotePushPendingError) {
+      // Note committed locally; only the SF push enqueue failed.
+      revalidatePath("/tasks", "page");
+      return {
+        kind: "success",
+        message: "Note saved — sending to driver failed, will retry.",
+      };
+    }
     return mapToEditResult(err, "Task");
   }
 }
