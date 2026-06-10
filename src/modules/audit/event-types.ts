@@ -537,6 +537,25 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: false,
   },
 
+  // R4 (plan-PR #335 §2.R4) — outbound leg of the one-off address
+  // override. Mirrors task.note_pushed_to_external (R3): a typed
+  // enqueue-time event paired with the local-write events
+  // (subscription.exception.created + subscription.address_override
+  // .applied) by a shared correlation_id. Fire-and-forget; enqueue
+  // failures re-throw (no emit) and the form action surfaces "saved
+  // locally; SF push pending". Address text is NEVER in metadata —
+  // IDs only (the durable address lives on the addresses row).
+  "task.address_override_pushed": {
+    id: "task.address_override_pushed",
+    resource: "task",
+    action: "address_override_pushed",
+    description:
+      "A one-off address override (R4) on a task already dispatched (live external tracking number present) was enqueued for outbound push to the external fleet provider, with the ConsigneeSnapshot built server-side from the override address row. Fire-and-forget at enqueue time; delivery failures route to the outbound DLQ. Paired with subscription.exception.created + subscription.address_override.applied by a shared correlation_id (those = local-write leg; this = outbound leg). Emitted only when the task had a live external AWB — an override on an unpushed or unmaterialized task does not emit it.",
+    metadataNotes:
+      "task_id (uuid), awb (string — the task's external tracking number), exception_id (uuid), address_override_id (uuid — the addresses row the snapshot was built from), correlation_id (uuid — shared with the QStash update-task message + the paired subscription.* events). Address text is NOT included — IDs only.",
+    systemOnly: false,
+  },
+
   // Day 8 / D8-5 — manual DLQ retry from /admin/failed-pushes. Operator-
   // driven: a Tenant Admin clicks the retry button on the admin UI;
   // the route handler authorizes via `failed_pushes:retry`, then a

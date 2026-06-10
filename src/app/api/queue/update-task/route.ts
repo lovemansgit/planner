@@ -16,6 +16,7 @@
 import "server-only";
 
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
+import { sql as sqlTag } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { withServiceRole } from "@/shared/db";
@@ -176,6 +177,42 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
       task_id: taskId,
     });
     throw err;
+  }
+
+  // R4/R5 (plan-PR #335 §2.R4/§2.R5 + OQ-1 ruling (a) / migration 0029):
+  // flip outbound_sync_state to 'synced' on SF 2xx. Mirrors the
+  // cancel-task convergence write one route over: rows set to
+  // 'pending_update' by the address-override repository writes converge
+  // here; rows previously 'failed' also converge (a successful retry
+  // implies SF caught up). Pre-R4 update flows (date/window/notes)
+  // never wrote an in-flight state, so this is a no-op for them
+  // ('synced' rows don't match the WHERE).
+  try {
+    await withServiceRole(
+      `queue:update_task_mark_synced ${taskId}`,
+      async (tx) =>
+        tx.execute(sqlTag`
+          UPDATE tasks
+          SET outbound_sync_state = 'synced'
+          WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND outbound_sync_state IN ('pending_update', 'failed')
+        `),
+    );
+  } catch (err) {
+    // Convergence write failure must NOT fail the QStash message — SF
+    // already accepted the update; failing the ack would trigger a
+    // duplicate PATCH on retry. Log + Sentry; ops triage reconciles
+    // the stuck 'pending_update' row via SQL.
+    requestLog.error(
+      { error: err instanceof Error ? err.message : String(err) },
+      "update-task: outbound_sync_state convergence write failed — SF update already accepted, leaving state for ops triage",
+    );
+    captureException(err, {
+      component: "queue_update_task",
+      operation: "mark_outbound_sync_state_synced",
+      tenant_id: tenantId,
+      task_id: taskId,
+    });
   }
 
   requestLog.info(

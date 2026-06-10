@@ -45,6 +45,13 @@ vi.mock("../../task-outbound-queue", () => ({
   enqueueBulkUpdateTasks: vi.fn().mockResolvedValue({ enqueuedCount: 0, failedChunks: 0, totalCount: 0 }),
 }));
 
+// R4 option B — the wrapper builds the ConsigneeSnapshot server-side via
+// this helper inside a withTenant read; mocked so the unit layer controls
+// the snapshot without a DB.
+vi.mock("../../subscription-addresses", () => ({
+  buildConsigneeSnapshotForAddress: vi.fn(),
+}));
+
 vi.mock("../../../shared/logger", () => {
   const child = {
     debug: vi.fn(),
@@ -125,6 +132,7 @@ import {
   enqueueCancelTask,
   enqueueUpdateTask,
 } from "../../task-outbound-queue";
+import { buildConsigneeSnapshotForAddress } from "../../subscription-addresses";
 import type { CreateTaskInput, Task } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
@@ -139,6 +147,7 @@ const mockListBySubscription = vi.mocked(listTasksBySubscription);
 const mockListAllTaskIdsByTenant = vi.mocked(listAllTaskIdsByTenant);
 const mockUpdate = vi.mocked(updateTaskRow);
 const mockListVisibleTaskExternalIds = vi.mocked(listVisibleTaskExternalIds);
+const mockBuildSnapshot = vi.mocked(buildConsigneeSnapshotForAddress);
 const mockLoggerError = vi.mocked(logger.error);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
@@ -1497,7 +1506,7 @@ describe("updateTaskAndPushOutbound — wrapper around updateTask + enqueue", ()
     expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
   });
 
-  it("skips enqueue when integration patch is empty (e.g. only addressId without snapshot mapping)", async () => {
+  it("addressId patch builds the ConsigneeSnapshot server-side and enqueues it as the consignee patch (R4 option B)", async () => {
     const before = taskFixture({
       deliveryDate: FAR_FUTURE_DATE,
       externalTrackingNumber: "MPL-T",
@@ -1509,6 +1518,44 @@ describe("updateTaskAndPushOutbound — wrapper around updateTask + enqueue", ()
     };
     mockFindById.mockResolvedValueOnce(before);
     mockUpdate.mockResolvedValueOnce(after);
+    const snapshot = {
+      name: "Snapshot Consignee",
+      contactPhone: "+971500000001",
+      address: {
+        addressLine1: "12 Override Street",
+        city: "Dubai",
+        district: "Downtown",
+        countryCode: "AE",
+      },
+    };
+    mockBuildSnapshot.mockResolvedValueOnce(snapshot);
+
+    await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { addressId: "00000000-0000-0000-0000-000000000bbb" as never },
+    );
+
+    expect(mockBuildSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(1);
+    const payload = mockEnqueueUpdateTask.mock.calls[0][0];
+    expect(payload.awb).toBe("MPL-T");
+    expect(payload.patch.consignee).toEqual(snapshot);
+  });
+
+  it("addressId patch with unavailable snapshot (null) degrades to empty patch → no enqueue", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-T",
+      addressId: null,
+    });
+    const after = {
+      ...before,
+      addressId: "00000000-0000-0000-0000-000000000bbb" as never,
+    };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+    mockBuildSnapshot.mockResolvedValueOnce(null);
 
     await updateTaskAndPushOutbound(
       userCtx(["task:update"]),

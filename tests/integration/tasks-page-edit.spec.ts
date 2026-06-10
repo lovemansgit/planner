@@ -3,14 +3,16 @@
 // Day-30 B2 — /tasks-page edit action integration tests (plan #308 v2 §5.1).
 //
 // Cases pinned:
-//   B2-I5 — address edit via Path A:
-//           tasks.address_id updated, tasks.updated_at advanced, audit
-//           task.updated with changed_fields=['addressId'], NO enqueueUpdateTask
-//           invoked (per §3.6 OQ-3 ruling — address-only patches skip SF push;
-//           ConsigneeSnapshot mapping deferred Day-22+). Success result
-//           carries the §3.6 OQ-3 VERBATIM disclosure copy:
-//           "Address change saved; SuiteFleet will reflect on the next
-//            scheduled push pass" — pinned exact-string assertion.
+//   B2-I5 (amended Day-52, R4 ConsigneeSnapshot option B) — address edit
+//           routes updateTaskAndPushOutbound:
+//           tasks.address_id updated, tasks.updated_at advanced. UNPUSHED
+//           task (no AWB): no enqueue; success copy "Address change
+//           saved." PUSHED task (live AWB): enqueueUpdateTask invoked
+//           with the server-built ConsigneeSnapshot as patch.consignee;
+//           success copy "Address change saved; sending update to
+//           SuiteFleet." The B2 OQ-3 "next scheduled push pass"
+//           disclosure copy is RETIRED on this path by the Day-52
+//           ruling.
 //   B2-I6 — driver-note edit via addNoteToDriver:
 //           tasks.notes updated, action returns { kind: 'success' }.
 //   B2-I7 — delivery-date rejected at form-action layer:
@@ -28,8 +30,9 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-// Hoisted publisher spy — confirms updateTask-via-action path does NOT
-// enqueue SF push for address-only patches per OQ-3 ruling.
+// Hoisted publisher spy — observes the wrapper's SF enqueue: absent for
+// unpushed tasks, present (with consignee snapshot) for pushed tasks
+// per the Day-52 R4 option B ruling.
 const enqueueUpdateTaskSpy = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../src/modules/task-outbound-queue/publish", () => ({
   enqueueCancelTask: vi.fn(async () => undefined),
@@ -60,6 +63,7 @@ const ADDRESS_ORIG = randomUUID();
 const ADDRESS_NEW = randomUUID();
 
 const TASK_ADDRESS_EDIT = randomUUID();
+const TASK_ADDRESS_EDIT_PUSHED = randomUUID();
 const TASK_NOTE_EDIT = randomUUID();
 const TASK_DATE_REJECT = randomUUID();
 
@@ -72,6 +76,7 @@ function nextWedAfter(daysOffset: number): string {
 }
 
 const DATE_ADDRESS = nextWedAfter(40);
+const DATE_ADDRESS_PUSHED = nextWedAfter(45);
 const DATE_NOTE = nextWedAfter(50);
 const DATE_DATE_REJECT = nextWedAfter(60);
 
@@ -130,19 +135,29 @@ describe("Day-30 B2 — /tasks edit actions (real Postgres)", () => {
         ) VALUES
           (${TASK_ADDRESS_EDIT}, ${TENANT}, ${CONSIGNEE}, NULL, ${ADDRESS_ORIG},
            ${`B2-EA-${RUN_ID}`}, 'CREATED', ${DATE_ADDRESS}, '08:00:00', '10:00:00', 'manual_admin'),
+          (${TASK_ADDRESS_EDIT_PUSHED}, ${TENANT}, ${CONSIGNEE}, NULL, ${ADDRESS_ORIG},
+           ${`B2-EP-${RUN_ID}`}, 'CREATED', ${DATE_ADDRESS_PUSHED}, '08:00:00', '10:00:00', 'manual_admin'),
           (${TASK_NOTE_EDIT}, ${TENANT}, ${CONSIGNEE}, NULL, ${ADDRESS_ORIG},
            ${`B2-EN-${RUN_ID}`}, 'CREATED', ${DATE_NOTE}, '08:00:00', '10:00:00', 'manual_admin'),
           (${TASK_DATE_REJECT}, ${TENANT}, ${CONSIGNEE}, NULL, ${ADDRESS_ORIG},
            ${`B2-DR-${RUN_ID}`}, 'CREATED', ${DATE_DATE_REJECT}, '08:00:00', '10:00:00', 'manual_admin')
       `);
+      // Mark the pushed-variant task SF-live (AWB present) so the action's
+      // wrapper enqueues the SF update for it.
+      await tx.execute(sqlTag`
+        UPDATE tasks
+        SET external_tracking_number = ${`AWB-B2EP-${RUN_ID}`},
+            pushed_to_external_at = now()
+        WHERE id = ${TASK_ADDRESS_EDIT_PUSHED}
+      `);
     });
   });
 
   // ---------------------------------------------------------------------------
-  // B2-I5 — address edit via Path A
+  // B2-I5 — address edit via updateTaskAndPushOutbound (Day-52 R4 option B)
   // ---------------------------------------------------------------------------
 
-  it("B2-I5 — address edit updates tasks.address_id, NO SF enqueue, success carries verbatim OQ-3 copy", async () => {
+  it("B2-I5a — address edit on UNPUSHED task updates tasks.address_id, no SF enqueue, plain saved copy", async () => {
     enqueueUpdateTaskSpy.mockClear();
 
     const fd = new FormData();
@@ -152,10 +167,7 @@ describe("Day-30 B2 — /tasks edit actions (real Postgres)", () => {
 
     expect(result.kind).toBe("success");
     if (result.kind === "success") {
-      // OQ-3 VERBATIM copy — do NOT paraphrase. Exact-string assert.
-      expect(result.message).toBe(
-        "Address change saved; SuiteFleet will reflect on the next scheduled push pass",
-      );
+      expect(result.message).toBe("Address change saved.");
     }
     expect(enqueueUpdateTaskSpy).not.toHaveBeenCalled();
 
@@ -169,6 +181,56 @@ describe("Day-30 B2 — /tasks edit actions (real Postgres)", () => {
     const updatedAt = new Date((task as { updated_at: string }).updated_at);
     const createdAt = new Date((task as { created_at: string }).created_at);
     expect(updatedAt.getTime()).toBeGreaterThan(createdAt.getTime());
+  });
+
+  it("B2-I5b — address edit on PUSHED task enqueues SF update with server-built ConsigneeSnapshot + honest copy", async () => {
+    enqueueUpdateTaskSpy.mockClear();
+
+    const fd = new FormData();
+    fd.set("addressId", ADDRESS_NEW);
+
+    const result = await editTaskAddressAction(
+      TASK_ADDRESS_EDIT_PUSHED,
+      { kind: "idle" },
+      fd,
+    );
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.message).toBe("Address change saved; sending update to SuiteFleet.");
+    }
+
+    expect(enqueueUpdateTaskSpy).toHaveBeenCalledTimes(1);
+    const payload = (enqueueUpdateTaskSpy.mock.calls[0] as unknown[])[0] as {
+      awb: string;
+      patch: {
+        consignee?: {
+          name: string;
+          contactPhone: string;
+          address: { addressLine1: string; city: string; district: string; countryCode: string };
+        };
+      };
+    };
+    expect(payload.awb).toBe(`AWB-B2EP-${RUN_ID}`);
+    // Snapshot built server-side from the NEW address row + consignee row
+    // (R4 option B): Tower 7 / Downtown / Dubai is ADDRESS_NEW's shape.
+    expect(payload.patch.consignee).toEqual({
+      name: "B2 Edit Consignee",
+      contactPhone: `+97150be${RUN_ID}`,
+      address: {
+        addressLine1: "Tower 7",
+        city: "Dubai",
+        district: "Downtown",
+        countryCode: "AE",
+      },
+    });
+
+    const [task] = await withServiceRole("B2-I5b verify", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT address_id FROM tasks WHERE id = ${TASK_ADDRESS_EDIT_PUSHED} LIMIT 1
+      `),
+    );
+    expect((task as { address_id: string }).address_id).toBe(ADDRESS_NEW);
   });
 
   // ---------------------------------------------------------------------------

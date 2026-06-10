@@ -2,7 +2,8 @@
 //
 // Three operator-facing actions on the merchant /tasks list:
 //   - cancelTaskAction        — subscription-linked task only (OQ-1 single-canonical-path)
-//   - editTaskAddressAction   — addressId only (OQ-2 Path A, OQ-5 .pick whitelist)
+//   - editTaskAddressAction   — addressId only (OQ-5 .pick whitelist; Day-52
+//                               R4 option B: routes updateTaskAndPushOutbound)
 //   - editTaskNoteAction      — notes only (OQ-4 addNoteToDriver path)
 // Plus one read helper for the edit modal:
 //   - getTaskEditContextAction — returns the current task + available consignee addresses
@@ -25,10 +26,13 @@
 //     button is bypassable).
 //   - tasks.cancelTask service-fn is intentionally NOT consumed.
 //
-// OQ-3 UX disclosure: the client surfaces the verbatim copy
-//   "Address change saved; SuiteFleet will reflect on the next
-//    scheduled push pass"
-// after a successful address edit. Copy must NOT be paraphrased.
+// OQ-3 UX disclosure (B2) — RETIRED by the Day-52 R4 ConsigneeSnapshot
+// option B ruling: address edits now route through
+// updateTaskAndPushOutbound, which builds the ConsigneeSnapshot
+// server-side and enqueues the SF update, so the "next scheduled push
+// pass" deferral no longer exists on this path. The success copy now
+// states the push honestly ("sending update to SuiteFleet" when the
+// task has a live AWB; plain "saved" when it was never pushed).
 
 "use server";
 
@@ -42,7 +46,7 @@ import {
   addNoteToDriver,
   DriverNotePushPendingError,
   getTask,
-  updateTask,
+  updateTaskAndPushOutbound,
 } from "@/modules/tasks";
 import { listConsigneeAddresses } from "@/modules/subscription-addresses";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
@@ -194,14 +198,22 @@ export async function editTaskAddressAction(
 
   try {
     const ctx = await buildRequestContext("/tasks", requestId);
-    await updateTask(ctx, taskId as Uuid, { addressId: parsed.data.addressId as Uuid });
+    // R4 ConsigneeSnapshot option B (Day-52 ruling): route through the
+    // outbound wrapper, which builds the snapshot server-side from the
+    // new address row and enqueues the SF update. Retires the B2 OQ-3
+    // "next scheduled push pass" deferral copy on this path.
+    const updated = await updateTaskAndPushOutbound(ctx, taskId as Uuid, {
+      addressId: parsed.data.addressId as Uuid,
+    });
 
     revalidatePath("/tasks", "page");
 
-    // OQ-3 verbatim UX copy — DO NOT paraphrase. Pinned by integration spec.
     return {
       kind: "success",
-      message: "Address change saved; SuiteFleet will reflect on the next scheduled push pass",
+      message:
+        updated.externalTrackingNumber !== null
+          ? "Address change saved; sending update to SuiteFleet."
+          : "Address change saved.",
     };
   } catch (err) {
     return mapToEditResult(err, "Task");

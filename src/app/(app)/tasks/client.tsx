@@ -383,13 +383,16 @@ function Row({
 //   visible-but-disabled state with explanatory tooltip; the server action
 //   ALSO rejects ad-hoc cancels for defense-in-depth (B2-I2′ two-layer).
 //
-// OQ-2 (Path A address edit): the Edit modal writes addressId directly via
-//   updateTask. The /tasks Path A vs popover Path B asymmetry is documented
-//   in memory/followup_tasks_page_vs_popover_address_path_asymmetry.md.
+// OQ-2 (address edit): the Edit modal writes addressId via
+//   updateTaskAndPushOutbound (Day-52 R4 ConsigneeSnapshot option B — the
+//   wrapper builds the snapshot server-side and enqueues the SF update).
+//   The /tasks vs popover address-path asymmetry memo is retired by the
+//   same ruling: both paths now push SF.
 //
-// OQ-3 (UX disclosure): after a successful address edit, the modal surfaces
-//   the verbatim copy "Address change saved; SuiteFleet will reflect on the
-//   next scheduled push pass" — copy is locked, do NOT paraphrase.
+// OQ-3 (UX disclosure): RETIRED Day-52 — the address edit pushes SF
+//   directly, so the "next scheduled push pass" deferral copy is gone;
+//   the action returns honest "sending update to SuiteFleet" / "saved"
+//   copy and the modal renders whatever the action returns.
 //
 // OQ-5 (defense-in-depth whitelist): delivery-date is NOT exposed in the UI
 //   and is rejected at the form-action Zod boundary if a malicious or buggy

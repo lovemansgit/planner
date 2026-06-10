@@ -21,6 +21,8 @@ import { sql as sqlTag } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
+import type { ConsigneeSnapshot } from "@/modules/integration";
+
 import type {
   AddressOwnershipRow,
   ConsigneeAddressRow,
@@ -90,6 +92,75 @@ export async function findAddressForConsignee(
     tenantId: row.tenant_id as Uuid,
     label: row.label as "home" | "office" | "other",
     isPrimary: row.is_primary,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// buildConsigneeSnapshotForAddress — server-side ConsigneeSnapshot for
+// address-bearing outbound pushes (R4/R5 + the updateTaskAndPushOutbound
+// address fold)
+// -----------------------------------------------------------------------------
+
+/**
+ * R4/R5 (calendar-management lane Phase 1, plan-PR #335 §2.R4/§2.R5) —
+ * the ruled ConsigneeSnapshot option B: read the address row + its
+ * consignee row server-side and build the integration-internal
+ * `ConsigneeSnapshot` for an SF update push, instead of a client-built
+ * snapshot (the rejected option A from
+ * memory/followup_address_edit_sf_outbound_gap.md).
+ *
+ * Field mapping mirrors the cron push path's buildTaskCreateRequest
+ * (task-push/service.ts) so SF sees the same wire shape from both
+ * lanes:
+ *   addressLine1 = addresses.line
+ *   city         = addresses.emirate   (one-string-fits-both, UAE pilot)
+ *   district     = addresses.district
+ *   countryCode  = 'AE'                (locked — SF resolves countryId)
+ *   name / contactPhone from the consignees row.
+ *
+ * Returns null when the address does not exist, does not belong to
+ * `consigneeId`, or is outside `tenantId` (same AND-joined predicates
+ * as findAddressForConsignee above — defence-in-depth alongside RLS).
+ * Callers that already validated ownership in the same tx treat null
+ * as a should-not-happen race and skip the enqueue rather than fail
+ * the committed operation.
+ */
+export async function buildConsigneeSnapshotForAddress(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  addressId: Uuid,
+): Promise<ConsigneeSnapshot | null> {
+  type Row = {
+    line: string;
+    district: string;
+    emirate: string;
+    name: string;
+    phone: string;
+  } & Record<string, unknown>;
+
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT a.line, a.district, a.emirate, c.name, c.phone
+    FROM addresses a
+    JOIN consignees c
+      ON c.id = a.consignee_id
+     AND c.tenant_id = a.tenant_id
+    WHERE a.id = ${addressId}
+      AND a.consignee_id = ${consigneeId}
+      AND a.tenant_id = ${tenantId}
+  `);
+
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  return {
+    name: row.name,
+    contactPhone: row.phone,
+    address: {
+      addressLine1: row.line,
+      city: row.emirate,
+      district: row.district,
+      countryCode: "AE",
+    },
   };
 }
 

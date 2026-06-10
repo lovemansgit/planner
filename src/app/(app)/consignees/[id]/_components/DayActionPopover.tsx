@@ -639,6 +639,14 @@ function outboundSyncStateBadge(
         label: "SF reschedule pending",
         classes: "bg-stone-100 text-stone-700",
       };
+    case "pending_update":
+      // R4/R5 (plan-PR #335 OQ-1 ruling (a) / migration 0029) — an
+      // operator address override committed locally; the SF update is
+      // in flight. Same stone palette as the cancel/reschedule pendings.
+      return {
+        label: "Sending to SuiteFleet",
+        classes: "bg-stone-100 text-stone-700",
+      };
     case "failed":
       return {
         label: "SF sync failed — see ops",
