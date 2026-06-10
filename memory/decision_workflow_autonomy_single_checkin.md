@@ -250,10 +250,16 @@ on paper (§7) — is retired in practice.
 
 - The pair runs autonomously on agent-agreement. Love does not approve
   technical correctness (Love does not blind-approve — it is not a gate). No
-  cutover gates. Pre-MVP, production promote is a normal deploy the pair
-  performs (builder executes); there is NO production go/no-go review ceremony
-  while pre-MVP — the named-authorization floor below is the only production
-  control until MVP-FINALIZED.
+  cutover gates.
+- Production, Option B (Love-ruled): PRE-MVP, production promote (Vercel) is
+  part of the autonomous flow — the pair performs it on agent-agreement, with
+  NO per-promote Love authorization. Pre-MVP promotes are reversible and have
+  no live users; up-to-MVP promote gating is theater (Love's ruling).
+  CARVE-OUT that still parks pre-MVP: live DATABASE changes —
+  `supabase/migrations/**` and any production SQL apply — ALWAYS park for
+  Love. That is Love-trigger #1 (risk of breaking Love's own work/data), not a
+  user-protection gate: a bad migration is destructive to Love's work, so it
+  parks regardless of phase.
 - The two-party seam is PERMANENT: separate contexts, reviewer body-reads at
   pinned SHAs, reviewer posts its own verdicts. Never collapses, including
   within a single long session. The seam is the guardrail that enables the
@@ -269,17 +275,22 @@ on paper (§7) — is retired in practice.
      gold-plating is flagged TO Love, not resolved builder↔reviewer.
   4. Cost — any new paid dependency, metered/paid API call, or new spend.
 - MVP-FINALIZED placeholder (NOT active): a future switch Love throws by
-  sentence. When thrown, the production floor returns: production promote +
-  live DB changes start PARKING for Love's go.
+  sentence. When thrown, the FULL production floor returns: promotes ALSO
+  start PARKING for Love's go (DB changes already park in every phase). Until
+  Love throws that switch, promotes flow.
   > PLACEHOLDER — Love defines "MVP finalized" here when he throws the switch.
 
 **Supersedence (narrative lives here, per the append-only discipline; older
 sections are left as written):**
 
 - §5's "Production SQL apply + Vercel promote: Love's, manual, always" is
-  SUPERSEDED: both are now builder-EXECUTED, but only on Love's explicit named
-  authorization — Love does nothing manually; Love authorizes by sentence, the
-  builder executes and states the route. This floor holds regardless of phase.
+  SUPERSEDED two ways (Option B): (a) Vercel promote — pre-MVP it flows
+  autonomously on agent-agreement with no per-promote authorization, and starts
+  parking for Love's go only at MVP-FINALIZED; (b) production SQL / migrations
+  — gated in EVERY phase: they park, and are builder-EXECUTED only on Love's
+  explicit named authorization. Love does nothing manually in either case;
+  where Love authorizes, he authorizes by sentence and the builder executes
+  and states the route.
 - §3's once-a-day check-in framing is relaxed: park notification is now
   event-driven (debounced desktop push + email per park-batch), and Love rules
   by sentence whenever he arrives. The queue still NEVER auto-drains.
