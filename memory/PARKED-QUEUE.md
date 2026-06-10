@@ -5,23 +5,18 @@ _the park labels on open PRs are the source of truth._
 
 ## PR #356 — feat(d52/r8): History section in the task drawer — task-scoped audit timeline
 
-- Label: `needs-directional-ruling`
-- Head SHA: `abc737f3b86e2794580aad07e791cac5553c2115`
+- Label: `parked-t3`
+- Head SHA: `6ec1cb20b8020c52652cac24c668fd2bc16cd4fe`
 
-ORCH-PARK — needs-directional-ruling
+ORCH-PARK — parked-t3 (round 2, awaiting Love's final clearance)
 
-**What this PR does (plain English):** Clicking into a task's details drawer now offers a collapsed "History" section. Expand it and you see what happened to that delivery — who skipped it, when the pause cancelled it, when SuiteFleet updated its status, who added the driver note — newest first, 15 at a time with "Show more". Each row expands to show the recorded detail. It only ever shows things that actually happened: the audit layer doesn't record failed attempts, and the copy is careful not to pretend otherwise.
+**What changed since the first park:** your two clearance items are applied. (1) The expanded-row metadata render is now an operator-meaningful ALLOW-LIST — internal UUIDs, correlation/idempotency keys, raw SuiteFleet error text (`last_error`), `sf_action` codes, and outbound plumbing never render; the raw system actor-id row is gone too (the resolved actor label in the headline is the display). The exact per-event field table is in the PR description ("Metadata allow-list" section) — **that table is what you're confirming at clearance**; if any hidden field should show (or vice versa), say the word and it's a one-line set change. (2) The rulings record is banked: `memory/plan_r8_audit_timeline_drawer.md` flipped to RULED+BUILT with your 7 rulings quoted verbatim (PR #358, auto-merged through the docs lane on your authorization, and merged into this branch so it's in the PR's own tree).
 
-**What it touches:** a new read path in the audit module (first ever — until now audit was write-only), a new `getTaskHistory` service in the tasks module, one server action, and the drawer UI. **No migration. No new permission. No new dependency or spend. SQL TO APPLY: no.**
+**Reviewer's verdict (one line):** APPROVE, round 2 (opus) at head `6ec1cb2` — the round-1 repo-record flag is resolved by the banked rulings, and the metadata-exposure flag is resolved by the allow-list. Verdict: https://github.com/lovemansgit/planner/pull/356#issuecomment-4669776311
 
-**Reviewer's verdict (one line):** REQUEST_CHANGES round 1 — code judged correct and well-built (tests/typecheck/lint verified, emit-site metadata shapes verified), but the repo record at the pinned SHA still shows the R8 plan **gated on your ruling of its 7 open questions**, and no record of those rulings exists in any commit or memo — so the reviewer flagged a Love-only directional question + LOVE-TRIGGERs 2 (plan/brief drift) and 3 (scope built against an unresolved gate). Verdict: https://github.com/lovemansgit/planner/pull/356#issuecomment-4669405117
+**What this PR does (unchanged):** collapsed "History" section in the task drawer — what happened to this delivery and why (task events + the subscription events that affected it), newest first, 15 per batch, headline rows with click-to-expand detail. Records successful actions only and says so.
 
-**Why this parked instead of getting revised:** The builder received your 7 rulings in-session (Day-52 AM, Session A R8 dispatch) and built to them exactly — they're quoted in the PR description. But the reviewer body-reads only the repo record, and the repo still says "build pending Love's ruling." That's the two-party seam doing its job — same situation as the §9 memo encoding, where the clearance itself became the verification. Per the runbook, a Love-only directional question parks immediately; no revision round was attempted.
+**SQL TO APPLY: no.** No migration, no new permission, no new spend. CI green (unit + integration + Vercel preview build) at `6ec1cb2`.
 
-**What Love needs to rule (one sentence each):**
-1. Confirm the 7 rulings quoted in the PR description are yours as relayed (events shown incl. affecting-subscription events minus push noise; headline+expand detail; ~15-batch show-more; collapsed History section; drawer-permission visibility; placement below details; scalable spine not viewer features).
-2. The reviewer specifically flags raw metadata in expanded rows (correlation ids, internal field names — push-failure error text is already excluded by ruling 1) being shown to anyone who can open the drawer — confirm that's acceptable for v1 or name a redaction rule.
-3. On clearance, the rulings should be banked into the repo record (plan doc status flip — a small docs-lane PR the builder can ship on your word).
-
-**Honest verification note:** verified by unit suite (1983 green incl. new predicate matrix), typecheck, lint, CI integration tests, and Vercel preview build — NOT yet eyeballed in a live browser (preview needs operator login). The drawer fetch is lazy and read-only; worst-case UI failure is an error banner inside the History section.
+**For your final clearance:** confirm the allow-list table in the PR description, then clear the merge (code lane — builder executes on your named authorization and states the route).
 
