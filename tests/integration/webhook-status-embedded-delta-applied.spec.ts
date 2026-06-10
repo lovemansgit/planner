@@ -197,13 +197,12 @@ describe("Day-31 / A1 — applyWebhookStatusEvent embedded-delta reconciliation 
     // 08:00-10:00 → 13:00-15:00. Uses the EXISTING edit handler path
     // (unchanged by A1).
     const editEvent = buildEditEvent(AWB_INTERLEAVE, "2026-05-19T08:20:36.000Z", {
-      deliveryStartTime: "09:00:00", // UTC; current existing edit handler
-                                      // writes verbatim into Dubai-local time
-                                      // column (latent inbound-TZ bug per §2.5,
-                                      // out of scope this PR). Choose values
-                                      // that won't collide with the status-
-                                      // path test's converted values below.
-      deliveryEndTime: "11:00:00",
+      deliveryStartTime: "09:00:00", // UTC → Dubai 13:00:00. The Day-52
+                                      // inbound-TZ fix closed the latent
+                                      // §2.5 edit-handler gap — the edit
+                                      // path now converts UTC → Dubai like
+                                      // the status path always has.
+      deliveryEndTime: "11:00:00", //   UTC → Dubai 15:00:00
     });
     const editResult = await applyWebhookEditEvent(
       TENANT,
@@ -226,8 +225,8 @@ describe("Day-31 / A1 — applyWebhookStatusEvent embedded-delta reconciliation 
       delivery_start_time: string;
       delivery_end_time: string;
     };
-    expect(editedRow.delivery_start_time).toBe("09:00:00");
-    expect(editedRow.delivery_end_time).toBe("11:00:00");
+    expect(editedRow.delivery_start_time).toBe("13:00:00");
+    expect(editedRow.delivery_end_time).toBe("15:00:00");
     // date NOT yet changed.
     expect(editedRow.delivery_date).toBe("2026-05-20");
 
@@ -268,8 +267,8 @@ describe("Day-31 / A1 — applyWebhookStatusEvent embedded-delta reconciliation 
     expect(conv.delivery_date).toBe("2026-05-19");
     // window preserved from the early edit (no further window edit in
     // step 2 → no UPDATE on those columns).
-    expect(conv.delivery_start_time).toBe("09:00:00");
-    expect(conv.delivery_end_time).toBe("11:00:00");
+    expect(conv.delivery_start_time).toBe("13:00:00");
+    expect(conv.delivery_end_time).toBe("15:00:00");
 
     // Audit metadata captures the embedded delta.
     const auditRows = await withServiceRole("I-interleaving audit", async (tx) =>
