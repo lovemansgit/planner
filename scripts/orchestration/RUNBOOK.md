@@ -1,10 +1,48 @@
-# Shape-3 Orchestration Runbook
+# Shape-3 Orchestration Runbook — LIVE
+
+**Shape-3 is LIVE (Day-52 PM).** Proven end-to-end: agent-to-agent cross-review
+with a real caught bug, a real revision round, a real park with verdict +
+desktop push + email, a live Action auto-merge by the bot, SHA-pinning
+verified. The manual relay is retired.
 
 The operating procedure for the terminal builder + reviewer pair. Discipline
-source of truth: `memory/decision_workflow_autonomy_single_checkin.md`. Ruled
-design: `memory/design_shape3_orchestration_surface.md` @ `f2226af` + Love's
-Fork 1–6 rulings (Day-52). Built deliberately NARROWER than the memo grants:
+source of truth: `memory/decision_workflow_autonomy_single_checkin.md` (see its
+§9 Day-52 PM amendment for the ruled autonomy model). Ruled design:
+`memory/design_shape3_orchestration_surface.md` @ `f2226af` + Love's Fork 1–6
+rulings (Day-52). Built deliberately NARROWER than the memo grants:
 v1 auto-merges DOCS ONLY; all code and all T2 parks.
+
+## Love's ruled autonomy model (Day-52 PM, pre-MVP)
+
+- The pair runs **autonomously on agent-agreement**. Love does not approve
+  technical correctness (Love does not blind-approve — it is not a gate).
+  No cutover gates. Pre-MVP, production promote is a normal deploy the pair
+  performs (builder executes); there is NO production go/no-go review
+  ceremony while pre-MVP — the named-authorization floor below is the only
+  production control until MVP-FINALIZED.
+- **The two-party seam is PERMANENT**: separate contexts, reviewer body-reads
+  at pinned SHAs, reviewer posts its own verdicts. Never collapses, including
+  within a single long session. The seam is the guardrail that enables the
+  autonomy; it is not optional and not subject to streamlining.
+- **Four Love-triggers park-and-email EVEN WHEN BOTH AGENTS AGREE**
+  (agreement does NOT clear these):
+  1. Risk of breaking LOVE'S WORK or the build — repo corruption,
+     lost/overwritten commits, a wedged or unrecoverable build state.
+     (NOT live-customer risk — moot pre-MVP.)
+  2. Drift from the product brief (`memory/PLANNER_PRODUCT_BRIEF.md`;
+     claude.ai-side: MEMORY-product-brief.md).
+  3. Over-engineering the reviewer judges a Love ruling could streamline —
+     gold-plating is flagged TO Love, not resolved builder↔reviewer.
+  4. Cost — any new paid dependency, metered/paid API call, or new spend.
+- **MVP-FINALIZED placeholder (NOT active):** a future switch Love throws by
+  sentence. When thrown, the production floor returns: production promote +
+  live DB changes start PARKING for Love's go.
+  > PLACEHOLDER — Love defines "MVP finalized" here when he throws the switch.
+- **Unchanged floors regardless of phase:** production SQL and Vercel promote
+  are builder-EXECUTED but only on Love's explicit named authorization (Love
+  does nothing manually — Love authorizes by sentence, builder executes and
+  states the route). §3.6 body-reads. Verify-against-running-product.
+  Path-gate + merge-Action lock as built (docs-only auto-merge in v1).
 
 ## Pieces
 
@@ -41,6 +79,11 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
      with `needs-directional-ruling`. No revision attempt — the question is
      Love's, not the pair's.
    - Missing or malformed verdict → park. Never re-prompt toward approval.
+   - **Love-trigger check (BOTH lanes, applies even on APPROVE):** if either
+     agent flags any of the four Love-triggers (build/repo breakage risk,
+     brief drift, streamlinable over-engineering, new cost/spend), the PR
+     parks-and-emails regardless of agreement. Agreement does not clear a
+     trigger; only Love does.
 5. Parking a PR:
    - Apply exactly one park label: `needs-directional-ruling`, `parked-t3`,
      or `parked-t2`.
@@ -67,8 +110,8 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
      `ORCH_RESEND_API_KEY` in `.env.local` (gitignored; a SEPARATE
      orchestration key per Love's ruling — independently revocable without
      touching production email, whose RESEND_API_KEY lives only in Vercel).
-     Until the key lands and Love confirms the from-address, the desktop
-     push is the operating signal and the email step is skipped, not faked.
+     LIVE since Day-52: key placed, from `onboarding@resend.dev` to
+     `love.mansukhani@gmail.com`, test send confirmed received.
 
 ## What NEVER happens (memo §5, enforced not promised)
 
@@ -77,26 +120,24 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
 - Merging anything off the docs allowlist — Layer 1 + Layer 2 both park it.
 - Draining the park queue without Love — no automation touches park labels
   except the Action's own park-on-failure.
-- Production SQL or Vercel promote by an agent — Love, manual, always.
+- Production SQL or Vercel promote without Love's explicit NAMED authorization —
+  Love authorizes by sentence, the builder executes and states the route.
+  Love performs nothing manually; unauthorized execution never happens.
 - One brain reviewing its own work — the reviewer is a separate context with
   fixed standing orders; the builder passes only a PR number.
 
-## One-time Love setup (action items, Love performs)
+## One-time Love setup — ALL DONE (Day-52)
 
-1. **Branch protection — require 1 approving review on main:**
-   GitHub → `lovemansgit/planner` → Settings → Branches → edit the `main`
-   rule → check "Require a pull request before merging" → set
-   "Required approvals" to **1** → Save.
-2. **Let the Action approve docs PRs:** Settings → Actions → General →
-   Workflow permissions → check **"Allow GitHub Actions to create and approve
-   pull requests"** → Save.
-3. **Caveat to know before clicking:** all agent PRs are authored by the
-   `lovemansgit` account, and GitHub forbids approving your own PR. After
-   step 1, docs PRs get their required approval from the Action
-   (github-actions bot); for parked T3 PRs Love merges using the admin
-   **"bypass branch protections"** checkbox on the merge button. If that
-   feels wrong, say so before clicking and we re-surface options.
-4. **Rule the park-notification send path** (see ORCH-PARK notification above).
+1. ~~Branch protection: required approvals = 1 on main~~ **DONE** (verified:
+   agent self-merge impossible; admin path required for Love-authorized merges).
+2. ~~Allow GitHub Actions to create and approve pull requests~~ **DONE**
+   (verified live: the bot approved and merged PR #350).
+3. Standing reference: agent PRs are authored by `lovemansgit`, and GitHub
+   forbids approving your own PR — docs PRs get their required approval from
+   the Action's bot; Love-authorized code merges go via the admin route
+   (builder executes on Love's named authorization and states the route).
+4. ~~Park-notification send path~~ **DONE** (both: desktop push + Resend email,
+   verified received Day-52).
 
 ## Model swap (Fork 6)
 
