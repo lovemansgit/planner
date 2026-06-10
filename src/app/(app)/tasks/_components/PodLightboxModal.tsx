@@ -5,7 +5,7 @@
 // just the photo + close affordance. Empty arrays should NOT reach this
 // component (callers must short-circuit and render the muted-icon /
 // no-trigger state instead — see PodIcon for the muted variant and
-// CalendarWeekView for the trigger-swap guard).
+// CalendarMonthView for the trigger-swap guard).
 //
 // Close affordances: ESC, backdrop click, X button. Pattern matches
 // CrmStateModal + DayActionPopover (role="dialog", aria-modal="true",
