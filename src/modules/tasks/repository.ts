@@ -1439,6 +1439,52 @@ export async function markTaskAddressOverridden(
 }
 
 /**
+ * R5 (calendar-management lane Phase 1, plan-PR #335 §2.R5) — apply a
+ * forward address override to every in-horizon task on the
+ * subscription. Bulk sibling of `markTaskAddressOverridden` directly
+ * above: same SET shape (address_id + the 'pending_update' CASE flip
+ * on pushed rows, migration 0029), but windowed per the Day-52 ruling
+ * verbatim — `delivery_date >= start_date AND delivery_date <
+ * CURRENT_DATE + 14 days` (the materialization horizon; >14-day-out
+ * tasks don't exist yet and materialize at the new address via the
+ * CTE's forward-override branch). Same terminal+SKIPPED status
+ * exclusion as the one-off variant.
+ *
+ * Returns ALL updated rows (RETURNING tuple per row) so the caller can
+ * fan out SF updates for the pushed subset — mirrors
+ * `markTasksCanceledInWindow` (R2) below. Empty array = nothing
+ * materialized in the window; the exception row alone carries the
+ * override forward.
+ */
+export async function markTasksAddressOverriddenForward(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  startDate: string,
+  addressId: Uuid,
+): Promise<readonly { taskId: Uuid; externalTrackingNumber: string | null }[]> {
+  const result = (await tx.execute(sqlTag`
+    UPDATE tasks
+    SET address_id = ${addressId},
+        outbound_sync_state = CASE
+          WHEN external_tracking_number IS NOT NULL THEN 'pending_update'
+          ELSE outbound_sync_state
+        END
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date >= ${startDate}
+      AND delivery_date < CURRENT_DATE + interval '14 days'
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'SKIPPED')
+    RETURNING id, external_tracking_number
+  `)) as readonly { id: string; external_tracking_number: string | null }[];
+
+  return result.map((row) => ({
+    taskId: row.id as Uuid,
+    externalTrackingNumber: row.external_tracking_number,
+  }));
+}
+
+/**
  * Day-16 / Block 4-C Service B — bulk-flip tasks in a pause window
  * to internal_status='CANCELED'. Used by `pauseSubscription` step 9
  * per merged plan §4.1 + brief §3.1.7.

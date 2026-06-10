@@ -420,6 +420,7 @@ describe("addSubscriptionException — permission matrix", () => {
         addressOverrideId: ADDRESS_ID,
       }),
     ]);
+    mockExecute.mockResolvedValueOnce([]); // R5 markTasksAddressOverriddenForward — no in-horizon rows in unit fixtures
 
     const ctx = ctxWith(["subscription:change_address_forward"]);
     const result = await addSubscriptionException(ctx, SUBSCRIPTION_ID, input, { now: NOW });
@@ -642,6 +643,7 @@ describe("addSubscriptionException — days-of-week eligibility", () => {
         addressOverrideId: ADDRESS_ID,
       }),
     ]);
+    mockExecute.mockResolvedValueOnce([]); // R5 markTasksAddressOverriddenForward — no in-horizon rows in unit fixtures
 
     const ctx = ctxWith(["subscription:change_address_forward"]);
     const result = await addSubscriptionException(
@@ -813,6 +815,7 @@ describe("addSubscriptionException — audit emission per type", () => {
         addressOverrideId: ADDRESS_ID,
       }),
     ]);
+    mockExecute.mockResolvedValueOnce([]); // R5 markTasksAddressOverriddenForward — no in-horizon rows in unit fixtures
 
     const ctx = ctxWith(["subscription:change_address_forward"]);
     await addSubscriptionException(

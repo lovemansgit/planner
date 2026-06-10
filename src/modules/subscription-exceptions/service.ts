@@ -49,7 +49,12 @@ import { emit } from "@/modules/audit";
 import type { ConsigneeSnapshot } from "@/modules/integration";
 import { requirePermission } from "@/modules/identity";
 import type { PermissionId } from "@/modules/identity/permissions";
-import { enqueueCancelTask, enqueueUpdateTask } from "@/modules/task-outbound-queue";
+import {
+  enqueueBulkUpdateTasks,
+  enqueueCancelTask,
+  enqueueUpdateTask,
+} from "@/modules/task-outbound-queue";
+import type { UpdateTaskPayload } from "@/modules/task-outbound-queue";
 import { invokeOnDemandMaterialization } from "@/modules/task-materialization/service";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
@@ -92,7 +97,11 @@ import {
   listForConsigneeCalendar,
   listRecentExceptionsForSubscription,
 } from "./repository";
-import { markTaskAddressOverridden, markTaskSkipped } from "@/modules/tasks/repository";
+import {
+  markTaskAddressOverridden,
+  markTasksAddressOverriddenForward,
+  markTaskSkipped,
+} from "@/modules/tasks/repository";
 
 // -----------------------------------------------------------------------------
 // Helpers (mirrors subscriptions/service.ts pattern — four-line copies
@@ -598,6 +607,39 @@ export async function addSubscriptionException(
       }
     }
 
+    // 12c. R5 (plan-PR #335 §2.R5, Love-ruled Day-52) — forward address
+    // override backfills address_id on EVERY in-horizon task on this
+    // subscription (delivery_date >= start_date AND < CURRENT_DATE +
+    // 14 days, ruling-verbatim window) and flips the pushed subset to
+    // 'pending_update'. The >14-day-out future needs no write here:
+    // the exception row inserted at step 10 IS the subscription-level
+    // stored address — the materializer CTE's forward-override branch
+    // (cte-builder.ts resolved_addresses layer 2) reads it on every
+    // future materialization tick. Other subscriptions on the same
+    // consignee are untouched (ruling: subscription-scoped, NOT
+    // consignee-scoped).
+    let forwardOverriddenTasks: readonly {
+      taskId: Uuid;
+      externalTrackingNumber: string | null;
+    }[] = [];
+    if (input.type === "address_override_forward") {
+      forwardOverriddenTasks = await markTasksAddressOverriddenForward(
+        tx,
+        tenantId,
+        subscriptionId,
+        skipDate,
+        input.addressOverrideId as Uuid,
+      );
+      if (forwardOverriddenTasks.some((t) => t.externalTrackingNumber !== null)) {
+        overrideSnapshot = await buildConsigneeSnapshotForAddress(
+          tx,
+          tenantId,
+          subscription.consigneeId,
+          input.addressOverrideId as Uuid,
+        );
+      }
+    }
+
     return {
       replay: null,
       exception,
@@ -607,6 +649,7 @@ export async function addSubscriptionException(
       skippedTask,
       overriddenTask,
       overrideSnapshot,
+      forwardOverriddenTasks,
     } as const;
   });
 
@@ -616,8 +659,15 @@ export async function addSubscriptionException(
     return idempotentReplayResult(txResult.replay);
   }
 
-  const { exception, newEndDate, endDateExtended, skippedTask, overriddenTask, overrideSnapshot } =
-    txResult;
+  const {
+    exception,
+    newEndDate,
+    endDateExtended,
+    skippedTask,
+    overriddenTask,
+    overrideSnapshot,
+    forwardOverriddenTasks,
+  } = txResult;
 
   // Day-29 §D(2) Phase-1 (plan-PR #302 §7 + §3.6 OQ-3 ruling Option A):
   // compute the outbound_emission metadata field for the
@@ -828,6 +878,70 @@ export async function addSubscriptionException(
           correlation_id: exception.correlationId,
         },
       });
+    }
+  }
+
+  // R5 (plan-PR #335 §2.R5) — fan out SF updates for the PUSHED subset
+  // of the in-horizon backfill. Mirrors R2's pause cancel fan-out
+  // posture (pauseSubscription): post-commit, shared correlation_id
+  // across payloads (the per-task QStash dedup key is
+  // `${task_id}_update_${correlation_id}`, so one correlation across N
+  // tasks still dedups per task), typed bulk event emitted with the
+  // counts, then emit-then-re-throw on partial failure (failedChunks >
+  // 0) so the caller surfaces "saved locally; SF updates pending" —
+  // affected rows stay 'pending_update' for ops triage either way.
+  if (input.type === "address_override_forward") {
+    const pushedTasks = forwardOverriddenTasks.filter(
+      (t) => t.externalTrackingNumber !== null,
+    );
+    if (pushedTasks.length > 0) {
+      if (overrideSnapshot === null) {
+        logger.warn(
+          {
+            operation: "address_override_forward_enqueue_bulk",
+            tenant_id: tenantId,
+            subscription_id: subscriptionId,
+            exception_id: exception.id,
+            pushed_task_count: pushedTasks.length,
+          },
+          "addSubscriptionException: forward override snapshot unavailable post-commit — skipping SF fan-out; tasks stay pending_update for ops triage",
+        );
+      } else {
+        const snapshot = overrideSnapshot;
+        const payloads: UpdateTaskPayload[] = pushedTasks.map((t) => ({
+          tenant_id: tenantId,
+          task_id: t.taskId,
+          awb: t.externalTrackingNumber as string,
+          patch: { consignee: snapshot },
+          correlation_id: exception.correlationId,
+        }));
+
+        const bulkResult = await enqueueBulkUpdateTasks(payloads);
+
+        await emit({
+          ...baseEmit,
+          eventType: "subscription.address_override_pushed",
+          resourceType: "subscription",
+          resourceId: subscriptionId,
+          metadata: {
+            subscription_id: subscriptionId,
+            exception_id: exception.id,
+            address_override_id: exception.addressOverrideId,
+            correlation_id: exception.correlationId,
+            backfilled_task_count: forwardOverriddenTasks.length,
+            pushed_task_count: pushedTasks.length,
+            enqueued_count: bulkResult.enqueuedCount,
+            failed_chunks: bulkResult.failedChunks,
+            effective_from: exception.startDate,
+          },
+        });
+
+        if (bulkResult.failedChunks > 0) {
+          throw new Error(
+            `addSubscriptionException: forward address override SF fan-out partially failed — ${bulkResult.failedChunks} chunk(s) of ${pushedTasks.length} update payload(s) did not enqueue. Tasks carry the new address locally and are marked pending_update; SF updates are pending ops follow-up.`,
+          );
+        }
+      }
     }
   }
 

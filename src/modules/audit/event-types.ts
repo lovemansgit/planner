@@ -403,6 +403,25 @@ const EVENT_TYPES_DRAFT = {
       "subscription_id (uuid), correlation_id (uuid — shared with the paired subscription.paused), pushed_task_count (int — tasks with a live SF AWB enqueued for cancel), enqueued_count (int — BulkEnqueueResult.enqueuedCount), failed_chunks (int — chunks that failed to enqueue; >0 triggers the Q5 re-throw), pause_start (YYYY-MM-DD), pause_end (YYYY-MM-DD).",
     systemOnly: false,
   },
+  // R5 (plan-PR #335 §2.R5) — outbound leg of the forward address
+  // override. Mirrors subscription.pause_cancels_pushed (R2): a typed
+  // enqueue-time bulk event paired with the local-write events
+  // (subscription.exception.created + subscription.address_override
+  // .applied) by a shared correlation_id. Emitted only when ≥1 pushed
+  // task was in the in-horizon window; failed_chunks > 0 means partial
+  // fan-out failure — the service re-throws after this emit so the
+  // caller surfaces "saved locally; SF updates pending". Address text
+  // is NEVER in metadata — IDs only.
+  "subscription.address_override_pushed": {
+    id: "subscription.address_override_pushed",
+    resource: "subscription",
+    action: "address_override_pushed",
+    description:
+      "A forward address override (R5) backfilled every in-horizon task on the subscription and the pushed subset (live external tracking numbers) had outbound SF updates fanned out via enqueueBulkUpdateTasks, each carrying the server-built ConsigneeSnapshot for the override address. Paired with subscription.address_override.applied by a shared correlation_id (applied = local-write leg; this = outbound leg). Emitted only when ≥1 pushed task was in the window; an override touching only unmaterialized or unpushed tasks does not emit it. failed_chunks > 0 means partial fan-out failure — the service re-throws after this emit so the caller surfaces the saved-locally state.",
+    metadataNotes:
+      "subscription_id (uuid), exception_id (uuid), address_override_id (uuid — the addresses row the snapshot was built from), correlation_id (uuid — shared with the QStash update-task messages + the paired subscription.* events), backfilled_task_count (int — in-horizon rows whose address_id was updated), pushed_task_count (int — subset with a live SF AWB enqueued for update), enqueued_count (int — BulkEnqueueResult.enqueuedCount), failed_chunks (int — chunks that failed to enqueue; >0 triggers the re-throw), effective_from (YYYY-MM-DD — the override start_date). Address text is NOT included — IDs only.",
+    systemOnly: false,
+  },
 
   // ---- task --------------------------------------------------------------
   "task.created": {
