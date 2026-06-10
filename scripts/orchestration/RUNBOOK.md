@@ -52,17 +52,23 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
      No special rails for the queue doc — it rides the same lock as
      everything else.
    - Notify Love (see below).
-6. Park notification (event-driven, debounced):
+6. Park notification (event-driven, debounced — Love-ruled Day-52: BOTH
+   desktop push AND email, every park-batch):
    - Debounce = one notification per builder work-batch: finish parking
      EVERYTHING in the current batch first, then send ONE notification
-     listing all newly parked items, not one per PR.
-   - Body = the new PARKED-QUEUE.md entries (plain English, SQL flags
-     included).
-   - **Send mechanism: PENDING LOVE'S RULING.** No email-send path exists
-     in-environment without a new credential (verified Day-52: no local
-     Resend key; macOS sendmail unconfigured; Gmail MCP is draft-only).
-     Options are with Love. Until ruled, use the harness PushNotification
-     tool as the interim event-driven signal.
+     covering all newly parked items, not one per PR.
+   - **Desktop push (harness PushNotification tool):** one push per batch.
+     Pushes truncate near 200 characters, so the push carries the compressed
+     form — count + PR numbers/titles + SQL flags. The full detail lives in
+     the email and PARKED-QUEUE.md.
+   - **Email (`scripts/orchestration/notify-park.sh`):** subject
+     `Shape-3: <n> parked for Love`, body on stdin = the new PARKED-QUEUE.md
+     entries verbatim (plain English, SQL flags included). Requires
+     `ORCH_RESEND_API_KEY` in `.env.local` (gitignored; a SEPARATE
+     orchestration key per Love's ruling — independently revocable without
+     touching production email, whose RESEND_API_KEY lives only in Vercel).
+     Until the key lands and Love confirms the from-address, the desktop
+     push is the operating signal and the email step is skipped, not faked.
 
 ## What NEVER happens (memo §5, enforced not promised)
 
