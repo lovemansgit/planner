@@ -14,15 +14,30 @@
 // dividers between entries, sentence-case action labels, ink body copy
 // on paper surface, navy accent bar on the latest entry. Drawer slides
 // in from right; closes on Escape, click-outside, or explicit Close.
+//
+// Day-52 / R8 adds the History section below the delivery timeline:
+// the task's audit history (this task's events + the subscription
+// events that affected it). Two-level disclosure per the R8 rulings —
+// the section is collapsed by default (ruling 4); expanded rows are
+// headlines (event + actor + timestamp) with click-to-expand metadata
+// detail (ruling 2); batches load via "Show more" (ruling 3). Fetches
+// lazily on first expand via `getTaskHistoryAction`.
+//
+// Honesty constraint (followup_audit_failed_attempts.md): the audit
+// layer records successful actions only, so all History copy frames
+// the section as "what happened" — never as an attempt log.
 
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 
 import {
+  getTaskHistoryAction,
   getTaskTimelineAction,
   type GetTaskTimelineActionResult,
 } from "../_calendar-actions";
+import type { AuditEventCursor } from "@/modules/audit";
+import type { TaskHistoryEntry } from "@/modules/tasks";
 
 interface TaskTimelineDrawerProps {
   readonly consigneeId: string;
@@ -157,6 +172,8 @@ export function TaskTimelineDrawer({
               {state.result.message}
             </p>
           )}
+
+          <HistorySection consigneeId={consigneeId} taskId={taskId} />
         </div>
       </div>
     </div>
@@ -208,5 +225,303 @@ function TimelineEntries({
         );
       })}
     </ol>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// History section — Day-52 / R8
+// -----------------------------------------------------------------------------
+
+/**
+ * Operator-readable labels for the audit event types that can appear
+ * in a task's history (this task's events + affecting subscription
+ * events per ruling 1). `subscription.exception.created` is labelled
+ * by its exception type — the type discriminator is what an operator
+ * recognises ("Delivery skipped"), not the event id.
+ *
+ * Unknown event types render their raw id — visible drift is the
+ * correct failure mode (same posture as ACTION_LABELS / OQ-6(a)).
+ */
+const HISTORY_EVENT_LABELS: Readonly<Record<string, string>> = {
+  "task.created": "Task created",
+  "task.updated": "Task updated",
+  "task.completed": "Task completed",
+  "task.note_added": "Driver note added",
+  "task.note_pushed_to_external": "Driver note sent to SuiteFleet",
+  "task.labels_printed": "Shipping label printed",
+  "task.status_changed_via_webhook": "Status updated by SuiteFleet",
+  "task.edit_applied_via_webhook": "Details updated by SuiteFleet",
+  "task.pod_received_via_webhook": "Proof of delivery received",
+  "subscription.paused": "Subscription paused",
+  "subscription.resumed": "Subscription resumed",
+  "subscription.auto_paused": "Subscription auto-paused after delivery failures",
+  "subscription.pause_cancels_pushed": "Pause cancellations sent to SuiteFleet",
+  "subscription.end_date.extended": "Subscription extended",
+  "subscription.address_override.applied": "Address override applied",
+};
+
+const EXCEPTION_TYPE_LABELS: Readonly<Record<string, string>> = {
+  skip: "Delivery skipped",
+  address_override_one_off: "Address changed for one delivery",
+  address_override_forward: "Address changed going forward",
+  append_without_skip: "Delivery appended",
+};
+
+function historyEventLabel(entry: TaskHistoryEntry): string {
+  if (entry.eventType === "subscription.exception.created") {
+    const exceptionType = entry.metadata["type"];
+    if (typeof exceptionType === "string" && EXCEPTION_TYPE_LABELS[exceptionType]) {
+      return EXCEPTION_TYPE_LABELS[exceptionType];
+    }
+    return "Subscription exception recorded";
+  }
+  return HISTORY_EVENT_LABELS[entry.eventType] ?? entry.eventType;
+}
+
+function formatMetadataValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+/**
+ * Render-layer allow-list for expanded-row metadata (Love's Day-52
+ * metadata ruling: operator-meaningful fields only, not the raw
+ * payload). Keys NOT in this set never render — notably internal
+ * record/correlation UUIDs (task_id, subscription_id, exception_id,
+ * correlation_id, webhook_events_id, idempotency_key, task_ids,
+ * skipped_task_ids …), raw vendor error text (last_error), SF action
+ * codes (sf_action), and outbound plumbing (outbound_emission,
+ * enqueued_count, failed_chunks, format).
+ *
+ * Built against the REAL emit-site metadata shapes (tasks,
+ * subscriptions, subscription-exceptions services + the webhook
+ * appliers) — the per-event mapping is tabled on PR #356. Events
+ * whose fields are all hidden/empty fall back to the existing
+ * "No further detail recorded." line.
+ */
+const METADATA_ALLOW_LIST: ReadonlySet<string> = new Set([
+  // what changed
+  "changed_fields",
+  "previous_status",
+  "new_status",
+  "to_internal_status",
+  "bulk_operation",
+  // dates & windows
+  "scheduled_for",
+  "start_date",
+  "target_date_override",
+  "compensating_date",
+  "effective_from",
+  "pause_start",
+  "pause_end",
+  "actual_resume_date",
+  "previous_end_date",
+  "new_end_date",
+  "event_timestamp",
+  // counts
+  "canceled_task_count",
+  "restored_task_count",
+  "pushed_task_count",
+  "failure_count",
+  "requested_count",
+  "printed_count",
+  "skipped_count",
+  "photo_count",
+  // kind / why
+  "type",
+  "scope",
+  "triggered_by",
+  "skip_without_append",
+  "is_auto_resume",
+  "completed_via",
+  // operator-supplied + note deltas
+  "reason",
+  "previous_notes_length",
+  "new_notes_length",
+  // operator-facing references
+  "awb",
+  "suitefleet_task_id",
+  "customer_order_number",
+]);
+
+type HistoryState =
+  | { kind: "collapsed" }
+  | { kind: "loading"; entries: readonly TaskHistoryEntry[] }
+  | {
+      kind: "loaded";
+      entries: readonly TaskHistoryEntry[];
+      nextCursor: AuditEventCursor | null;
+    }
+  | { kind: "error"; message: string; entries: readonly TaskHistoryEntry[] };
+
+/**
+ * Collapsible History section (ruling 4: collapsed by default under a
+ * clear "History" heading). Fetches its first batch lazily when the
+ * operator expands it; "Show more" appends older batches (ruling 3).
+ */
+function HistorySection({
+  consigneeId,
+  taskId,
+}: {
+  readonly consigneeId: string;
+  readonly taskId: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [history, setHistory] = useState<HistoryState>({ kind: "collapsed" });
+  const [openEntryIds, setOpenEntryIds] = useState<ReadonlySet<string>>(new Set());
+
+  async function fetchBatch(
+    existing: readonly TaskHistoryEntry[],
+    before?: AuditEventCursor,
+  ) {
+    setHistory({ kind: "loading", entries: existing });
+    const result = await getTaskHistoryAction(consigneeId, taskId, before);
+    if (result.kind === "success") {
+      setHistory({
+        kind: "loaded",
+        entries: [...existing, ...result.page.entries],
+        nextCursor: result.page.nextCursor,
+      });
+    } else {
+      setHistory({ kind: "error", message: result.message, entries: existing });
+    }
+  }
+
+  function handleToggle() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && history.kind === "collapsed") {
+      void fetchBatch([]);
+    }
+  }
+
+  function toggleEntry(id: string) {
+    setOpenEntryIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  return (
+    <section className="mt-6 border-t border-stone-200 pt-5">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-baseline justify-between text-left"
+      >
+        <span>
+          <span className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+            History
+          </span>
+          <span className="mt-1 block text-xs text-[color:var(--color-text-secondary)]">
+            Recorded actions for this task and its subscription
+          </span>
+        </span>
+        <span
+          aria-hidden="true"
+          className="text-xs text-[color:var(--color-text-secondary)]"
+        >
+          {expanded ? "Hide" : "Show"}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="mt-4">
+          {history.kind === "error" ? (
+            <p
+              role="alert"
+              className="rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red"
+            >
+              {history.message}
+            </p>
+          ) : null}
+
+          {history.kind !== "collapsed" && history.entries.length > 0 ? (
+            <ol className="space-y-3">
+              {history.entries.map((entry) => {
+                const isOpen = openEntryIds.has(entry.id);
+                const metadataPairs = Object.entries(entry.metadata).filter(
+                  ([key]) => METADATA_ALLOW_LIST.has(key),
+                );
+                return (
+                  <li key={entry.id} className="border-l border-stone-200 pl-4">
+                    <button
+                      type="button"
+                      onClick={() => toggleEntry(entry.id)}
+                      aria-expanded={isOpen}
+                      className="w-full text-left"
+                    >
+                      <p className="font-display text-sm text-navy">
+                        {historyEventLabel(entry)}
+                      </p>
+                      <p className="mt-0.5 text-xs tabular-nums text-[color:var(--color-text-secondary)]">
+                        {formatTimestamp(entry.occurredAt)}
+                      </p>
+                      <p className="mt-1 text-[10px] uppercase tracking-[0.1em] text-[color:var(--color-text-tertiary)]">
+                        {entry.actorLabel}
+                      </p>
+                    </button>
+                    {isOpen ? (
+                      <dl className="mt-2 space-y-1 border-t border-stone-200 pt-2">
+                        {metadataPairs.length === 0 ? (
+                          <p className="text-xs text-[color:var(--color-text-secondary)]">
+                            No further detail recorded.
+                          </p>
+                        ) : (
+                          metadataPairs.map(([key, value]) => (
+                            <div key={key} className="flex gap-2 text-xs">
+                              <dt className="shrink-0 text-[color:var(--color-text-tertiary)]">
+                                {key}
+                              </dt>
+                              <dd className="break-all text-[color:var(--color-text-secondary)]">
+                                {formatMetadataValue(value)}
+                              </dd>
+                            </div>
+                          ))
+                        )}
+                      </dl>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ol>
+          ) : null}
+
+          {history.kind === "loaded" && history.entries.length === 0 ? (
+            <p className="text-sm text-[color:var(--color-text-secondary)]">
+              No recorded actions yet.
+            </p>
+          ) : null}
+
+          {history.kind === "loading" ? (
+            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
+              Loading history…
+            </p>
+          ) : null}
+
+          {history.kind === "loaded" && history.nextCursor !== null ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (history.kind === "loaded" && history.nextCursor !== null) {
+                  void fetchBatch(history.entries, history.nextCursor);
+                }
+              }}
+              className="mt-4 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy"
+            >
+              Show more
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   );
 }
