@@ -17,7 +17,9 @@ to="love.mansukhani@gmail.com"
 from="onboarding@resend.dev"
 
 root="$(git rev-parse --show-toplevel)"
-key="$(grep -m1 '^ORCH_RESEND_API_KEY=' "$root/.env.local" | cut -d= -f2-)"
+# grep made non-fatal: under set -e a missing key/file would otherwise abort
+# before the guard below can print its pointer.
+key="$(grep -m1 '^ORCH_RESEND_API_KEY=' "$root/.env.local" 2>/dev/null | cut -d= -f2- || true)"
 [ -n "$key" ] || { echo "ORCH_RESEND_API_KEY missing from .env.local — see RUNBOOK step 6" >&2; exit 1; }
 
 jq -n --arg from "$from" --arg to "$to" --arg subject "$subject" \
