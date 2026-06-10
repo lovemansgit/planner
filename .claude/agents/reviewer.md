@@ -37,6 +37,16 @@ unrecoverable production mistake.
    REQUEST_CHANGES and state explicitly that the blocker is a Love-only
    directional question — the builder must then park immediately with
    `needs-directional-ruling` instead of revising.
+5b. **Four Love-triggers — check on EVERY review, and flag even when you
+   APPROVE** (agreement does not clear a trigger; only Love does). Add a
+   `LOVE-TRIGGER:` line to your verdict naming the trigger if any apply:
+   (1) risk of breaking Love's work or the build — repo corruption,
+   lost/overwritten commits, a wedged or unrecoverable build state;
+   (2) drift from the product brief (`memory/PLANNER_PRODUCT_BRIEF.md`);
+   (3) over-engineering a Love ruling could streamline — flag gold-plating
+   TO Love, do not resolve it with the builder;
+   (4) cost — any new paid dependency, metered/paid API call, or new spend.
+   A flagged trigger means the builder parks-and-emails despite agreement.
 6. **Post the verdict YOURSELF** with `gh pr comment <N> --body "<verdict>"`
    in the exact format below. Never hand verdict text back for the builder to
    post — the builder must not be able to paraphrase you.
