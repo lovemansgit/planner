@@ -95,6 +95,8 @@ Legend: ✅ shipped & proven on real wire · 🔶 shipped, **not** proven on rea
 ### The "deaf integration" list — merged/looks-done but NOT proven on real wire
 These are the items most likely to embarrass at an Ops demo:
 
+> **Day-52 PM update (proving pass, post-filing):** items 1–3 below were **proven ALIVE on real wire** — R2 pause-cancel fan-out (2-task window, both SF-CANCELED: `MPL-28787105`, `MPL-01868399`), R3 note-push (SF webhook echoed the note text: `MPL-76890591`), skip→cancel (SF `CHANGE_STATUS → CANCELED`: `MPL-48882801`). Evidence in `memory/handoffs/day-52-eod.md` §C. Items 4–5 (task-UPDATE push, POD post-fix) remain unproven.
+
 1. **R2 pause → SF cancel fan-out** (#342) — merged, **never fired against real SF.** A pause that doesn't actually stop dispatch is exactly the "deaf integration" risk.
 2. **R3 driver-note → SF push** (#344) — merged, **never fired against real SF.** A note the driver never receives.
 3. **Skip → cancel** — integration-tested on real Postgres, but the **QStash→SF leg is mocked**; no record of a real skip firing a real cancel.
@@ -110,6 +112,8 @@ These are the items most likely to embarrass at an Ops demo:
 - **Auth cookie httponly/secure hardening** — never confirmed shipped.
 
 ### Correctness / race risks under real operation
+- **Inbound webhook TZ re-stamp (FOUND Day-52 PM, proving pass):** `TASK_HAS_BEEN_UPDATED` reflections carry SF's UTC delivery window and `apply-webhook-edit-event.ts` applies it as Dubai-local — every update reflection shifts the task window −4h (observed: 06:00–09:00 → 02:00–05:00 on the R3 note task). Operator-visible wrong window; outbound got the TZ fix (PR #307), inbound did not. Fix parked as its own PR (overnight Session A lane). Related: `followup_inbound_webhook_edit_apply_two_bugs.md`.
+
 Lower-probability but real: assigned-before-cutoff dispatch race; auto-pause vs bounded-pause divergence (stranded subs); webhook row lost on update rollback; reconcile recovered-local-write failure (no-DLQ path); consignee deactivation doesn't cascade-cancel tasks (`mp_13`). *Triage these against the UAT line in §7.*
 
 ---
