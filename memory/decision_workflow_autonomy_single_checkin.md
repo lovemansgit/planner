@@ -224,4 +224,3 @@ cleanup behind a Love authorization that added no safety.
 
 **End of decision memo. To be cross-referenced from the next EOD and indexed in
 MEMORY.md. The terminal orchestration plumbing is scoped as a separate build task.**
-
