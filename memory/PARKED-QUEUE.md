@@ -6,21 +6,24 @@ _the park labels on open PRs are the source of truth._
 ## PR #352 — docs(d52): Shape-3 memo §9 — orchestration LIVE + final autonomy ruling (repo record)
 
 - Label: `needs-directional-ruling`
-- Head SHA: `1adaf5ed7a39f5e9d9be9158f5b6559af91dcde5`
+- Head SHA: `3c9dabfcf4a5a94a93be19de7559bd3dfb77c471`
 
 ORCH-PARK
-**What this PR does (plain English):** appends §9 to the Shape-3 memo — the repo record that the orchestration is LIVE and of your final pre-MVP autonomy ruling (four triggers, permanent seam, builder-executed production on your named authorization, MVP-FINALIZED placeholder). Older sections preserved as filed.
+**What this PR does (plain English):** the repo record of your autonomy ruling, now revised to OPTION B — pre-MVP promotes flow on agent-agreement (no per-promote authorization); live DB changes (migrations / production SQL) ALWAYS park as Love-trigger #1; at MVP-FINALIZED promotes also start parking. Append-only: older memo sections untouched.
 **What it touches:** memory/decision_workflow_autonomy_single_checkin.md only. No code, no migrations, no SQL to apply.
-**Reviewer verdict:** APPROVE round 1 (sonnet). Parked anyway — builder-flagged LOVE-TRIGGER: this writes down a loosened production floor whose only source is your in-session ruling; agreement between agents does not clear that. Clear this and companion #351 together by sentence.
+**Reviewer verdict:** APPROVE round 2 (sonnet) at head 3c9dabfcf4a5a94a93be19de7559bd3dfb77c471.
+**Clearance order:** clear THIS one first — #351 depends on §9 existing on main.
+**Waiting on you:** clearance by sentence.
 
 ## PR #351 — docs(d52): Shape-3 LIVE — runbook + reviewer standing orders (final autonomy ruling)
 
 - Label: `needs-directional-ruling`
-- Head SHA: `fb8964ba7941af33f4a7c6d00e84aeb24db3398c`
+- Head SHA: `051b61d61eba0faba0e1a61b430a1111da336218`
 
 ORCH-PARK
-**What this PR does (plain English):** marks Shape-3 LIVE in the runbook and reviewer standing orders, encoding your Day-52 PM autonomy ruling (four Love-triggers, permanent seam, builder-executed production on your named authorization, MVP-FINALIZED placeholder).
+**What this PR does (plain English):** runbook + reviewer standing orders marked LIVE, revised to OPTION B (promotes flow pre-MVP; DB/SQL parks every phase; full floor at MVP-FINALIZED).
 **What it touches:** scripts/orchestration/RUNBOOK.md + .claude/agents/reviewer.md. No product code, no migrations, no SQL to apply.
-**Why parked:** the reviewer correctly found that the repo has NO record of this ruling — it was relayed in-session — and a docs change loosening the production floor must not stand on the builder's say-so. The memo §9 amendment PR creates that record and parks alongside this one. **Both need your explicit clearance by sentence.**
-**Reviewer verdict:** REQUEST_CHANGES round 1 (opus), LOVE-TRIGGER (1) flagged — see ORCH-VERDICT above.
+**Reviewer verdict:** REQUEST_CHANGES round 2 (opus) at head 051b61d61eba0faba0e1a61b430a1111da336218 — structural, expected: the §9 this runbook cites lives in still-parked #352, so it cannot stand on main first. Round cap reached; dispute trail attached.
+**Clearance order:** clear #352 first (the record lands), then this one — your sentence covers both.
+**Waiting on you:** clearance by sentence.
 
