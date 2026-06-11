@@ -9,7 +9,7 @@
 // so any caller reaches the DB through the audited / system-actor-
 // gated surface.
 
-export type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
+export type { FailedPush, FailureReason, RecordFailedPushInput, ResolvedFailedPush } from "./types";
 export type {
   BulkResolveFailedPushesInput,
   BulkResolveFailedPushesResult,
@@ -21,6 +21,7 @@ export type {
 export {
   bulkResolveFailedPushes,
   listFailedPushTaskIdsForTenant,
+  listResolvedFailedPushes,
   listUnresolvedFailedPushes,
   markFailedPushResolved,
   recordFailedPush,
