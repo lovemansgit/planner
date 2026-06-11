@@ -31,6 +31,7 @@ import { logger } from "@/shared/logger";
 import type { Uuid } from "@/shared/types";
 
 import type { WebhookEvent } from "../../types";
+import { utcTimeToDubaiLocal } from "./tz";
 
 const log = logger.with({ component: "apply_webhook_edit_event" });
 
@@ -47,7 +48,11 @@ const log = logger.with({ component: "apply_webhook_edit_event" });
 // post-parser equality is trivial string === (NO parseISO, NO dateFns, NO
 // epoch-ms compare; no date-arithmetic dependency added per locked §5.2).
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-const HMS_TIME_REGEX = /^\d{2}:\d{2}:\d{2}$/;
+// Day-52 inbound-TZ fix: range-valid time-of-day (was any \d{2} triple).
+// utcTimeToDubaiLocal below does mod-24 hour arithmetic, so out-of-range
+// hours must be rejected at the boundary (→ payload_validation_failed),
+// not silently wrapped into a plausible-looking wrong time.
+const HMS_TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/;
 
 const consigneeLocationSchema = z.object({}).passthrough();
 
@@ -111,8 +116,8 @@ interface AuditMeta {
  *
  * Per plan §4.2 — 12 fields tracked:
  *   * delivery_date
- *   * delivery_start_time          ← deliveryStartTime
- *   * delivery_end_time            ← deliveryEndTime
+ *   * delivery_start_time          ← deliveryStartTime (UTC → Dubai +4h)
+ *   * delivery_end_time            ← deliveryEndTime   (UTC → Dubai +4h)
  *   * recipient_name               ← deliveryInformation.recipientName
  *   * signature                    ← deliveryInformation.signature
  *   * consignee_rating             ← deliveryInformation.consigneeRating
@@ -334,10 +339,26 @@ function extractEditFields(parsed: WebhookEditPayload): ExtractedFields {
   // not-yet-delivered task — Day-29 forensic, 12-payload corpus). Coerce
   // null → undefined here to preserve diffField's "field absent → leave
   // column alone" semantic uniformly across all 9 leaves.
+  // Day-52 inbound-TZ fix (memory/handoffs/day-52-eod.md §D): SF wire
+  // times are UTC; Planner's `time` columns are Dubai-local. Convert via
+  // the shared A1 helper (tz.ts — the same conversion the status-event
+  // applier already does) BEFORE the diff, so an SF reflection echoing an
+  // unchanged window compares equal (no_diff) instead of re-stamping the
+  // row −4h. deliveryDate is the Dubai-local operational anchor on the
+  // wire in BOTH directions (PR #307 ruling) — applied as-is, never
+  // adjusted, even when the time wraps past midnight. The helper throws
+  // on out-of-range hours, but HMS_TIME_REGEX range-validates at the Zod
+  // boundary first, routing garbage to payload_validation_failed.
   return {
     delivery_date: parsed.deliveryDate,
-    delivery_start_time: parsed.deliveryStartTime,
-    delivery_end_time: parsed.deliveryEndTime,
+    delivery_start_time:
+      parsed.deliveryStartTime === undefined
+        ? undefined
+        : utcTimeToDubaiLocal(parsed.deliveryStartTime),
+    delivery_end_time:
+      parsed.deliveryEndTime === undefined
+        ? undefined
+        : utcTimeToDubaiLocal(parsed.deliveryEndTime),
     recipient_name: di?.recipientName ?? undefined,
     signature: di?.signature ?? undefined,
     consignee_rating: di?.consigneeRating ?? undefined,

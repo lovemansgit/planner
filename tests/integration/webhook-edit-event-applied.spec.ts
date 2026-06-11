@@ -118,6 +118,8 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
       // deliveryDate (matches real SF wire format + the Bug 1 fix at the
       // line-247 source). Snake_case delivery_date is now an unknown root
       // key — silently stripped by the Zod parser per locked §6.1 U2.
+      // Day-52 TZ fix: wire times are UTC — 14:00/16:00 UTC = 18:00/20:00
+      // Dubai on the row.
       deliveryDate: "2026-05-12",
       deliveryStartTime: "14:00:00",
       deliveryEndTime: "16:00:00",
@@ -137,8 +139,8 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
       `),
     );
     expect((task as { delivery_date: string }).delivery_date).toMatch(/2026-05-12/);
-    expect((task as { delivery_start_time: string }).delivery_start_time).toBe("14:00:00");
-    expect((task as { delivery_end_time: string }).delivery_end_time).toBe("16:00:00");
+    expect((task as { delivery_start_time: string }).delivery_start_time).toBe("18:00:00");
+    expect((task as { delivery_end_time: string }).delivery_end_time).toBe("20:00:00");
 
     const [audit] = await withServiceRole("verify edit audit", async (tx) =>
       tx.execute(sqlTag`
@@ -346,10 +348,12 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
     // (post-C1 the Zod parser strips unknown snake_case keys per locked
     // §6.1 U2 — pre-C4 this test passed for the wrong reason because the
     // date payload was silently dropped before the comparison).
+    // Day-52 TZ fix: "same values" on the wire means UTC — the row's
+    // 08:00–10:00 Dubai window is 04:00–06:00 UTC.
     const event = buildEditEvent(AWB_NO_DIFF, occurredAt, {
       deliveryDate: "2026-05-09",
-      deliveryStartTime: "08:00:00",
-      deliveryEndTime: "10:00:00",
+      deliveryStartTime: "04:00:00",
+      deliveryEndTime: "06:00:00",
     });
 
     const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
@@ -609,9 +613,14 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
           completion_latitude, completion_longitude,
           created_via
         ) VALUES (
+          -- Day-52 TZ fix: seed times are Dubai-local 12:00–14:00 = the
+          -- fixture's verbatim 08:00–10:00 UTC wire times, so the time
+          -- columns stay no-diff and ONLY delivery_date moves (the
+          -- regression this test pins). The wire fixture below stays
+          -- byte-faithful to the DMB-17621675 corpus shape.
           ${TASK_NULL_TOL}, ${TENANT}, ${CONSIGNEE}, ${`WEE-NULL-${RUN_ID}`},
           ${EXT_ID_NULL_TOL}, ${AWB_NULL_TOL},
-          'CREATED', '2026-05-17', '08:00:00', '10:00:00',
+          'CREATED', '2026-05-17', '12:00:00', '14:00:00',
           'Pre-Existing Recipient', 'data:base64,preexisting', 4, 'Pre-existing rating',
           'Pre-existing driver note', 0,
           25.100, 55.200,
@@ -727,6 +736,194 @@ describe("Day-18 / A2 Layer 3 — applyWebhookEditEvent (real Postgres)", () => 
   // place this combination is exercised; mirrors test 7's pattern of
   // replaying the same (awb, occurredAt) tuple post-success.
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Day-52 §D — inbound TZ round-trip (memory/handoffs/day-52-eod.md §D).
+  //
+  // SF wire times are UTC (Love-confirmed SF contract, PR #307); Planner
+  // time columns are Dubai-local (UTC+4, no DST). Outbound got the
+  // conversion in PR #307 (dubaiLocalTimeToUtc, −4h); the inbound
+  // edit-apply path did not — SF's UTC wall-clock values were diffed
+  // against and stamped onto the Dubai-local columns verbatim, shifting
+  // every reflected window −4h (observed live Day-52: 06:00–09:00 Dubai
+  // task re-stamped to 02:00–05:00 by its own note's reflection webhook).
+  //
+  // Contract pinned here (inverse of PR #307's outbound ruling):
+  //   - deliveryStartTime / deliveryEndTime shift UTC → Dubai (+4h, wrap).
+  //   - deliveryDate stays Dubai-local on the wire BOTH directions —
+  //     applied as-is, NEVER adjusted, even when the time wraps past
+  //     midnight.
+  // ---------------------------------------------------------------------------
+
+  it("TZ round-trip — SF reflection echoing the same window in UTC is a no_diff; Dubai window preserved", async () => {
+    const occurredAt = "2026-06-10T05:30:00.000Z";
+    const AWB_TZ_ECHO = `WEE-${RUN_ID}-TZECHO`;
+    const EXT_ID_TZ_ECHO = String(EXT_ID_BASE + 60);
+    const TASK_TZ_ECHO = randomUUID() as Uuid;
+
+    // The Day-52 §D live shape: task holds 06:00–09:00 Dubai; the note's
+    // reflection webhook carries the SAME window as SF stores it — UTC.
+    await withServiceRole("seed TZ-echo task (Roudy M note surrogate)", async (tx) => {
+      await tx.execute(sqlTag`
+        INSERT INTO tasks (
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
+          internal_status, delivery_date, delivery_start_time, delivery_end_time,
+          created_via
+        ) VALUES (
+          ${TASK_TZ_ECHO}, ${TENANT}, ${CONSIGNEE}, ${`WEE-TZE-${RUN_ID}`},
+          ${EXT_ID_TZ_ECHO}, ${AWB_TZ_ECHO},
+          'CREATED', '2026-06-15', '06:00:00', '09:00:00', 'manual_admin'
+        )
+      `);
+    });
+
+    const event = buildEditEvent(AWB_TZ_ECHO, occurredAt, {
+      deliveryDate: "2026-06-15",
+      deliveryStartTime: "02:00:00", // 06:00 Dubai in UTC
+      deliveryEndTime: "05:00:00", // 09:00 Dubai in UTC
+    });
+
+    const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
+
+    // Pre-fix this was applied:true with the window re-stamped to
+    // 02:00–05:00. Post-fix the converted times equal the row → no_diff.
+    expect(result.applied).toBe(false);
+    if (!result.applied) {
+      expect(result.reason).toBe("no_diff");
+    }
+
+    const [task] = await withServiceRole("verify TZ-echo window preserved", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT delivery_date, delivery_start_time, delivery_end_time
+        FROM tasks WHERE id = ${TASK_TZ_ECHO} LIMIT 1
+      `),
+    );
+    const t = task as Record<string, string>;
+    expect(t.delivery_date.slice(0, 10)).toBe("2026-06-15");
+    expect(t.delivery_start_time).toBe("06:00:00");
+    expect(t.delivery_end_time).toBe("09:00:00");
+
+    // No audit emit — an echo of the unchanged window is not an edit.
+    const audits = await withServiceRole("verify no audit emit on TZ echo", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT id FROM audit_events
+        WHERE event_type = 'task.edit_applied_via_webhook'
+          AND tenant_id = ${TENANT}
+          AND resource_id = ${TASK_TZ_ECHO}
+      `),
+    );
+    expect(audits).toEqual([]);
+  });
+
+  it("TZ genuine edit — SF-side window change lands as Dubai-local; audit delta is Dubai-local both sides", async () => {
+    const occurredAt = "2026-06-10T06:00:00.000Z";
+    const AWB_TZ_EDIT = `WEE-${RUN_ID}-TZEDIT`;
+    const EXT_ID_TZ_EDIT = String(EXT_ID_BASE + 61);
+    const TASK_TZ_EDIT = randomUUID() as Uuid;
+
+    await withServiceRole("seed TZ-edit task", async (tx) => {
+      await tx.execute(sqlTag`
+        INSERT INTO tasks (
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
+          internal_status, delivery_date, delivery_start_time, delivery_end_time,
+          created_via
+        ) VALUES (
+          ${TASK_TZ_EDIT}, ${TENANT}, ${CONSIGNEE}, ${`WEE-TZD-${RUN_ID}`},
+          ${EXT_ID_TZ_EDIT}, ${AWB_TZ_EDIT},
+          'CREATED', '2026-06-15', '06:00:00', '09:00:00', 'manual_admin'
+        )
+      `);
+    });
+
+    // Operator moves the window 06:00–09:00 → 08:00–11:00 Dubai in the SF
+    // OpsPortal; SF emits it as 04:00–07:00 UTC.
+    const event = buildEditEvent(AWB_TZ_EDIT, occurredAt, {
+      deliveryStartTime: "04:00:00",
+      deliveryEndTime: "07:00:00",
+    });
+
+    const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
+    expect(result.applied).toBe(true);
+
+    const [task] = await withServiceRole("verify TZ-edit window in Dubai-local", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT delivery_start_time, delivery_end_time
+        FROM tasks WHERE id = ${TASK_TZ_EDIT} LIMIT 1
+      `),
+    );
+    expect((task as { delivery_start_time: string }).delivery_start_time).toBe("08:00:00");
+    expect((task as { delivery_end_time: string }).delivery_end_time).toBe("11:00:00");
+
+    // Audit metadata speaks Dubai-local on BOTH sides of the delta — the
+    // converted value is what was diffed and written.
+    const [audit] = await withServiceRole("verify TZ-edit audit delta", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT metadata FROM audit_events
+        WHERE event_type = 'task.edit_applied_via_webhook'
+          AND tenant_id = ${TENANT}
+          AND resource_id = ${TASK_TZ_EDIT}
+        ORDER BY occurred_at DESC LIMIT 1
+      `),
+    );
+    const meta = (audit as { metadata: Record<string, unknown> }).metadata;
+    const changedFields = meta.changed_fields as readonly {
+      field: string;
+      previous: unknown;
+      new: unknown;
+    }[];
+    const startEntry = changedFields.find((c) => c.field === "delivery_start_time");
+    expect(startEntry?.previous).toBe("06:00:00");
+    expect(startEntry?.new).toBe("08:00:00");
+    const endEntry = changedFields.find((c) => c.field === "delivery_end_time");
+    expect(endEntry?.new).toBe("11:00:00");
+  });
+
+  it("TZ midnight wrap — UTC times past 20:00 wrap into the next Dubai clock-day; deliveryDate untouched", async () => {
+    const occurredAt = "2026-06-10T06:30:00.000Z";
+    const AWB_TZ_WRAP = `WEE-${RUN_ID}-TZWRAP`;
+    const EXT_ID_TZ_WRAP = String(EXT_ID_BASE + 62);
+    const TASK_TZ_WRAP = randomUUID() as Uuid;
+
+    await withServiceRole("seed TZ-wrap task", async (tx) => {
+      await tx.execute(sqlTag`
+        INSERT INTO tasks (
+          id, tenant_id, consignee_id, customer_order_number,
+          external_id, external_tracking_number,
+          internal_status, delivery_date, delivery_start_time, delivery_end_time,
+          created_via
+        ) VALUES (
+          ${TASK_TZ_WRAP}, ${TENANT}, ${CONSIGNEE}, ${`WEE-TZW-${RUN_ID}`},
+          ${EXT_ID_TZ_WRAP}, ${AWB_TZ_WRAP},
+          'CREATED', '2026-06-15', '06:00:00', '09:00:00', 'manual_admin'
+        )
+      `);
+    });
+
+    // 21:00–22:30 UTC = 01:00–02:30 Dubai (next clock-day). Mirror of the
+    // PR #307 outbound ruling: the time wraps mod 24; deliveryDate is the
+    // Dubai-local operational anchor and is NEVER adjusted by conversion.
+    const event = buildEditEvent(AWB_TZ_WRAP, occurredAt, {
+      deliveryDate: "2026-06-15",
+      deliveryStartTime: "21:00:00",
+      deliveryEndTime: "22:30:00",
+    });
+
+    const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
+    expect(result.applied).toBe(true);
+
+    const [task] = await withServiceRole("verify TZ-wrap row", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT delivery_date, delivery_start_time, delivery_end_time
+        FROM tasks WHERE id = ${TASK_TZ_WRAP} LIMIT 1
+      `),
+    );
+    const t = task as Record<string, string>;
+    expect(t.delivery_date.slice(0, 10)).toBe("2026-06-15");
+    expect(t.delivery_start_time).toBe("01:00:00");
+    expect(t.delivery_end_time).toBe("02:30:00");
+  });
 
   it("D29-NULL-DUP — replaying the all-null fixture against the dedup gate returns reason='duplicate'", async () => {
     const occurredAt = "2026-05-09T16:00:00.000Z"; // same as D29-NULL
