@@ -38,7 +38,7 @@ export default defineConfig({
         resolve: { alias: SRC_ALIAS },
         test: {
           name: "unit",
-          include: ["src/**/*.spec.ts", "tests/unit/**/*.spec.ts"],
+          include: ["src/**/*.spec.{ts,tsx}", "tests/unit/**/*.spec.{ts,tsx}"],
           environment: "node",
         },
       },

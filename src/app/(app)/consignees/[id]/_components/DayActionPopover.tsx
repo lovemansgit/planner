@@ -33,6 +33,11 @@ import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import type { TaskInternalStatus, TaskOutboundSyncState } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
+// R5 (Day-52, OQ-3 ruling) — inline modal-within-popover confirm for the
+// forward address override. Presentational sibling module so its
+// JSX-shape spec renders without this file's server-action imports.
+import { ForwardOverrideConfirmDialog } from "./ForwardOverrideConfirmDialog";
+
 import {
   addNoteToDriverAction,
   cancelNoAppendAction,
@@ -442,6 +447,25 @@ function ChangeAddressPanel({
     FormData
   >(boundAction, { kind: "idle" });
 
+  // R5 confirmation gate (forward scope only — the one-off ruling is
+  // explicitly NO popup, scope self-evident). The visible submit
+  // button for forward is type="button": it native-validates the form
+  // (radio required), then opens the confirm dialog; only the
+  // dialog's confirm triggers the real submit.
+  const formRef = useRef<HTMLFormElement>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  function handleForwardSubmitClick() {
+    if (formRef.current?.reportValidity()) {
+      setConfirmOpen(true);
+    }
+  }
+
+  function handleConfirm() {
+    setConfirmOpen(false);
+    formRef.current?.requestSubmit();
+  }
+
   useEffect(() => {
     if (actionResult.kind === "success" || actionResult.kind === "idempotent_replay") {
       onSuccess();
@@ -457,7 +481,7 @@ function ChangeAddressPanel({
   }
 
   return (
-    <form action={formAction} className="mt-4 space-y-3">
+    <form ref={formRef} action={formAction} className="relative mt-4 space-y-3">
       <fieldset className="space-y-2">
         <legend className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
           Address
@@ -487,17 +511,31 @@ function ChangeAddressPanel({
         ))}
       </fieldset>
       <ResultBanner result={actionResult} />
-      <button
-        type="submit"
-        disabled={isPending}
-        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {isPending
-          ? "Saving…"
-          : scope === "one-off"
-            ? "Override for this delivery"
-            : "Override from this date forward"}
-      </button>
+      {scope === "one-off" ? (
+        <button
+          type="submit"
+          disabled={isPending}
+          className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isPending ? "Saving…" : "Override for this delivery"}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={handleForwardSubmitClick}
+          disabled={isPending}
+          className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isPending ? "Saving…" : "Override from this date forward"}
+        </button>
+      )}
+      {confirmOpen ? (
+        <ForwardOverrideConfirmDialog
+          onConfirm={handleConfirm}
+          onCancel={() => setConfirmOpen(false)}
+          isPending={isPending}
+        />
+      ) : null}
     </form>
   );
 }
