@@ -103,6 +103,7 @@ function merchantFixture(overrides: Partial<Merchant> = {}): Merchant {
     },
     suitefleetCustomerCode: "588",
     suitefleetRegionId: "11111111-1111-4111-a111-111111111111" as Uuid,
+    suitefleetAuthMethodOverride: null,
     suitefleetCredential1VaultId: null,
     suitefleetCredential2VaultId: null,
     createdAt: FIXED_NOW,

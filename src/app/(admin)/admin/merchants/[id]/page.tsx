@@ -40,7 +40,7 @@ import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
 
 import { authMethodBadge } from "../../regions/_helpers";
-import { statusBadgeSurface } from "../_helpers";
+import { merchantEffectiveAuthMethod, statusBadgeSurface } from "../_helpers";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -90,7 +90,14 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
   const credentialsConfigured =
     merchant.suitefleetCredential1VaultId !== null &&
     merchant.suitefleetCredential2VaultId !== null;
-  const authBadge = region !== null ? authMethodBadge(region.authMethod) : null;
+  // Day-53: render the EFFECTIVE method (override ?? region default) —
+  // the region's raw method misreports any merchant flipped via the
+  // credentials page's auth-method switch.
+  const effectiveAuth =
+    region !== null
+      ? merchantEffectiveAuthMethod(merchant.suitefleetAuthMethodOverride, region.authMethod)
+      : null;
+  const authBadge = effectiveAuth !== null ? authMethodBadge(effectiveAuth.method) : null;
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
@@ -166,12 +173,17 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
               <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
                 Auth method
               </p>
-              <div>
+              <div className="flex items-center gap-2">
                 <span
                   className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${authBadge.className}`}
                 >
                   {authBadge.label}
                 </span>
+                {effectiveAuth?.overrideActive ? (
+                  <span className="text-xs text-[color:var(--color-text-secondary)]">
+                    (merchant override)
+                  </span>
+                ) : null}
               </div>
             </div>
           ) : null}
