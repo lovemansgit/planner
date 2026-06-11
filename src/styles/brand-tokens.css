@@ -46,6 +46,14 @@
    * enumerated and reviewable. */
   --color-tint-navy-subtle: rgba(37, 45, 96, 0.025);
 
+  /* Modal / drawer / lightbox backdrop scrim. Navy at 40% — the
+   * intended dim behind overlays. NOTE: a Tailwind `bg-navy/40` opacity
+   * modifier does NOT work because --color-navy is a hex (not RGB
+   * channels), so the alpha is silently dropped and the backdrop renders
+   * transparent. This token bakes the alpha in (matching the rgba navy
+   * tints above) so `bg-scrim` renders a real backdrop. Day-53/54. */
+  --color-scrim: rgba(37, 45, 96, 0.4);
+
   /* Typography — next/font/google variables registered in layout.tsx */
   --font-sans:
     var(--font-mulish), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
