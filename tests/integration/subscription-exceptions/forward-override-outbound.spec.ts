@@ -1,26 +1,31 @@
 // tests/integration/subscription-exceptions/forward-override-outbound.spec.ts
 // =============================================================================
 // Day-52 R5 (plan-PR #335 §2.R5) — forward address override →
-// subscription-scoped in-horizon backfill + SF bulk fan-out +
-// materializer future-horizon pickup. Real-Postgres integration per the
+// subscription-scoped full-upcoming backfill + SF bulk fan-out +
+// materializer not-yet-materialized pickup. Real-Postgres integration per the
 // schema-drift discipline; harness mirrors the sibling
 // address-override-outbound.spec.ts (publisher mocked, all else real).
 //
 // Cases pinned:
-//   1. Mixed-population backfill: every in-horizon task on the
-//      subscription (>= start_date, < CURRENT_DATE + 14 days, non-
-//      terminal) gets the new address_id; pushed subset flips to
+//   1. Mixed-population backfill: EVERY upcoming task on the
+//      subscription (>= start_date, NO upper date bound — Day-53
+//      correction: the Day-52 ruling's 14-day figure was stale
+//      pre-horizon-bump framing; full materializer horizon is 21 days)
+//      gets the new address_id; pushed subset flips to
 //      'pending_update'; rows BEFORE start_date, terminal rows, and a
 //      SIBLING SUBSCRIPTION's rows are untouched (ruling: subscription-
-//      scoped, NOT consignee-scoped). enqueueBulkUpdateTasks called
-//      once with exactly the pushed subset — every payload carries the
-//      server-built ConsigneeSnapshot + the exception correlation_id.
-//      Typed subscription.address_override_pushed event with counts.
-//   2. Future-horizon pickup (ruling step iii): the exception row IS
-//      the subscription-level stored address — running the materializer
-//      for a >14-day-out range materializes the new task at the
-//      OVERRIDE address via the CTE forward branch. No subscription
-//      column write needed.
+//      scoped, NOT consignee-scoped). Includes the Day-53 REGRESSION
+//      row: a pushed task at CURRENT_DATE + 18 days (15-21d band, which
+//      the original 14-day bound missed) MUST be re-pointed + flipped +
+//      fanned out. enqueueBulkUpdateTasks called once with exactly the
+//      pushed subset — every payload carries the server-built
+//      ConsigneeSnapshot + the exception correlation_id. Typed
+//      subscription.address_override_pushed event with counts.
+//   2. Not-yet-materialized pickup (ruling step iii): the exception
+//      row IS the subscription-level stored address — running the
+//      materializer for a beyond-horizon date (+30d, no task row yet)
+//      materializes the new task at the OVERRIDE address via the CTE
+//      forward branch. No subscription column write needed.
 //   3. Partial fan-out failure: failedChunks > 0 → typed event emitted
 //      with the counts, then service re-throws (R2 emit-then-re-throw
 //      posture). Local backfill stays committed.
@@ -32,7 +37,7 @@
 import { randomUUID } from "node:crypto";
 
 import { sql as sqlTag } from "drizzle-orm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
@@ -80,6 +85,17 @@ const EXPECTED_SNAPSHOT = {
     countryCode: "AE",
   },
 };
+
+// Per-test tenants tracked for afterAll teardown. Without cleanup, the
+// 10 same-created_at subscriptions this file seeds intermittently trip
+// the PRE-EXISTING unstable-sort pagination spec in
+// admin-subscriptions-cross-tenant.spec.ts (listAllSubscriptions has no
+// deterministic ORDER BY tiebreaker — flagged as a followup; not this
+// lane's fix). Teardown mirrors task-materialization-per-sub.spec.ts:
+// children only, tenants row kept (audit_events_no_delete RULE breaks
+// ON DELETE CASCADE from tenants — see
+// memory/followup_audit_rule_cascade_conflict.md).
+const SEEDED_TENANTS: Uuid[] = [];
 
 interface Seeded {
   tenant: Uuid;
@@ -174,8 +190,26 @@ async function seedBase(label: string): Promise<Seeded> {
     `);
   });
 
+  SEEDED_TENANTS.push(tenant);
   return { tenant, user, consignee, addressPrimary, addressOverride, subscription, siblingSubscription };
 }
+
+afterAll(async () => {
+  try {
+    await withServiceRole("d52-r5 teardown", async (tx) => {
+      for (const tenant of SEEDED_TENANTS) {
+        await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id = ${tenant}`);
+        await tx.execute(sqlTag`DELETE FROM subscription_exceptions WHERE tenant_id = ${tenant}`);
+        await tx.execute(sqlTag`DELETE FROM subscription_materialization WHERE tenant_id = ${tenant}`);
+        await tx.execute(sqlTag`DELETE FROM subscriptions WHERE tenant_id = ${tenant}`);
+        await tx.execute(sqlTag`DELETE FROM addresses WHERE tenant_id = ${tenant}`);
+        await tx.execute(sqlTag`DELETE FROM consignees WHERE tenant_id = ${tenant}`);
+      }
+    });
+  } catch {
+    /* audit RULE / FK ordering; best-effort cleanup */
+  }
+});
 
 interface SeedTaskInput {
   seeded: Seeded;
@@ -221,7 +255,7 @@ async function readTask(
   });
 }
 
-describe("Day-52 R5 — forward address override → in-horizon backfill + SF bulk fan-out", () => {
+describe("Day-52 R5 (Day-53 horizon correction) — forward address override → full-upcoming backfill + SF bulk fan-out", () => {
   beforeEach(() => {
     enqueueBulkUpdateTasksSpy.mockReset();
     enqueueBulkUpdateTasksSpy.mockImplementation(async (payloads: readonly unknown[]) => ({
@@ -231,24 +265,31 @@ describe("Day-52 R5 — forward address override → in-horizon backfill + SF bu
     }));
   });
 
-  // Case 1
-  it("backfills every in-horizon task on THIS subscription; pushed subset fans out with snapshot; window + sibling boundaries hold", async () => {
+  // Case 1 (incl. the Day-53 +18d regression row)
+  it("backfills EVERY upcoming task on THIS subscription incl. the 15-21d band; pushed subset fans out with snapshot; start/sibling boundaries hold", async () => {
     const seeded = await seedBase("mixed");
     const startDate = isoPlusDays(2);
 
-    const TASK_BEFORE_START = randomUUID() as Uuid; // in horizon, BEFORE start_date
+    const TASK_BEFORE_START = randomUUID() as Uuid; // BEFORE start_date — untouched
     const TASK_PUSHED_A = randomUUID() as Uuid;
     const TASK_PUSHED_B = randomUUID() as Uuid;
+    // Day-53 regression: pushed task in the 15-21d band the original
+    // 14-day bound missed (operator-visible wrong address forever,
+    // since the materializer's ON CONFLICT DO NOTHING never repairs
+    // an existing row).
+    const TASK_PUSHED_FAR = randomUUID() as Uuid;
     const TASK_UNPUSHED = randomUUID() as Uuid;
     const TASK_DELIVERED = randomUUID() as Uuid; // terminal — excluded
     const TASK_SIBLING = randomUUID() as Uuid; // other subscription — untouched
 
     const AWB_A = `AWB-R5-${RUN_ID}-A`;
     const AWB_B = `AWB-R5-${RUN_ID}-B`;
+    const AWB_FAR = `AWB-R5-${RUN_ID}-FAR`;
 
     await seedTask({ seeded, id: TASK_BEFORE_START, subscriptionId: seeded.subscription, date: isoPlusDays(1), awb: `AWB-R5-${RUN_ID}-PRE` });
     await seedTask({ seeded, id: TASK_PUSHED_A, subscriptionId: seeded.subscription, date: isoPlusDays(3), awb: AWB_A });
     await seedTask({ seeded, id: TASK_PUSHED_B, subscriptionId: seeded.subscription, date: isoPlusDays(9), awb: AWB_B });
+    await seedTask({ seeded, id: TASK_PUSHED_FAR, subscriptionId: seeded.subscription, date: isoPlusDays(18), awb: AWB_FAR });
     await seedTask({ seeded, id: TASK_UNPUSHED, subscriptionId: seeded.subscription, date: isoPlusDays(6) });
     await seedTask({ seeded, id: TASK_DELIVERED, subscriptionId: seeded.subscription, date: isoPlusDays(4), awb: `AWB-R5-${RUN_ID}-DEL`, internalStatus: "DELIVERED" });
     await seedTask({ seeded, id: TASK_SIBLING, subscriptionId: seeded.siblingSubscription, date: isoPlusDays(5), awb: `AWB-R5-${RUN_ID}-SIB` });
@@ -268,6 +309,11 @@ describe("Day-52 R5 — forward address override → in-horizon backfill + SF bu
     const pushedB = await readTask(seeded.tenant, TASK_PUSHED_B);
     expect(pushedB.address_id).toBe(seeded.addressOverride);
     expect(pushedB.outbound_sync_state).toBe("pending_update");
+    // Day-53 regression assertion: the +18d row (beyond the retired
+    // 14-day bound, within the 21-day horizon) is re-pointed + flipped.
+    const pushedFar = await readTask(seeded.tenant, TASK_PUSHED_FAR);
+    expect(pushedFar.address_id).toBe(seeded.addressOverride);
+    expect(pushedFar.outbound_sync_state).toBe("pending_update");
     const unpushed = await readTask(seeded.tenant, TASK_UNPUSHED);
     expect(unpushed.address_id).toBe(seeded.addressOverride);
     expect(unpushed.outbound_sync_state).toBe("pending");
@@ -289,17 +335,18 @@ describe("Day-52 R5 — forward address override → in-horizon backfill + SF bu
       patch: { consignee: unknown };
       correlation_id: string;
     }[];
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(3);
     const byTask = new Map(payloads.map((p) => [p.task_id, p]));
     expect(byTask.get(TASK_PUSHED_A)?.awb).toBe(AWB_A);
     expect(byTask.get(TASK_PUSHED_B)?.awb).toBe(AWB_B);
+    expect(byTask.get(TASK_PUSHED_FAR)?.awb).toBe(AWB_FAR);
     for (const p of payloads) {
       expect(p.tenant_id).toBe(seeded.tenant);
       expect(p.correlation_id).toBe(result.correlationId);
       expect(p.patch.consignee).toEqual(EXPECTED_SNAPSHOT);
     }
 
-    // Typed bulk event with counts (backfilled=3 in-window rows; pushed=2).
+    // Typed bulk event with counts (backfilled=4 upcoming rows; pushed=3).
     await withServiceRole("d52-r5 typed event check", async (tx) => {
       type Row = { event_type: string; metadata: Record<string, unknown> };
       const rows = (await tx.execute(sqlTag`
@@ -312,9 +359,9 @@ describe("Day-52 R5 — forward address override → in-horizon backfill + SF bu
         subscription_id: seeded.subscription,
         exception_id: result.exceptionId,
         address_override_id: seeded.addressOverride,
-        backfilled_task_count: 3,
-        pushed_task_count: 2,
-        enqueued_count: 2,
+        backfilled_task_count: 4,
+        pushed_task_count: 3,
+        enqueued_count: 3,
         failed_chunks: 0,
         effective_from: startDate,
       });
@@ -322,7 +369,7 @@ describe("Day-52 R5 — forward address override → in-horizon backfill + SF bu
   });
 
   // Case 2 — future-horizon pickup via the CTE forward branch (ruling step iii)
-  it("materializer picks up the forward override for >14-day-out dates from the exception row alone", async () => {
+  it("materializer picks up the forward override for not-yet-materialized future dates from the exception row alone", async () => {
     const seeded = await seedBase("cte");
     const startDate = isoPlusDays(2);
 
@@ -336,7 +383,7 @@ describe("Day-52 R5 — forward address override → in-horizon backfill + SF bu
     // No tasks existed → no fan-out.
     expect(enqueueBulkUpdateTasksSpy).not.toHaveBeenCalled();
 
-    // Materialize a >14-day-out single day (the scheduled cron's job);
+    // Materialize a beyond-horizon single day (the scheduled cron's job);
     // the CTE's forward-override branch must resolve the override
     // address with NO subscription column having been written.
     const futureDate = isoPlusDays(30);

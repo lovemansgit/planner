@@ -607,17 +607,19 @@ export async function addSubscriptionException(
       }
     }
 
-    // 12c. R5 (plan-PR #335 §2.R5, Love-ruled Day-52) — forward address
-    // override backfills address_id on EVERY in-horizon task on this
-    // subscription (delivery_date >= start_date AND < CURRENT_DATE +
-    // 14 days, ruling-verbatim window) and flips the pushed subset to
-    // 'pending_update'. The >14-day-out future needs no write here:
-    // the exception row inserted at step 10 IS the subscription-level
-    // stored address — the materializer CTE's forward-override branch
-    // (cte-builder.ts resolved_addresses layer 2) reads it on every
-    // future materialization tick. Other subscriptions on the same
-    // consignee are untouched (ruling: subscription-scoped, NOT
-    // consignee-scoped).
+    // 12c. R5 (plan-PR #335 §2.R5, Love-ruled Day-52; Day-53 horizon
+    // correction) — forward address override backfills address_id on
+    // EVERY upcoming materialized task on this subscription
+    // (delivery_date >= start_date, no upper bound — the Day-52
+    // ruling's literal 14-day window was stale pre-Day-28-horizon-bump
+    // framing; Love confirmed full-horizon coverage 2026-06-11) and
+    // flips the pushed subset to 'pending_update'. Not-yet-materialized
+    // future dates need no write here: the exception row inserted at
+    // step 10 IS the subscription-level stored address — the
+    // materializer CTE's forward-override branch (cte-builder.ts
+    // resolved_addresses layer 2) reads it on every future
+    // materialization tick. Other subscriptions on the same consignee
+    // are untouched (ruling: subscription-scoped, NOT consignee-scoped).
     let forwardOverriddenTasks: readonly {
       taskId: Uuid;
       externalTrackingNumber: string | null;

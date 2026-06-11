@@ -34,6 +34,17 @@ audit event following the R2/R3 typed-event precedent
 
 (i) UPDATE `address_id` on every in-horizon task on that subscription
 (`delivery_date >= start_date AND delivery_date < CURRENT_DATE + 14 days`);
+> **Day-53 correction (Love, 2026-06-11):** the literal 14-day figure above was
+> stale framing from before the Day-28 horizon bump
+> (`MATERIALIZATION_HORIZON_DAYS = 21`, `dubai-date.ts`). Love confirmed at the
+> Day-53 check-in that R5 covers **every upcoming delivery on the subscription
+> (full materializer horizon)** — the implementation drops the upper date bound
+> entirely (no tasks exist beyond the horizon; correct across horizon changes).
+> Caught as a reviewer-counter finding against #368 head `1575a7a`: a 14-day
+> bound left materialized tasks 15-21 days out on the old address forever
+> (materializer INSERTs are ON CONFLICT DO NOTHING). See Session A's Day-53
+> rulings memo for the full check-in record; Love's verbatim sentence rides in
+> the #364/#367 merge comments and the #368 fix-round commit.
 (ii) `enqueueBulkUpdateTasks` fan-out SF push per task; (iii) the subscription's
 stored address updates so future cron-materialized tasks pick it up via the
 existing materializer CTE (the `address_override_forward` exception row IS that

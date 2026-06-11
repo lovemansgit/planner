@@ -1439,21 +1439,29 @@ export async function markTaskAddressOverridden(
 }
 
 /**
- * R5 (calendar-management lane Phase 1, plan-PR #335 §2.R5) — apply a
- * forward address override to every in-horizon task on the
- * subscription. Bulk sibling of `markTaskAddressOverridden` directly
- * above: same SET shape (address_id + the 'pending_update' CASE flip
- * on pushed rows, migration 0029), but windowed per the Day-52 ruling
- * verbatim — `delivery_date >= start_date AND delivery_date <
- * CURRENT_DATE + 14 days` (the materialization horizon; >14-day-out
- * tasks don't exist yet and materialize at the new address via the
- * CTE's forward-override branch). Same terminal+SKIPPED status
- * exclusion as the one-off variant.
+ * R5 (calendar-management lane Phase 1, plan-PR #335 §2.R5; Day-53
+ * correction) — apply a forward address override to EVERY upcoming
+ * materialized task on the subscription (`delivery_date >=
+ * start_date`, no upper date bound). Bulk sibling of
+ * `markTaskAddressOverridden` directly above: same SET shape
+ * (address_id + the 'pending_update' CASE flip on pushed rows,
+ * migration 0029). Same terminal+SKIPPED status exclusion as the
+ * one-off variant.
+ *
+ * Day-53 ruling correction (Love, 2026-06-11): the Day-52 ruling's
+ * "CURRENT_DATE + 14 days" window was stale framing from before the
+ * Day-28 horizon bump (MATERIALIZATION_HORIZON_DAYS = 21,
+ * dubai-date.ts). A literal 14-day bound left materialized tasks
+ * 15-21 days out on the OLD address forever — the materializer's
+ * INSERTs are ON CONFLICT DO NOTHING, so re-materialization never
+ * repairs an existing row. No upper bound is the correct shape: no
+ * tasks exist beyond the horizon, and the query stays correct across
+ * any future horizon change.
  *
  * Returns ALL updated rows (RETURNING tuple per row) so the caller can
  * fan out SF updates for the pushed subset — mirrors
  * `markTasksCanceledInWindow` (R2) below. Empty array = nothing
- * materialized in the window; the exception row alone carries the
+ * materialized from start_date on; the exception row alone carries the
  * override forward.
  */
 export async function markTasksAddressOverriddenForward(
@@ -1473,7 +1481,6 @@ export async function markTasksAddressOverriddenForward(
     WHERE tenant_id = ${tenantId}
       AND subscription_id = ${subscriptionId}
       AND delivery_date >= ${startDate}
-      AND delivery_date < CURRENT_DATE + interval '14 days'
       AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'SKIPPED')
     RETURNING id, external_tracking_number
   `)) as readonly { id: string; external_tracking_number: string | null }[];
