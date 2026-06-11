@@ -27,6 +27,7 @@
 
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
+import { podProxyPhotoPaths } from "@/modules/tasks/pod-proxy";
 import type { Task } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
@@ -812,7 +813,11 @@ function PodCell({
   }
   // tone === "active" requires task.podPhotos to be non-null + non-empty
   // per podCellState contract.
-  const photos = task.podPhotos ?? [];
+  //
+  // Day-53 POD proxy (Love-ruled UAT-blocking): the lightbox renders
+  // same-origin proxy paths, not the stored SF pre-signed URLs — the
+  // server fetches those (src/modules/tasks/pod-proxy.ts grounding).
+  const photos = podProxyPhotoPaths(task.id, task.podPhotos) ?? [];
   return (
     <button
       type="button"
