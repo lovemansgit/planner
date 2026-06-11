@@ -319,12 +319,14 @@ describe("listTasksByTenant", () => {
   });
 
   describe("searchTerm filter", () => {
-    it("omits the ILIKE clause and consignee join when searchTerm is undefined", async () => {
+    it("omits the ILIKE clause when searchTerm is undefined (consignee join now unconditional per R6)", async () => {
       const tx = makeStubTx([[]]);
       await listTasksByTenant(tx, TENANT_ID);
       const captured = compile(tx.execute.mock.calls[0][0]);
       expect(captured.sql).not.toMatch(/ILIKE/i);
-      expect(captured.sql).not.toMatch(/JOIN consignees/i);
+      // R6: the consignees join is no longer search-gated — it is always
+      // present so the list can project the consignee name/phone columns.
+      expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
     });
 
     it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
@@ -353,6 +355,82 @@ describe("listTasksByTenant", () => {
       expect(captured.sql).toMatch(/ILIKE/i);
       expect(captured.params).toContain("DELIVERED");
       expect(captured.params).toContain("%Sarah%");
+    });
+  });
+
+  // Day-53 R6-part-1 — consignee-context columns on /tasks. The list now
+  // projects the consignee name/phone plus the override-resolved
+  // effective address (tasks.address_id → addresses, falling through to
+  // the consignee's own address fields when address_id IS NULL).
+  describe("consignee + effective-address projection (R6)", () => {
+    it("joins consignees unconditionally even with no search term", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID);
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/LEFT JOIN consignees c\b/i);
+    });
+
+    it("joins addresses on the task's effective address_id", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID);
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/LEFT JOIN addresses a\b/i);
+      expect(captured.sql).toMatch(/a\.id\s*=\s*t\.address_id/i);
+    });
+
+    it("projects consignee name/phone and the COALESCE effective-address columns", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID);
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/c\.name\s+AS\s+consignee_name/i);
+      expect(captured.sql).toMatch(/c\.phone\s+AS\s+consignee_phone/i);
+      expect(captured.sql).toMatch(
+        /COALESCE\(a\.line,\s*c\.address_line\)\s+AS\s+effective_address_line/i,
+      );
+      expect(captured.sql).toMatch(
+        /COALESCE\(a\.district,\s*c\.district\)\s+AS\s+effective_district/i,
+      );
+      expect(captured.sql).toMatch(
+        /COALESCE\(a\.emirate,\s*c\.emirate_or_region\)\s+AS\s+effective_emirate/i,
+      );
+    });
+
+    it("maps the projected consignee + effective-address columns onto each row", async () => {
+      const tx = makeStubTx([
+        [
+          taskRowWithPackagesFixture([], {
+            consignee_name: "Sarah Khan",
+            consignee_phone: "+971500000001",
+            effective_address_line: "Villa 12, Street 4",
+            effective_district: "Al Barsha",
+            effective_emirate: "Dubai",
+          }),
+        ],
+      ]);
+      const result = await listTasksByTenant(tx, TENANT_ID);
+      expect(result[0].consigneeName).toBe("Sarah Khan");
+      expect(result[0].consigneePhone).toBe("+971500000001");
+      expect(result[0].effectiveAddressLine).toBe("Villa 12, Street 4");
+      expect(result[0].effectiveDistrict).toBe("Al Barsha");
+      expect(result[0].effectiveEmirate).toBe("Dubai");
+    });
+
+    it("maps NULL consignee/address projection columns to null (fall-through with no data)", async () => {
+      const tx = makeStubTx([
+        [
+          taskRowWithPackagesFixture([], {
+            consignee_name: null,
+            consignee_phone: null,
+            effective_address_line: null,
+            effective_district: null,
+            effective_emirate: null,
+          }),
+        ],
+      ]);
+      const result = await listTasksByTenant(tx, TENANT_ID);
+      expect(result[0].consigneeName).toBeNull();
+      expect(result[0].effectiveAddressLine).toBeNull();
+      expect(result[0].effectiveEmirate).toBeNull();
     });
   });
 });

@@ -70,10 +70,12 @@ import { sql as sqlTag } from "drizzle-orm";
 import { z } from "zod";
 
 import { emit as auditEmit } from "@/modules/audit";
+import { enqueuePodCapture } from "@/modules/pod-capture";
 import { withTenant } from "@/shared/db";
 import { isUniqueViolation } from "@/shared/db-errors";
 import { ValidationError } from "@/shared/errors";
 import { logger } from "@/shared/logger";
+import { captureException } from "@/shared/sentry-capture";
 import type { Uuid } from "@/shared/types";
 
 import type { InternalTaskStatus, WebhookEvent } from "../../types";
@@ -532,6 +534,35 @@ export async function applyWebhookStatusEvent(
     await emitStatusChangedAudit(tenantId, txBundle.meta);
     if (txBundle.meta.podPhotoCount !== null && txBundle.meta.podPhotoCount > 0) {
       await emitPodReceivedAudit(tenantId, txBundle.meta);
+
+      // Day-53 EVE — durable POD capture (cleared #413): enqueue the
+      // capture job while the SF pre-signed URLs are seconds old (the
+      // 7-day TTL clock started at mint). Best-effort: a publish
+      // failure must not fail the webhook 200 — the Sentry event is
+      // the ops signal, and the loss window is TTL-bounded (documented
+      // accepted risk; plan §4.1).
+      try {
+        await enqueuePodCapture({
+          tenant_id: tenantId,
+          task_id: txBundle.meta.taskId,
+          correlation_id: txBundle.meta.webhookEventsId,
+        });
+      } catch (enqueueErr) {
+        log.warn({
+          operation: "apply_webhook_status_event",
+          error_code: "pod_capture_enqueue_failed",
+          tenant_id: tenantId,
+          task_id: txBundle.meta.taskId,
+          webhook_events_id: txBundle.meta.webhookEventsId,
+          message: enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr),
+        });
+        captureException(enqueueErr, {
+          component: "apply_webhook_status_event",
+          operation: "pod_capture_enqueue",
+          tenant_id: tenantId,
+          task_id: txBundle.meta.taskId,
+        });
+      }
     }
   }
 

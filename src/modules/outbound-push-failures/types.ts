@@ -15,8 +15,18 @@ import type { IsoTimestamp, Uuid } from "@/shared/types";
 /**
  * The outbound action that failed. Closed enum; mirrors the CHECK
  * constraint on outbound_push_failures.operation.
+ *
+ * Day-53 EVE: caught up with the CHECK — 'reschedule' (0025, the
+ * Phase-2 reserve the migration landed early) and 'pod_capture'
+ * (0031, the POD-capture failure twin) were in the constraint but
+ * missing here.
  */
-export type OutboundOperation = "update" | "cancel" | "bulk_cancel";
+export type OutboundOperation =
+  | "update"
+  | "cancel"
+  | "bulk_cancel"
+  | "reschedule"
+  | "pod_capture";
 
 /**
  * Categorised failure reasons. Mirrors the CHECK constraint on

@@ -1048,6 +1048,9 @@ export async function resumeSubscription(
     let newEndDate: string | null = subscription.endDate;
     let endDateChanged = false;
     let restoredTaskCount = 0;
+    // R16: restored rows that were SF-cancelled (carried an AWB before
+    // the restore cleared it) — the post-commit re-push fan-out input.
+    let reactivationRows: readonly { taskId: Uuid; previousAwb: string }[] = [];
 
     if (earlyManual && subscription.endDate !== null) {
       const subForHelpers: SubscriptionForSkip = {
@@ -1090,13 +1093,22 @@ export async function resumeSubscription(
       }
 
       // Restore tasks where target_date >= actual_resume_date AND <= pause_end.
-      restoredTaskCount = await markTasksRestoredInWindow(
+      // R16: the restore clears external ids on SF-cancelled rows and
+      // returns them (with the pre-clear AWB) for the re-push fan-out.
+      const restoredRows = await markTasksRestoredInWindow(
         tx,
         tenantId,
         id,
         actualResumeDate,
         pauseWindow.end_date,
       );
+      restoredTaskCount = restoredRows.length;
+      reactivationRows = restoredRows
+        .filter((r) => r.previous_external_tracking_number !== null)
+        .map((r) => ({
+          taskId: r.id as Uuid,
+          previousAwb: r.previous_external_tracking_number as string,
+        }));
     }
 
     // Flip subscription status + end_date.
@@ -1127,6 +1139,7 @@ export async function resumeSubscription(
       previousEndDate: subscription.endDate,
       endDateChanged,
       restoredTaskCount,
+      reactivationRows,
     };
   });
 
@@ -1136,12 +1149,13 @@ export async function resumeSubscription(
       actual_resume_date: null,
       new_end_date: null,
       restored_task_count: 0,
+      reactivated_task_count: 0,
       status: "already_active",
       http_status: 200,
     };
   }
 
-  const { pauseWindow, actualResumeDate, newEndDate, previousEndDate, endDateChanged, restoredTaskCount } = txResult;
+  const { pauseWindow, actualResumeDate, newEndDate, previousEndDate, endDateChanged, restoredTaskCount, reactivationRows: reactivation } = txResult;
 
   const baseEmit = {
     actorKind: ctx.actor.kind,
@@ -1182,11 +1196,58 @@ export async function resumeSubscription(
     });
   }
 
+  // R16 (plan memory/plans/day-53-r16-resume-sf-reactivation.md §2):
+  // re-push the restored rows that were SF-cancelled. SF cancel is
+  // terminal (un-cancel probe → 403), so re-activation = a FRESH SF
+  // create through the EXISTING push pipeline — the restore tx cleared
+  // the rows' external ids, so pushSingleTask's already-pushed guard
+  // passes and markTaskPushed installs the new AWB. Post-commit,
+  // emit-then-re-throw on partial enqueue failure (R2 posture
+  // verbatim): the local restore is durable; the rows sit in
+  // outbound_sync_state='pending' where the materializer
+  // reconciliation sweep re-discovers them.
+  if (reactivation.length > 0) {
+    const batchResult = await enqueueTaskPushBatch({
+      tenantId,
+      taskIds: reactivation.map((r) => r.taskId),
+      requestId: ctx.requestId,
+    });
+
+    await emit({
+      ...baseEmit,
+      eventType: "subscription.resume_reactivations_pushed",
+      resourceType: "subscription",
+      resourceId: id,
+      metadata: {
+        subscription_id: id,
+        correlation_id: pauseWindow.correlation_id,
+        actual_resume_date: actualResumeDate,
+        reactivated_task_count: reactivation.length,
+        enqueued_count: batchResult.enqueuedCount,
+        failed_chunks: batchResult.failedChunks,
+        // Forensic bridge: the restore cleared these AWBs off the rows;
+        // ops triage of an escaped SF cancel (in-flight/failed at resume
+        // time) finds the old AWB only here + webhook_events + DLQ.
+        previous_awbs: reactivation.map((r) => ({
+          task_id: r.taskId,
+          awb: r.previousAwb,
+        })),
+      },
+    });
+
+    if (batchResult.failedChunks > 0) {
+      throw new Error(
+        `resumeSubscription: SF re-activation fan-out partially failed — ${batchResult.failedChunks} chunk(s) of ${reactivation.length} re-push payload(s) did not enqueue. Tasks are restored locally and marked pending; SF re-activation is pending the reconciliation sweep or ops follow-up.`,
+      );
+    }
+  }
+
   return {
     correlation_id: pauseWindow.correlation_id,
     actual_resume_date: actualResumeDate,
     new_end_date: newEndDate,
     restored_task_count: restoredTaskCount,
+    reactivated_task_count: reactivation.length,
     status: "resumed",
     http_status: 200,
   };

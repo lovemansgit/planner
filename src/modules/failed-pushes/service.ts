@@ -57,11 +57,14 @@ import {
   bulkMarkUnresolvedAsResolved,
   findFailedPushById,
   insertFailedPush,
+  listResolvedByTenant,
   listUnresolvedByTenant,
   markUnresolvedAsResolved,
   updateFailedPushAttempt,
 } from "./repository";
-import type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
+import type { FailedPush, FailureReason, RecordFailedPushInput, ResolvedFailedPush } from "./types";
+
+export type { ResolvedFailedPush } from "./types";
 
 // Closed set of valid failure reasons — runtime guard against bypass
 // routes that supply a string outside the type's union. The DB CHECK
@@ -749,4 +752,34 @@ export async function retryFailedPush(
     failedPush: refreshed ?? failedPush,
     outcome,
   };
+}
+
+// =============================================================================
+// listResolvedFailedPushes — Day-53 R12 (resolved-rows review page)
+// =============================================================================
+
+/**
+ * List RESOLVED failed_pushes rows for the requesting tenant, newest
+ * resolution first. Read-only review log for
+ * /admin/failed-pushes/resolved (Path B per
+ * memory/followup_resolved_rows_visibility_gap.md; plan at
+ * memory/plans/day-53-session-c-r12-resolved-rows.md).
+ *
+ * Gated by `failed_pushes:retry` — the same permission as the
+ * work-queue page this extends. Deliberately NOT the Day-30
+ * `failed_pushes:read` split: resolved rows carry the same
+ * Tenant-Admin-only fields (resolution notes, failure context) that
+ * the split keeps away from read-but-not-retry roles.
+ *
+ * Tenant-scoped via `withTenant` (RLS defence-in-depth alongside the
+ * explicit WHERE tenant_id in the repo query). Read-not-audited per
+ * R-4 — reviewing resolution history is operator-routine.
+ */
+export async function listResolvedFailedPushes(
+  ctx: RequestContext,
+): Promise<readonly ResolvedFailedPush[]> {
+  requirePermission(ctx, "failed_pushes:retry");
+  assertTenantScoped(ctx, "failed_pushes:list_resolved");
+  const tenantId = ctx.tenantId;
+  return withTenant(tenantId, async (tx) => listResolvedByTenant(tx, tenantId));
 }

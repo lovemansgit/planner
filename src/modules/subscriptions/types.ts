@@ -232,6 +232,12 @@ export interface ResumeSubscriptionResult {
   readonly new_end_date: string | null;
   /** Tasks restored to 'CREATED' (early manual resume only; 0 on auto). */
   readonly restored_task_count: number;
+  /**
+   * R16 — restored tasks that were SF-cancelled and re-entered the push
+   * pipeline for a fresh SF create (subset of restored_task_count;
+   * 0 on auto/already_active).
+   */
+  readonly reactivated_task_count: number;
   readonly status: "resumed" | "already_active";
   readonly http_status: 200;
 }

@@ -191,3 +191,51 @@ describe("compile() helper sanity", () => {
     expect(params).toEqual([FAILED_PUSH_ID, TENANT_ID]);
   });
 });
+
+describe("listResolvedByTenant (Day-53 R12)", () => {
+  it("SELECTs resolved rows only, LEFT JOINs users for resolver email, newest resolved first", async () => {
+    const tx = makeStubTx([[]]);
+    const { listResolvedByTenant } = await import("../repository");
+    await listResolvedByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/FROM failed_pushes fp/i);
+    expect(captured.sql).toMatch(/LEFT JOIN users u ON u\.id\s*=\s*fp\.resolved_by/i);
+    expect(captured.sql).toMatch(/fp\.tenant_id\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/fp\.resolved_at\s+IS\s+NOT\s+NULL/i);
+    expect(captured.sql).toMatch(/ORDER BY fp\.resolved_at\s+DESC/i);
+    expect(captured.params).toContain(TENANT_ID);
+  });
+
+  it("maps rows to the ResolvedFailedPush shape, with NULL resolver email surviving (system-resolved)", async () => {
+    const resolvedAt = new Date("2026-06-11T12:00:00.000Z");
+    const tx = makeStubTx([
+      [
+        {
+          id: FAILED_PUSH_ID,
+          task_id: TASK_ID,
+          failure_reason: "client_4xx",
+          http_status: 422,
+          attempt_count: 3,
+          first_failed_at: FIXED_NOW,
+          resolved_at: resolvedAt,
+          resolved_by_email: null,
+          resolution_notes: "backlog cleanup",
+        },
+      ],
+    ]);
+    const { listResolvedByTenant } = await import("../repository");
+    const rows = await listResolvedByTenant(tx, TENANT_ID);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      id: FAILED_PUSH_ID,
+      taskId: TASK_ID,
+      failureReason: "client_4xx",
+      httpStatus: 422,
+      attemptCount: 3,
+      firstFailedAt: FIXED_NOW.toISOString(),
+      resolvedAt: resolvedAt.toISOString(),
+      resolvedByEmail: null,
+      resolutionNotes: "backlog cleanup",
+    });
+  });
+});

@@ -77,3 +77,24 @@ export interface RecordFailedPushInput {
   readonly failureDetail?: string;
   readonly httpStatus?: number;
 }
+
+/**
+ * Day-53 R12 — narrow read shape for the resolved-rows review page
+ * (/admin/failed-pushes/resolved). Exactly what that read-only surface
+ * renders, nothing more: no taskPayload / failureDetail dump, no
+ * tenantId echo. `resolvedByEmail` is the operator-readable resolver
+ * (LEFT JOIN users); NULL means system-resolved (attribution lives in
+ * resolutionNotes per the markFailedPushResolved convention) or a
+ * since-deleted resolver — both render as "System"/em-dash.
+ */
+export interface ResolvedFailedPush {
+  readonly id: Uuid;
+  readonly taskId: Uuid;
+  readonly failureReason: FailureReason;
+  readonly httpStatus: number | null;
+  readonly attemptCount: number;
+  readonly firstFailedAt: IsoTimestamp;
+  readonly resolvedAt: IsoTimestamp;
+  readonly resolvedByEmail: string | null;
+  readonly resolutionNotes: string | null;
+}

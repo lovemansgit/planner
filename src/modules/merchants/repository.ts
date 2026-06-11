@@ -83,6 +83,7 @@ type TenantRow = {
   pickup_address_emirate: string | null;
   suitefleet_customer_code: string | null;
   suitefleet_region_id: string;
+  suitefleet_auth_method_override: string | null;
   suitefleet_credential_1_vault_id: string | null;
   suitefleet_credential_2_vault_id: string | null;
   created_at: Date | string;
@@ -132,6 +133,8 @@ function mapRow(row: TenantRow): Merchant {
     pickupAddress,
     suitefleetCustomerCode: row.suitefleet_customer_code,
     suitefleetRegionId: row.suitefleet_region_id as Uuid,
+    suitefleetAuthMethodOverride:
+      row.suitefleet_auth_method_override as Merchant["suitefleetAuthMethodOverride"],
     suitefleetCredential1VaultId: row.suitefleet_credential_1_vault_id as Uuid | null,
     suitefleetCredential2VaultId: row.suitefleet_credential_2_vault_id as Uuid | null,
     createdAt: toIso(row.created_at),
