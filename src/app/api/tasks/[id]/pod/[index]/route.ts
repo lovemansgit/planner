@@ -1,0 +1,136 @@
+// GET /api/tasks/[id]/pod/[index]   task:read → POD photo bytes
+//
+// Day-53 POD proxy (Love-ruled UAT-blocking, decision_d53_pm_uat_calls.md
+// ruling 4). SF's POD photos are S3 pre-signed URLs (7-day TTL) that the
+// browser may refuse even within TTL (ERR_BLOCKED_BY_RESPONSE, Day-33)
+// and S3 hard-403s after TTL. This route resolves the stored URL
+// server-side (same tenant + permission gate as the task row), fetches
+// it with Node sockets — immune to browser response policy — and
+// streams the bytes back same-origin. Grounding + the post-UAT durable
+// ingest-capture follow-on: src/modules/tasks/pod-proxy.ts and
+// memory/followup_pod_broken_image_pre_existing.md.
+//
+// Same security posture as /api/tasks/labels: the operator browser
+// never sees the SF host or the signed URL — only this Planner path.
+//
+// Status mapping:
+//   200 image/*           → 200, bytes streamed, short private cache
+//   S3 403 (sig expired)  → 410 Gone — vendor-dead row, only SF can
+//                           re-sign; the UI's broken-image fallback is
+//                           honest here
+//   anything else         → 502 upstream error
+//   fetch threw           → 502 upstream error
+
+import "server-only";
+
+import { randomUUID } from "node:crypto";
+
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+import { getPodPhotoSourceUrl } from "@/modules/tasks";
+import { classifyPodUpstreamResponse } from "@/modules/tasks/pod-proxy";
+import { buildRequestContext } from "@/shared/request-context";
+import { ValidationError } from "@/shared/errors";
+import { logger } from "@/shared/logger";
+import type { Uuid } from "@/shared/types";
+
+import { errorResponse } from "../../../../_lib/error-response";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+// Node runtime — withTenant + the S3 fetch require Node sockets.
+export const runtime = "nodejs";
+
+const log = logger.with({ component: "pod_proxy_route" });
+
+const IdParamSchema = z.string().uuid({ message: "id must be a uuid" });
+// SF tasks carry a handful of photos; 50 is a generous structural bound
+// that keeps the path namespace from accepting arbitrary integers.
+const IndexParamSchema = z.coerce.number().int().min(0).max(50);
+
+type RouteContext = { params: Promise<{ id: string; index: string }> };
+
+export async function GET(_req: Request, { params }: RouteContext): Promise<Response> {
+  const requestId = randomUUID();
+  try {
+    const { id: rawId, index: rawIndex } = await params;
+    const idResult = IdParamSchema.safeParse(rawId);
+    if (!idResult.success) {
+      throw new ValidationError(`id must be a uuid, got '${rawId}'`);
+    }
+    const indexResult = IndexParamSchema.safeParse(rawIndex);
+    if (!indexResult.success) {
+      throw new ValidationError(`index must be a small non-negative integer, got '${rawIndex}'`);
+    }
+
+    const ctx = await buildRequestContext(
+      `/api/tasks/${idResult.data}/pod/${indexResult.data}`,
+      requestId,
+    );
+    const sourceUrl = await getPodPhotoSourceUrl(
+      ctx,
+      idResult.data as Uuid,
+      indexResult.data,
+    );
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(sourceUrl, { redirect: "follow" });
+    } catch (fetchErr) {
+      log.warn({
+        operation: "pod_proxy_fetch",
+        error_code: "upstream_unreachable",
+        task_id: idResult.data,
+        photo_index: indexResult.data,
+        request_id: requestId,
+        message: fetchErr instanceof Error ? fetchErr.message : String(fetchErr),
+      });
+      return NextResponse.json(
+        { error: "pod photo upstream unreachable" },
+        { status: 502 },
+      );
+    }
+
+    const contentType = upstream.headers.get("content-type");
+    const klass = classifyPodUpstreamResponse(upstream.status, contentType);
+
+    if (klass === "expired") {
+      // Past-TTL pre-signed URL: vendor-dead, deterministic. 410 (not
+      // 404) so the failure is distinguishable from a missing task or
+      // index in logs and devtools.
+      return NextResponse.json(
+        { error: "pod photo url expired at the delivery vendor" },
+        { status: 410 },
+      );
+    }
+    if (klass === "upstream_error") {
+      log.warn({
+        operation: "pod_proxy_fetch",
+        error_code: "upstream_error",
+        task_id: idResult.data,
+        photo_index: indexResult.data,
+        request_id: requestId,
+        upstream_status: upstream.status,
+        upstream_content_type: contentType,
+      });
+      return NextResponse.json(
+        { error: "pod photo upstream error" },
+        { status: 502 },
+      );
+    }
+
+    const bytes = await upstream.arrayBuffer();
+    return new NextResponse(bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType ?? "image/jpeg",
+        // Same-tenant authorized bytes; short private cache keeps the
+        // lightbox snappy without persisting past the operator session.
+        "Cache-Control": "private, max-age=300",
+      },
+    });
+  } catch (e) {
+    return errorResponse(e);
+  }
+}
