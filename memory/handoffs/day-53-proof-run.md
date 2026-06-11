@@ -16,6 +16,6 @@ Merchant detail page now renders the EFFECTIVE auth method (`override ?? region 
 
 ## 3. Standing state
 
-- Parked queue: #394 (Session B nav label, needs-directional-ruling) + #396 (this lane, parked-t2).
+- Parked queue at close: #396 (this lane, parked-t2) + #398 (Session B docs, needs-directional-ruling). #394 was merged by Love mid-session.
 - Temp proof spec kept untracked at `tests/sandbox/demo-bistro-apikey-proof.spec.ts` for an instant re-run on Love's "re-entered" — never to be committed.
 - Production provisioning gate: CLOSED (header shape still wire-unconfirmed).
