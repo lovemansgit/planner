@@ -479,3 +479,70 @@ describe("SuiteFleetTokenCache — custom refreshLeadTimeMs", () => {
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// =============================================================================
+// Day-53 — api_key renewal strategy (plan: day-53-sf-apikey-production-auth-lane.md §2)
+// =============================================================================
+//
+// The refresh wire (GET /api/auth/refresh + Cookie) is OAuth-verified
+// ONLY — the api_key refresh wire is the decision memo's Q4 residual.
+// api_key sessions therefore skip the refresh attempt entirely and
+// renew via full loginApiKey (30-day tokens → renewal fires ~monthly).
+
+const APIKEY_CREDENTIALS: SuiteFleetCredentials = {
+  auth_method: "api_key",
+  apiKey: "ak_prod_sample",
+  secretKey: "sk_prod_sample",
+  clientId: "transcorpuae",
+  customerId: 9001,
+};
+
+describe("SuiteFleetTokenCache — api_key renewal skips the unverified refresh wire (Day-53)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renews an api_key session via full login — refresh is NEVER attempted", async () => {
+    const h = buildHarness();
+    h.resolveMock.mockResolvedValue(APIKEY_CREDENTIALS);
+    // 30-day access token per the api_key contract.
+    h.loginMock.mockResolvedValueOnce(
+      makeTokens({ fromTime: h.clock.now, accessExpiresInMs: 30 * 24 * 60 * 60 * 1000 }),
+    );
+    await h.cache.getSession(TENANT_A);
+
+    // Advance to 30 minutes before expiry — inside the T-1h window.
+    h.clock.now += 30 * 24 * 60 * 60 * 1000 - 30 * 60 * 1000;
+
+    h.loginMock.mockResolvedValueOnce(
+      makeTokens({
+        accessToken: "AT.relogin",
+        refreshToken: "RT.relogin",
+        fromTime: h.clock.now,
+        accessExpiresInMs: 30 * 24 * 60 * 60 * 1000,
+      }),
+    );
+
+    const renewed = await h.cache.getSession(TENANT_A);
+
+    expect(h.refreshMock).not.toHaveBeenCalled();
+    expect(h.loginMock).toHaveBeenCalledTimes(2);
+    expect(h.loginMock).toHaveBeenLastCalledWith(APIKEY_CREDENTIALS);
+    expect(renewed.token).toBe("AT.relogin");
+  });
+
+  it("oauth sessions still attempt refresh first (regression pin)", async () => {
+    const h = buildHarness();
+    h.loginMock.mockResolvedValueOnce(makeTokens({ fromTime: h.clock.now }));
+    await h.cache.getSession(TENANT_A);
+
+    h.clock.now += 23.5 * 60 * 60 * 1000;
+    h.refreshMock.mockResolvedValueOnce(
+      makeTokens({ accessToken: "AT.oauth-refreshed", fromTime: h.clock.now }),
+    );
+
+    const renewed = await h.cache.getSession(TENANT_A);
+
+    expect(h.refreshMock).toHaveBeenCalledTimes(1);
+    expect(h.loginMock).toHaveBeenCalledTimes(1);
+    expect(renewed.token).toBe("AT.oauth-refreshed");
+  });
+});
