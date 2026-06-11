@@ -108,7 +108,7 @@ export function SearchBar({
         placeholder={placeholder}
         inputMode="search"
         autoComplete="off"
-        className="w-full max-w-md border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:border-navy focus:bg-stone-100 focus:outline-none"
+        className="w-full max-w-md border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:border-navy focus:bg-ivory focus:outline-none"
       />
     </div>
   );

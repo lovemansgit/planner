@@ -36,6 +36,7 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
 
+import { AuthMethodSwitch } from "./_components/AuthMethodSwitch";
 import { CredentialsForm } from "./_components/CredentialsForm";
 
 export const dynamic = "force-dynamic";
@@ -97,15 +98,22 @@ export default async function CredentialsPage({ params }: CredentialsPageProps) 
             Region: <span className="font-medium text-navy">{state.region.displayName}</span> ·
             authentication method:{" "}
             <span className="font-medium text-navy">
-              {state.region.authMethod === "oauth" ? "OAuth" : "API Key"}
+              {state.effectiveAuthMethod === "oauth" ? "OAuth" : "API Key"}
             </span>
+            {state.authMethodOverride !== null ? " (merchant override)" : null}
           </p>
         </header>
+
+        <AuthMethodSwitch
+          tenantId={state.tenantId}
+          effectiveMethod={state.effectiveAuthMethod}
+          overrideActive={state.authMethodOverride !== null}
+        />
 
         <CredentialsForm
           tenantId={state.tenantId}
           merchantName={state.merchantName}
-          authMethod={state.region.authMethod}
+          authMethod={state.effectiveAuthMethod}
           hasCredentials={state.hasCredentials}
         />
       </div>

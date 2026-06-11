@@ -26,7 +26,7 @@ export function ForwardOverrideConfirmDialog({
       role="alertdialog"
       aria-modal="true"
       aria-label="Confirm forward address override"
-      className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-navy/30 p-4"
+      className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-scrim p-4"
     >
       <div className="w-full rounded-sm border border-stone-200 border-t-[1px] border-t-green bg-surface-primary p-4">
         <p className="text-sm text-navy">{FORWARD_OVERRIDE_CONFIRM_COPY}</p>

@@ -42,10 +42,10 @@ export function TopNav({ permissions, userIdentity }: TopNavProps) {
       aria-label="Primary"
       className="border-b border-[color:var(--color-border-strong)] bg-surface-primary"
     >
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-12 py-6">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-y-4 px-12 py-6">
         <Link
           href="/"
-          className="flex items-center gap-3 transition-opacity duration-150 hover:opacity-80"
+          className="flex shrink-0 items-center gap-3 rounded-sm transition-opacity duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
           aria-label="Subscription Planner — Transcorp home"
         >
           <Image
@@ -61,7 +61,7 @@ export function TopNav({ permissions, userIdentity }: TopNavProps) {
             Subscription planner
           </span>
         </Link>
-        <ul className="flex items-center gap-8">
+        <ul className="flex flex-wrap items-center gap-x-8 gap-y-2">
           {items.map((item) => {
             const active = isActiveNavPath(pathname, item);
             return (
@@ -71,8 +71,8 @@ export function TopNav({ permissions, userIdentity }: TopNavProps) {
                   aria-current={active ? "page" : undefined}
                   className={
                     active
-                      ? "border-b-2 border-green pb-1 text-sm font-medium text-navy"
-                      : "text-sm text-[color:var(--color-text-secondary)] hover:text-navy"
+                      ? "rounded-sm border-b-2 border-green pb-1 text-sm font-medium text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
+                      : "rounded-sm text-sm text-[color:var(--color-text-secondary)] transition-colors duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:text-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
                   }
                 >
                   {item.label}

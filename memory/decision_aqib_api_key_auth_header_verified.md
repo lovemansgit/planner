@@ -80,3 +80,15 @@ Closing the gate requires production-region api_key test credentials **plus** ex
 ## Meta
 
 Filed 9 June 2026 as part of the API-key auth-unblock T2 (branch `fix/d36-a-api-key-auth-header`, off main `3beb33c`). Companion to the `loginApiKey()` implementation in the same PR. Production provisioning (NOT merge) is gated on the probe per the Rule-A caveat. Rotates `followup_aqib_api_key_auth_header_pending.md` from load-bearing to resolved.
+
+---
+
+## Day-54 annotation (append-only) — "sandbox is OAuth-only" was a Planner-side assumption, corrected by Love
+
+> "Love's correction, 2026-06-11: SuiteFleet accepts BOTH auth methods on ALL tenants, sandbox included — 'sandbox is OAuth-only' was a Planner-side assumption, not a vendor limitation."
+
+This memo's probe-gate section asserts "There is NO sandbox api_key path. The sandbox region (transcorpsb) is OAuth-only" and "a true probe needs a production-region api_key endpoint." Per the correction those statements described **Planner's own region seeding**, not SuiteFleet. Consequences (Day-53/54 night lane, `memory/decision_d53_night_sandbox_apikey_lane.md`):
+
+- The header-shape probe AND the Q4 refresh-wire residual are provable on **sandbox** Client Credentials — production credentials and production-probe authorization are no longer prerequisites for closing them.
+- The production provisioning gate itself is unchanged: the first production-region merchant still waits on the probe's empirical confirmation — the probe just gained a sandbox target (Demo Bistro, on Love's clearance).
+- Original text above left intact per the append-only discipline.

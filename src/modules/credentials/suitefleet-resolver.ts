@@ -69,6 +69,7 @@ interface ResolverRow {
   readonly suitefleet_customer_code: string | null;
   readonly suitefleet_credential_1_vault_id: string | null;
   readonly suitefleet_credential_2_vault_id: string | null;
+  readonly auth_method_override: string | null;
   readonly region_client_id: string;
   readonly region_status: string;
   readonly region_auth_method: string;
@@ -83,6 +84,7 @@ export async function resolveSuiteFleetCredentials(
         t.suitefleet_customer_code,
         t.suitefleet_credential_1_vault_id,
         t.suitefleet_credential_2_vault_id,
+        t.suitefleet_auth_method_override AS auth_method_override,
         r.client_id   AS region_client_id,
         r.status      AS region_status,
         r.auth_method AS region_auth_method
@@ -159,12 +161,19 @@ export async function resolveSuiteFleetCredentials(
   ]);
 
   const clientId = row.region_client_id;
-  const authMethod = row.region_auth_method;
+  // Day-54 per-merchant override (migration 0030, plan
+  // day-54-sandbox-apikey-method-switch.md §2): the merchant's override
+  // wins over the region default. Vault-pair semantics follow the
+  // EFFECTIVE method; setMerchantAuthMethodOverride clears the pair on
+  // change, so the fail-closed credentials_not_configured branch above
+  // fires before a stale pair could ever be misread here.
+  const authMethod = row.auth_method_override ?? row.region_auth_method;
 
   log.debug({
     operation: "resolve",
     tenant_id: tenantId,
     auth_method: authMethod,
+    override_active: row.auth_method_override !== null,
     source: "db",
   });
 
@@ -187,11 +196,12 @@ export async function resolveSuiteFleetCredentials(
     };
   }
 
-  // Defensive — CHECK constraint on suitefleet_regions.auth_method
-  // (oauth | api_key) makes this branch unreachable. Surface as
-  // CredentialError rather than letting an unexpected enum value silently
-  // bypass the discriminator switch downstream.
+  // Defensive — CHECK constraints on suitefleet_regions.auth_method AND
+  // tenants.suitefleet_auth_method_override (oauth | api_key) make this
+  // branch unreachable. Surface as CredentialError rather than letting an
+  // unexpected enum value silently bypass the discriminator switch
+  // downstream.
   throw new CredentialError(
-    `SuiteFleet credentials for tenant ${tenantId}: unknown region.auth_method '${authMethod}'`,
+    `SuiteFleet credentials for tenant ${tenantId}: unknown effective auth_method '${authMethod}'`,
   );
 }

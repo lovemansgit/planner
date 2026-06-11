@@ -12,11 +12,13 @@
 // Day-21) it must be probed against a LIVE api_key-region endpoint before
 // merge. See memory/decision_aqib_api_key_auth_header_verified.md.
 //
-// IMPORTANT — there is NO sandbox api_key endpoint: the sandbox region
-// (transcorpsb) is OAuth-only. This probe needs PRODUCTION-region api_key
-// credentials (transcorp / transcorpuae / transcorpqatar via SF OpsPortal)
-// AND explicit production-probe authorization. It will NOT run against the
-// OAuth sandbox.
+// Day-54 correction (Love, 2026-06-11): SuiteFleet accepts BOTH auth
+// methods on ALL tenants, sandbox included — the earlier "sandbox is
+// OAuth-only" framing here was a Planner-side assumption, not a vendor
+// limitation. The probe can therefore run against SANDBOX Client
+// Credentials (e.g. Demo Bistro per the Day-54 runbook) — set
+// SF_API_BASE accordingly and use the sandbox clientId. Production-
+// probe authorization is still required for any PRODUCTION-region call.
 //
 // Secret hygiene: the request api_key/secret and the response tokens are
 // REDACTED in output. The probe's job is to confirm header NAMES/casing,
