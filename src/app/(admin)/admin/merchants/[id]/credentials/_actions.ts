@@ -26,6 +26,7 @@ import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 
 import {
+  setMerchantAuthMethodOverride,
   storeSuitefleetCredentials,
   type CredentialsClassifier,
 } from "@/modules/credentials";
@@ -125,6 +126,70 @@ export async function storeCredentialsAction(
         kind: "validation",
         fieldErrors: { _form: err.message },
       };
+    }
+    throw err;
+  }
+}
+
+// =============================================================================
+// Day-54 — auth-method switch action (plan day-54-sandbox-apikey-method-switch.md §4.4)
+// =============================================================================
+//
+// Same DI posture as storeCredentialsAction: the REAL adapter's
+// invalidateSession is the fourth service argument, so a flipped
+// merchant's cached SF session drops immediately (the cleared
+// credential pair must not keep authenticating from cache).
+
+export type SetAuthMethodActionResult =
+  | {
+      readonly kind: "switched";
+      readonly tenantId: string;
+      readonly newMethod: "oauth" | "api_key";
+    }
+  | { readonly kind: "noop" }
+  | { readonly kind: "validation"; readonly message: string }
+  | { readonly kind: "forbidden"; readonly message: string }
+  | { readonly kind: "not_found"; readonly message: string };
+
+export async function setAuthMethodAction(
+  tenantId: string,
+  method: string,
+): Promise<SetAuthMethodActionResult> {
+  const requestId = randomUUID();
+  if (method !== "oauth" && method !== "api_key") {
+    return { kind: "validation", message: "Unknown authentication method." };
+  }
+
+  const adapter = getSuiteFleetAdapter();
+  try {
+    const ctx = await buildRequestContext(
+      `/admin/merchants/${tenantId}/credentials`,
+      requestId,
+    );
+    const result = await setMerchantAuthMethodOverride(
+      ctx,
+      tenantId as Uuid,
+      method,
+      (tid) => adapter.invalidateSession(tid),
+    );
+    revalidatePath(`/admin/merchants/${tenantId}`, "page");
+    revalidatePath(`/admin/merchants/${tenantId}/credentials`, "page");
+    if (!result.changed) {
+      return { kind: "noop" };
+    }
+    return { kind: "switched", tenantId: result.tenantId, newMethod: result.newMethod };
+  } catch (err) {
+    if (err instanceof ForbiddenError) {
+      return {
+        kind: "forbidden",
+        message: "You don't have permission to change the authentication method.",
+      };
+    }
+    if (err instanceof NotFoundError) {
+      return { kind: "not_found", message: "Merchant not found." };
+    }
+    if (err instanceof ValidationError) {
+      return { kind: "validation", message: err.message };
     }
     throw err;
   }

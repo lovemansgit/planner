@@ -134,7 +134,7 @@ export function TaskTimelineDrawer({
       role="dialog"
       aria-modal="true"
       aria-label={`Timeline for delivery on ${deliveryDate}`}
-      className="fixed inset-0 z-[60] flex justify-end bg-navy/20"
+      className="fixed inset-0 z-[60] flex justify-end bg-scrim"
     >
       <div
         ref={panelRef}
@@ -160,9 +160,17 @@ export function TaskTimelineDrawer({
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {state.kind === "loading" ? (
-            <p className="text-sm text-[color:var(--color-text-secondary)]">
-              Loading timeline…
-            </p>
+            <div aria-busy="true" aria-label="Loading timeline" className="space-y-4">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="flex animate-pulse items-start gap-3">
+                  <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-stone-200" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3 w-2/5 rounded-sm bg-stone-200" />
+                    <div className="h-2 w-1/4 rounded-sm bg-ivory" />
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : state.result.kind === "success" ? (
             <TimelineEntries entries={state.result.timeline.entries} />
           ) : (

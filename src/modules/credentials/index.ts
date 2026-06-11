@@ -19,6 +19,7 @@ export {
   updateRegion,
   deactivateRegion,
   storeSuitefleetCredentials,
+  setMerchantAuthMethodOverride,
   // Read-side surface (Sub-PR 3 admin UI)
   listRegions,
   listRegionsWithUsage,

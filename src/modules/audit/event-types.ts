@@ -976,6 +976,17 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: true,
   },
 
+  "credentials.method_changed": {
+    id: "credentials.method_changed",
+    resource: "credentials",
+    action: "method_changed",
+    description:
+      "Day 54. A merchant's SuiteFleet auth method was switched via the Transcorp-staff setMerchantAuthMethodOverride service (tenants.suitefleet_auth_method_override, migration 0030) under Love's 2026-06-11 correction (SuiteFleet accepts both methods on all tenants). The switch clears BOTH Vault credential columns in the same transaction — the merchant fails loud on outbound (resolver credentials_not_configured) until new credentials are entered for the new method. Region auth_method remains immutable; this event records the per-merchant exception. Gated on merchant:update (same operator scope as credentials.set per ratified OQ-1).",
+    metadataNotes:
+      "tenant_id (uuid), previous_method ('oauth' | 'api_key' — the prior EFFECTIVE method), new_method ('oauth' | 'api_key'), credentials_cleared (boolean — always true when this event emits; same-method no-ops do not emit). NEVER contains plaintext credentials or Vault UUIDs. SHAPE DIVERGENCE (per Day-25 §A discipline + ratified OQ-8, same as credentials.set): credential-class mutation — minimal sensitive-by-class payload, NOT the merchant.updated flat-diff convention.",
+    systemOnly: true,
+  },
+
   "cron.on_demand_invoked": {
     id: "cron.on_demand_invoked",
     resource: "cron",

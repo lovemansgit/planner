@@ -299,7 +299,7 @@ export function CrmStateModal({ consigneeId, currentState }: CrmStateModalProps)
           role="dialog"
           aria-modal="true"
           aria-label="Change CRM state"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-navy/20 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
         >
           <div
             ref={panelRef}

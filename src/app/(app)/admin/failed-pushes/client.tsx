@@ -441,7 +441,7 @@ function BulkResolveModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="bulk-resolve-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-navy/50 p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6"
     >
       <div className="w-full max-w-lg border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] p-8 text-navy">
         <h2

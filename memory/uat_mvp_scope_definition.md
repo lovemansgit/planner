@@ -92,24 +92,26 @@ Legend: ✅ shipped & proven on real wire · 🔶 shipped, **not** proven on rea
 - **LABELS** — 500-id batch → 200, real PDF.
 - **Webhook INBOUND** — SF fires events; embedded-delta handling grounded on real AWBs (`MPL-80355079`, `MPL-38610276`).
 - **Task UPDATE push (R4/R5 address override)** — **proven Day-53 PM.** R4 one-off (06-18 `MPL-46009060`, 06-19 `MPL-21097704`) + R5 forward-from-06-25 (fan-out echoes on `MPL-61377363`/`MPL-50803723`, boundary held at day 24 `MPL-44913455`). SF webhook echoes the `Updated` event back per task; `pending_update` badge sets + clears on ack. Evidence: `memory/handoffs/day-53-pm-proving-pass.md`.
+- **POD photo path (proxy, #377)** — **proven Day-53 EVE** for ingest + proxy + expired-state. Real SF S3 URLs in `pod_photos` (`MPL-80355079`/`MPL-38610276`/`MPL-02403404`); the operator lightbox serves same-origin `/api/tasks/{id}/pod/{index}` (no raw S3 leak); past-TTL rows → proxy **410 Gone** / honest fallback; unauth → 401. **Open sub-leg:** the live 200 byte-render (needs a within-7-day driver photo upload on SF, not producible from Planner) — prove opportunistically at UAT. Evidence: `memory/handoffs/day-53-eve-pod-proof.md`.
 
-### The "deaf integration" list — merged/looks-done but NOT proven on real wire
-These are the items most likely to embarrass at an Ops demo:
+### The "deaf integration" list — ALL legs proven (Day-52/53 proving passes)
 
-> **Day-52 PM update (proving pass):** items 1–3 below were **proven ALIVE on real wire** — R2 pause-cancel fan-out (2-task window, both SF-CANCELED: `MPL-28787105`, `MPL-01868399`), R3 note-push (SF webhook echoed the note text: `MPL-76890591`), skip→cancel (SF `CHANGE_STATUS → CANCELED`: `MPL-48882801`). Evidence in `memory/handoffs/day-52-eod.md` §C.
+> **Day-52 PM:** R2 pause-cancel fan-out (`MPL-28787105`, `MPL-01868399`), R3 note-push (`MPL-76890591`), skip→cancel (`MPL-48882801`) — all proven on real wire (`memory/handoffs/day-52-eod.md` §C).
 >
-> **Day-53 PM update (proving pass):** item 4 (task-UPDATE push, R4/R5 address override) is now **proven ALIVE on real wire** — see the Proven list above + `memory/handoffs/day-53-pm-proving-pass.md`. **Only item 5 (POD post-fix) remains unproven.** Caveat surfaced while proving R4/R5: v1 has **no UI to give a consignee a second address**, so the override is unreachable for UI-onboarded consignees — `memory/followup_no_ui_second_consignee_address.md` (demo-prep / Phase-2 item, not a wire failure).
+> **Day-53 PM:** task-UPDATE push (R4/R5 address override) proven (`memory/handoffs/day-53-pm-proving-pass.md`). Caveat: no UI to give a consignee a 2nd address → override unreachable for UI-onboarded consignees (`memory/followup_no_ui_second_consignee_address.md`; demo-prep / Phase-2, not a wire failure; UAT uses pre-seeded multi-address consignees per Love's EVE ruling).
+>
+> **Day-53 EVE:** POD post-fix proven for ingest + proxy + expired-state (`memory/handoffs/day-53-eve-pod-proof.md`); only the live-render sub-leg is open (UAT-opportunistic, not a code gap).
 
 1. **R2 pause → SF cancel fan-out** (#342) — ✅ proven Day-52 (`MPL-28787105`, `MPL-01868399`).
 2. **R3 driver-note → SF push** (#344) — ✅ proven Day-52 (`MPL-76890591`).
 3. **Skip → cancel** — ✅ proven Day-52 (`MPL-48882801`).
-4. **Task UPDATE push (R4/R5 address override)** — ✅ **proven Day-53** (see Proven list). Reachability caveat: no UI path to a second consignee address (Phase-2).
-5. **POD ingestion post-fix** — the status/date sync bug was fixed, but **real POD ingestion post-fix is unconfirmed.** *(Only remaining unproven leg.)*
+4. **Task UPDATE push (R4/R5 address override)** — ✅ **proven Day-53 PM**. Reachability caveat: no UI path to a 2nd consignee address (Phase-2).
+5. **POD post-fix (proxy)** — ✅ **proven Day-53 EVE** for ingest + proxy + expired-state; live byte-render open (UAT-opportunistic, unit-tested in #377).
 
-### Hardening items (UAT-grade, not blockers but visible)
-- **Server-side metadata strip (R8)** (`#360`, filed today) — the audit allow-list filters *client-side*; raw SF error text + internal IDs still reach the browser payload (fishable via dev-tools). Fix: apply the allow-list server-side. *Low-risk now (same-tenant, authenticated); worth closing before Ops.*
-- **POD broken-image** — S3 pre-signed URL expiry → broken POD images in UI. 3 fix paths unpicked. **UAT-visible.**
-- **Resolved-rows visibility gap** — resolved DLQ rows invisible in the UI.
+### Hardening items (UAT-grade)
+- **Server-side metadata strip (R8)** — ✅ **closed** (#376, Day-53 EVE): the R8 allow-list now strips server-side so excluded fields never reach the browser; client filter stays belt-and-braces.
+- **POD broken-image** — ✅ **closed** (#377, Day-53 EVE): same-origin authenticated proxy; expired links show an honest fallback instead of a leaked/mystery glyph. (Deferred: durable ingest-time photo capture — needs a migration + storage ruling.)
+- **Resolved-rows visibility gap** — **deferred past the first UAT** per Love's Day-53 PM ruling (`memory/decision_d53_pm_uat_calls.md`).
 - **Move-to-date placeholder** — calendar UI currently *promises* a reschedule the code doesn't fully deliver ("lies to the operator"). Closed by R4/R5 work.
 - **Phone display readability** — cosmetic but visible.
 - **Auth cookie httponly/secure hardening** — never confirmed shipped.
@@ -121,28 +123,34 @@ Lower-probability but real: assigned-before-cutoff dispatch race; auto-pause vs 
 
 ---
 
-## 6. The production-promote gap (structural)
+## 6. The production-promote gap (structural) — RESOLVED Day-53
 
-Everything R1→R8 is **main-only**. Production HEAD predates the entire calendar lane.
+_At filing this read: "Everything R1→R8 is main-only; production HEAD predates the
+entire calendar lane; a real-wire UAT requires a promote first."_
 
-**Consequence:** a UAT that claims "both actor flows end-to-end, no deaf integrations" **cannot run against current production** — it would be testing months-old code. A real-wire UAT *requires a production promote first.* Under the current (pre-MVP) autonomy model, promotes flow on agent-agreement, so this is a "when Love says go" operational step, not a build — but it must happen before UAT, and it's worth a deliberate smoke pass immediately after.
+**Resolved.** Production was promoted across Day-51→Day-53; the latest promote
+(#384, prod HEAD `0665e8c`, Day-53 EVE) carries R1→R8 + R4/R5 + the POD proxy
+(#377) + the metadata strip (#376). Each promote ran smoke + demo-preflight 10/10.
+The real-wire proving passes (Day-52/53) ran **against this production**, so the
+"no deaf integrations" claim is now grounded on shipped code, not main-only code.
 
 ---
 
 ## 7. MVP-blocking vs deferred — the actual checklist
 
-### Genuinely blocking a UAT line (the short, real list)
-1. **Promote to production** and smoke the current main (R1→R8). *Operational; do first.*
-2. **R4 + R5** — address overrides (one-off + forward) with SF push. *The last operator-promise features.*
-3. **Real-wire proving pass** over the merged-but-never-fired legs: **R2 pause-cancel, R3 note-push, skip→cancel, task-update push.** *This is the "no deaf integrations" requirement made concrete.*
-4. **SF production auth** — *only if Love chooses Option B (§2).* Requires Aqib production credentials + Love's probe authorization. **If Option A (sandbox UAT), this is deferred to post-UAT.**
-5. **HEM 403** — *only if a production-region merchant is in UAT scope.* Blocked on Aqib diagnostic.
+### Genuinely blocking a UAT line — ALL CLEARED for sandbox (Option A) UAT
+1. **Promote to production** — ✅ done (Day-51 → Day-53; latest prod HEAD carries R1→R8 + R4/R5 + POD proxy + metadata strip, EVE promote #384 `0665e8c`). Smoke + demo-preflight 10/10 each promote.
+2. **R4 + R5** — ✅ built, merged (Phase 1 closed @ #368), proven on real wire (Day-53 PM).
+3. **Real-wire proving pass** — ✅ complete: R2 pause-cancel, R3 note-push, skip→cancel (Day-52), task-update push (Day-53 PM), POD post-fix (Day-53 EVE). The "no deaf integrations" requirement is met; only the POD live-render sub-leg is UAT-opportunistic.
+4. **SF production auth** — *Option B only.* Plan + code parked Day-53 EVE (#378/#380, Session A); standing Love-gated (credential entry + live probe). **Sandbox UAT (Option A) does not need it.**
+5. **HEM 403** — *only if a production-region merchant is in UAT scope.* Blocked on Aqib diagnostic. N/A for sandbox UAT.
 
-### Love's open product calls (decide before/at UAT)
-- **POD broken-image** — UAT-blocking or deferred? (It's visible; a broken POD image in front of Ops is a "disappointment.")
-- **Resolved-rows visibility** — UAT or deferred?
-- **Server-side metadata strip** — close before Ops, or accept for first UAT?
-- **The §5 correctness/race items** — which (if any) are UAT-blocking vs accepted-risk for a controlled UAT?
+### Love's open product calls — ALL RULED (Day-53 PM/EVE, `decision_d53_pm_uat_calls.md` + `decision_d53_eve_final_clears.md`)
+- **POD broken-image** — ruled UAT-blocking; **fixed** (#377 proxy, proven Day-53 EVE).
+- **Resolved-rows visibility** — **deferred** past the first UAT.
+- **Server-side metadata strip** — ruled UAT-blocking; **fixed** (#376, Day-53 EVE).
+- **The §5 correctness/race items** — **accepted as controlled-UAT risk**; triage before production merchants onboard.
+- **Multi-address (2nd consignee address) UI** — Phase 2; builds **before production merchants onboard, not before UAT**. UAT runs on pre-seeded multi-address consignees.
 
 ### Explicitly deferred — POST-MVP (parked so they can't creep into UAT)
 **Love's recalled post-MVP items:**
@@ -164,14 +172,17 @@ Everything R1→R8 is **main-only**. Production HEAD predates the entire calenda
 
 ## 8. Honest summary — how far from a UAT line
 
-**Closer than it feels, but gated on proving rather than building.** If Love chooses **sandbox UAT (Option A)**, the remaining work is:
+**At the line (sandbox / Option A).** As of Day-53 EVE the entire blocking list is
+cleared:
 
-- Build R4/R5 (the last two features).
-- Promote to production + smoke.
-- Run a real-wire proving pass over R2/R3/skip/update so they're not "deaf."
-- Rule the handful of product calls (POD image, resolved-rows, metadata strip).
+- ✅ R4/R5 built + merged (Phase 1 closed) + proven on real wire.
+- ✅ Promoted to production + smoke + demo-preflight 10/10.
+- ✅ Real-wire proving pass complete (R2/R3/skip/update + POD ingest/proxy/expired) — no "deaf integrations" left; one POD sub-leg (live byte-render) is UAT-opportunistic.
+- ✅ Product calls ruled and the UAT-blocking ones fixed (POD proxy #377, metadata strip #376; resolved-rows deferred; race items accepted; 2nd-address UI is Phase-2-not-UAT-blocking).
 
-That's a bounded, countable list — not "lots more to build."
+**The first Ops UAT can run now**, on the pre-seeded multi-address consignees, per
+`memory/uat_run_sheet_v1.md`. Sandbox probe data is the UAT demo data (torn down
+after). What's left is **running** the UAT, not building for it.
 
 If Love chooses **production-merchant UAT (Option B)**, add: Aqib production credentials, the API-key probe, Love's probe authorization, and HEM 403 resolution — all of which depend on external (Aqib/SF) timelines Love doesn't fully control.
 
@@ -181,10 +192,13 @@ If Love chooses **production-merchant UAT (Option B)**, add: Aqib production cre
 
 ## 9. Next actions
 
-1. **Love rules §2** — sandbox UAT or production-merchant UAT for the first Ops demo.
-2. **Love rules the §7 product calls** — POD image, resolved-rows, metadata strip, race items.
-3. Build the blocking list (§7): R4/R5, then the real-wire proving pass, gated by Love's §2 choice.
-4. Promote + smoke before UAT.
-5. This document is filed in the repo (`memory/uat_mvp_scope_definition.md`) and mirrored to the project cabinet, so it survives session boundaries and can be handed to Ops.
+_§2 and the §7 product calls are now ruled (Day-53 PM/EVE); the blocking list is
+built, proven, and promoted. Remaining:_
+
+1. **Run the first Ops UAT** on the pre-seeded multi-address consignees per `memory/uat_run_sheet_v1.md` (sandbox / Option A). Capture Ops' "what else" list.
+2. **Opportunistic POD live-render** — during UAT, on the first fresh delivered-with-photo order (within 7 days), confirm the photo streams through the proxy (the one open §5 sub-leg).
+3. **After UAT:** tear down the Day-53 sandbox probe data (Fatima's probe subscription + its SF tasks).
+4. **Before production merchants onboard:** build the Phase-2 add-address UI (`followup_no_ui_second_consignee_address.md`); resolve SF production auth (Option B: Aqib creds + Love's probe go, #378/#380); triage the §5 race items.
+5. This document is filed in the repo (`memory/uat_mvp_scope_definition.md`), so it survives session boundaries and can be handed to Ops.
 
 *This is a UAT definition. Final MVP sign-off follows Ops review.*

@@ -21,6 +21,7 @@ const config: Config = {
         "stone-200": "var(--color-stone-200)",
         "stone-600": "var(--color-stone-600)",
         ink: "var(--color-ink)",
+        scrim: "var(--color-scrim)",
       },
       fontFamily: {
         sans: ["var(--font-sans)"],

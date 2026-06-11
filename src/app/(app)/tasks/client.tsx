@@ -207,7 +207,7 @@ export function TasksClient({
           type="button"
           onClick={printLabels}
           disabled={!someSelected || isPending}
-          className="px-4 py-2 text-xs uppercase tracking-[0.2em] border border-navy text-navy hover:opacity-80 disabled:cursor-not-allowed disabled:border-[color:var(--color-border-default)] disabled:text-[color:var(--color-text-tertiary)]"
+          className="rounded-sm border border-navy px-4 py-2 text-xs uppercase tracking-[0.2em] text-navy transition-opacity duration-[120ms] ease-out hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary disabled:cursor-not-allowed disabled:border-[color:var(--color-border-default)] disabled:text-[color:var(--color-text-tertiary)]"
         >
           {printLabel}
         </button>
@@ -467,7 +467,7 @@ function CancelModal({ task, onClose }: { readonly task: Task; readonly onClose:
       role="dialog"
       aria-modal="true"
       aria-label={`Cancel delivery for order ${task.customerOrderNumber}`}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-navy/20 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
     >
       <div className="w-full max-w-sm border border-stone-200 border-t-[1px] border-t-red bg-surface-primary p-6">
         <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
@@ -495,7 +495,7 @@ function CancelModal({ task, onClose }: { readonly task: Task; readonly onClose:
           <button
             type="submit"
             disabled={isPending}
-            className="rounded-sm border border-red bg-red px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-sm border border-red bg-red px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isPending ? "Cancelling…" : "Cancel delivery"}
           </button>
@@ -539,7 +539,7 @@ function EditModal({ task, onClose }: { readonly task: Task; readonly onClose: (
       role="dialog"
       aria-modal="true"
       aria-label={`Edit order ${task.customerOrderNumber}`}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-navy/20 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
     >
       <div className="w-full max-w-md border border-stone-200 border-t-[1px] border-t-green bg-surface-primary p-6">
         <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
@@ -559,7 +559,11 @@ function EditModal({ task, onClose }: { readonly task: Task; readonly onClose: (
         </div>
 
         {context.kind === "loading" ? (
-          <p className="mt-6 text-xs text-[color:var(--color-text-secondary)]">Loading…</p>
+          <div aria-busy="true" aria-label="Loading" className="mt-6 animate-pulse space-y-3">
+            <div className="h-3 w-1/3 rounded-sm bg-stone-200" />
+            <div className="h-9 w-full rounded-sm bg-ivory" />
+            <div className="h-9 w-full rounded-sm bg-ivory" />
+          </div>
         ) : context.kind === "loaded" && context.result.kind === "success" ? (
           mode === "address" ? (
             <EditAddressPanel
@@ -711,7 +715,7 @@ function EditAddressPanel({
       <button
         type="submit"
         disabled={isPending}
-        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isPending ? "Saving…" : "Save address"}
       </button>
@@ -760,7 +764,7 @@ function EditNotePanel({
       <button
         type="submit"
         disabled={isPending}
-        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isPending ? "Saving…" : "Save note"}
       </button>
@@ -823,7 +827,7 @@ function PodCell({
       type="button"
       onClick={() => onOpenPod(photos)}
       aria-label={`View proof of delivery for order ${task.customerOrderNumber}`}
-      className="inline-flex items-center justify-center rounded-sm transition-opacity duration-[120ms] ease-out hover:opacity-70"
+      className="inline-flex items-center justify-center rounded-sm transition-opacity duration-[120ms] ease-out hover:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
       data-pod-state="active"
     >
       <PodIcon tone="active" />
