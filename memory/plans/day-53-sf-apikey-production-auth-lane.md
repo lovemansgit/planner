@@ -55,3 +55,9 @@ Implementation shape (code-PR): `performRenewal` consults `credentials.auth_meth
 ## §7 Brief refs
 
 §3.6 (four-layer identifier model), §3.7 (credential storage), v1.15 amendment (dual-path auth — this lane is the api_key half reaching production-readiness *behind the probe gate*).
+
+---
+
+## Day-54 annotation (append-only) — §1 sandbox premise corrected
+
+§1's "Probe … not yet runnable (no api_key credentials; sandbox is OAuth-only)" carried the Planner-side assumption Love corrected on 2026-06-11: SuiteFleet accepts both methods on all tenants, sandbox included. The probe gained a sandbox target (Demo Bistro) via the Day-54 lane (`memory/plans/day-54-sandbox-apikey-method-switch.md`); the §2 renewal strategy and §3 probe extension are unchanged by the correction.

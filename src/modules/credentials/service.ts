@@ -541,6 +541,135 @@ export async function storeSuitefleetCredentials(
 }
 
 // =============================================================================
+// setMerchantAuthMethodOverride — Day 54 (sandbox api_key enablement)
+// =============================================================================
+//
+// Per plan memory/plans/day-54-sandbox-apikey-method-switch.md §4.3 under
+// Love's 2026-06-11 correction: per-merchant auth-method override with the
+// region as default. Switching the EFFECTIVE method clears BOTH Vault
+// credential columns in the same transaction — the old pair is
+// semantically wrong under the new method, and a half-switched merchant
+// must fail LOUD on outbound (resolver credentials_not_configured →
+// failed-push visibility), never misread stale credentials or fall back.
+//
+// Same-effective-method calls are no-ops: no clear, no audit emit, no
+// session invalidation.
+//
+// Orphaned Vault ciphertext rows are left in place (no delete primitive
+// exists; rows are inert without the FK pointer) — plan §3.
+
+export interface SetAuthMethodOverrideResult {
+  readonly tenantId: Uuid;
+  /** False when the requested method already was the effective method. */
+  readonly changed: boolean;
+  /** True iff a credential pair was cleared by this call. */
+  readonly credentialsCleared: boolean;
+  readonly previousMethod: RegionAuthMethod;
+  readonly newMethod: RegionAuthMethod;
+}
+
+const authMethodOverrideSchema = z.enum(["oauth", "api_key"]);
+
+interface AuthMethodStateRow {
+  readonly auth_method_override: string | null;
+  readonly region_auth_method: string;
+  readonly v1: string | null;
+  readonly v2: string | null;
+}
+
+export async function setMerchantAuthMethodOverride(
+  ctx: RequestContext,
+  tenantId: Uuid,
+  method: RegionAuthMethod,
+  invalidateSession: (tenantId: Uuid) => void,
+): Promise<SetAuthMethodOverrideResult> {
+  requirePermission(ctx, "merchant:update");
+
+  const parsedMethod = authMethodOverrideSchema.safeParse(method);
+  if (!parsedMethod.success) {
+    throw new ValidationError(`auth method must be 'oauth' or 'api_key', got '${String(method)}'`);
+  }
+
+  const stateRows = await withServiceRole(
+    `transcorp_staff:read_tenant_auth_method ${tenantId}`,
+    async (tx) => {
+      const rows = await tx.execute<AuthMethodStateRow & Record<string, unknown>>(sqlTag`
+        SELECT
+          t.suitefleet_auth_method_override AS auth_method_override,
+          r.auth_method AS region_auth_method,
+          t.suitefleet_credential_1_vault_id AS v1,
+          t.suitefleet_credential_2_vault_id AS v2
+        FROM tenants t
+        JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+        WHERE t.id = ${tenantId}
+        LIMIT 1
+      `);
+      return rows as unknown as ReadonlyArray<AuthMethodStateRow>;
+    },
+  );
+  if (stateRows.length === 0) {
+    throw new NotFoundError(`tenant not found: ${tenantId}`);
+  }
+  const state = stateRows[0];
+  const effectiveBefore = (state.auth_method_override ??
+    state.region_auth_method) as RegionAuthMethod;
+
+  if (effectiveBefore === parsedMethod.data) {
+    return {
+      tenantId,
+      changed: false,
+      credentialsCleared: false,
+      previousMethod: effectiveBefore,
+      newMethod: parsedMethod.data,
+    };
+  }
+
+  // One transaction: set the override AND clear the credential pair.
+  // The clear is unconditional on change (plan §3) — even a NULL pair
+  // is written NULL again — so the invariant "override changed ⇒ pair
+  // cleared" holds without branching.
+  await withServiceRole(
+    `transcorp_staff:set_tenant_auth_method ${tenantId}`,
+    async (tx) => {
+      await tx.execute(sqlTag`
+        UPDATE tenants
+        SET suitefleet_auth_method_override = ${parsedMethod.data},
+            suitefleet_credential_1_vault_id = NULL,
+            suitefleet_credential_2_vault_id = NULL,
+            updated_at = now()
+        WHERE id = ${tenantId}
+      `);
+    },
+  );
+
+  invalidateSession(tenantId);
+
+  await emit({
+    eventType: "credentials.method_changed",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: null,
+    resourceType: "credentials",
+    resourceId: tenantId,
+    metadata: {
+      tenant_id: tenantId,
+      previous_method: effectiveBefore,
+      new_method: parsedMethod.data,
+      credentials_cleared: true,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return {
+    tenantId,
+    changed: true,
+    credentialsCleared: true,
+    previousMethod: effectiveBefore,
+    newMethod: parsedMethod.data,
+  };
+}
+
+// =============================================================================
 // Read-side surface — Day 26 / T3 Sub-PR 3 (admin UI)
 // =============================================================================
 //
@@ -718,6 +847,10 @@ export interface CredentialsPageState {
    * Drives the SET vs ROTATE submit-button label + modal copy.
    */
   readonly hasCredentials: boolean;
+  /** Day-54: the per-merchant override (migration 0030); NULL = region default. */
+  readonly authMethodOverride: RegionAuthMethod | null;
+  /** Day-54: override ?? region.authMethod — drives field labels + the switch control. */
+  readonly effectiveAuthMethod: RegionAuthMethod;
 }
 
 /**
@@ -753,6 +886,7 @@ export async function loadCredentialsPageState(
         region_auth_method: string;
         region_created_at: Date | string;
         region_updated_at: Date | string;
+        auth_method_override: string | null;
       } & Record<string, unknown>;
       const rows = await tx.execute<JoinedRow>(sqlTag`
         SELECT
@@ -765,7 +899,8 @@ export async function loadCredentialsPageState(
           r.status       AS region_status,
           r.auth_method  AS region_auth_method,
           r.created_at   AS region_created_at,
-          r.updated_at   AS region_updated_at
+          r.updated_at   AS region_updated_at,
+          t.suitefleet_auth_method_override AS auth_method_override
         FROM tenants t
         JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
         WHERE t.id = ${tenantId}
@@ -793,5 +928,9 @@ export async function loadCredentialsPageState(
       updatedAt: toIso(row.region_updated_at),
     },
     hasCredentials: row.has_credential_1 && row.has_credential_2,
+    // Day-54 override (migration 0030): NULL → region default.
+    authMethodOverride: (row.auth_method_override ?? null) as RegionAuthMethod | null,
+    effectiveAuthMethod: (row.auth_method_override ??
+      row.region_auth_method) as RegionAuthMethod,
   };
 }
