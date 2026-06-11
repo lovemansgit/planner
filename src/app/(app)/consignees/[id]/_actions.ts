@@ -220,3 +220,65 @@ export async function createAdHocTaskAction(
     throw err;
   }
 }
+
+// -----------------------------------------------------------------------------
+// Day-53 add-a-second-address — Add address action
+// -----------------------------------------------------------------------------
+//
+// Wraps the new `createAddress` service (non-primary add from the
+// consignee detail page; plan at
+// memory/plans/day-53-session-c-add-second-address.md). Bound to
+// consigneeId at the dialog render site. On success revalidatePath
+// refreshes the detail page so the Overview address list and the R4/R5
+// override pickers see the new row immediately.
+
+import { createAddress, type AddressLabel } from "@/modules/addresses";
+
+export type AddAddressActionResult =
+  | { readonly kind: "created"; readonly addressId: string }
+  | { readonly kind: "validation"; readonly message: string }
+  | { readonly kind: "forbidden"; readonly message: string }
+  | { readonly kind: "not_found"; readonly message: string };
+
+const ADDRESS_LABELS: readonly AddressLabel[] = ["home", "office", "other"];
+
+export async function addAddressAction(
+  consigneeId: string,
+  _prevState: AddAddressActionResult | { kind: "idle" },
+  formData: FormData,
+): Promise<AddAddressActionResult> {
+  const requestId = randomUUID();
+  const trimmed = (key: string): string => {
+    const v = formData.get(key);
+    return typeof v === "string" ? v.trim() : "";
+  };
+
+  const labelRaw = trimmed("label");
+  if (!(ADDRESS_LABELS as readonly string[]).includes(labelRaw)) {
+    return { kind: "validation", message: "Label must be Home, Office, or Other." };
+  }
+  const label = labelRaw as AddressLabel;
+
+  try {
+    const ctx = await buildRequestContext(`/consignees/${consigneeId}`, requestId);
+    const created = await createAddress(ctx, consigneeId as Uuid, {
+      label,
+      line: trimmed("line"),
+      district: trimmed("district"),
+      emirate: trimmed("emirate"),
+    });
+    revalidatePath(`/consignees/${consigneeId}`, "page");
+    return { kind: "created", addressId: created.id };
+  } catch (err) {
+    if (err instanceof ForbiddenError) {
+      return { kind: "forbidden", message: "You don't have permission to edit this consignee." };
+    }
+    if (err instanceof NotFoundError) {
+      return { kind: "not_found", message: "Consignee not found." };
+    }
+    if (err instanceof ValidationError) {
+      return { kind: "validation", message: err.message };
+    }
+    throw err;
+  }
+}
