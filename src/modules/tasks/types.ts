@@ -239,6 +239,30 @@ export interface Task {
 }
 
 /**
+ * Day-53 R6-part-1 — the `/tasks` list row. Extends `Task` with the
+ * consignee-context columns the operator list projects: the consignee's
+ * name/phone and the override-resolved *effective* delivery address.
+ *
+ * "Effective" = `tasks.address_id` → addresses (the R4/R5 override
+ * winner, pre-resolved at materialization / by `updateTask`), falling
+ * through to the consignee's own address fields when `address_id` is
+ * NULL (legacy/quarantined rows). The COALESCE lives in the repository
+ * SELECT; these fields are the resolved result. All nullable: a row with
+ * no consignee match or no address on file projects NULL.
+ *
+ * Kept separate from `Task` (not a widening) so the ~7 other read paths
+ * that return `TaskRowWithPackages`/`Task` don't leak these always-null
+ * columns into shapes that never JOIN consignees/addresses.
+ */
+export interface TaskListRow extends Task {
+  readonly consigneeName: string | null;
+  readonly consigneePhone: string | null;
+  readonly effectiveAddressLine: string | null;
+  readonly effectiveDistrict: string | null;
+  readonly effectiveEmirate: string | null;
+}
+
+/**
  * Per-package payload accepted by `insertTaskWithPackages`. The
  * task_id and tenant_id are supplied by the repository (read from
  * the freshly-inserted parent task and the call's tenantId); the

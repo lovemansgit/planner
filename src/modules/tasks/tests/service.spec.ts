@@ -134,7 +134,7 @@ import {
   enqueueUpdateTask,
 } from "../../task-outbound-queue";
 import { buildConsigneeSnapshotForAddress } from "../../subscription-addresses";
-import type { CreateTaskInput, Task } from "../types";
+import type { CreateTaskInput, Task, TaskListRow } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
 const mockWithServiceRole = vi.mocked(withServiceRole);
@@ -226,6 +226,21 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     packages: [],
+    ...overrides,
+  };
+}
+
+// Day-53 R6-part-1 — listTasks now returns TaskListRow (Task + the
+// consignee-context columns). Separate fixture so taskFixture stays a
+// plain Task for the create/update/get paths.
+function taskListRowFixture(overrides: Partial<TaskListRow> = {}): TaskListRow {
+  return {
+    ...taskFixture(),
+    consigneeName: "Sarah Khan",
+    consigneePhone: "+971500000001",
+    effectiveAddressLine: "Villa 12, Street 4",
+    effectiveDistrict: "Al Barsha",
+    effectiveEmirate: "Dubai",
     ...overrides,
   };
 }
@@ -573,7 +588,7 @@ describe("listTasks", () => {
   });
 
   it("returns the rows inside withTenant; not audited", async () => {
-    mockListByTenant.mockResolvedValue([taskFixture()]);
+    mockListByTenant.mockResolvedValue([taskListRowFixture()]);
     const result = await listTasks(userCtx(["task:read"]));
     expect(result).toHaveLength(1);
     expect(mockWithTenant).toHaveBeenCalledOnce();

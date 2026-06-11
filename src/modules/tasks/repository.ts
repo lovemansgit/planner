@@ -58,6 +58,7 @@ import type {
   TaskCreationSource,
   TaskInternalStatus,
   TaskKind,
+  TaskListRow,
   TaskOutboundSyncState,
   TaskPackage,
   TaskPackageStatus,
@@ -307,6 +308,32 @@ function mapPodPhotos(value: unknown): readonly string[] | null {
 function mapTaskWithPackages(row: TaskRowWithPackages): Task {
   const packages = (row.packages ?? []).map(mapPackageFromJson);
   return mapTask(row, packages);
+}
+
+/**
+ * Day-53 R6-part-1 — the `/tasks` list-row wire shape. `TaskRowWithPackages`
+ * plus the consignee-context columns the list SELECT projects (see
+ * `listTasksByTenant`). `effective_*` are already COALESCE-resolved in SQL
+ * (override address, else the consignee's own); the mapper just narrows.
+ * Every column is nullable (LEFT JOINs + fall-through legacy rows).
+ */
+type TaskRowWithConsignee = TaskRowWithPackages & {
+  consignee_name: string | null;
+  consignee_phone: string | null;
+  effective_address_line: string | null;
+  effective_district: string | null;
+  effective_emirate: string | null;
+};
+
+function mapTaskListRow(row: TaskRowWithConsignee): TaskListRow {
+  return {
+    ...mapTaskWithPackages(row),
+    consigneeName: row.consignee_name ?? null,
+    consigneePhone: row.consignee_phone ?? null,
+    effectiveAddressLine: row.effective_address_line ?? null,
+    effectiveDistrict: row.effective_district ?? null,
+    effectiveEmirate: row.effective_emirate ?? null,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -606,22 +633,29 @@ export async function listTasksByTenant(
   tx: DbTx,
   tenantId: Uuid,
   opts: ListTasksOpts = {},
-): Promise<readonly Task[]> {
+): Promise<readonly TaskListRow[]> {
   const { limit, offset = 0, status, searchTerm, dateFrom, dateTo } = opts;
   const statusFilter = status
     ? sqlTag`AND t.internal_status = ${status}`
     : sqlTag``;
   const searchFilter = buildTaskSearchFilter(searchTerm);
-  const consigneeJoin = needsConsigneeJoin(searchTerm)
-    ? sqlTag`LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id`
-    : sqlTag``;
   const dateFromFilter = buildDateFromFilter(dateFrom);
   const dateToFilter = buildDateToFilter(dateTo);
   const limitClause = limit !== undefined ? sqlTag`LIMIT ${limit}` : sqlTag``;
   const offsetClause = offset > 0 ? sqlTag`OFFSET ${offset}` : sqlTag``;
-  const rows = await tx.execute<TaskRowWithPackages>(sqlTag`
+  // R6-part-1: the consignees join is now UNCONDITIONAL (was search-gated
+  // via needsConsigneeJoin) so every list row can carry consignee
+  // name/phone; the addresses join resolves the task's effective address.
+  // effective_* COALESCE the override address (tasks.address_id →
+  // addresses) onto the consignee's own fields when address_id IS NULL.
+  const rows = await tx.execute<TaskRowWithConsignee>(sqlTag`
     SELECT
       t.*,
+      c.name AS consignee_name,
+      c.phone AS consignee_phone,
+      COALESCE(a.line, c.address_line) AS effective_address_line,
+      COALESCE(a.district, c.district) AS effective_district,
+      COALESCE(a.emirate, c.emirate_or_region) AS effective_emirate,
       COALESCE(
         (
           SELECT json_agg(tp.* ORDER BY tp.position ASC)
@@ -631,7 +665,8 @@ export async function listTasksByTenant(
         '[]'::json
       ) AS packages
     FROM tasks t
-    ${consigneeJoin}
+    LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id
+    LEFT JOIN addresses a ON a.id = t.address_id AND a.tenant_id = t.tenant_id
     WHERE t.tenant_id = ${tenantId}
       ${statusFilter}
       ${searchFilter}
@@ -641,7 +676,7 @@ export async function listTasksByTenant(
     ${limitClause}
     ${offsetClause}
   `);
-  return rows.map(mapTaskWithPackages);
+  return rows.map(mapTaskListRow);
 }
 
 
