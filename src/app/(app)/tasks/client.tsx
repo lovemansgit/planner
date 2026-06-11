@@ -33,6 +33,8 @@ import { podProxyPhotoPaths } from "@/modules/tasks/pod-proxy";
 import type { Task, TaskListRow } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
+import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
+
 import { consigneeCellModel } from "./_components/consignee-cell";
 
 import {
@@ -81,6 +83,8 @@ export function TasksClient({
   const [lightboxPhotos, setLightboxPhotos] = useState<readonly string[] | null>(
     null,
   );
+  // R6-part-2: the task whose timeline drawer is open (null = closed).
+  const [timelineTask, setTimelineTask] = useState<TaskListRow | null>(null);
 
   const failedSet = useMemo(() => new Set(failedPushTaskIds), [failedPushTaskIds]);
   const pageIds = useMemo(() => initialTasks.map((t) => t.id), [initialTasks]);
@@ -292,6 +296,7 @@ export function TasksClient({
                 onToggle={() => toggle(task.id)}
                 failed={failedSet.has(task.id)}
                 onOpenPod={(photos) => setLightboxPhotos(photos)}
+                onOpenTimeline={() => setTimelineTask(task)}
               />
             ))}
           </tbody>
@@ -304,6 +309,19 @@ export function TasksClient({
           onClose={() => setLightboxPhotos(null)}
         />
       ) : null}
+
+      {/* R6-part-2: AWB cell opens the shared task-timeline drawer (the same
+          one the consignee calendar uses). `awb` drives the R6.3
+          partial-state banner for not-yet-pushed (null-AWB) tasks. */}
+      {timelineTask !== null ? (
+        <TaskTimelineDrawer
+          consigneeId={timelineTask.consigneeId}
+          taskId={timelineTask.id}
+          deliveryDate={timelineTask.deliveryDate}
+          awb={timelineTask.externalTrackingNumber}
+          onClose={() => setTimelineTask(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -314,12 +332,14 @@ function Row({
   onToggle,
   failed,
   onOpenPod,
+  onOpenTimeline,
 }: {
   readonly task: TaskListRow;
   readonly checked: boolean;
   readonly onToggle: () => void;
   readonly failed: boolean;
   readonly onOpenPod: (photos: readonly string[]) => void;
+  readonly onOpenTimeline: () => void;
 }) {
   const filter = TASK_STATUS_FILTERS.find((f) => f.value === task.internalStatus);
   const podTone = podCellState(task.podPhotos);
@@ -343,16 +363,30 @@ function Row({
       </Td>
       <Td className="whitespace-nowrap tabular-nums">{task.deliveryDate}</Td>
       <Td className="font-mono text-xs tabular-nums">
-        {task.externalTrackingNumber !== null ? (
-          <span className="flex flex-col gap-0.5">
-            <span>{task.externalTrackingNumber}</span>
-            <span className="font-sans text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
-              <span className="text-navy">✓</span> Pushed to SuiteFleet
+        {/* R6-part-2: the AWB cell opens the task-timeline drawer. Both
+            populated and not-yet-pushed (—) tasks open it; the drawer
+            shows the R6.3 banner for the null-AWB case. */}
+        <button
+          type="button"
+          onClick={onOpenTimeline}
+          aria-label={
+            task.externalTrackingNumber !== null
+              ? `View timeline for AWB ${task.externalTrackingNumber}`
+              : `View timeline for order ${task.customerOrderNumber} (not yet pushed)`
+          }
+          className="text-left transition-opacity duration-[120ms] ease-out hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-inset"
+        >
+          {task.externalTrackingNumber !== null ? (
+            <span className="flex flex-col gap-0.5">
+              <span>{task.externalTrackingNumber}</span>
+              <span className="font-sans text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
+                <span className="text-navy">✓</span> Pushed to SuiteFleet
+              </span>
             </span>
-          </span>
-        ) : (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        )}
+          ) : (
+            <span className="text-[color:var(--color-text-tertiary)]">—</span>
+          )}
+        </button>
       </Td>
       <Td>
         <span

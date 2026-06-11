@@ -36,6 +36,7 @@ import {
   getTaskTimelineAction,
   type GetTaskTimelineActionResult,
 } from "./actions";
+import { isAwaitingPush, TASK_AWAITING_PUSH_BANNER } from "./partial-state";
 import type { AuditEventCursor } from "@/modules/audit";
 import type { TaskHistoryEntry } from "@/modules/tasks";
 import { TASK_HISTORY_METADATA_ALLOW_LIST } from "@/modules/tasks/history-metadata";
@@ -45,6 +46,14 @@ interface TaskTimelineDrawerProps {
   readonly taskId: string;
   readonly deliveryDate: string;
   readonly onClose: () => void;
+  /**
+   * R6.3 (R6-part-2): the task's AWB / external tracking number. When the
+   * caller passes `null` (task not yet pushed to SuiteFleet), the drawer
+   * shows a partial-state banner explaining the empty SF timeline. Callers
+   * that omit it (the consignee-calendar entry point) get no banner —
+   * unchanged behaviour.
+   */
+  readonly awb?: string | null;
 }
 
 /**
@@ -93,6 +102,7 @@ export function TaskTimelineDrawer({
   taskId,
   deliveryDate,
   onClose,
+  awb,
 }: TaskTimelineDrawerProps) {
   const [state, setState] = useState<
     | { kind: "loading" }
@@ -157,6 +167,15 @@ export function TaskTimelineDrawer({
             Close
           </button>
         </div>
+
+        {isAwaitingPush(awb) ? (
+          <p
+            role="status"
+            className="border-b border-amber-100 bg-amber-100/40 px-6 py-3 text-xs text-[color:var(--color-amber-deep)]"
+          >
+            {TASK_AWAITING_PUSH_BANNER}
+          </p>
+        ) : null}
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {state.kind === "loading" ? (
