@@ -5,22 +5,28 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        navy: "var(--color-navy)",
-        green: "var(--color-green)",
-        "surface-primary": "var(--color-surface-primary)",
-        "surface-secondary": "var(--color-surface-secondary)",
-        amber: "var(--color-amber)",
-        red: "var(--color-red)",
-        "ocean-blue": "var(--color-ocean-blue)",
-        "amber-100": "var(--color-amber-100)",
-        "amber-300": "var(--color-amber-300)",
-        "amber-600": "var(--color-amber-600)",
-        "amber-deep": "var(--color-amber-deep)",
-        paper: "var(--color-paper)",
-        ivory: "var(--color-ivory)",
-        "stone-200": "var(--color-stone-200)",
-        "stone-600": "var(--color-stone-600)",
-        ink: "var(--color-ink)",
+        // H4 (Day-53 Tier-2): each colour resolves through an RGB channel
+        // token via `rgb(var(--color-x-rgb) / <alpha-value>)` so Tailwind
+        // opacity modifiers render (a bare utility resolves to `/ 1` =
+        // identical to the hex). See src/styles/brand-tokens.css.
+        navy: "rgb(var(--color-navy-rgb) / <alpha-value>)",
+        green: "rgb(var(--color-green-rgb) / <alpha-value>)",
+        "surface-primary": "rgb(var(--color-surface-primary-rgb) / <alpha-value>)",
+        "surface-secondary": "rgb(var(--color-surface-secondary-rgb) / <alpha-value>)",
+        amber: "rgb(var(--color-amber-rgb) / <alpha-value>)",
+        red: "rgb(var(--color-red-rgb) / <alpha-value>)",
+        "ocean-blue": "rgb(var(--color-ocean-blue-rgb) / <alpha-value>)",
+        "amber-100": "rgb(var(--color-amber-100-rgb) / <alpha-value>)",
+        "amber-300": "rgb(var(--color-amber-300-rgb) / <alpha-value>)",
+        "amber-600": "rgb(var(--color-amber-600-rgb) / <alpha-value>)",
+        "amber-deep": "rgb(var(--color-amber-deep-rgb) / <alpha-value>)",
+        paper: "rgb(var(--color-paper-rgb) / <alpha-value>)",
+        ivory: "rgb(var(--color-ivory-rgb) / <alpha-value>)",
+        "stone-200": "rgb(var(--color-stone-200-rgb) / <alpha-value>)",
+        "stone-600": "rgb(var(--color-stone-600-rgb) / <alpha-value>)",
+        ink: "rgb(var(--color-ink-rgb) / <alpha-value>)",
+        // scrim is intentionally alpha-baked (Tier-1 surgical backdrop
+        // fix); it is not channel-remapped.
         scrim: "var(--color-scrim)",
       },
       fontFamily: {
