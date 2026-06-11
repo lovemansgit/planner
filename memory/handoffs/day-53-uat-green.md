@@ -6,7 +6,13 @@ type: reference
 
 # UAT GREEN — Day-53 (2026-06-11)
 
-**Status: GREEN. The sandbox UAT is cleared to run.**
+**Status: GREEN. The pre-UAT gate is closed.**
+
+> **Timing update (Plan A, 2026-06-11):** per Love's Plan-A ruling the entire
+> post-UAT queue is pulled PRE-UAT and **UAT now runs after final assembly** —
+> not immediately. UAT GREEN stands as a fact (the gate is closed); only the
+> *when* moves. The "Going into UAT" section below describes the run when it
+> happens. See `memory/decision_d53_plan_a_pre_uat_queue.md`.
 
 | | |
 |---|---|
