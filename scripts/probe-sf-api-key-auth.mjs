@@ -144,6 +144,56 @@ async function main() {
   } else {
     console.log(`  VERDICT_HINT=unexpected ${response.status} — inspect body.`);
   }
+
+  // ---------------------------------------------------------------------------
+  // Day-53 — refresh-wire observation (plan
+  // memory/plans/day-53-sf-apikey-production-auth-lane.md §3).
+  //
+  // The OAuth refresh wire (GET /api/auth/refresh + Cookie: refreshToken
+  // + Clientid header) is UNVERIFIED for api_key tokens — the decision
+  // memo's Q4 residual. After a successful api_key login, attempt that
+  // wire with the returned refresh token and RECORD the outcome. This
+  // step never fails the probe: it is observation, not a gate. If it
+  // returns 200 with a token body, the token-cache skip-refresh strategy
+  // can be revisited with evidence.
+  // ---------------------------------------------------------------------------
+  if (response.status === 200) {
+    let refreshToken;
+    try {
+      refreshToken = JSON.parse(bodyText).refreshToken;
+    } catch {
+      refreshToken = undefined;
+    }
+    if (typeof refreshToken !== "string" || refreshToken.length === 0) {
+      console.log(`[${nowIso()}] step=refresh_observation SKIPPED — no refreshToken in login body`);
+      return;
+    }
+    const refreshUrl = `${SF_API_BASE}/api/auth/refresh`;
+    console.log(`[${nowIso()}] step=refresh_observation`);
+    console.log(`  request=GET ${refreshUrl}`);
+    console.log(`  request_headers=Clientid + Cookie: refreshToken=<redacted> (the OAuth wire, observed for api_key)`);
+    try {
+      const rStart = Date.now();
+      const rResponse = await fetch(refreshUrl, {
+        method: "GET",
+        headers: {
+          Clientid: clientId,
+          Cookie: `refreshToken=${refreshToken}`,
+          Accept: "application/json",
+        },
+      });
+      const rBody = await rResponse.text();
+      console.log(`  status=${rResponse.status} ${rResponse.statusText} elapsed_ms=${Date.now() - rStart}`);
+      console.log(`  response_body(tokens redacted)=${redactBody(rBody)}`);
+      if (rResponse.status === 200) {
+        console.log(`  REFRESH_OBSERVATION=OAuth wire WORKS for api_key tokens — Q4 closes; skip-refresh strategy may be revisited (one-line revert with this evidence).`);
+      } else {
+        console.log(`  REFRESH_OBSERVATION=OAuth wire REJECTED for api_key tokens (${rResponse.status}) — Q4 closes the other way; skip-refresh strategy stands.`);
+      }
+    } catch (err) {
+      console.log(`  REFRESH_OBSERVATION=network error during observation: ${err.message} — inconclusive, probe verdict unaffected.`);
+    }
+  }
 }
 
 main().catch((e) => {
