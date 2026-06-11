@@ -68,20 +68,17 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
   > production SQL (named authorization), new spend, and genuine open
   > decisions the reviewer surfaces as questions. Confirmed by Love."
 - **Builder clearance-merges (Love's authorization, 2026-06-11 — verbatim
-  "builder to merge"):** the builder MAY merge a Love-cleared PR via
-  `gh api repos/*/pulls/*/merge` (admin route), bypassing the off-allowlist
-  park, ONLY under ALL of: (1) Love EXPLICITLY named the PR cleared; (2) a
-  reviewer APPROVE verdict exists OR a Standing-Order-5 directional park whose
-  directional question Love has answered (clearance-is-verification); (3) CI
-  green at the PINNED head SHA the verdict was posted for; (4) the builder
-  STATES the route + the head/merge SHAs in the report, every time. No promote
-  rides a clearance-merge. This is a TEMPORARY bridge: a post-wave hardening
-  followup (`memory/followup_clearance_merge_into_action.md`) moves
-  clearance-merges INTO the orch-automerge Action so the hard `gh pr merge`
-  deny returns and the builder never holds the merge capability directly.
-  Until then, the `.claude/settings.json` deny stands for `gh pr merge`; the
-  gh-api clearance-merge is the only sanctioned exception, only under the four
-  conditions above.
+  "builder to merge"):** when Love EXPLICITLY clears a parked PR, the builder
+  may complete that PR's merge directly, ONLY under ALL of: (1) Love explicitly
+  named the PR cleared; (2) a reviewer APPROVE verdict exists OR a
+  Standing-Order-5 directional park whose directional question Love has
+  answered (clearance-is-verification); (3) CI green at the PINNED head SHA the
+  verdict was posted for; (4) the builder states the merge route + the
+  head/merge SHAs in the report, every time. No promote rides a
+  clearance-merge. TEMPORARY: a post-wave hardening
+  (`memory/followup_clearance_merge_into_action.md`) folds clearance-merge
+  execution into the orch-automerge Action, restoring the standing rule that
+  the Action is the only actor that merges.
 
 ## Pieces
 
