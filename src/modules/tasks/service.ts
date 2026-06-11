@@ -133,6 +133,7 @@ import type {
   CreateTaskInput,
   Task,
   TaskInternalStatus,
+  TaskListRow,
   UpdateTaskPatch,
 } from "./types";
 
@@ -784,7 +785,7 @@ export async function getTask(ctx: RequestContext, id: Uuid): Promise<Task | nul
 export async function listTasks(
   ctx: RequestContext,
   opts: ListTasksOpts = {},
-): Promise<readonly Task[]> {
+): Promise<readonly TaskListRow[]> {
   requirePermission(ctx, "task:read");
   assertTenantScoped(ctx, "task:read");
   return withTenant(ctx.tenantId, async (tx) => {

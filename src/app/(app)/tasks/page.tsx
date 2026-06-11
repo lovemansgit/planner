@@ -40,7 +40,7 @@ import {
   countTasks,
   listTasks,
   PRINT_LABELS_MAX_TASKS_PER_REQUEST,
-  type Task,
+  type TaskListRow,
 } from "@/modules/tasks";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
@@ -95,7 +95,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const rawTo = parseDateParam(params.to, today);
   const { from: dateFrom, to: dateTo } = normaliseDateRange(rawFrom, rawTo);
 
-  let tasks: readonly Task[];
+  let tasks: readonly TaskListRow[];
   let totalCount: number;
   let failedPushTaskIds: ReadonlySet<string>;
   try {
