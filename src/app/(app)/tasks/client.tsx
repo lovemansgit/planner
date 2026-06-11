@@ -466,14 +466,14 @@ function ActionsCell({ task }: { readonly task: Task }) {
               ? "Cancel this delivery (notifies SuiteFleet)"
               : "Cancel via SuiteFleet directly — this task has no Planner subscription"
           }
-          className="px-3 py-1.5 text-[10px] uppercase tracking-[0.14em] border border-red text-red hover:opacity-80 disabled:cursor-not-allowed disabled:border-[color:var(--color-border-default)] disabled:text-[color:var(--color-text-tertiary)]"
+          className="px-3 py-1.5 text-[10px] uppercase tracking-[0.14em] border border-red text-red transition-opacity duration-[120ms] ease-out hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary disabled:cursor-not-allowed disabled:border-[color:var(--color-border-default)] disabled:text-[color:var(--color-text-tertiary)]"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={() => setOpenModal("edit")}
-          className="px-3 py-1.5 text-[10px] uppercase tracking-[0.14em] border border-navy text-navy hover:opacity-80"
+          className="px-3 py-1.5 text-[10px] uppercase tracking-[0.14em] border border-navy text-navy transition-opacity duration-[120ms] ease-out hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
         >
           Edit
         </button>

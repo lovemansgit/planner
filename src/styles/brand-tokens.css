@@ -54,6 +54,37 @@
    * tints above) so `bg-scrim` renders a real backdrop. Day-53/54. */
   --color-scrim: rgba(37, 45, 96, 0.4);
 
+  /* ---------------------------------------------------------------------
+   * H4 (Day-53 Tier-2) — RGB-channel companions.
+   *
+   * Each base colour above is a HEX value, which makes Tailwind opacity
+   * modifiers (`bg-navy/40`, `border-red/40 bg-red/10`, `border-green/30`,
+   * lightbox `/90`) compile to an invalid `rgb(#hex / a)` and drop the
+   * alpha — every translucent surface in the app rendered as bare colour
+   * (finding 14 root cause). These space-separated channel triplets let
+   * `tailwind.config.ts` map each colour to
+   * `rgb(var(--color-x-rgb) / <alpha-value>)`, so opacity renders and a
+   * bare utility (`bg-navy`) still resolves to `rgb(... / 1)` — identical
+   * to the hex. The HEX tokens above are KEPT: direct
+   * `[color:var(--color-navy)]` references depend on them.
+   * ------------------------------------------------------------------- */
+  --color-navy-rgb: 37 45 96;
+  --color-green-rgb: 62 124 75;
+  --color-surface-primary-rgb: 250 248 244;
+  --color-surface-secondary-rgb: 242 238 230;
+  --color-amber-rgb: 232 163 60;
+  --color-red-rgb: 217 58 43;
+  --color-ocean-blue-rgb: 31 111 168;
+  --color-amber-100-rgb: 251 228 189;
+  --color-amber-300-rgb: 241 191 107;
+  --color-amber-600-rgb: 201 135 38;
+  --color-amber-deep-rgb: 142 90 20;
+  --color-paper-rgb: 250 248 244;
+  --color-ivory-rgb: 242 238 230;
+  --color-stone-200-rgb: 211 206 194;
+  --color-stone-600-rgb: 78 74 66;
+  --color-ink-rgb: 20 20 20;
+
   /* Typography — next/font/google variables registered in layout.tsx */
   --font-sans:
     var(--font-mulish), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
