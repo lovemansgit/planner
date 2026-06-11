@@ -51,6 +51,22 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
   builder executes and states the route). §3.6 body-reads.
   Verify-against-running-product. Path-gate + merge-Action lock as built
   (docs-only auto-merge in v1).
+- **Firing-as-clearance (Love's amendment, 2026-06-11):** firing a dispatch
+  prompt constitutes Love's clearance of the items that prompt EXPLICITLY
+  names as cleared-by-firing. Those named items merge/close on the firing; the
+  builder records the firing as the clearance basis (alongside any verbatim
+  ruling already carried in the ORCH-PARK). This does NOT collapse the
+  two-party seam — the reviewer still body-reads and posts its verdict; firing
+  is Love's authorization layer, not the technical-correctness check.
+  Explicit CONVERSATIONAL rulings remain REQUIRED for: live DB changes and
+  production SQL (named authorization — the Love-trigger #1 carve-out above),
+  new spend (Love-trigger #4), and genuine open decisions the reviewer
+  surfaces as questions (a reviewer "Love-only directional" park). Verbatim:
+  > "Love's amendment, 2026-06-11: firing a dispatch prompt constitutes Love's
+  > clearance of the items that prompt explicitly names as cleared-by-firing.
+  > Explicit conversational rulings remain required for: live DB changes and
+  > production SQL (named authorization), new spend, and genuine open
+  > decisions the reviewer surfaces as questions. Confirmed by Love."
 
 ## Pieces
 
