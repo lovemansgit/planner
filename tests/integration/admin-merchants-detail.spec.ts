@@ -33,8 +33,10 @@ import {
 const RUN_ID = randomUUID().slice(0, 8);
 const TENANT_FULL = randomUUID();
 const TENANT_NULL_PICKUP = randomUUID();
+const TENANT_OVERRIDE = randomUUID();
 const SLUG_FULL = `det-${RUN_ID}-full`;
 const SLUG_NULL = `det-${RUN_ID}-null`;
+const SLUG_OVERRIDE = `det-${RUN_ID}-ovr`;
 
 const SYSADMIN_ACTOR = randomUUID();
 const READ_ONLY_ACTOR = randomUUID();
@@ -61,12 +63,14 @@ describe("admin merchants detail — integration", () => {
         INSERT INTO tenants (
           id, slug, name, status,
           pickup_address_line, pickup_address_district, pickup_address_emirate,
-          suitefleet_customer_code
+          suitefleet_customer_code, suitefleet_auth_method_override
         ) VALUES
           (${TENANT_FULL}, ${SLUG_FULL}, 'Detail Test Full', 'active',
-           'Building 1', 'Al Quoz', 'Dubai', '588'),
+           'Building 1', 'Al Quoz', 'Dubai', '588', NULL),
           (${TENANT_NULL_PICKUP}, ${SLUG_NULL}, 'Detail Test NullPickup', 'provisioning',
-           NULL, NULL, NULL, NULL)
+           NULL, NULL, NULL, NULL, NULL),
+          (${TENANT_OVERRIDE}, ${SLUG_OVERRIDE}, 'Detail Test Override', 'active',
+           'Building 2', 'Al Quoz', 'Dubai', '591', 'api_key')
       `);
     });
   });
@@ -78,7 +82,7 @@ describe("admin merchants detail — integration", () => {
     try {
       await withServiceRole("detail-page integration teardown", async (tx) => {
         await tx.execute(sqlTag`
-          DELETE FROM tenants WHERE id IN (${TENANT_FULL}, ${TENANT_NULL_PICKUP})
+          DELETE FROM tenants WHERE id IN (${TENANT_FULL}, ${TENANT_NULL_PICKUP}, ${TENANT_OVERRIDE})
         `);
       });
     } catch {
@@ -106,6 +110,26 @@ describe("admin merchants detail — integration", () => {
       emirate: "Dubai",
     });
     expect(merchant?.suitefleetCustomerCode).toBe("588");
+  });
+
+  // Day-53 — the detail page renders the EFFECTIVE auth method, so the
+  // DTO must project tenants.suitefleet_auth_method_override through
+  // the mapRow boundary (Love found Demo Bistro's flip invisible on
+  // the detail page: AUTH METHOD still read OAUTH off the region).
+  it("auth-method override is projected onto the DTO — null when unset", async () => {
+    const merchant = await getMerchantById(
+      ctxWith(["merchant:read_all"], READ_ONLY_ACTOR),
+      TENANT_FULL as Uuid,
+    );
+    expect(merchant?.suitefleetAuthMethodOverride).toBeNull();
+  });
+
+  it("auth-method override is projected onto the DTO — value when set", async () => {
+    const merchant = await getMerchantById(
+      ctxWith(["merchant:read_all"], READ_ONLY_ACTOR),
+      TENANT_OVERRIDE as Uuid,
+    );
+    expect(merchant?.suitefleetAuthMethodOverride).toBe("api_key");
   });
 
   it("read-only happy path — null pickup tenant returns pickupAddress=null + customer_code=null", async () => {
