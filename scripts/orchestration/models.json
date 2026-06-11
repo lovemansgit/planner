@@ -1,0 +1,6 @@
+{
+  "_comment": "Shape-3 reviewer model split (Fork 6, Love-ruled). Values are Claude Code Agent-tool model aliases, verified Day-52: sonnet -> claude-sonnet-4-6, opus -> claude-opus-4-8. Swap is a one-line change (Fable leaves subscription 2026-06-22).",
+  "docs_reviewer": "sonnet",
+  "code_reviewer": "opus",
+  "builder": "fable"
+}

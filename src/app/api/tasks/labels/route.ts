@@ -86,22 +86,34 @@ export async function POST(req: Request): Promise<Response> {
     const dateUtc = new Date().toISOString().slice(0, 10);
     const filename = `labels-${dateUtc}-${result.printedCount}-tasks.pdf`;
 
+    // Day 17 — partial-success headers for the Planner UUID → SF
+    // external_id translation. When the service skipped tasks because
+    // they hadn't been pushed to SF yet, surface the count + reason
+    // via response headers so the UI can render a banner without
+    // parsing the audit log. X-Skipped-* headers added only when
+    // non-zero so the success-path response stays minimal.
+    const headers: Record<string, string> = {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      // Forensic split surfaced on response headers so the UI can
+      // render "28 of 30 selected tasks printed" without parsing
+      // the PDF or making a separate audit-log query. Mirrors the
+      // audit metadata's requested_count / printed_count.
+      "X-Requested-Count": String(result.requestedCount),
+      "X-Printed-Count": String(result.printedCount),
+      // Don't cache: the PDF reflects current task state at render
+      // time. SF could re-render with different content if a task
+      // were re-pushed; cached PDFs would diverge.
+      "Cache-Control": "no-store, max-age=0",
+    };
+    if (result.skippedCount > 0) {
+      headers["X-Skipped-Count"] = String(result.skippedCount);
+      headers["X-Skipped-Reason"] = "not-pushed-to-suitefleet";
+    }
+
     return new NextResponse(result.pdfBuffer as unknown as BodyInit, {
       status: 200,
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        // Forensic split surfaced on response headers so the UI can
-        // render "28 of 30 selected tasks printed" without parsing
-        // the PDF or making a separate audit-log query. Mirrors the
-        // audit metadata's requested_count / printed_count.
-        "X-Requested-Count": String(result.requestedCount),
-        "X-Printed-Count": String(result.printedCount),
-        // Don't cache: the PDF reflects current task state at render
-        // time. SF could re-render with different content if a task
-        // were re-pushed; cached PDFs would diverge.
-        "Cache-Control": "no-store, max-age=0",
-      },
+      headers,
     });
   } catch (e) {
     return errorResponse(e);

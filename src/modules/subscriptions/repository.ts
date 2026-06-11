@@ -47,6 +47,8 @@ import type { DbTx } from "@/shared/db";
 import { ConflictError, NotFoundError } from "@/shared/errors";
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
+import type { TenantStatus } from "../merchants/types";
+
 import type {
   CreateSubscriptionInput,
   Subscription,
@@ -68,7 +70,12 @@ import type {
 //     CI Postgres returns Date instances). Coerced via `toIso`.
 //   - date: string ('YYYY-MM-DD').
 //   - time: string ('HH:MM:SS').
-//   - integer[]: number[] (postgres-js binds Postgres arrays directly).
+//   - integer[]: bound via `ARRAY[${arr}]::integer[]` so the array
+//     constructor + explicit type cast produces a single array literal
+//     in the rendered SQL. A bare `${arr}` would spread as N
+//     comma-separated parameters — correct for `IN (…)` clauses, but
+//     interpreted as a record/tuple in a single-column VALUES slot,
+//     incompatible with the `integer[]` column type (Postgres 42804).
 //   - jsonb: parsed object | null (postgres-js JSON-parses jsonb columns).
 
 type SubscriptionRow = {
@@ -170,7 +177,7 @@ export async function insertSubscription(
       ${input.status ?? "active"},
       ${input.startDate},
       ${input.endDate ?? null},
-      ${input.daysOfWeek as number[]},
+      ${daysOfWeekArrayLiteral(input.daysOfWeek)},
       ${input.deliveryWindowStart},
       ${input.deliveryWindowEnd},
       ${input.deliveryAddressOverride ?? null},
@@ -214,6 +221,156 @@ export async function listSubscriptionsByTenant(
     ORDER BY created_at DESC
   `);
   return rows.map(mapSubscription);
+}
+
+/**
+ * Day-23 §3.3.2 — SELECT every subscription for `consigneeId` within
+ * `tenantId`, newest first. Drives the consignee-detail Subscription
+ * tab (replaces the PlaceholderTab that shipped at Day-17). Tenant
+ * predicate is explicit alongside RLS for defence-in-depth and
+ * legibility, matching `listAddressesForConsignee` precedent.
+ */
+export async function listSubscriptionsByConsignee(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+): Promise<readonly Subscription[]> {
+  const rows = await tx.execute<SubscriptionRow>(sqlTag`
+    SELECT * FROM subscriptions
+    WHERE tenant_id = ${tenantId}
+      AND consignee_id = ${consigneeId}
+    ORDER BY created_at DESC
+  `);
+  return rows.map(mapSubscription);
+}
+
+// -----------------------------------------------------------------------------
+// Day-22 §3.22 Fix 1 — list subscriptions with consignee name JOIN
+// -----------------------------------------------------------------------------
+
+/**
+ * Wrapper row returned by `listSubscriptionsWithConsigneeByTenant`.
+ * Adds the consignee's display name + id as separate fields so the
+ * /subscriptions list page can render the operator-readable name
+ * instead of a truncated UUID.
+ */
+export interface SubscriptionWithConsignee {
+  readonly subscription: Subscription;
+  readonly consigneeName: string;
+}
+
+/**
+ * Day-22 §3.22 Fix 1 — JOIN subscriptions + consignees so the operator
+ * /subscriptions list shows consignee names instead of UUID
+ * shorthands. Tenant-scoped on both tables for defence-in-depth
+ * alongside RLS. Newest-first per existing convention.
+ */
+export async function listSubscriptionsWithConsigneeByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly SubscriptionWithConsignee[]> {
+  type JoinedRow = SubscriptionRow & {
+    readonly consignee_name: string;
+  };
+  const searchFilter = buildSubscriptionSearchFilter(opts.searchTerm);
+  const rows = await tx.execute<JoinedRow>(sqlTag`
+    SELECT s.*, c.name AS consignee_name
+    FROM subscriptions s
+    JOIN consignees c ON c.id = s.consignee_id AND c.tenant_id = s.tenant_id
+    WHERE s.tenant_id = ${tenantId}
+      ${searchFilter}
+    ORDER BY s.created_at DESC
+  `);
+  return rows.map((row) => ({
+    subscription: mapSubscription(row),
+    consigneeName: row.consignee_name,
+  }));
+}
+
+function buildSubscriptionSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const pattern = `%${trimmed}%`;
+  return sqlTag`AND (c.name ILIKE ${pattern} OR s.external_ref ILIKE ${pattern})`;
+}
+
+// -----------------------------------------------------------------------------
+// Day 19 / Phase 1.5 — cross-tenant admin list
+// -----------------------------------------------------------------------------
+
+/**
+ * Filters for listAllSubscriptionsRows. Optional merchantSlug narrows
+ * to a single tenant; limit/offset for pagination (defaults applied
+ * at fn body — default 50, max 500 per merged plan scope item 8).
+ */
+export interface ListAllSubscriptionsFilters {
+  readonly merchantSlug?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+type AdminSubscriptionJoinRow = SubscriptionRow & {
+  readonly merchant_tenant_id: string;
+  readonly merchant_slug: string;
+  readonly merchant_name: string;
+  readonly merchant_status: TenantStatus;
+};
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of subscriptions across all
+ * merchants. Caller is in withServiceRole; no RLS predicate. JOIN
+ * tenants for merchant surface columns per merged plan §5.3.
+ *
+ * ORDER BY created_at DESC per merged plan scope item 9.
+ */
+export async function listAllSubscriptionsRows(
+  tx: DbTx,
+  filters: ListAllSubscriptionsFilters = {},
+): Promise<
+  readonly {
+    subscription: Subscription;
+    merchant: {
+      tenantId: Uuid;
+      slug: string;
+      name: string;
+      status: TenantStatus;
+    };
+  }[]
+> {
+  const limit = Math.min(filters.limit ?? 50, 500);
+  const offset = filters.offset ?? 0;
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+
+  const rows = await tx.execute<AdminSubscriptionJoinRow>(sqlTag`
+    SELECT
+      s.*,
+      ten.id   AS merchant_tenant_id,
+      ten.slug AS merchant_slug,
+      ten.name AS merchant_name,
+      ten.status AS merchant_status
+    FROM subscriptions s
+    JOIN tenants ten ON ten.id = s.tenant_id
+    WHERE 1 = 1
+      AND ten.status != 'archived'
+      ${merchantFilter}
+    ORDER BY s.created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  return rows.map((row) => ({
+    subscription: mapSubscription(row),
+    merchant: {
+      tenantId: row.merchant_tenant_id as Uuid,
+      slug: row.merchant_slug,
+      name: row.merchant_name,
+      status: row.merchant_status,
+    },
+  }));
 }
 
 /**
@@ -275,11 +432,33 @@ export async function updateSubscription(
   return { before, after: mapSubscription(afterRows[0]) };
 }
 
+// Day-16 / Block 4-C — `resumeSubscription` repository helper DELETED.
+// The new service-layer `resumeSubscription` in service.ts performs
+// the multi-table tx inline (find pause_window exception → restore
+// tasks → flip subscription → recompute end_date for early-manual)
+// per merged plan §4 + brief §3.1.7.
+//
+// `pauseSubscription` repository helper KEPT below — it remains the
+// single-table status-flip primitive used by the system-actor
+// `autoPauseSubscriptionForRepeatedFailure` flow (Day-7 / MP-14)
+// where bounded-pause semantics don't apply (auto-pause is an
+// emergency halt on N consecutive push failures, not an
+// operator-chosen window). The new operator-driven pauseSubscription
+// in service.ts does the multi-table tx itself; it does NOT call this
+// helper.
+
 /**
  * Transition a subscription from 'active' to 'paused'. Sets
  * `paused_at = now()`. Returns `{ before, after }` on success, null if
  * the row does not exist / is RLS-hidden. Throws `ConflictError` if
  * the row exists but is not in 'active' state.
+ *
+ * **Scope-limited as of Day-16 Block 4-C.** Used ONLY by
+ * `autoPauseSubscriptionForRepeatedFailure` for the system-actor
+ * emergency-halt path. The operator-driven bounded-pause flow
+ * (`pauseSubscription` in service.ts) does NOT use this helper —
+ * it does its own multi-table tx (subscription_exceptions INSERT +
+ * tasks bulk UPDATE + subscriptions flip with end_date extension).
  */
 export async function pauseSubscription(
   tx: DbTx,
@@ -303,41 +482,6 @@ export async function pauseSubscription(
   const afterRows = await tx.execute<SubscriptionRow>(sqlTag`
     UPDATE subscriptions
     SET status = 'paused', paused_at = now()
-    WHERE id = ${id} AND tenant_id = ${tenantId}
-    RETURNING *
-  `);
-  return { before, after: mapSubscription(afterRows[0]) };
-}
-
-/**
- * Transition a subscription from 'paused' to 'active'. Clears
- * `paused_at` to NULL (status is the canonical truth; paused_at is
- * the annotation). Returns `{ before, after }` on success, null if
- * the row does not exist. Throws `ConflictError` on illegal
- * transition.
- */
-export async function resumeSubscription(
-  tx: DbTx,
-  tenantId: Uuid,
-  id: Uuid
-): Promise<SubscriptionUpdate | null> {
-  const beforeRows = await tx.execute<SubscriptionRow>(sqlTag`
-    SELECT * FROM subscriptions
-    WHERE id = ${id} AND tenant_id = ${tenantId}
-    FOR UPDATE
-  `);
-  if (beforeRows.length === 0) return null;
-  const before = mapSubscription(beforeRows[0]);
-
-  if (before.status !== "paused") {
-    throw new ConflictError(
-      `Cannot resume subscription ${id}: status is '${before.status}', expected 'paused'`
-    );
-  }
-
-  const afterRows = await tx.execute<SubscriptionRow>(sqlTag`
-    UPDATE subscriptions
-    SET status = 'active', paused_at = NULL
     WHERE id = ${id} AND tenant_id = ${tenantId}
     RETURNING *
   `);
@@ -381,13 +525,33 @@ export async function endSubscription(
 // Internal helpers
 // -----------------------------------------------------------------------------
 
+/**
+ * Render a Postgres `integer[]` array literal for the given weekday list.
+ *
+ * Why this exists (Day-22 PM regression fix): a bare `${arr}` embed in
+ * Drizzle's `sql` template wraps the spread in parentheses —
+ * `($1, $2, $3)` — which Postgres parses as a record/tuple. Bound into
+ * an `integer[]` column slot, Postgres raises 42804 datatype_mismatch.
+ *
+ * `sql.join([...], ', ')` produces a flat `$1, $2, $3` list without the
+ * surrounding parens, so wrapping it in `ARRAY[…]::integer[]` produces
+ * the valid array-constructor form. Each element binds as its own
+ * scalar param.
+ */
+function daysOfWeekArrayLiteral(days: readonly number[]): SQL {
+  return sqlTag`ARRAY[${sqlTag.join(
+    days.map((d) => sqlTag`${d}`),
+    sqlTag`, `,
+  )}]::integer[]`;
+}
+
 function buildUpdateSets(patch: UpdateSubscriptionPatch): SQL[] {
   const sets: SQL[] = [];
   if (patch.consigneeId !== undefined) sets.push(sqlTag`consignee_id = ${patch.consigneeId}`);
   if (patch.startDate !== undefined) sets.push(sqlTag`start_date = ${patch.startDate}`);
   if (patch.endDate !== undefined) sets.push(sqlTag`end_date = ${patch.endDate}`);
   if (patch.daysOfWeek !== undefined)
-    sets.push(sqlTag`days_of_week = ${patch.daysOfWeek as number[]}`);
+    sets.push(sqlTag`days_of_week = ${daysOfWeekArrayLiteral(patch.daysOfWeek)}`);
   if (patch.deliveryWindowStart !== undefined)
     sets.push(sqlTag`delivery_window_start = ${patch.deliveryWindowStart}`);
   if (patch.deliveryWindowEnd !== undefined)

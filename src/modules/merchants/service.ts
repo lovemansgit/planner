@@ -1,0 +1,711 @@
+// Merchants module service-layer operations.
+//
+// Day 16 / Block 4-D — Service D. Transcorp-staff cross-tenant surface
+// per merged plan PR #155 §5.2 + brief §3.1.4. Four public methods:
+// createMerchant, activateMerchant, deactivateMerchant, listMerchants.
+//
+// All four methods gate on the `merchant:*` permission family
+// (systemOnly per `src/modules/identity/permissions.ts:526-560`),
+// granted only to the `transcorp-sysadmin` role
+// (`src/modules/identity/roles.ts:183-190` ALL set). Tenant Admins
+// MUST NOT have these permissions; the
+// `systemOnlyPermissionsAreNotInTenantRoles` test enforces it
+// statically.
+//
+// Cross-tenant scope: every method runs inside `withServiceRole(reason,
+// async (tx) => ...)` because:
+//   - The `tenants` table has its own RLS policy keyed by
+//     `id = app.current_tenant_id` (per 0001_identity.sql); no session
+//     tenant_id is bound for cross-tenant create/list/state-flip ops.
+//   - The audit-emit `withServiceRole` recursion-skip contract from
+//     `src/modules/audit/emit.ts:14-31` requires the reason string to
+//     NOT start with `audit:emit:`; we use `transcorp_staff:<verb>`
+//     prefix to distinguish from the audit emit's internal scope.
+//
+// State-machine rulings (Block 4-D Option C ruling — plan-strict):
+//   - activateMerchant: ONLY `provisioning → active`. All other
+//     from-states throw ConflictError 409. Reactivation from
+//     `inactive`, un-suspend from `suspended` are Phase 2 per
+//     `memory/followup_merchant_lifecycle_transition_expansion.md`.
+//   - deactivateMerchant: ONLY `active → inactive`. All other
+//     from-states throw ConflictError 409. `suspended → inactive`
+//     is Phase 2 per the same followup memo.
+//   - `'suspended'` is reserved per brief §3.1.1; this PR introduces
+//     no code path that exercises it.
+//
+// Audit body shape (Block 4-D Gate 4 Option C ruling for merchant.created
+// + registered metadataNotes literals for merchant.activated +
+// merchant.deactivated):
+//   - merchant.created: { tenant_id, slug, name, pickup_address: {
+//     line, district, emirate } } — NESTED per registered
+//     metadataNotes at audit/event-types.ts:707-708.
+//   - merchant.activated: { tenant_id, from_status: 'provisioning'
+//     (literal), to_status: 'active' (literal) } — registered
+//     metadataNotes at :716-717. Literal contract — Phase 2 expansion
+//     to enum requires metadataNotes update first per §A discipline
+//     rule.
+//   - merchant.deactivated: { tenant_id, from_status: 'active'
+//     (literal), to_status: 'inactive' (literal) } — registered
+//     metadataNotes at :728-729. Same literal contract.
+
+import { emit } from "../audit";
+import { withServiceRole } from "../../shared/db";
+import { isForeignKeyViolation, isUniqueViolation } from "../../shared/db-errors";
+import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors";
+import type { Actor, RequestContext } from "../../shared/tenant-context";
+import type { Uuid } from "../../shared/types";
+
+import { requirePermission } from "../identity";
+
+import {
+  findMerchantById,
+  findMerchantForStatusUpdate,
+  insertMerchant,
+  listMerchants as listMerchantsRows,
+  updateMerchantFields,
+  updateMerchantStatus,
+  type UpdateMerchantFieldsPatch,
+} from "./repository";
+import type {
+  ActivateMerchantResult,
+  CreateMerchantInput,
+  CreateMerchantResult,
+  DeactivateMerchantResult,
+  ListMerchantsFilters,
+  Merchant,
+  PickupAddress,
+  UpdateMerchantInput,
+  UpdateMerchantResult,
+} from "./types";
+
+// -----------------------------------------------------------------------------
+// Helpers (local; cross-module imports of internal helpers forbidden)
+// -----------------------------------------------------------------------------
+
+/**
+ * Same actor → audit-id mapping as identity/service.ts +
+ * consignees/service.ts (R-2 boundary rule — no cross-module
+ * imports of internal helpers).
+ */
+function actorIdFor(actor: Actor): string {
+  return actor.kind === "user" ? actor.userId : actor.system;
+}
+
+/**
+ * Trim and reject empty / whitespace-only required strings. Mirrors
+ * the consignees/service.ts helper of the same name.
+ */
+function requireNonEmpty(value: string, field: string): string {
+  if (typeof value !== "string") {
+    throw new ValidationError(`${field} is required`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new ValidationError(`${field} is required`);
+  }
+  return trimmed;
+}
+
+/** lowercase-kebab `^[a-z0-9-]+$` of length 1-60 per merged plan §5.2.1. */
+const SLUG_RE = /^[a-z0-9-]+$/;
+
+function requireValidSlug(value: string): string {
+  const trimmed = requireNonEmpty(value, "slug");
+  if (trimmed.length > 60 || !SLUG_RE.test(trimmed)) {
+    throw new ValidationError(
+      `slug must be lowercase-kebab '[a-z0-9-]' of length 1-60`,
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Positive-integer string per the SF resolver contract
+ * (`credentials/suitefleet-resolver.ts:108-131` parses with
+ * `parseInt(raw, 10)` + asserts > 0 + asserts `String(parsed) === raw`
+ * to reject leading zeros / non-integer numerals). The regex
+ * `^[1-9]\d*$` captures all three constraints in one pass — rejects
+ * empty, leading-zero forms (`"0588"`), bare zero (`"0"`), negatives,
+ * decimals, signs, and non-digit characters.
+ */
+const SUITEFLEET_CUSTOMER_CODE_RE = /^[1-9]\d*$/;
+
+function requireSuitefleetCustomerCode(value: string): string {
+  const trimmed = requireNonEmpty(value, "suitefleet_customer_code");
+  if (!SUITEFLEET_CUSTOMER_CODE_RE.test(trimmed)) {
+    throw new ValidationError(
+      "suitefleet_customer_code must be a positive integer (e.g. 588), no leading zeros",
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Canonical RFC-4122 UUID regex (lowercase hex; any version digit; any
+ * variant bit). Used to shape-validate the SF region FK at the service
+ * boundary before the DB sees it — a bogus string here would otherwise
+ * surface as a postgres parse error rather than a typed ValidationError.
+ * The DB-level FK constraint (`REFERENCES suitefleet_regions(id) ON
+ * DELETE RESTRICT`) is the canonical existence check; this regex only
+ * guarantees the value can BE a UUID.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function requireValidUuid(value: string, field: string): string {
+  const trimmed = requireNonEmpty(value, field);
+  if (!UUID_RE.test(trimmed)) {
+    throw new ValidationError(`${field} must be a valid UUID`);
+  }
+  return trimmed.toLowerCase();
+}
+
+// -----------------------------------------------------------------------------
+// createMerchant
+// -----------------------------------------------------------------------------
+
+/**
+ * Create a new merchant tenant row. Lands in `tenants.status =
+ * 'provisioning'` (DB DEFAULT per migration 0001). Slug uniqueness
+ * is enforced by the UNIQUE constraint on `tenants.slug`; a
+ * duplicate raises SQLSTATE 23505 mapped to ConflictError.
+ *
+ * Pickup-address validation: all three sub-fields required and
+ * non-empty after trim. The schema columns (per migration 0017)
+ * are nullable for legacy backfill, but new merchants must have
+ * complete pickup_address.
+ *
+ * Audit emit: `merchant.created` with NESTED `pickup_address`
+ * shape per registered metadataNotes (Block 4-D Gate 4 Option C).
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:create`.
+ *   - ValidationError   missing/empty fields, malformed slug.
+ *   - ConflictError     slug already exists (UNIQUE collision).
+ */
+export async function createMerchant(
+  ctx: RequestContext,
+  input: CreateMerchantInput,
+): Promise<CreateMerchantResult> {
+  requirePermission(ctx, "merchant:create");
+
+  const normalised: CreateMerchantInput = {
+    name: requireNonEmpty(input.name, "name"),
+    slug: requireValidSlug(input.slug),
+    pickupAddress: {
+      line: requireNonEmpty(input.pickupAddress?.line, "pickup_address.line"),
+      district: requireNonEmpty(
+        input.pickupAddress?.district,
+        "pickup_address.district",
+      ),
+      emirate: requireNonEmpty(
+        input.pickupAddress?.emirate,
+        "pickup_address.emirate",
+      ),
+    },
+    suitefleetCustomerCode: requireSuitefleetCustomerCode(
+      input.suitefleetCustomerCode,
+    ),
+  };
+
+  let created: Merchant;
+  try {
+    created = await withServiceRole(
+      "transcorp_staff:create_merchant",
+      async (tx) => insertMerchant(tx, normalised),
+    );
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new ConflictError(`merchant slug already exists: ${normalised.slug}`);
+    }
+    throw err;
+  }
+
+  await emit({
+    eventType: "merchant.created",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: null, // cross-tenant operation; no current tenant scope
+    resourceType: "merchant",
+    resourceId: created.tenantId,
+    metadata: {
+      tenant_id: created.tenantId,
+      slug: created.slug,
+      name: created.name,
+      pickup_address: {
+        line: normalised.pickupAddress.line,
+        district: normalised.pickupAddress.district,
+        emirate: normalised.pickupAddress.emirate,
+      },
+      // Day-22 §5.3 Gate 2 closure — captured at create time so the
+      // audit trail records the value as supplied (debugging forensic
+      // for SF-routing issues post-onboarding).
+      suitefleet_customer_code: normalised.suitefleetCustomerCode,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return { status: "created", tenantId: created.tenantId };
+}
+
+// -----------------------------------------------------------------------------
+// activateMerchant
+// -----------------------------------------------------------------------------
+
+/**
+ * Flip tenant.status `provisioning → active`. PLAN-STRICT per Block
+ * 4-D Option C ruling: ONLY `provisioning → active` is allowed.
+ * `inactive → active` (reactivation) and `suspended → active`
+ * (un-suspend) are Phase 2 per
+ * `memory/followup_merchant_lifecycle_transition_expansion.md`.
+ *
+ * Behavior in single transaction:
+ *   1. Permission gate (`merchant:activate`).
+ *   2. SELECT FOR UPDATE — row-lock the tenant.
+ *   3. Reject 404 if not found.
+ *   4. Reject 409 ConflictError if `status !== 'provisioning'`.
+ *   5. UPDATE tenants.status = 'active'.
+ *   6. Post-commit: emit merchant.activated with literal
+ *      from_status='provisioning', to_status='active' per registered
+ *      metadataNotes.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:activate`.
+ *   - NotFoundError     tenant id not found.
+ *   - ConflictError     tenant.status !== 'provisioning'.
+ */
+export async function activateMerchant(
+  ctx: RequestContext,
+  tenantId: Uuid,
+): Promise<ActivateMerchantResult> {
+  requirePermission(ctx, "merchant:activate");
+
+  await withServiceRole(
+    `transcorp_staff:activate_merchant ${tenantId}`,
+    async (tx) => {
+      const before = await findMerchantForStatusUpdate(tx, tenantId);
+      if (!before) {
+        throw new NotFoundError(`merchant not found: ${tenantId}`);
+      }
+      if (before.status !== "provisioning") {
+        throw new ConflictError(
+          `merchant.status must be 'provisioning' to activate; current status is '${before.status}'`,
+        );
+      }
+      const updated = await updateMerchantStatus(tx, tenantId, "active");
+      if (!updated) {
+        // FOR UPDATE lock means this shouldn't happen — surface as
+        // NotFound for caller-consistent semantics.
+        throw new NotFoundError(`merchant not found: ${tenantId}`);
+      }
+    },
+  );
+
+  await emit({
+    eventType: "merchant.activated",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: null,
+    resourceType: "merchant",
+    resourceId: tenantId,
+    metadata: {
+      tenant_id: tenantId,
+      from_status: "provisioning",
+      to_status: "active",
+    },
+    requestId: ctx.requestId,
+  });
+
+  return {
+    status: "activated",
+    tenantId,
+    previousStatus: "provisioning",
+    newStatus: "active",
+  };
+}
+
+// -----------------------------------------------------------------------------
+// deactivateMerchant
+// -----------------------------------------------------------------------------
+
+/**
+ * Flip tenant.status `active → inactive`. PLAN-STRICT per Block 4-D
+ * Option C ruling: ONLY `active → inactive` is allowed.
+ * `suspended → inactive` is Phase 2 per
+ * `memory/followup_merchant_lifecycle_transition_expansion.md`.
+ *
+ * Behavior in single transaction:
+ *   1. Permission gate (`merchant:deactivate`).
+ *   2. SELECT FOR UPDATE — row-lock the tenant.
+ *   3. Reject 404 if not found.
+ *   4. Reject 409 ConflictError if `status !== 'active'`.
+ *   5. UPDATE tenants.status = 'inactive'.
+ *   6. Post-commit: emit merchant.deactivated with literal
+ *      from_status='active', to_status='inactive' per registered
+ *      metadataNotes.
+ *
+ * Side effects: NONE in MVP per brief §5.4 Q3 ("Deactivation in MVP
+ * is reversible — sets tenant.status to INACTIVE, blocks new
+ * operator logins, preserves all data."). Block-new-logins is
+ * already enforced at `buildRequestContext` time per the
+ * `tenants.status='active'` filter shipped in commit d7fd9e9.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:deactivate`.
+ *   - NotFoundError     tenant id not found.
+ *   - ConflictError     tenant.status !== 'active'.
+ */
+export async function deactivateMerchant(
+  ctx: RequestContext,
+  tenantId: Uuid,
+): Promise<DeactivateMerchantResult> {
+  requirePermission(ctx, "merchant:deactivate");
+
+  await withServiceRole(
+    `transcorp_staff:deactivate_merchant ${tenantId}`,
+    async (tx) => {
+      const before = await findMerchantForStatusUpdate(tx, tenantId);
+      if (!before) {
+        throw new NotFoundError(`merchant not found: ${tenantId}`);
+      }
+      if (before.status !== "active") {
+        throw new ConflictError(
+          `merchant.status must be 'active' to deactivate; current status is '${before.status}'`,
+        );
+      }
+      const updated = await updateMerchantStatus(tx, tenantId, "inactive");
+      if (!updated) {
+        throw new NotFoundError(`merchant not found: ${tenantId}`);
+      }
+    },
+  );
+
+  await emit({
+    eventType: "merchant.deactivated",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: null,
+    resourceType: "merchant",
+    resourceId: tenantId,
+    metadata: {
+      tenant_id: tenantId,
+      from_status: "active",
+      to_status: "inactive",
+    },
+    requestId: ctx.requestId,
+  });
+
+  return {
+    status: "deactivated",
+    tenantId,
+    previousStatus: "active",
+    newStatus: "inactive",
+  };
+}
+
+// -----------------------------------------------------------------------------
+// getMerchantById — single-merchant read (Day 25 / T2 detail page)
+// -----------------------------------------------------------------------------
+
+/**
+ * Read one merchant by tenant id. Gated on `merchant:read_all`.
+ *
+ * **Perm-gate history (Day 25 PR #270 plan §9.2):** originally
+ * shipped Day 25 AM (PR #264) gated on `merchant:update` per a
+ * route-specific tightness argument ("what you can edit, you can
+ * see"). The new read-only `/admin/merchants/[id]` detail page
+ * (PR #270 plan) legitimately needs read access without the update
+ * permission, so the gate relaxed to `merchant:read_all` (the same
+ * gate the list page at `/admin/merchants` uses).
+ *
+ * Discipline carry-forward: gate service-layer functions at the
+ * broadest legitimate need, not the tightest single-caller posture.
+ * The edit page caller has `merchant:update` (which implies
+ * `merchant:read_all` in the current role catalogue since
+ * `transcorp-sysadmin` holds ALL); the read-only viewer caller only
+ * needs `merchant:read_all`. Gating on `merchant:read_all` covers
+ * both legitimately without bifurcating the read fn.
+ *
+ * Returns null when not found; the page-level caller maps to the
+ * not-found surface (Next.js `notFound()` or inline render).
+ *
+ * Cross-tenant scope — runs inside `withServiceRole` to bypass the
+ * `tenants` RLS policy. No audit emit (reads not audited per R-4).
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:read_all`.
+ */
+export async function getMerchantById(
+  ctx: RequestContext,
+  tenantId: Uuid,
+): Promise<Merchant | null> {
+  requirePermission(ctx, "merchant:read_all");
+
+  return withServiceRole(
+    `transcorp_staff:get_merchant ${tenantId}`,
+    async (tx) => findMerchantById(tx, tenantId),
+  );
+}
+
+// -----------------------------------------------------------------------------
+// updateMerchant — Day 25 / T3
+// -----------------------------------------------------------------------------
+
+/**
+ * Update an existing merchant tenant's name, pickup address
+ * (line/district/emirate), and SF routing (suitefleet_customer_code).
+ * Status changes are NOT in scope — they go through activateMerchant /
+ * deactivateMerchant. Slug changes are NOT in scope — slug is set at
+ * creation only (UI-driven rename would silently break internal-tenant
+ * identity per the string-literal coupling documented at
+ * UpdateMerchantInput).
+ *
+ * Plan §3.3 behavior (single transaction):
+ *   1. Permission gate (`merchant:update`).
+ *   2. Validate input shape — at least one field provided; supplied
+ *      fields pass type-specific regex/non-empty checks; pickup is
+ *      all-or-none.
+ *   3. withServiceRole:
+ *      a. findMerchantForStatusUpdate (FOR UPDATE row-lock).
+ *      b. 404 if not found.
+ *      c. Compute diff: for each provided field, compare normalized
+ *         new value vs current row. Build `changedFields` + audit
+ *         `changes` payload (flat dot-notation per plan §2.5.1).
+ *      d. 422 ValidationError("no changes") if zero fields changed.
+ *      e. updateMerchantFields(tx, tenantId, normalizedPatch).
+ *         - SQLSTATE 23505 → ConflictError (defense-in-depth against
+ *           any future UNIQUE-constrained column added to the patch
+ *           shape; no editable column under the current v1 surface
+ *           carries a UNIQUE constraint).
+ *   4. Post-commit emit: merchant.updated with metadata.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:update`.
+ *   - ValidationError   missing/empty/malformed field; no fields to
+ *                       update; no changes diff; pickup partial.
+ *   - NotFoundError     tenant id not found.
+ *   - ConflictError     SQLSTATE 23505 (no live trigger under v1 patch
+ *                       shape; defensive for future UNIQUE columns).
+ */
+export async function updateMerchant(
+  ctx: RequestContext,
+  tenantId: Uuid,
+  input: UpdateMerchantInput,
+): Promise<UpdateMerchantResult> {
+  requirePermission(ctx, "merchant:update");
+
+  const normalised = normaliseUpdateInput(input);
+
+  let changedFields: readonly string[] = [];
+  let changes: Record<string, { before: unknown; after: unknown }> = {};
+
+  await withServiceRole(
+    `transcorp_staff:update_merchant ${tenantId}`,
+    async (tx) => {
+      const before = await findMerchantForStatusUpdate(tx, tenantId);
+      if (!before) {
+        throw new NotFoundError(`merchant not found: ${tenantId}`);
+      }
+
+      const diff = computeMerchantDiff(before, normalised);
+      if (diff.changedFields.length === 0) {
+        throw new ValidationError("no changes");
+      }
+      changedFields = diff.changedFields;
+      changes = diff.changes;
+
+      try {
+        const updated = await updateMerchantFields(tx, tenantId, normalised);
+        if (!updated) {
+          // FOR UPDATE row-lock should prevent vanished-mid-tx; surface
+          // as NotFound for caller-consistent semantics with
+          // updateMerchantStatus.
+          throw new NotFoundError(`merchant not found: ${tenantId}`);
+        }
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          // Defensive: no editable column on the v1 patch shape carries
+          // a UNIQUE constraint, so this branch has no live trigger.
+          // Retained so any future UNIQUE-constrained editable column
+          // surfaces as 409 instead of 500 without service-layer churn.
+          throw new ConflictError(`merchant update conflict (uniqueness violation)`);
+        }
+        if (isForeignKeyViolation(err)) {
+          // suitefleet_region_id FK violation — operator submitted a
+          // region UUID that doesn't exist in suitefleet_regions. The
+          // UI picker only ever sends IDs from listRegions results, so
+          // this is defense-in-depth against a manual POST. Surface as
+          // ValidationError (422) rather than letting it bubble as 500.
+          throw new ValidationError(
+            "suitefleet_region_id references an unknown region",
+          );
+        }
+        throw err;
+      }
+    },
+  );
+
+  await emit({
+    eventType: "merchant.updated",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: null,
+    resourceType: "merchant",
+    resourceId: tenantId,
+    metadata: {
+      tenant_id: tenantId,
+      changes,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return { status: "updated", tenantId, changedFields };
+}
+
+/**
+ * Normalize + shape-validate an UpdateMerchantInput. Throws
+ * ValidationError on any structural violation; never reads the DB.
+ *
+ * Returns an UpdateMerchantFieldsPatch (the repository shape) — the
+ * fields present here are the ones the caller wants to set; absent
+ * fields are absent.
+ */
+function normaliseUpdateInput(input: UpdateMerchantInput): UpdateMerchantFieldsPatch {
+  const patch: { -readonly [K in keyof UpdateMerchantFieldsPatch]: UpdateMerchantFieldsPatch[K] } = {};
+
+  if (input.name !== undefined) {
+    patch.name = requireNonEmpty(input.name, "name");
+  }
+  if (input.pickupAddress !== undefined) {
+    patch.pickupAddress = {
+      line: requireNonEmpty(input.pickupAddress.line, "pickup_address.line"),
+      district: requireNonEmpty(
+        input.pickupAddress.district,
+        "pickup_address.district",
+      ),
+      emirate: requireNonEmpty(
+        input.pickupAddress.emirate,
+        "pickup_address.emirate",
+      ),
+    };
+  }
+  if (input.suitefleetCustomerCode !== undefined) {
+    patch.suitefleetCustomerCode = requireSuitefleetCustomerCode(
+      input.suitefleetCustomerCode,
+    );
+  }
+  if (input.suitefleetRegionId !== undefined) {
+    patch.suitefleetRegionId = requireValidUuid(
+      input.suitefleetRegionId,
+      "suitefleet_region_id",
+    ) as Uuid;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    throw new ValidationError("no fields to update");
+  }
+
+  return patch;
+}
+
+/**
+ * Compute the field-level diff between a current Merchant row and a
+ * normalised patch. Returns the changed-field key list (flat
+ * dot-notation per plan §2.5.1) AND the audit `changes` payload
+ * shape ({ <field>: { before, after } }).
+ *
+ * Pickup-address sub-field diffs are individually keyed
+ * (`pickup_address.line` / `.district` / `.emirate`). This is the
+ * deliberate divergence from `merchant.created`'s NESTED shape — a
+ * single sub-field change surfaces atomically without nested-object
+ * parsing.
+ */
+function computeMerchantDiff(
+  current: Merchant,
+  patch: UpdateMerchantFieldsPatch,
+): {
+  changedFields: readonly string[];
+  changes: Record<string, { before: unknown; after: unknown }>;
+} {
+  const changes: Record<string, { before: unknown; after: unknown }> = {};
+  const fields: string[] = [];
+
+  if (patch.name !== undefined && patch.name !== current.name) {
+    changes.name = { before: current.name, after: patch.name };
+    fields.push("name");
+  }
+  if (patch.pickupAddress !== undefined) {
+    const before: PickupAddress | null = current.pickupAddress;
+    const after: PickupAddress = patch.pickupAddress;
+    if ((before?.line ?? null) !== after.line) {
+      changes["pickup_address.line"] = {
+        before: before?.line ?? null,
+        after: after.line,
+      };
+      fields.push("pickup_address.line");
+    }
+    if ((before?.district ?? null) !== after.district) {
+      changes["pickup_address.district"] = {
+        before: before?.district ?? null,
+        after: after.district,
+      };
+      fields.push("pickup_address.district");
+    }
+    if ((before?.emirate ?? null) !== after.emirate) {
+      changes["pickup_address.emirate"] = {
+        before: before?.emirate ?? null,
+        after: after.emirate,
+      };
+      fields.push("pickup_address.emirate");
+    }
+  }
+  if (
+    patch.suitefleetCustomerCode !== undefined &&
+    patch.suitefleetCustomerCode !== current.suitefleetCustomerCode
+  ) {
+    changes.suitefleet_customer_code = {
+      before: current.suitefleetCustomerCode,
+      after: patch.suitefleetCustomerCode,
+    };
+    fields.push("suitefleet_customer_code");
+  }
+  if (
+    patch.suitefleetRegionId !== undefined &&
+    patch.suitefleetRegionId !== current.suitefleetRegionId
+  ) {
+    changes.suitefleet_region_id = {
+      before: current.suitefleetRegionId,
+      after: patch.suitefleetRegionId,
+    };
+    fields.push("suitefleet_region_id");
+  }
+
+  return { changedFields: fields, changes };
+}
+
+// -----------------------------------------------------------------------------
+// listMerchants
+// -----------------------------------------------------------------------------
+
+/**
+ * Cross-tenant SELECT of all merchants. Read-only; no audit emit
+ * per the existing R-4 reads-not-audited rule (consignees/service.ts
+ * `getConsignee` / `listConsignees` follow the same pattern).
+ *
+ * Optional `status` filter per merged plan §5.2.4. Ordered by
+ * `created_at DESC` (newest first) — matches the
+ * `list-cron-eligible-tenants.ts` ordering posture.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:read_all`.
+ */
+export async function listMerchants(
+  ctx: RequestContext,
+  filters: ListMerchantsFilters = {},
+): Promise<readonly Merchant[]> {
+  requirePermission(ctx, "merchant:read_all");
+
+  return withServiceRole("transcorp_staff:list_merchants", async (tx) => {
+    return listMerchantsRows(tx, filters);
+  });
+}
+

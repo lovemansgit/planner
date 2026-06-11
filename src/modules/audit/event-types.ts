@@ -149,6 +149,32 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "email — captured before the row went away.",
     systemOnly: false,
   },
+  // Day-24 — login-blocked / login-restored audit pair, paired with the
+  // /admin/users disable + enable surfaces. `user.disabled` writes
+  // disabled_at on the public.users mirror AND sets ban_duration on
+  // auth.users so the user cannot sign in until enabled. `user.enabled`
+  // is the symmetric undo. Distinct from `user.deleted` (which removes
+  // the row entirely) and `user.updated` (display-name / general field
+  // changes); these two are the typed events for the disable/enable
+  // lifecycle so audit queries can filter directly.
+  "user.disabled": {
+    id: "user.disabled",
+    resource: "user",
+    action: "disabled",
+    description:
+      "A user's login was blocked. Sets disabled_at on the public.users mirror and ban_duration on auth.users. Reversible via user.enabled.",
+    metadataNotes: "email; reason (optional free text supplied at the disable surface).",
+    systemOnly: false,
+  },
+  "user.enabled": {
+    id: "user.enabled",
+    resource: "user",
+    action: "enabled",
+    description:
+      "A previously-disabled user's login was restored. Clears disabled_at on the public.users mirror and ban_duration on auth.users.",
+    metadataNotes: "email.",
+    systemOnly: false,
+  },
   // Day 10 — login surface. Two events for a single auth path; the
   // success event is user-attributed (actor.kind='user' on the freshly
   // resolved user), the failure event is system-attributed
@@ -366,6 +392,17 @@ const EVENT_TYPES_DRAFT = {
       "subscription_id (uuid), failure_count (int — attempt_count on the failed_pushes row that triggered the pause), last_error (string — failure_detail or short summary, no credentials/PII), task_id (uuid — the task whose repeated failure tripped the threshold).",
     systemOnly: true,
   },
+  // Day-51 / R2 — calendar-management lane Phase 1, plan-PR #337 §2.R2.
+  "subscription.pause_cancels_pushed": {
+    id: "subscription.pause_cancels_pushed",
+    resource: "subscription",
+    action: "pause_cancels_pushed",
+    description:
+      "Day-51 / R2. After a `subscription.paused` transition, the pushed (SF-live) tasks in the pause window had outbound SF cancels fanned out via `enqueueBulkCancelTasks`. Paired with `subscription.paused` by a shared `correlation_id` (paused = local-cancel leg; this = outbound leg). Emitted only when ≥1 pushed task was in the window; a pure-local pause (no pushed tasks) does not emit it. `failed_chunks > 0` means partial fan-out failure — the service re-throws after this emit so the caller surfaces \"saved locally; SF cancels pending\".",
+    metadataNotes:
+      "subscription_id (uuid), correlation_id (uuid — shared with the paired subscription.paused), pushed_task_count (int — tasks with a live SF AWB enqueued for cancel), enqueued_count (int — BulkEnqueueResult.enqueuedCount), failed_chunks (int — chunks that failed to enqueue; >0 triggers the Q5 re-throw), pause_start (YYYY-MM-DD), pause_end (YYYY-MM-DD).",
+    systemOnly: false,
+  },
 
   // ---- task --------------------------------------------------------------
   "task.created": {
@@ -456,6 +493,69 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: false,
   },
 
+  // Day-22 / PR-B — calendar popover action 7. Dedicated event for
+  // operator-driven driver-note appends. Distinct from task.updated
+  // (which carries changed_fields[] for the generic 16-field patch)
+  // because note-add is a semantically-distinct customer-facing
+  // operation that benefits from high-signal audit queries
+  // ("show me every note added in the last 24h"). Mirrors the
+  // subscription.exception.created precedent — a typed event per
+  // operator workflow rather than a generic updated catch-all.
+  //
+  // No corresponding `task.note_viewed` event — per R-4 read-not-
+  // audited convention, reads don't emit. The companion task:view_timeline
+  // perm (action 8 / D3 ruling) gates a read-only surface with no audit.
+  //
+  // Note text itself is NOT in metadata to avoid PII leak into the audit
+  // log; the durable text is in tasks.notes and is read-accessible to
+  // anyone with task:read.
+  "task.note_added": {
+    id: "task.note_added",
+    resource: "task",
+    action: "note_added",
+    description:
+      "Day-22 / PR-B. An operator appended a driver-facing note to a task via the consignee detail calendar popover (action 7). Distinct from task.updated (generic 16-field patch) — note-add is a single-purpose customer-service-facing workflow that benefits from a typed event for high-signal audit queries. Subject to the 18:00 Dubai cut-off the day before delivery (mirrors task:update cutoff semantics).",
+    metadataNotes:
+      "task_id (uuid), previous_notes_length (int — length of tasks.notes before append, 0 when null), new_notes_length (int — length of tasks.notes after append).",
+    systemOnly: false,
+  },
+
+  // R3 (plan-PR #337 §2.R3) — outbound leg of the driver-note workflow.
+  // Mirrors subscription.pause_cancels_pushed (R2): a typed enqueue-time
+  // event paired with the local-write event (task.note_added) by a shared
+  // correlation_id. Fire-and-forget; enqueue failures re-throw (no emit) and
+  // the form action surfaces "saved; sending failed, will retry". Note text
+  // is NEVER in metadata (PII — lives on tasks.notes).
+  "task.note_pushed_to_external": {
+    id: "task.note_pushed_to_external",
+    resource: "task",
+    action: "note_pushed_to_external",
+    description:
+      "An operator-added driver note was enqueued for outbound push to the external fleet provider for a task already dispatched (a live external tracking number is present). Fire-and-forget at enqueue time; delivery failures route to the outbound DLQ. Paired with task.note_added by the note workflow (note_added = local write leg; this = outbound leg). Emitted only when the task had a live external AWB — a note on an unpushed task does not emit it.",
+    metadataNotes:
+      "task_id (uuid), awb (string — the task's external tracking number), correlation_id (uuid — shared with the QStash update-task message + DLQ row). Note text is NOT included (PII — the durable text lives on tasks.notes, read-accessible via task:read).",
+    systemOnly: false,
+  },
+
+  // R4 (plan-PR #335 §2.R4) — outbound leg of the one-off address
+  // override. Mirrors task.note_pushed_to_external (R3): a typed
+  // enqueue-time event paired with the local-write events
+  // (subscription.exception.created + subscription.address_override
+  // .applied) by a shared correlation_id. Fire-and-forget; enqueue
+  // failures re-throw (no emit) and the form action surfaces "saved
+  // locally; SF push pending". Address text is NEVER in metadata —
+  // IDs only (the durable address lives on the addresses row).
+  "task.address_override_pushed": {
+    id: "task.address_override_pushed",
+    resource: "task",
+    action: "address_override_pushed",
+    description:
+      "A one-off address override (R4) on a task already dispatched (live external tracking number present) was enqueued for outbound push to the external fleet provider, with the ConsigneeSnapshot built server-side from the override address row. Fire-and-forget at enqueue time; delivery failures route to the outbound DLQ. Paired with subscription.exception.created + subscription.address_override.applied by a shared correlation_id (those = local-write leg; this = outbound leg). Emitted only when the task had a live external AWB — an override on an unpushed or unmaterialized task does not emit it.",
+    metadataNotes:
+      "task_id (uuid), awb (string — the task's external tracking number), exception_id (uuid), address_override_id (uuid — the addresses row the snapshot was built from), correlation_id (uuid — shared with the QStash update-task message + the paired subscription.* events). Address text is NOT included — IDs only.",
+    systemOnly: false,
+  },
+
   // Day 8 / D8-5 — manual DLQ retry from /admin/failed-pushes. Operator-
   // driven: a Tenant Admin clicks the retry button on the admin UI;
   // the route handler authorizes via `failed_pushes:retry`, then a
@@ -480,6 +580,36 @@ const EVENT_TYPES_DRAFT = {
       "Day 8 / D8-5. A Tenant Admin manually retried an unresolved failed_pushes row from the /admin/failed-pushes UI. Operator-attributed (user actor); the downstream task-push outcome emits its own task.pushed_via_reconcile or task.push_failed event. Distinct from the cron-path retries (which are system-attributed via task.push_failed alone) so audit-log queries can isolate operator-initiated retries.",
     metadataNotes:
       "task_id (uuid), failed_push_id (uuid), prior_attempt_count (int — attempt_count BEFORE the retry; the post-retry value lands on the task.push_failed or task.pushed_via_reconcile event), retry_outcome (string union: 'succeeded' | 'awb_reconciled' | 'awb_exists' | 'failed_to_dlq' | 'skipped_district' | 'tenant_skipped' | 'task_already_pushed' | 'task_not_found').",
+    systemOnly: false,
+  },
+
+  // Day-33 PR-D (Plan #317 §3.7 CLEANUP-1, §6 OQ-4 ruling (a)+(b) at
+  // SHA f0ef560). Operator-driven "give up on these rows without
+  // retrying" decision over multiple unresolved failed_pushes at once.
+  // Distinct from failed_push.retried — retry tries SF again; bulk_resolved
+  // accepts the failure and closes the DLQ row with an operator-provided
+  // reason (e.g. past-dated tasks ops decides to accept-leak rather than
+  // reschedule). ONE event per bulk operation (mirrors task.bulk_created
+  // and consignee.bulk_created precedent), not one per row — the per-row
+  // durable record lives in failed_pushes.resolved_at + resolution_notes.
+  //
+  // Two emit sources, discriminated by `source` field in metadata:
+  //   - 'admin_ui'  — /admin/failed-pushes' "Resolve selected" button.
+  //                   actorKind = 'user'.
+  //   - 'cli'       — scripts/resolve-failed-pushes.mjs --apply runs.
+  //                   actorKind = 'system'; actorId = 'cli:resolve_failed_pushes'.
+  //
+  // systemOnly = false because the UI path is the primary surface;
+  // the CLI path is for ops backlog-drain (rare; ops manager runs it
+  // under the same audit accountability via the synthetic system actor).
+  "failed_push.bulk_resolved": {
+    id: "failed_push.bulk_resolved",
+    resource: "failed_push",
+    action: "bulk_resolved",
+    description:
+      "Day-33 PR-D (Plan #317 §3.7 CLEANUP-1, §6 OQ-4 (a)+(b)). Bulk-resolve operator tooling for failed_pushes: an operator marked many unresolved DLQ rows as resolved in one atomic operation via either /admin/failed-pushes' Resolve-selected button OR scripts/resolve-failed-pushes.mjs CLI tool. Distinct from failed_push.retried — bulk_resolved is 'give up on these without retrying' (operator decided not to re-attempt SF push; row closes with the operator's reason). Per-row durable record lives in failed_pushes.resolved_at + resolution_notes; this event is the operator-attribution + bulk-operation observability.",
+    metadataNotes:
+      "failed_push_ids[] (uuid[] — IDs successfully resolved by this operation), count (int — failed_push_ids.length, denormalised for audit-log query convenience), resolution_notes (string — operator-provided reason, ≤500 chars), source (string union: 'admin_ui' | 'cli' — discriminates the entry point so forensic queries can isolate CLI-driven backlog drains from UI-driven ops triage), not_found_count (int — count of submitted IDs that were NOT resolved because they were already-resolved or wrong-tenant; surfaces partial-success). resourceId is omitted (multi-row event; per-row identity lives in failed_push_ids array — mirrors task.bulk_created precedent).",
     systemOnly: false,
   },
 
@@ -593,6 +723,46 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: true,
   },
 
+  // ---- task — webhook-driven mutations (Day 18 / A2 Layer 2 + 3) ---------
+  // Three events for the A2 webhook handler 3-layer code-PR. Distinct
+  // from operator-driven task.* events (which carry user actors) — the
+  // _via_webhook suffix marks the system-actor path. Each carries
+  // webhook_events.id in metadata for forensic linkage to the raw
+  // payload.
+
+  "task.status_changed_via_webhook": {
+    id: "task.status_changed_via_webhook",
+    resource: "task",
+    action: "status_changed_via_webhook",
+    description:
+      "Day 18 / A2 Layer 2. A task's internal_status was UPDATEd as a consequence of a SuiteFleet webhook event landing. Distinct from operator-driven status changes — the via_webhook suffix marks the system-actor path. Carries webhook_events.id for forensic linkage to the raw payload.",
+    metadataNotes:
+      "task_id (uuid), suitefleet_task_id (string — AWB), previous_status (InternalTaskStatus), new_status (InternalTaskStatus), sf_action (string — SF action vocabulary), webhook_events_id (uuid), event_timestamp (iso8601).",
+    systemOnly: true,
+  },
+
+  "task.edit_applied_via_webhook": {
+    id: "task.edit_applied_via_webhook",
+    resource: "task",
+    action: "edit_applied_via_webhook",
+    description:
+      "Day 18 / A2 Layer 3. A task row was UPDATEd from a TASK_HAS_BEEN_UPDATED webhook payload. Captures the field-by-field delta in metadata; covers delivery_date, delivery_start_time, delivery_end_time, and the deliveryInformation.* extracted fields. Address-payload-received cases (consignee.location.* changes per plan §4.3) are captured in metadata as changed_fields entries with previous=null but do NOT mutate tasks.address_id in MVP.",
+    metadataNotes:
+      "task_id (uuid), suitefleet_task_id (string — AWB), webhook_events_id (uuid), changed_fields (array of {field: string, previous: unknown, new: unknown}).",
+    systemOnly: true,
+  },
+
+  "task.pod_received_via_webhook": {
+    id: "task.pod_received_via_webhook",
+    resource: "task",
+    action: "pod_received_via_webhook",
+    description:
+      "Day 18 / A2 Layer 3. POD photos landed for a task on TASK_STATUS_UPDATED_TO_DELIVERED. tasks.pod_photos transitioned from NULL to a populated jsonb. Co-emits with task.status_changed_via_webhook (DELIVERED transition) but the POD event is the load-bearing signal for the demo §5.3 Gate-5 preflight.",
+    metadataNotes:
+      "task_id (uuid), suitefleet_task_id (string — AWB), photo_count (number), webhook_events_id (uuid).",
+    systemOnly: true,
+  },
+
   // ---- db (system-internal) ----------------------------------------------
   "db.service_role.use": {
     id: "db.service_role.use",
@@ -602,6 +772,200 @@ const EVENT_TYPES_DRAFT = {
       "withServiceRole was invoked. Emitted by the audit module's serviceRoleObserver per the R-3 + R-4 contract. Recursion-skip prevents this event from emitting on its own audit-emit pathway.",
     metadataNotes: "reason — the string passed to withServiceRole (e.g. 'audit emit: x.created').",
     systemOnly: true,
+  },
+
+  // ---- subscription exception model (Day 13 / T3 part 1) -----------------
+  // Brief §3.1.2 vocabulary list — 9 events span two surfaces:
+  // subscription exceptions / lifecycle (#1–#5; tenant-operator surface)
+  // and merchant lifecycle (#7–#9; transcorp_staff surface, systemOnly).
+  //
+  // 7 NEW registrations land below. 2 events from the brief's list
+  // (subscription.paused at line ~320 + subscription.resumed at line
+  // ~330) already exist in the catalogue from earlier work — those
+  // pre-existing registrations describe the prior non-bounded
+  // active↔paused toggle; the part-2 service code will emit them with
+  // additional metadata (pause_start, pause_end, correlation_id) for
+  // the brief's bounded-pause posture (BRD §3.1.7) on top of the
+  // existing fields. Updating those registrations' metadataNotes is
+  // part-2 scope (service code change pairs with the doc change);
+  // part-1 keeps audit-vocabulary changes additive only.
+  //
+  // Causally-related events share `correlation_id` per brief §7 — see
+  // metadataNotes per event for which pairs share which id.
+  //
+  // Implementation in part 2 (Day 14): the service layer mints the
+  // correlation_id (uuid v7) at request entry and threads it through the
+  // emit pairs. Part 1 lands the registrations only.
+  //
+  // Audit-failed-attempts gap: per
+  // memory/followup_audit_failed_attempts.md, denied-event vocabulary
+  // (e.g., subscription.exception.denied) for permission-failed paths is
+  // separate part-2 scope. The events below cover the SUCCESS path only.
+
+  "subscription.exception.created": {
+    id: "subscription.exception.created",
+    resource: "subscription",
+    action: "exception.created",
+    description:
+      "Day 13 / T3. A subscription exception (skip / pause_window / address_override_one_off / address_override_forward / append_without_skip) was created. Emitted in the same database transaction as the originating service call. For type='skip' without skip_without_append=true, emitted alongside subscription.end_date.extended with shared correlation_id. Day 29 / §D(2) Phase-1 (plan-PR #302): for type='skip' variants 1+2 (plain skip / skip-without-append) the metadata carries outbound_emission to record whether an outbound SF cancel was enqueued. Variant 3 (move-to-date) omits outbound_emission entirely until Phase 2 lands rescheduleTask.",
+    metadataNotes:
+      "subscription_id (uuid), exception_id (uuid), type (enum — see subscription_exceptions_type_check), target_date (YYYY-MM-DD — start_date of the exception), compensating_date (YYYY-MM-DD or null — populated only for type='skip' without skip_without_append), correlation_id (uuid). Day-29 §D(2) Phase-1 addition: outbound_emission ({ kind: 'cancel', task_id: uuid } | { kind: 'none' }) is present for type='skip' variants 1+2; absent for type='skip' variant 3 (move-to-date) and all non-skip types. kind='cancel' means enqueueCancelTask was invoked post-commit with the recorded task_id; kind='none' means no outbound (task not materialized or no external_tracking_number). Phase 2 will extend the kind enum to include 'reschedule'.",
+    systemOnly: false,
+  },
+
+  "subscription.end_date.extended": {
+    id: "subscription.end_date.extended",
+    resource: "subscription",
+    action: "end_date.extended",
+    description:
+      "Day 13 / T3. A subscription's end_date was extended. Causally paired with the originating event via correlation_id: skip flow pairs with subscription.exception.created; pause flow pairs with subscription.paused; append-without-skip flow pairs with subscription.exception.created (type='append_without_skip').",
+    metadataNotes:
+      "subscription_id (uuid), previous_end_date (YYYY-MM-DD), new_end_date (YYYY-MM-DD), correlation_id (uuid), triggered_by (enum 'skip' | 'pause_resume' | 'append_without_skip').",
+    systemOnly: false,
+  },
+
+  "subscription.address_override.applied": {
+    id: "subscription.address_override.applied",
+    resource: "subscription",
+    action: "address_override.applied",
+    description:
+      "Day 13 / T3. An address override was applied to a subscription — either one-off (single delivery) or forward (every delivery from this date onward). The originating subscription_exceptions row carries the type discriminator; this event surfaces the operator-visible effect (which delivery/effective-date got which address).",
+    metadataNotes:
+      "subscription_id (uuid), exception_id (uuid), target_date (YYYY-MM-DD — populated for one-off, null for forward) OR effective_from (YYYY-MM-DD — populated for forward, null for one-off), address_id (uuid).",
+    systemOnly: false,
+  },
+
+  // subscription.paused and subscription.resumed are NOT re-registered
+  // here — they pre-exist in the catalogue (lines ~320 / ~330). Brief's
+  // §3.1.2 list counts them as part of the 9-event vocabulary; part-2
+  // service code will emit them with bounded-pause metadata
+  // (pause_start, pause_end, correlation_id) on top of the existing
+  // fields. The metadataNotes update on those entries is paired with
+  // the part-2 service change (additive at the call-site, semantic
+  // refinement at the registration).
+
+  "consignee.crm_state.changed": {
+    id: "consignee.crm_state.changed",
+    resource: "consignee",
+    action: "crm_state.changed",
+    description:
+      "Day 13 / T3. A consignee's CRM state transitioned. Brief §3.1.1 six-state machine (ACTIVE / ON_HOLD / HIGH_RISK / INACTIVE / CHURNED / SUBSCRIPTION_ENDED). The consignee_crm_events table carries the same fact in append-only structured form for direct query; this event mirrors it in the audit_events stream so cross-resource forensic queries pick it up.",
+    metadataNotes:
+      "consignee_id (uuid), from_state (enum or null on initial create), to_state (enum), reason (string — operator-supplied, may be null).",
+    systemOnly: false,
+  },
+
+  // Merchant lifecycle events (transcorp_staff surface).
+  //
+  // systemOnly=true because these events are never emitted from a
+  // tenant-controlled call site. The Transcorp-staff createMerchant /
+  // activateMerchant / deactivateMerchant services (part 2) emit them
+  // under withServiceRole. Per plan §1.7.1, the lifecycle is:
+  //   create → 'provisioning' (DB default; merchant.created event)
+  //         → activateMerchant → 'active' (merchant.activated event,
+  //                                        from_status='provisioning')
+  //         → deactivateMerchant → 'inactive' (merchant.deactivated
+  //                                            event, from_status='active')
+  // 'suspended' is reserved (part-2 service-surface decision deferred per
+  // plan §6).
+
+  "merchant.created": {
+    id: "merchant.created",
+    resource: "merchant",
+    action: "created",
+    description:
+      "Day 13 / T3. A new merchant tenant was created via the Transcorp-staff createMerchant service. Tenant lands in tenants.status='provisioning' (DB default per §1.7.1 prod canon); event represents the row creation, not state transition. Activation is a separate Transcorp-staff action emitting merchant.activated.",
+    metadataNotes:
+      "tenant_id (uuid), slug (string), name (string), pickup_address (object: { line, district, emirate }).",
+    systemOnly: true,
+  },
+
+  "merchant.activated": {
+    id: "merchant.activated",
+    resource: "merchant",
+    action: "activated",
+    description:
+      "Day 13 / T3. A merchant tenant was activated via the Transcorp-staff activateMerchant service. Represents the tenants.status transition 'provisioning' → 'active' (lowercase per §1.7.1 prod canon). After activation, merchant operators can log in and operate within the tenant.",
+    metadataNotes:
+      "tenant_id (uuid), from_status (literal 'provisioning'), to_status (literal 'active').",
+    systemOnly: true,
+  },
+
+  "merchant.deactivated": {
+    id: "merchant.deactivated",
+    resource: "merchant",
+    action: "deactivated",
+    description:
+      "Day 13 / T3. A merchant tenant was deactivated via the Transcorp-staff deactivateMerchant service. Represents the tenants.status transition 'active' → 'inactive' (lowercase per §1.7.1 prod canon). Reversible — preserves all data; blocks new operator logins. Hard data archival follows post-pilot data lifecycle policy.",
+    metadataNotes:
+      "tenant_id (uuid), from_status (literal 'active'), to_status (literal 'inactive').",
+    systemOnly: true,
+  },
+
+  "merchant.updated": {
+    id: "merchant.updated",
+    resource: "merchant",
+    action: "updated",
+    description:
+      "Day 25 / T3. A merchant tenant was updated via the Transcorp-staff updateMerchant service. Captures field-level diffs (before / after) for each changed column. Does NOT capture status changes — those land in merchant.activated / merchant.deactivated. systemOnly per brief §2.3 (v1.12).",
+    metadataNotes:
+      "tenant_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: name, slug, pickup_address.line, pickup_address.district, pickup_address.emirate, suitefleet_customer_code). DELIBERATE divergence from merchant.created's NESTED pickup_address shape: this event uses FLAT dot-notation in the diff so single-sub-field changes surface atomically to audit-trail readers without nested-object parsing. Only changed fields appear in the changes object; an update that mutates zero fields throws ValidationError and never reaches emit.",
+    systemOnly: true,
+  },
+
+  "region.created": {
+    id: "region.created",
+    resource: "region",
+    action: "created",
+    description:
+      "Day 26 / T3. A SuiteFleet region was created via the Transcorp-staff createRegion service. Regions are cross-tenant routing configuration (suitefleet_regions table); merchants point at one via tenants.suitefleet_region_id. auth_method is captured because it is the load-bearing discriminator that determines how merchants in this region authenticate to SuiteFleet (and is IMMUTABLE post-create). systemOnly per brief §3.6 (v1.14).",
+    metadataNotes:
+      "region_id (uuid), client_id (text — lowercase-alphanumeric region identifier), display_name (text), auth_method ('oauth' | 'api_key').",
+    systemOnly: true,
+  },
+
+  "region.updated": {
+    id: "region.updated",
+    resource: "region",
+    action: "updated",
+    description:
+      "Day 26 / T3. A SuiteFleet region was updated via the Transcorp-staff updateRegion service. Captures field-level diffs for each changed column. auth_method is IMMUTABLE post-create per v1.15; updateRegion rejects any auth_method mutation, so the discriminator never appears in this event's changes payload. Status changes (active ↔ inactive) land in region.deactivated separately. systemOnly per brief §3.6 (v1.14).",
+    metadataNotes:
+      "region_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: client_id, display_name). FLAT diff per the merchant.updated precedent + ratified OQ-3. auth_method is NEVER in the changes object — the field is IMMUTABLE post-create and the updateRegion service rejects mutation attempts upstream. Status changes go through region.deactivated, not here.",
+    systemOnly: true,
+  },
+
+  "region.deactivated": {
+    id: "region.deactivated",
+    resource: "region",
+    action: "deactivated",
+    description:
+      "Day 26 / T3. A SuiteFleet region was deactivated via the Transcorp-staff deactivateRegion service (status flipped from 'active' to 'inactive'). Operational kill-switch per brief §3.7: tenants pointing at a deactivated region resolve-fail-closed on subsequent SF push attempts. Does NOT cascade to tenants — existing pointers remain intact and route correctly if the region is later re-activated (out-of-band SQL only, since reactivateRegion is not in scope). systemOnly per brief §3.6 (v1.14).",
+    metadataNotes:
+      "region_id (uuid).",
+    systemOnly: true,
+  },
+
+  "credentials.set": {
+    id: "credentials.set",
+    resource: "credentials",
+    action: "set",
+    description:
+      "Day 26 / T3. Per-merchant SuiteFleet credentials were set or rotated via the Transcorp-staff storeSuitefleetCredentials service. Wraps both initial-set (first provisioning of a tenant's Vault credential UUIDs) and rotation (replacing plaintext in place, preserving the Vault UUIDs). systemOnly per brief §3.6 (v1.14); gated on the existing merchant:update permission per ratified OQ-1 (no new credentials:set permission — same operator scope as merchant updates).",
+    metadataNotes:
+      "tenant_id (uuid), classifier ('initial-set' | 'rotation'). NEVER contains plaintext credentials or Vault UUIDs. SHAPE DIVERGENCE (per Day-25 §A discipline + ratified OQ-8): this event deliberately diverges from the merchant.updated / region.updated flat-diff convention — payload is { tenant_id, classifier } only, NOT a { changes: { <field>: { before, after } } } diff. Rationale: credentials are sensitive-by-class; any per-field before/after shape risks leaking partial plaintext or rotation-vintage metadata into the audit body. auth_method is deliberately NOT in the payload either — recoverable forensically via tenant_id → region_id → auth_method for queries that need it. Forensic queries filter on classifier for rotation history.",
+    systemOnly: true,
+  },
+
+  "cron.on_demand_invoked": {
+    id: "cron.on_demand_invoked",
+    resource: "cron",
+    action: "on_demand_invoked",
+    description:
+      "The on-demand materializer was invoked synchronously by an operator action that would otherwise have deferred to the next scheduled 16:00 Dubai cron tick. Emitted after materializeTenant returns successfully. triggered_by names the originating action. Scheduled cron continues unchanged; on-demand is additive.",
+    metadataNotes:
+      "tenant_id (uuid), triggered_by (enum: 'skip_tail_end' | 'forward_address_override'), subscription_id (uuid — the subscription whose exception triggered the invocation), correlation_id (uuid — shared with the originating subscription.exception.created event), target_date (YYYY-MM-DD — the materialization horizon date computed for this invocation), new_inserted_task_count (int — Phase 2 newInsertedTaskIds.length), capped_by_gate (boolean — true if the materializer cap-gate fired and Phases 2-3 were SKIPPED).",
+    systemOnly: false,
   },
 } as const satisfies Record<string, EventTypeDef>;
 

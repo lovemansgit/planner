@@ -170,11 +170,24 @@ export function createSuiteFleetLabelClient(
       }
 
       if (response.status >= 500) {
+        // Day 17 — capture response body excerpt to parity with the
+        // 4xx branch below. SF returns small JSON envelopes
+        // (e.g. {"message":"Internal server error"}) for unknown task
+        // IDs; without capturing the body, diagnosis took 30 minutes
+        // instead of 5 (see
+        // memory/followup_planner_uuid_to_sf_external_id_translation.md).
+        let responseText: string;
+        try {
+          responseText = await response.text();
+        } catch {
+          responseText = "";
+        }
         log.warn({
           operation: "print_labels",
           status: response.status,
           error_code: "server_5xx",
           tenant_id: session.tenantId,
+          response_excerpt: responseText.slice(0, 400),
         });
         throw new CredentialError(
           `SuiteFleet printLabels returned ${response.status} — single-attempt policy, no retry`,

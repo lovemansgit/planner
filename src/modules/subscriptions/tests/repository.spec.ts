@@ -22,9 +22,10 @@ import {
   endSubscription,
   findSubscriptionById,
   insertSubscription,
+  listAllSubscriptionsRows,
+  listSubscriptionsByConsignee,
   listSubscriptionsByTenant,
-  pauseSubscription,
-  resumeSubscription,
+  listSubscriptionsWithConsigneeByTenant,
   updateSubscription,
 } from "../repository";
 import type { CreateSubscriptionInput, UpdateSubscriptionPatch } from "../types";
@@ -208,6 +209,88 @@ describe("insertSubscription", () => {
       /produced zero rows/
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §4 FIX 1 anchor — days_of_week SQL array binding
+  // ---------------------------------------------------------------------------
+  //
+  // Background: the original embedding `${input.daysOfWeek as number[]}`
+  // expanded Drizzle's array-spread inside a single VALUES column slot,
+  // producing `($6, $7, $8, $9, $10)` — Postgres parsed this as a
+  // record/tuple literal, incompatible with the `integer[]` column type
+  // (error 42804: column "days_of_week" is of type integer[] but
+  // expression is of type record). The fix wraps the array in an
+  // ARRAY[…]::integer[] constructor + cast so the rendered SQL is a
+  // valid Postgres array literal regardless of element count.
+  //
+  // These tests assert the SHAPE of the rendered SQL (not the param
+  // count, which still scales with element count under Drizzle's array
+  // spread). The shape guarantee — `ARRAY[...]::integer[]` wrapping the
+  // weekday placeholders — is what makes the binding type-compatible
+  // with the column.
+
+  describe("days_of_week SQL array binding (Day-22 PM regression guard)", () => {
+    it("renders ARRAY[…]::integer[] around the day-of-week placeholders", async () => {
+      const tx = makeStubTx([[subRowFixture()]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [1, 2, 3, 4, 5] });
+
+      const { sql } = compile(tx.execute.mock.calls[0][0]);
+      // ARRAY constructor wraps the comma-separated placeholders.
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+(\s*,\s*\$\d+)*\s*\]::integer\[\]/);
+      // Defence: the SQL must NOT have the bug shape — a bare comma list
+      // inside the VALUES tuple at the days_of_week slot without the
+      // ARRAY wrapper.
+      expect(sql).not.toMatch(/days_of_week[\s\S]*VALUES[\s\S]*\(\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*\)\s*,/);
+    });
+
+    it("binds each weekday as a separate param value (Drizzle spreads inside ARRAY constructor)", async () => {
+      const tx = makeStubTx([[subRowFixture()]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [1, 2, 3, 4, 5] });
+
+      const { params } = compile(tx.execute.mock.calls[0][0]);
+      // Each weekday integer appears as its own param value (postgres-js
+      // sees five separate scalars; Postgres assembles them via the
+      // ARRAY constructor at parse time).
+      for (const day of [1, 2, 3, 4, 5]) {
+        expect(params).toContain(day);
+      }
+    });
+
+    it("handles a 1-element weekday array (Sunday-only cadence)", async () => {
+      const tx = makeStubTx([[subRowFixture({ days_of_week: [7] })]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [7] });
+
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      // ARRAY[$N]::integer[] — 1-element form must still wrap.
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+\s*\]::integer\[\]/);
+      expect(params).toContain(7);
+    });
+
+    it("handles all 7 weekdays (daily cadence)", async () => {
+      const tx = makeStubTx([[subRowFixture({ days_of_week: [1, 2, 3, 4, 5, 6, 7] })]]);
+      await insertSubscription(tx, TENANT_ID, {
+        ...baseInput,
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+      });
+
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+(\s*,\s*\$\d+){6}\s*\]::integer\[\]/);
+      for (const day of [1, 2, 3, 4, 5, 6, 7]) {
+        expect(params).toContain(day);
+      }
+    });
+
+    it("handles a non-contiguous subset (Mon/Wed/Fri)", async () => {
+      const tx = makeStubTx([[subRowFixture({ days_of_week: [1, 3, 5] })]]);
+      await insertSubscription(tx, TENANT_ID, { ...baseInput, daysOfWeek: [1, 3, 5] });
+
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).toMatch(/ARRAY\[\s*\$\d+\s*,\s*\$\d+\s*,\s*\$\d+\s*\]::integer\[\]/);
+      expect(params).toContain(1);
+      expect(params).toContain(3);
+      expect(params).toContain(5);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -261,6 +344,114 @@ describe("listSubscriptionsByTenant", () => {
     const tx = makeStubTx([[]]);
     const result = await listSubscriptionsByTenant(tx, TENANT_ID);
     expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-23 §3.3.2 — listSubscriptionsByConsignee
+// ---------------------------------------------------------------------------
+
+describe("listSubscriptionsByConsignee", () => {
+  it("scopes the SELECT to tenant_id AND consignee_id, newest first", async () => {
+    const tx = makeStubTx([
+      [
+        subRowFixture({ id: "row-1", consignee_id: CONSIGNEE_ID }),
+        subRowFixture({ id: "row-2", consignee_id: CONSIGNEE_ID }),
+      ],
+    ]);
+    const result = await listSubscriptionsByConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/WHERE tenant_id =/);
+    expect(sql).toMatch(/AND consignee_id =/);
+    expect(sql).toMatch(/ORDER BY created_at DESC/);
+    expect(params).toContain(TENANT_ID);
+    expect(params).toContain(CONSIGNEE_ID);
+
+    expect(result.length).toBe(2);
+    expect(result[0].id).toBe("row-1");
+    expect(result[1].id).toBe("row-2");
+  });
+
+  it("returns an empty array when the consignee has no subscriptions yet", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listSubscriptionsByConsignee(tx, TENANT_ID, CONSIGNEE_ID);
+    expect(result).toEqual([]);
+  });
+
+  it("does not surface rows belonging to a different consignee (predicate carries)", async () => {
+    // The repository binds the consigneeId param into the WHERE; the
+    // SQL string assertion above verifies the predicate is present, and
+    // the mock returns only what would survive the filter. This test
+    // double-checks that the bound consigneeId — not a hardcoded one —
+    // is what actually goes to the driver.
+    const tx = makeStubTx([[]]);
+    await listSubscriptionsByConsignee(tx, TENANT_ID, OTHER_CONSIGNEE_ID);
+    const { params } = compile(tx.execute.mock.calls[0][0]);
+    expect(params).toContain(OTHER_CONSIGNEE_ID);
+    expect(params).not.toContain(CONSIGNEE_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 1 — listSubscriptionsWithConsigneeByTenant
+// ---------------------------------------------------------------------------
+
+describe("listSubscriptionsWithConsigneeByTenant", () => {
+  it("JOINs consignees + returns mapped { subscription, consigneeName } pairs newest-first", async () => {
+    const tx = makeStubTx([
+      [
+        { ...subRowFixture({ id: "row-1" }), consignee_name: "Sarah Khouri" },
+        { ...subRowFixture({ id: "row-2" }), consignee_name: "Love Mansukhani" },
+      ],
+    ]);
+
+    const result = await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
+
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM subscriptions s/);
+    expect(sql).toMatch(/JOIN consignees c/);
+    expect(sql).toMatch(/c\.tenant_id = s\.tenant_id/);
+    expect(sql).toMatch(/WHERE s\.tenant_id =/);
+    expect(sql).toMatch(/ORDER BY s\.created_at DESC/);
+    expect(params).toContain(TENANT_ID);
+
+    expect(result.length).toBe(2);
+    expect(result[0].subscription.id).toBe("row-1");
+    expect(result[0].consigneeName).toBe("Sarah Khouri");
+    expect(result[1].subscription.id).toBe("row-2");
+    expect(result[1].consigneeName).toBe("Love Mansukhani");
+  });
+
+  it("returns an empty array when the tenant has no subscriptions yet", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
+    expect(result).toEqual([]);
+  });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID);
+      const { sql } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID, { searchTerm: "   " });
+      const { sql } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against consignee name AND subscription external_ref when searchTerm is non-empty", async () => {
+      const tx = makeStubTx([[]]);
+      await listSubscriptionsWithConsigneeByTenant(tx, TENANT_ID, { searchTerm: "ACME-001" });
+      const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+      expect(sql).toMatch(/c\.name\s+ILIKE/i);
+      expect(sql).toMatch(/s\.external_ref\s+ILIKE/i);
+      expect(params).toContain("%ACME-001%");
+    });
   });
 });
 
@@ -350,6 +541,9 @@ describe("updateSubscription", () => {
     expect(update.sql).toMatch(/days_of_week =/);
     expect(update.sql).toMatch(/delivery_window_end =/);
     expect(update.sql).toMatch(/meal_plan_name =/);
+    // Day-22 PM §4 FIX 1 regression guard — the days_of_week column
+    // must be bound via ARRAY[…]::integer[], same as the INSERT path.
+    expect(update.sql).toMatch(/days_of_week = ARRAY\[\s*\$\d+\s*,\s*\$\d+\s*\]::integer\[\]/);
 
     expect(result?.after.consigneeId).toBe(OTHER_CONSIGNEE_ID);
     expect(result?.after.endDate).toBe("2026-12-31");
@@ -380,77 +574,11 @@ describe("updateSubscription", () => {
 // pauseSubscription / resumeSubscription / endSubscription
 // ---------------------------------------------------------------------------
 
-describe("pauseSubscription", () => {
-  it("transitions active → paused, sets paused_at, returns before+after", async () => {
-    const before = subRowFixture({ status: "active", paused_at: null });
-    const after = subRowFixture({ status: "paused", paused_at: FIXED_NOW });
-    const tx = makeStubTx([[before], [after]]);
-
-    const result = await pauseSubscription(tx, TENANT_ID, SUB_ID);
-
-    expect(tx.execute).toHaveBeenCalledTimes(2);
-    const update = compile(tx.execute.mock.calls[1][0]);
-    expect(update.sql).toMatch(/UPDATE subscriptions/);
-    expect(update.sql).toMatch(/status = 'paused'/);
-    expect(update.sql).toMatch(/paused_at = now\(\)/);
-
-    expect(result?.before.status).toBe("active");
-    expect(result?.before.pausedAt).toBeNull();
-    expect(result?.after.status).toBe("paused");
-    expect(result?.after.pausedAt).toBe(FIXED_ISO);
-  });
-
-  it("throws ConflictError when row is already paused (illegal transition)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "paused" })]]);
-    await expect(pauseSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("throws ConflictError when row is ended (terminal, illegal)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "ended", ended_at: FIXED_NOW })]]);
-    await expect(pauseSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("returns null when row does not exist (RLS-hidden or non-existent)", async () => {
-    const tx = makeStubTx([[]]);
-    const result = await pauseSubscription(tx, TENANT_ID, SUB_ID);
-    expect(result).toBeNull();
-  });
-});
-
-describe("resumeSubscription", () => {
-  it("transitions paused → active, clears paused_at to NULL, returns before+after", async () => {
-    const before = subRowFixture({ status: "paused", paused_at: FIXED_NOW });
-    const after = subRowFixture({ status: "active", paused_at: null });
-    const tx = makeStubTx([[before], [after]]);
-
-    const result = await resumeSubscription(tx, TENANT_ID, SUB_ID);
-
-    const update = compile(tx.execute.mock.calls[1][0]);
-    expect(update.sql).toMatch(/status = 'active'/);
-    expect(update.sql).toMatch(/paused_at = NULL/);
-
-    expect(result?.before.status).toBe("paused");
-    expect(result?.before.pausedAt).toBe(FIXED_ISO);
-    expect(result?.after.status).toBe("active");
-    expect(result?.after.pausedAt).toBeNull();
-  });
-
-  it("throws ConflictError when row is active (illegal transition)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "active" })]]);
-    await expect(resumeSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("throws ConflictError when row is ended (terminal, illegal)", async () => {
-    const tx = makeStubTx([[subRowFixture({ status: "ended", ended_at: FIXED_NOW })]]);
-    await expect(resumeSubscription(tx, TENANT_ID, SUB_ID)).rejects.toBeInstanceOf(ConflictError);
-  });
-
-  it("returns null when row does not exist", async () => {
-    const tx = makeStubTx([[]]);
-    const result = await resumeSubscription(tx, TENANT_ID, SUB_ID);
-    expect(result).toBeNull();
-  });
-});
+// pauseSubscription + resumeSubscription repository helpers DELETED at
+// Day-16 Block 4-C — the new bounded-pause service in service.ts does
+// the multi-table tx inline. These describe blocks were deleted with
+// the helpers; service-layer tests for pause/resume now live at
+// `service-lifecycle.spec.ts`.
 
 describe("endSubscription", () => {
   it("transitions active → ended, sets ended_at, clears paused_at, returns before+after", async () => {
@@ -497,5 +625,17 @@ describe("endSubscription", () => {
     const tx = makeStubTx([[]]);
     const result = await endSubscription(tx, TENANT_ID, SUB_ID);
     expect(result).toBeNull();
+  });
+});
+
+describe("listAllSubscriptionsRows — archive filter", () => {
+  // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
+  // belonging to archived tenants so the bulk CI-leak archive doesn't
+  // leak rows through /admin/subscriptions at demo time.
+  it("includes the ten.status != 'archived' predicate", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllSubscriptionsRows(tx, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
   });
 });

@@ -5,12 +5,31 @@
 // in C-4 reach the DB only through the audited / permission-gated
 // surface.
 
-export type { Consignee, CreateConsigneeInput, UpdateConsigneePatch } from "./types";
+export type {
+  ChangeConsigneeCrmStateInput,
+  ChangeConsigneeCrmStateResult,
+  Consignee,
+  ConsigneeCrmEvent,
+  ConsigneeCrmState,
+  CreateConsigneeInput,
+  SubscriptionExceptionType,
+  TaskTerminalStatus,
+  TimelineEvent,
+  UpdateConsigneePatch,
+} from "./types";
 
 export {
+  changeConsigneeCrmState,
+  countConsigneesByTenant,
   createConsignee,
   getConsignee,
+  getConsigneeCrmHistory,
+  getConsigneeOnboardingStats,
+  getConsigneeTimeline,
   listConsignees,
+  listConsigneesWithTaskCount,
   updateConsignee,
   deleteConsignee,
 } from "./service";
+
+export { ALLOWED_TRANSITIONS, canTransition } from "./transitions";

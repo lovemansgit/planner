@@ -1,14 +1,19 @@
 // POST /api/subscriptions/:id/resume   subscription:resume → subscription.resumed
 //
-// Lifecycle transition: 'paused' → 'active'. Takes NO request body —
-// id is path-only, transition is the verb. An incoming body MAY be
-// empty (`{}`) or absent; ANY key is rejected.
+// Day-16 Block 4-C — manual operator resume per brief §3.1.7. Body
+// shape: `{ idempotency_key }`. Auto-resume from cron is internal —
+// `/api/cron/auto-resume` calls the service directly with
+// `is_auto_resume: true`; that path does NOT route through this
+// endpoint.
 //
-// Success: 200 with the updated Subscription as JSON.
-// Returns 404 when the row is missing or RLS-hidden.
-// Returns 409 (ConflictError → CONFLICT, mapped at error-response.ts:51)
-// when the row exists but is not in 'paused' state — propagated from
-// the repository.
+// Success:
+//   - 200 with ResumeSubscriptionResult JSON. status field
+//     discriminates 'resumed' vs 'already_active' (idempotent replay).
+//
+// Errors:
+//   - 400 ValidationError (input shape)
+//   - 403 ForbiddenError (lacks subscription:resume)
+//   - 404 NotFoundError (subscription not in tenant)
 
 import "server-only";
 
@@ -18,7 +23,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { resumeSubscription } from "@/modules/subscriptions";
-import { LifecycleNoBodySchema } from "@/modules/subscriptions/schemas";
+import { ResumeSubscriptionBodySchema } from "@/modules/subscriptions/schemas";
 import { buildRequestContext } from "@/shared/request-context";
 import { ValidationError } from "@/shared/errors";
 
@@ -36,11 +41,11 @@ export async function POST(req: Request, { params }: RouteContext): Promise<Next
   try {
     const { id: rawId } = await params;
     const id = parseId(rawId);
-    rejectAnyBody(await req.json().catch(() => undefined));
+    const body = parseBody(await req.json().catch(() => undefined));
 
     const ctx = await buildRequestContext(`/api/subscriptions/${id}/resume`, requestId);
-    const updated = await resumeSubscription(ctx, id);
-    return NextResponse.json(updated);
+    const result = await resumeSubscription(ctx, id, body);
+    return NextResponse.json(result, { status: result.http_status });
   } catch (e) {
     return errorResponse(e);
   }
@@ -54,12 +59,15 @@ function parseId(raw: string): string {
   return result.data;
 }
 
-function rejectAnyBody(body: unknown): void {
-  if (body === undefined) return;
-  const parsed = LifecycleNoBodySchema.safeParse(body);
-  if (!parsed.success) {
+function parseBody(body: unknown): { idempotency_key: string } {
+  if (body === undefined || body === null) {
     throw new ValidationError(
-      `lifecycle endpoint takes no body: ${parsed.error.message}`
+      "resume endpoint requires a body: { idempotency_key }",
     );
   }
+  const parsed = ResumeSubscriptionBodySchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(`resume body invalid: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }

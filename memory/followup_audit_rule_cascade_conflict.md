@@ -4,6 +4,48 @@ description: 0002_audit's append-only RULE blocks cascade-deletes from tenants �
 type: project
 originSessionId: 745ed780-25c9-41f2-a58d-a5c1bbf8d5df
 ---
+## 🔴 LOAD-BEARING — read this before writing any integration spec that seeds tenants
+
+**Prescribed teardown pattern (Day-25, 2026-05-13 — codified after PR #266 CI failures):**
+
+```typescript
+afterAll(async () => {
+  // audit_events_no_delete RULE blocks DELETE FROM tenants when matching
+  // audit_events exist (see memory/followup_audit_rule_cascade_conflict.md).
+  // Best-effort teardown; swallow the rule-induced failure. Test tenants
+  // leak; random per-run UUIDs keep CI re-runs non-colliding.
+  try {
+    await withServiceRole("<spec name> integration teardown", async (tx) => {
+      // DELETE other tables that need explicit cleanup (e.g. auth.users
+      // for the identity flow) BEFORE the DELETE FROM tenants — those
+      // may succeed even if the tenants DELETE fails. Inside the same tx
+      // because failure on tenants rolls them back anyway.
+      await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (...)`);
+    });
+  } catch {
+    /* audit RULE; ignore */
+  }
+});
+```
+
+**Why this pattern:**
+- The `audit_events_no_delete` RULE blocks the cascade `DELETE FROM audit_events` that fires when `DELETE FROM tenants` runs against a tenant that has ANY audit events. `ri_PerformCheck` reports `referential integrity query gave unexpected result` and the DELETE rolls back.
+- Direct `DELETE FROM audit_events` in teardown is ALSO blocked by the same rule (`DO INSTEAD NOTHING`).
+- The leak is accepted by design — random per-run UUIDs prevent collision. Production semantics (audit events immutable) match. See "Test-hygiene observation" below for accumulation context.
+
+**Anti-patterns (do NOT do):**
+- ❌ `await tx.execute(sqlTag\`DELETE FROM audit_events WHERE tenant_id = ...\`);` — rule rejects, spec fails in teardown.
+- ❌ Plain `await ... DELETE FROM tenants ...` without try/catch — cascade trips rule, spec fails in teardown.
+- ❌ Multi-table DELETE chain (audit_events, tasks, consignees, then tenants) — the first audit_events DELETE blocks; subsequent statements unreachable.
+
+**Working precedents in the codebase** (as of 2026-05-13):
+- `tests/integration/cron-decoupling-happy-path.spec.ts:269-285`
+- `tests/integration/admin-merchants-update.spec.ts`
+- `tests/integration/task-packages-tenant-match.spec.ts`
+- `tests/integration/exception-model-check-constraints.spec.ts`
+- `tests/integration/suitefleet-resolver-per-tenant.spec.ts`
+- 6 specs fixed in PR (this filing) to match: consignees-create, consignees-list-no-tasks-flag, tasks-create-ad-hoc, identity-create-user-flow, identity-disable-enable-flow, plus tenant-consignees-count phone-digit-overlap unrelated bug.
+
 `supabase/migrations/0002_audit.sql` defines:
 
 ```sql

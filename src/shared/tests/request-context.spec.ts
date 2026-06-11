@@ -6,8 +6,12 @@
 //   - session present, user has no public.users mirror → throws Unauthorized
 //   - session present, user.disabled_at set → throws Unauthorized
 //   - session present, user has no role_assignments → throws Unauthorized
-//   - session absent + ALLOW_DEMO_AUTH=true → falls through to demo
-//   - session absent + no ALLOW_DEMO_AUTH → throws Unauthorized
+//   - session present, user's tenant has status != 'active' → throws
+//     Unauthorized (Day-16 §10.5; the JOIN tenants + status='active'
+//     filter is pinned at the SQL layer via the queryChunks regression
+//     test below — full 4-state matrix lives in the integration test)
+//   - session absent → throws Unauthorized (fail-closed; Posture B
+//     hard cutover landed Day 15 — no ALLOW_DEMO_AUTH fallback exists)
 //
 // Cookie contract (watch-list addition #1) — the cookies.setAll function
 // MUST swallow throws so RSC contexts (read-only cookieStore) don't
@@ -44,23 +48,8 @@ vi.mock("../db", () => ({
   }),
 }));
 
-vi.mock("../demo-context", () => ({
-  buildDemoContext: vi.fn(async (path: string, requestId: string) => ({
-    actor: {
-      kind: "user",
-      userId: "demo-user",
-      tenantId: "demo-tenant",
-      permissions: new Set<string>(),
-    },
-    tenantId: "demo-tenant",
-    requestId,
-    path,
-  })),
-}));
-
 const cookieAdapterRef: { value: { setAll: (xs: unknown[]) => void } | null } = { value: null };
 
-import { buildDemoContext } from "../demo-context";
 import { UnauthorizedError } from "../errors";
 import {
   __resetSessionCacheForTests,
@@ -75,7 +64,6 @@ const ORIG_ENV = { ...process.env };
 beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-test-key";
-  delete process.env.ALLOW_DEMO_AUTH;
   mockGetUser.mockReset();
   mockExecute.mockReset();
   cookieAdapterRef.value = null;
@@ -91,17 +79,61 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * Flatten drizzle's queryChunks into a single string. queryChunks is an
+ * array of StringChunk objects (with `.value: string[]` holding static
+ * SQL fragments) and parameter placeholders. For SQL inspection we only
+ * care about the static fragments — they carry the JOINs, WHEREs, and
+ * keyword clauses that pin query shape. Same pattern as the cron-list
+ * tenant-filter regression test.
+ */
+function flattenSql(sql: unknown): string {
+  type Chunk = { value?: readonly string[] };
+  const chunks = (sql as { queryChunks?: readonly Chunk[] })?.queryChunks ?? [];
+  return chunks
+    .flatMap((c) => (Array.isArray(c.value) ? c.value : []))
+    .join("");
+}
+
 describe("resolveUserContext", () => {
-  it("returns null when no rows match (no mirror or no role_assignments)", async () => {
+  it("returns null when no rows match (no mirror, no role_assignments, disabled_at set, or non-active tenant)", async () => {
     mockExecute.mockResolvedValueOnce([]);
     const result = await resolveUserContext("user-1");
     expect(result).toBeNull();
   });
 
-  it("returns tenantId + permissions for a single-role user", async () => {
+  it("queries with JOIN tenants + t.status = 'active' filter (§10.5 regression pin)", async () => {
+    // Day-16 §10.5: users on provisioning / suspended / inactive tenants
+    // must NOT resolve. The SQL layer is the load-bearing filter — pin
+    // its shape at the chunks level so a future refactor can't silently
+    // strip the JOIN or the status='active' clause. Real-DB matrix
+    // verification lives in tests/integration/auth-end-to-end.spec.ts.
+    mockExecute.mockResolvedValueOnce([]);
+    await resolveUserContext("user-1");
+    const sql = flattenSql(mockExecute.mock.calls[0][0]);
+    expect(sql).toMatch(/JOIN\s+tenants\s+t\s+ON\s+t\.id\s*=\s*u\.tenant_id/);
+    expect(sql).toMatch(/t\.status\s*=\s*'active'/);
+  });
+
+  it("SELECTs t.name AS tenant_name + t.slug AS tenant_slug (Day-17 T2 #1 user-menu identity)", async () => {
+    // The user-menu surface needs the operator's tenant name + slug
+    // alongside email + displayName. Pin both columns at the chunks
+    // level so a future refactor can't silently drop them and leave the
+    // user-menu rendering "—" for tenant identity. The two clauses share
+    // a single SELECT extension; pinning both guards the pair.
+    mockExecute.mockResolvedValueOnce([]);
+    await resolveUserContext("user-1");
+    const sql = flattenSql(mockExecute.mock.calls[0][0]);
+    expect(sql).toMatch(/t\.name\s+AS\s+tenant_name/);
+    expect(sql).toMatch(/t\.slug\s+AS\s+tenant_slug/);
+  });
+
+  it("returns tenantId + tenantName + tenantSlug + permissions for a single-role user", async () => {
     mockExecute.mockResolvedValueOnce([
       {
         tenant_id: "tenant-1",
+        tenant_name: "Demo Bistro",
+        tenant_slug: "demo-bistro",
         role_slug: "cs-agent",
         email: "agent@planner.test",
         display_name: "Aria Agent",
@@ -110,6 +142,8 @@ describe("resolveUserContext", () => {
     const result = await resolveUserContext("user-1");
     expect(result).not.toBeNull();
     expect(result?.tenantId).toBe("tenant-1");
+    expect(result?.tenantName).toBe("Demo Bistro");
+    expect(result?.tenantSlug).toBe("demo-bistro");
     expect(result?.permissions.has("consignee:read")).toBe(true);
     expect(result?.permissions.has("user:create")).toBe(false);
     expect(result?.email).toBe("agent@planner.test");
@@ -165,6 +199,8 @@ describe("buildRequestContext", () => {
     mockExecute.mockResolvedValueOnce([
       {
         tenant_id: "tenant-1",
+        tenant_name: "Tenant One Bistro",
+        tenant_slug: "tenant-one",
         role_slug: "tenant-admin",
         email: "tenant1@planner.test",
         display_name: "Tenant One",
@@ -179,6 +215,8 @@ describe("buildRequestContext", () => {
       expect(ctx.actor.tenantId).toBe("tenant-1");
       expect(ctx.actor.email).toBe("tenant1@planner.test");
       expect(ctx.actor.displayName).toBe("Tenant One");
+      expect(ctx.actor.tenantName).toBe("Tenant One Bistro");
+      expect(ctx.actor.tenantSlug).toBe("tenant-one");
     }
     expect(ctx.tenantId).toBe("tenant-1");
     expect(ctx.requestId).toBe("req-1");
@@ -194,36 +232,18 @@ describe("buildRequestContext", () => {
     );
   });
 
-  it("falls through to demo context when no session AND ALLOW_DEMO_AUTH=true", async () => {
+  it("throws UnauthorizedError when no session is present (Posture B fail-closed)", async () => {
+    // Post-Stage-2 cutover: no ALLOW_DEMO_AUTH gate exists. No session
+    // → UnauthorizedError → 401 / login-redirect. There is no demo
+    // fallthrough path remaining. Pinned even with ALLOW_DEMO_AUTH set
+    // in the environment (defence against stale Vercel env caches or
+    // local-dev legacy configs) — the runtime gate has been retired.
     process.env.ALLOW_DEMO_AUTH = "true";
     mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
 
-    const ctx = await buildRequestContext("/admin/webhook-config", "req-3");
-    expect(ctx.tenantId).toBe("demo-tenant");
-    expect(buildDemoContext).toHaveBeenCalledWith("/admin/webhook-config", "req-3");
-  });
-
-  it("throws UnauthorizedError when no session AND no ALLOW_DEMO_AUTH opt-in", async () => {
-    mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
-
-    await expect(buildRequestContext("/api/tasks", "req-4")).rejects.toBeInstanceOf(
+    await expect(buildRequestContext("/api/tasks", "req-no-session")).rejects.toBeInstanceOf(
       UnauthorizedError,
     );
-    expect(buildDemoContext).not.toHaveBeenCalled();
-  });
-
-  it("does NOT fall through to demo when session is present and user is unprovisioned (defence-in-depth)", async () => {
-    process.env.ALLOW_DEMO_AUTH = "true";
-    mockGetUser.mockResolvedValueOnce({ data: { user: { id: "user-1" } }, error: null });
-    mockExecute.mockResolvedValueOnce([]);
-
-    // Posture A only allows demo as fallback when there's NO session.
-    // A session-bearing-but-unprovisioned user must surface the
-    // UnauthorizedError, not silently demote to demo.
-    await expect(buildRequestContext("/api/tasks", "req-5")).rejects.toBeInstanceOf(
-      UnauthorizedError,
-    );
-    expect(buildDemoContext).not.toHaveBeenCalled();
   });
 });
 

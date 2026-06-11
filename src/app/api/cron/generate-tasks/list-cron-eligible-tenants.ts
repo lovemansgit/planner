@@ -19,11 +19,9 @@
 //
 // β adds enumeration-level filtering as the FIRST gate. Without it,
 // the cron walks every tenant in the table — including the 339 stale
-// test tenants from earlier development phases (see
-// memory/followup_audit_rule_cascade_conflict.md for the upstream
-// cleanup gap). The 340-tenant walk hit the Vercel Pro 300s cron
-// timeout on the second trigger (2 May 2026), captured in
-// memory/followup_suitefleet_bulk_push_empirical.md.
+// test tenants from earlier development phases. The 340-tenant walk
+// hit the Vercel Pro 300s cron timeout on the second trigger (2 May
+// 2026), captured in memory/followup_suitefleet_bulk_push_empirical.md.
 //
 // This is NOT a workaround — it's the right place for the filter.
 // Tenant onboarding is sequential:
@@ -38,11 +36,14 @@
 // scheduled cron pass. No special signalling needed; the column
 // itself is the gate.
 //
-// Operational consequence: 339 stale test tenants stay in the
-// database but are no longer in the cron path. Test-hygiene cleanup
-// of those rows remains a Day 9+ concern (see
-// memory/followup_audit_rule_cascade_conflict.md for the cleanup
-// mechanism gap — the audit-rule prevents straightforward DELETE).
+// Day-18 update (PR #189 plan + this code-PR): the test-hygiene
+// cleanup landed via migration 0021_tenants_status_archived.sql,
+// flipping 377 fixture rows to `status='archived'`. The status filter
+// added below ensures archived rows are NEVER walked by the cron,
+// belt-and-braces with the customer_code filter (some bg4g-* archived
+// rows carry alphanumeric customer_codes that A1's incoming numeric-
+// only resolver — PR #187 — would reject; the status filter is the
+// gate that prevents the post-archive DLQ flood).
 
 // Caller is the cron route handler at ./route.ts which carries
 // `import "server-only"` itself. Keeping this helper SSR-only via
@@ -58,12 +59,22 @@ import type { Uuid } from "@/shared/types";
 /**
  * List the tenant ids the cron should enumerate this run.
  *
- * Filter: `suitefleet_customer_code IS NOT NULL AND suitefleet_customer_code != ''`.
- * Empty-string defensive check parallels the per-tenant
- * `missing_customer_code` guard in src/modules/task-push/service.ts
- * (`config.suitefleetCustomerCode?.trim()` falsy-check) — keep the
- * two paths consistent so a value that the per-tenant guard would
- * skip is also excluded here at enumeration.
+ * Filters (both must pass):
+ *
+ *   1. `suitefleet_customer_code IS NOT NULL AND suitefleet_customer_code != ''`
+ *      Empty-string defensive check parallels the per-tenant
+ *      `missing_customer_code` guard in src/modules/task-push/service.ts
+ *      (`config.suitefleetCustomerCode?.trim()` falsy-check) — keep the
+ *      two paths consistent so a value that the per-tenant guard would
+ *      skip is also excluded here at enumeration.
+ *
+ *   2. `status IN ('provisioning', 'active')`
+ *      Day-18 cleanup gate. Archived rows (the 377 fixture rows
+ *      flipped by 0021_tenants_status_archived.sql) and any future
+ *      `inactive`/`suspended` tenants are excluded from the cron
+ *      walk regardless of customer_code state. Matches the same
+ *      "tenants accept inbound work" policy as
+ *      identity/tenant-lookup.ts:48 (`status IN ('provisioning', 'active')`).
  *
  * Order: `created_at ASC` preserves D8-4a's α-fix posture (sandbox
  * tenant at position 1 via `created_at = '2024-01-01'` UPDATE). The
@@ -79,6 +90,7 @@ export async function listCronEligibleTenantIds(): Promise<readonly Uuid[]> {
       FROM tenants
       WHERE suitefleet_customer_code IS NOT NULL
         AND suitefleet_customer_code <> ''
+        AND status IN ('provisioning', 'active')
       ORDER BY created_at ASC
     `);
     return rows.map((r) => r.id);

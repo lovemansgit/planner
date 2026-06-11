@@ -5,9 +5,7 @@
 //
 // Auth (Day 10): buildRequestContext resolves the Supabase Auth session
 // to a per-tenant RequestContext; UnauthorizedError surfaces as 401 via
-// errorResponse. Posture A graceful migration keeps the demo-context
-// fallthrough behind ALLOW_DEMO_AUTH=true (Preview-only) until the
-// post-soak Posture B follow-up retires it.
+// errorResponse.
 //
 // Validation: Zod schemas at the boundary catch shape errors (wrong
 // type, missing required field) before the service layer. The
@@ -31,22 +29,29 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 // -----------------------------------------------------------------------------
-// Request body schema
+// Request body schema — brief v1.12 nested shape
 // -----------------------------------------------------------------------------
 // All required fields enforced at boundary; optional fields permitted
 // to be undefined or string. Empty strings are accepted at the schema
 // layer and trimmed by the service layer (which then rejects required
 // fields that trim to empty).
 const CreateBodySchema = z.object({
-  name: z.string(),
-  phone: z.string(),
-  email: z.string().optional(),
-  addressLine: z.string(),
-  emirateOrRegion: z.string(),
-  district: z.string(),
-  deliveryNotes: z.string().optional(),
-  externalRef: z.string().optional(),
-  notesInternal: z.string().optional(),
+  identity: z.object({
+    name: z.string(),
+    phone: z.string(),
+    email: z.string().optional(),
+    deliveryNotes: z.string().optional(),
+    externalRef: z.string().optional(),
+    notesInternal: z.string().optional(),
+  }),
+  address: z.object({
+    label: z.enum(["home", "office", "other"]),
+    line: z.string(),
+    district: z.string(),
+    emirate: z.string(),
+    lat: z.number().nullable().optional(),
+    lng: z.number().nullable().optional(),
+  }),
 });
 
 // -----------------------------------------------------------------------------

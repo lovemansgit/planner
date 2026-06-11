@@ -1,0 +1,61 @@
+-- =============================================================================
+-- supabase/migrations/0017_tenants_pickup_address.sql
+-- =============================================================================
+-- Day 13 / T3 part 1: tenants.pickup_address_* column-add (×3). Implements
+-- memory/plans/day-13-exception-model-part-1.md §1.7.2.
+--
+-- IMPORTANT — tenants.status is NOT touched by this migration.
+--
+-- §0.2 Q1 prod verification surfaced that tenants.status already exists
+-- in production with a 4-state lowercase canon
+-- ('provisioning' / 'active' / 'suspended' / 'inactive') and DEFAULT
+-- 'provisioning'. The original plan §1.7 draft proposed adding a 2-state
+-- uppercase column ('ACTIVE' / 'INACTIVE'); both the column-add AND the
+-- proposed enum were dropped at plan-PR amendment time per Condition 2 of
+-- conditional approval. Plan §1.7.1 now adopts prod's 4-state lowercase
+-- canon as canonical. This migration carries no status-related DDL —
+-- documenting the no-op explicitly so the reviewer-grep `git log -- 0017`
+-- doesn't expect to find the column-add.
+--
+-- The brief amendment for tenants.status (PLANNER_PRODUCT_BRIEF.md §3.1.1
+-- text update) is queued in a separate combined brief-amendment PR per
+-- plan §6.
+--
+-- -----------------------------------------------------------------------------
+-- pickup_address_* triple — nullable column-adds, no CHECK
+-- -----------------------------------------------------------------------------
+-- The brief (§3.1.1) specifies three columns: pickup_address_line,
+-- pickup_address_district, pickup_address_emirate. Captured at merchant
+-- creation by Transcorp staff; surfaces as ship-from on every task.
+--
+-- Nullable + no CHECK because:
+--   - Existing tenants (sandbox + 3 demo + 339 stale test tenants per
+--     followup_audit_rule_cascade_conflict.md cleanup-mechanism gap) get
+--     NULL — no backfill is appropriate (we don't know their pickup
+--     addresses; making it up would corrupt operational data).
+--   - The Demo-Bistro flow per brief §5.1 step 2 supplies the values at
+--     create time via the Transcorp-staff createMerchant API (part 2).
+--     That API enforces non-null at the service layer.
+--   - A NOT NULL constraint at the column layer would require a backfill
+--     for the 343+ existing rows; the part-2 createMerchant service
+--     doesn't ship until Day 14, so the column would be unusable on
+--     existing rows without made-up data.
+--
+-- Phase 2 may promote to NOT NULL after every tenant has gone through
+-- the createMerchant onboarding flow with required values; that's a
+-- single-statement `ALTER TABLE … ALTER COLUMN … SET NOT NULL` change
+-- once data is clean.
+--
+-- -----------------------------------------------------------------------------
+-- No new index
+-- -----------------------------------------------------------------------------
+-- The pickup_address_* columns are read on a per-tenant basis (one row at
+-- a time, joined via tenant_id); no operator workflow enumerates by
+-- pickup_address content. No index needed.
+-- =============================================================================
+
+
+ALTER TABLE tenants
+  ADD COLUMN pickup_address_line     text,
+  ADD COLUMN pickup_address_district text,
+  ADD COLUMN pickup_address_emirate  text;

@@ -26,13 +26,19 @@ import type { IsoTimestamp, Uuid } from "@/shared/types";
  *                   timeout budget
  *   - 'unknown'     anything that doesn't fit above (catch-all for
  *                   diagnostic resilience)
+ *   - 'past_dated'  Day-32 PR-A / F-5: pushSingleTask guard fired because
+ *                   task.delivery_date < CURRENT_DATE at push-time
+ *                   (Dubai-local via Postgres clock). Distinct from
+ *                   client_4xx so ops triage can separate planner-side
+ *                   guard-rejected rows from SF-side 4xx-rejected rows.
  */
 export type FailureReason =
   | "network"
   | "server_5xx"
   | "client_4xx"
   | "timeout"
-  | "unknown";
+  | "unknown"
+  | "past_dated";
 
 export interface FailedPush {
   readonly id: Uuid;

@@ -1,5 +1,7 @@
 # Decision · Merchant-facing task editability cuts off at "assigned"
 
+> **SUPERSEDED — 2026-05-18 (Day-30, B2 code-PR for plan-PR #308 §3.6 cleared).** The "lock at TASK_HAS_BEEN_ASSIGNED" rule below is NOT enforced in code at any point post-Day-13. Brief §3.1.8 (post-dates this memo) commits to a time-based 18:00-Dubai-day-before cutoff, enforced at 10 service-layer sites via `isCutOffElapsedForDate`. The popover's `MUTATION_ELIGIBLE_STATUSES` ([DayActionPopover.tsx:101-105](../src/app/(app)/consignees/%5Bid%5D/_components/DayActionPopover.tsx#L101-L105)) explicitly includes `'ASSIGNED'` as mutation-eligible. B2 plan-PR #308 §4 ratifies the time-based rule as canonical and logs the "task ASSIGNED before time-cutoff → merchant could cancel a dispatched task" edge as a KNOWN pre-existing post-demo hardening item — see [`followup_assigned_before_cutoff_dispatch_race.md`](followup_assigned_before_cutoff_dispatch_race.md). Brief v1.16 records the supersede at the source-of-truth. **Read the memo below for historical context only; do NOT cite it as a current rule.**
+
 **Status:** Decided. Confirms existing operational rule. Captured from `aqib.a` review of `subscription-planner-onboarding_v1.1` page 16.
 **Decision date:** 28 April 2026 (Day 3 EOD review).
 **Decided by:** Love (engineering-owner). This is Transcorp's global operational rule, not a Planner-specific design choice.

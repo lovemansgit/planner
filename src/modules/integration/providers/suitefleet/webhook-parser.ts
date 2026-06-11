@@ -6,26 +6,31 @@
 // `internalStatus` undefined; the adapter assembly point composes the
 // parser output with `mapStatusToInternal` to populate it.
 //
-// Brief §5: webhooks default to JSON array (batched). Each entry has
-// an `action` field (one of 15 types), a `taskId`, a timestamp, and
-// arbitrary additional fields. The parser is permissive: it skips
-// individual entries that are missing required fields (logging a
-// warn) rather than failing the whole batch — a single malformed
-// entry shouldn't block valid events from being processed.
+// Brief §3.1.10 (post-v1.8): SuiteFleet sends a JSON array (batched
+// per receipt). Each entry has an `action` field (one of 15 types),
+// an `awb` field (the SF-side airway-bill / external task identifier,
+// AWB-shaped strings like "MPL-25193918"), a timestamp, and arbitrary
+// additional fields. The parser is permissive: it skips individual
+// entries that are missing required fields (logging a warn) rather
+// than failing the whole batch — a single malformed entry shouldn't
+// block valid events from being processed.
 //
-// Idempotency key: SHA-256 of `JSON.stringify(rawEntry)`. Two
+// Idempotency key: SHA-256 of canonical JSON of the rawEntry. Two
 // identical webhook deliveries (SuiteFleet retry) produce the same
 // key; two different events produce different keys. Independent of
 // how the parser extracts other fields, so future field-extraction
 // tweaks don't change the key for events already in flight.
 //
-// Action vocabulary: only `TASK_HAS_BEEN_ASSIGNED` is verified
-// (memory/decision_task_editability_cutoff_at_assigned.md). The other
-// 14 names live in `suitefleet-adapter-tech-spec.md` which is not in
-// the repo yet — see TODO below. Until verified, the classifier uses
-// a name-pattern fallback for kind-classification, and S-6's mapping
-// table will leave unrecognised actions producing the safe default
-// `CREATED` internal status.
+// Layer 1.5 (Day 18 / A2) — task-id extraction locked to AWB only per
+// memory/decision_layer_1_5_awb_only_extraction.md. Pre-Day-18 the
+// parser tried `taskId` / `externalTaskId` / `task_id` (camelCase
+// inferred at scaffold time, never observed in real SF payloads).
+// Day-18 Vercel-log dive showed every event dropping with
+// `missing_task_id`; the SF wire field is `awb`. The numeric `id`
+// SF also carries is preserved in `raw_payload` for forensic
+// recovery but is NOT extracted as a typed field — Layer 2 lookups
+// key off `tasks.external_id` which stores AWB-shaped strings per
+// PR #172 translation discipline.
 
 import { createHash } from "node:crypto";
 
@@ -36,14 +41,16 @@ import type { WebhookEvent, WebhookEventKind } from "../../types";
 
 const log = logger.with({ component: "suitefleet_webhook_parser" });
 
-// 15-action vocabulary per brief §5.3.4. Each name maps to the
-// most appropriate WebhookEventKind based on its name.
+// 15-action vocabulary per brief §3.1.10. Each name maps to the
+// most appropriate WebhookEventKind based on its name. The S-9
+// empirical-sandbox-capture TODO that previously sat here is closed
+// by the Day-7 capture surface (memory/followup_webhook_auth_architecture.md);
+// the inferred-key warning bracket the previous comment carried is
+// stripped because the action vocabulary itself was never the
+// drift surface (the field-key list was — see Layer 1.5 header
+// note above).
 const KNOWN_ACTIONS: Readonly<Record<string, WebhookEventKind>> = {
-  // VERIFIED — confirmed via memory/decision_task_editability_cutoff_at_assigned.md
   TASK_HAS_BEEN_ASSIGNED: "TASK_ASSIGNMENT_CHANGED",
-
-  // TODO(Day-4-spec): mappings below are inferred from action names per brief §5.3.4
-  // and remain unverified until S-9 empirical sandbox capture confirms each.
   TASK_HAS_BEEN_ORDERED: "TASK_STATUS_CHANGED",
   TASK_HAS_BEEN_UPDATED: "TASK_STATUS_CHANGED",
   TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC: "TASK_STATUS_CHANGED",
@@ -90,13 +97,10 @@ function extractAction(raw: Record<string, unknown>): string | null {
 }
 
 function extractTaskId(raw: Record<string, unknown>): string | null {
-  // SuiteFleet camelCase per brief §5. Accept a few common variants
-  // for resilience until the wire shape is captured empirically.
-  for (const key of ["taskId", "externalTaskId", "task_id"]) {
-    const value = raw[key];
-    if (typeof value === "string" && value.length > 0) return value;
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
+  // Layer 1.5 (Day 18 / A2): AWB only. See header comment for
+  // memory/decision_layer_1_5_awb_only_extraction.md rationale.
+  const value = raw.awb;
+  if (typeof value === "string" && value.length > 0) return value;
   return null;
 }
 

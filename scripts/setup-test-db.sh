@@ -18,8 +18,11 @@
 #
 # Steps in order:
 #   1. Apply auth-stub.sql (creates auth schema + auth.users; required by 0001).
-#   2. Apply migrations 0001/0002/0003 in numeric order.
-#   3. ALTER ROLE planner_app WITH LOGIN PASSWORD '$PG_APP_PW' (0003 creates
+#   2. Apply vault-stub.sql (creates vault schema + secrets table + create_secret /
+#      update_secret functions + decrypted_secrets view; required by 0024-touching
+#      integration specs that exercise vault-store.ts; Day 26 / T3).
+#   3. Apply all numbered migrations in order.
+#   4. ALTER ROLE planner_app WITH LOGIN PASSWORD '$PG_APP_PW' (0003 creates
 #      the role with NOLOGIN; LOGIN is granted out-of-band per the migration
 #      header).
 #
@@ -53,6 +56,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> Applying auth stub"
 psql -v ON_ERROR_STOP=1 -f "$REPO_ROOT/tests/integration/setup/auth-stub.sql"
+
+echo "==> Applying vault stub"
+# Day 26 / T3 — Supabase's `vault` schema is required by 0024-touching
+# integration specs but is not in vanilla Postgres. Mirrors the
+# auth-stub.sql pattern above. See the stub file header for the
+# interface contract + reader warning about pgsodium AEAD scope.
+psql -v ON_ERROR_STOP=1 -f "$REPO_ROOT/tests/integration/setup/vault-stub.sql"
 
 echo "==> Applying migrations"
 for migration in "$REPO_ROOT"/supabase/migrations/[0-9]*.sql; do

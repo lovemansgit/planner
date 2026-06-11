@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   parseWebhookEvents: vi.fn(),
   tenantAcceptsWebhooks: vi.fn(),
   auditEmit: vi.fn(),
+  applyWebhookStatusEvent: vi.fn(),
+  applyWebhookEditEvent: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -42,6 +44,18 @@ vi.mock("@/modules/identity", () => ({
 
 vi.mock("@/modules/audit", () => ({
   emit: mocks.auditEmit,
+}));
+
+// Day-18 / A2 — receiver dispatches to Layer 2 + Layer 3 service fns.
+// Mocked here so the receiver-verification-chain unit tests don't
+// pull in shared/db transitively (those service fns import withTenant).
+// Default behaviour: applied:true for status, applied:true for edit.
+vi.mock("@/modules/integration/providers/suitefleet/apply-webhook-status-event", () => ({
+  applyWebhookStatusEvent: mocks.applyWebhookStatusEvent,
+}));
+
+vi.mock("@/modules/integration/providers/suitefleet/apply-webhook-edit-event", () => ({
+  applyWebhookEditEvent: mocks.applyWebhookEditEvent,
 }));
 
 import { POST } from "@/app/api/webhooks/suitefleet/[tenantId]/route";

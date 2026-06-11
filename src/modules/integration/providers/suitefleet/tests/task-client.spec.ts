@@ -10,7 +10,9 @@ import { CredentialError, ValidationError } from "../../../../../shared/errors";
 
 import {
   buildSuiteFleetTaskBody,
+  buildSuiteFleetUpdatePatchBody,
   createSuiteFleetTaskClient,
+  parseSuiteFleetBulkCancelResponse,
   parseSuiteFleetTaskActivitiesResponse,
   parseSuiteFleetTaskResponse,
   SuiteFleetAwbExistsError,
@@ -111,11 +113,17 @@ describe("buildSuiteFleetTaskBody — required fields and shape", () => {
     expect(body.status).toBe("ORDERED");
   });
 
-  it("splits the delivery window into deliveryDate / deliveryStartTime / deliveryEndTime", () => {
+  it("splits the delivery window: date stays Dubai-local, times shift Dubai→UTC (Day-30 A3)", () => {
+    // SAMPLE_REQUEST window = { date: 2026-04-30, start: 23:00, end: 02:00 } Dubai-local.
+    // Post-A3 contract:
+    //   - times shift −4h to UTC: 23:00 Dubai → 19:00 UTC; 02:00 Dubai → 22:00 UTC (wrap)
+    //   - deliveryDate STAYS Dubai-local 2026-04-30 (cross-system operational anchor;
+    //     reviewer ruling: do NOT decrement date even on cross-midnight wrap)
+    //   - post-conversion window is NOT inverted (19:00 < 22:00) — buildWireWindow accepts
     const body = buildSuiteFleetTaskBody(SAMPLE_REQUEST, 588);
     expect(body.deliveryDate).toBe("2026-04-30");
-    expect(body.deliveryStartTime).toBe("23:00:00");
-    expect(body.deliveryEndTime).toBe("02:00:00");
+    expect(body.deliveryStartTime).toBe("19:00:00");
+    expect(body.deliveryEndTime).toBe("22:00:00");
   });
 
   it("builds the consignee with name, contactPhone, and a nested location", () => {
@@ -362,9 +370,10 @@ describe("createTask — request wire shape", () => {
     expect(body.customerId).toBe(588);
     expect(body.creationSource).toBe("API");
     expect(body.status).toBe("ORDERED");
+    // Day-30 A3: wire body carries Dubai-local date + UTC-shifted times.
     expect(body.deliveryDate).toBe("2026-04-30");
-    expect(body.deliveryStartTime).toBe("23:00:00");
-    expect(body.deliveryEndTime).toBe("02:00:00");
+    expect(body.deliveryStartTime).toBe("19:00:00");
+    expect(body.deliveryEndTime).toBe("22:00:00");
   });
 });
 
@@ -796,5 +805,512 @@ describe("createTask client — getTaskByAwb (D8-4b)", () => {
         awb: DOC_DERIVED_AWB,
       }),
     ).rejects.toBeInstanceOf(SuiteFleetTimelineParseError);
+  });
+});
+
+// =============================================================================
+// Day 21 / Phase 1 — updateTask / cancelTask / bulkCancelTasks
+// =============================================================================
+// Empirical anchors locked at Day-21 sandbox probe (see code-PR §3.6 thread):
+//   - cancel field name: { status: "CANCELED" } — variant A 200 OK first attempt
+//   - bulk endpoint takes NUMERIC SF task ids, not AWBs (Q3 memo correction)
+//   - bulk response is aggregate job summary, not per-task results
+//   - SF returns 200 + full task entity on cancel/update, NOT 204
+// All three methods are single-attempt (mirrors createTask).
+
+const SAMPLE_AWB = "MPL-72915243";
+
+describe("buildSuiteFleetUpdatePatchBody — RFC 7396 merge-patch shape", () => {
+  it("returns an empty object when no fields are present", () => {
+    expect(buildSuiteFleetUpdatePatchBody({})).toEqual({});
+  });
+
+  it("splits window: date stays Dubai-local, times shift Dubai→UTC (Day-30 A3)", () => {
+    // Dubai-local 09:00→11:00 on 2026-05-12.
+    // Post-A3: 09:00 Dubai → 05:00 UTC; 11:00 Dubai → 07:00 UTC; date unchanged.
+    const body = buildSuiteFleetUpdatePatchBody({
+      window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" },
+    });
+    expect(body).toEqual({
+      deliveryDate: "2026-05-12",
+      deliveryStartTime: "05:00:00",
+      deliveryEndTime: "07:00:00",
+    });
+  });
+
+  it("preserves explicit null on notes (clear-field semantic)", () => {
+    const body = buildSuiteFleetUpdatePatchBody({ notes: null });
+    expect(body).toHaveProperty("notes", null);
+  });
+
+  it("omits notes when undefined (RFC 7396 absence vs explicit null)", () => {
+    const body = buildSuiteFleetUpdatePatchBody({ notes: undefined });
+    expect(body).not.toHaveProperty("notes");
+  });
+
+  it("rebuilds full consignee snapshot via buildConsignee", () => {
+    const body = buildSuiteFleetUpdatePatchBody({
+      consignee: SAMPLE_REQUEST.consignee,
+    });
+    expect(body).toHaveProperty("consignee");
+    expect((body.consignee as { name: string }).name).toBe("Sample Consignee");
+  });
+
+  it("composes multiple patch fields without leaking absent keys (Day-30 A3 times in UTC)", () => {
+    const body = buildSuiteFleetUpdatePatchBody({
+      window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" },
+      notes: "Updated note",
+    });
+    expect(body).toEqual({
+      deliveryDate: "2026-05-12",
+      deliveryStartTime: "05:00:00",
+      deliveryEndTime: "07:00:00",
+      notes: "Updated note",
+    });
+    expect(body).not.toHaveProperty("consignee");
+  });
+});
+
+// =============================================================================
+// Day-30 / Fix-A3 (Aqib UAT 2026-05-18) — outbound TZ conversion contract
+// =============================================================================
+// Asserts the reviewer-ruled contract: times shift Dubai→UTC, deliveryDate
+// stays Dubai-local (NEVER decremented even on cross-midnight wrap), and
+// post-conversion inverted windows throw ValidationError rather than emit
+// silently.
+
+describe("Day-30 A3 — outbound TZ conversion contract", () => {
+  // Construct a TaskCreateRequest fixture builder so each case below can
+  // pass its own window without re-declaring the full payload shape.
+  function requestWithWindow(window: {
+    date: string;
+    startTime: string;
+    endTime: string;
+  }): TaskCreateRequest {
+    return { ...SAMPLE_REQUEST, window };
+  }
+
+  describe("createTask wire body", () => {
+    it("(a) Aqib UAT case — 10:00-12:00 Dubai becomes 06:00-08:00 UTC; date unchanged", () => {
+      // The exact case Aqib pushed during UAT 2026-05-18. Load-bearing:
+      // it proves the time-shift + the date-stays-Dubai-local ruling
+      // simultaneously.
+      const body = buildSuiteFleetTaskBody(
+        requestWithWindow({ date: "2026-05-20", startTime: "10:00:00", endTime: "12:00:00" }),
+        588,
+      );
+      expect(body.deliveryDate).toBe("2026-05-20");
+      expect(body.deliveryStartTime).toBe("06:00:00");
+      expect(body.deliveryEndTime).toBe("08:00:00");
+    });
+
+    it("(b) cross-midnight — 22:00-23:30 Dubai → 18:00-19:30 UTC; date stays 2026-05-20", () => {
+      // Reviewer ruling check: even when conversion shifts both times into
+      // the prior UTC day's clock value, the deliveryDate (Dubai-local
+      // operational anchor) is NOT decremented.
+      const body = buildSuiteFleetTaskBody(
+        requestWithWindow({ date: "2026-05-20", startTime: "22:00:00", endTime: "23:30:00" }),
+        588,
+      );
+      expect(body.deliveryDate).toBe("2026-05-20");
+      expect(body.deliveryStartTime).toBe("18:00:00");
+      expect(body.deliveryEndTime).toBe("19:30:00");
+    });
+
+    it("(b2) cross-midnight wrap — 01:00-03:00 Dubai → 21:00-23:00 UTC; date stays 2026-05-20", () => {
+      // Both times wrap past midnight (subtracted hour is negative, +24).
+      // The date STAYS 2026-05-20 — even though the UTC clock values
+      // correspond to "2026-05-19 evening", we send the Dubai-local
+      // operational date verbatim per reviewer ruling.
+      const body = buildSuiteFleetTaskBody(
+        requestWithWindow({ date: "2026-05-20", startTime: "01:00:00", endTime: "03:00:00" }),
+        588,
+      );
+      expect(body.deliveryDate).toBe("2026-05-20");
+      expect(body.deliveryStartTime).toBe("21:00:00");
+      expect(body.deliveryEndTime).toBe("23:00:00");
+    });
+
+    it("(c) inverted-after-conversion window throws ValidationError (does NOT silently emit)", () => {
+      // Dubai-local 02:00-04:00: start wraps to 22:00 UTC, end becomes
+      // 00:00 UTC → numerically inverted (22:00 > 00:00). Reviewer ruling:
+      // surface the inversion, do NOT emit. ValidationError lands the
+      // row in DLQ via the cron failureCallback path for ops triage.
+      expect(() =>
+        buildSuiteFleetTaskBody(
+          requestWithWindow({ date: "2026-05-20", startTime: "02:00:00", endTime: "04:00:00" }),
+          588,
+        ),
+      ).toThrow(/post-UTC-conversion window is inverted/);
+    });
+
+    it("rejects malformed time string (defensive validator boundary)", () => {
+      // The TaskCreateRequest type carries `startTime: string` without HMS
+      // regex validation, so a malformed value can slip through at the
+      // type boundary. buildWireWindow catches it before it hits the wire.
+      expect(() =>
+        buildSuiteFleetTaskBody(
+          requestWithWindow({ date: "2026-05-20", startTime: "10:00", endTime: "12:00:00" }),
+          588,
+        ),
+      ).toThrow(/time string must be HH:MM:SS/);
+    });
+  });
+
+  describe("updateTask wire body", () => {
+    it("(a) Aqib UAT case mirrored on update patch", () => {
+      const body = buildSuiteFleetUpdatePatchBody({
+        window: { date: "2026-05-20", startTime: "10:00:00", endTime: "12:00:00" },
+      });
+      expect(body).toEqual({
+        deliveryDate: "2026-05-20",
+        deliveryStartTime: "06:00:00",
+        deliveryEndTime: "08:00:00",
+      });
+    });
+
+    it("(c) inverted-after-conversion window throws on update path", () => {
+      expect(() =>
+        buildSuiteFleetUpdatePatchBody({
+          window: { date: "2026-05-20", startTime: "02:00:00", endTime: "04:00:00" },
+        }),
+      ).toThrow(/post-UTC-conversion window is inverted/);
+    });
+  });
+});
+
+describe("parseSuiteFleetBulkCancelResponse — aggregate job summary", () => {
+  const SAMPLE_BULK_OK = {
+    id: 1764,
+    tasksExecutedCount: 2,
+    expectedTasksCount: 2,
+    executionTimeInSeconds: 0,
+    status: "COMPLETED",
+    bulkUpdateSource: "BULK_UPDATE",
+  };
+
+  it("extracts jobId / executedCount / expectedCount / status from happy response", () => {
+    const result = parseSuiteFleetBulkCancelResponse(SAMPLE_BULK_OK);
+    expect(result).toEqual({
+      jobId: "1764",
+      executedCount: 2,
+      expectedCount: 2,
+      status: "COMPLETED",
+    });
+  });
+
+  it("stringifies numeric jobId for storage parity (matches TaskCreateResult.externalId)", () => {
+    const result = parseSuiteFleetBulkCancelResponse({ ...SAMPLE_BULK_OK, id: 9999 });
+    expect(result.jobId).toBe("9999");
+    expect(typeof result.jobId).toBe("string");
+  });
+
+  it("throws ValidationError on null body", () => {
+    expect(() => parseSuiteFleetBulkCancelResponse(null)).toThrow(ValidationError);
+  });
+
+  it("throws ValidationError on missing tasksExecutedCount", () => {
+    const rest = { ...SAMPLE_BULK_OK } as Record<string, unknown>;
+    delete rest.tasksExecutedCount;
+    expect(() => parseSuiteFleetBulkCancelResponse(rest)).toThrow(ValidationError);
+  });
+
+  it("throws ValidationError on missing status", () => {
+    const rest = { ...SAMPLE_BULK_OK } as Record<string, unknown>;
+    delete rest.status;
+    expect(() => parseSuiteFleetBulkCancelResponse(rest)).toThrow(ValidationError);
+  });
+
+  it("throws ValidationError on non-finite executedCount", () => {
+    expect(() =>
+      parseSuiteFleetBulkCancelResponse({ ...SAMPLE_BULK_OK, tasksExecutedCount: NaN }),
+    ).toThrow(ValidationError);
+  });
+});
+
+describe("SuiteFleetTaskClient.updateTask — wire posture + error mapping", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function happyResponse(): Response {
+    // Empirically observed: SF returns 200 + the full task entity on
+    // updateTask. Adapter discards the body but tests assert on it via
+    // the fetch mock to lock the wire contract.
+    return jsonResponse({ id: 59383, awb: SAMPLE_AWB, status: "ORDERED" });
+  }
+
+  it("issues PATCH /api/tasks/awb/{awb} with merge-patch+json content type", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(happyResponse());
+    await makeClient(fetchMock).updateTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      patch: { window: { date: "2026-05-12", startTime: "09:00:00", endTime: "11:00:00" } },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`https://api.suitefleet.com/api/tasks/awb/${SAMPLE_AWB}`);
+    expect(init.method).toBe("PATCH");
+    expect(init.headers["Content-Type"]).toBe("application/merge-patch+json");
+    expect(init.headers.Authorization).toBe(`Bearer ${SAMPLE_SESSION.token}`);
+    expect(init.headers.Clientid).toBe("transcorpsb");
+  });
+
+  it("URL-encodes the AWB into the path segment", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(happyResponse());
+    await makeClient(fetchMock).updateTask({
+      session: SAMPLE_SESSION,
+      awb: "MPL/with slash",
+      patch: { notes: "x" },
+    });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("MPL%2Fwith%20slash");
+  });
+
+  it("does not parse the 200 response body — discards explicitly", async () => {
+    // LANE 1 reviewer ruling: parser must not crash on body presence.
+    // Lock the contract: HTML or any non-JSON 200 should not throw.
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("<html>not-json", 200));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("maps 4xx to ValidationError carrying response excerpt", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("Bad Request", 400));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("maps 401 to CredentialError (auth-level)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("Unauthorized", 401));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+  });
+
+  it("maps 5xx to CredentialError without retry (single-attempt policy)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("oops", 502));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps network error to CredentialError (single-attempt)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("ECONNRESET"));
+    await expect(
+      makeClient(fetchMock).updateTask({
+        session: SAMPLE_SESSION,
+        awb: SAMPLE_AWB,
+        patch: { notes: "x" },
+      }),
+    ).rejects.toBeInstanceOf(CredentialError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SuiteFleetTaskClient.cancelTask — locked field name + fire-and-forget posture", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends body { status: 'CANCELED' } verbatim — Day-21 probe-locked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 59383, status: "CANCELED" }));
+    await makeClient(fetchMock).cancelTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      correlationId: "corr-xyz",
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ status: "CANCELED" });
+  });
+
+  it("does NOT put correlationId on the wire (SF ignores Idempotency-Key)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "CANCELED" }));
+    await makeClient(fetchMock).cancelTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      correlationId: "corr-LEAK-CHECK",
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).not.toContain("corr-LEAK-CHECK");
+    expect(init.headers["Idempotency-Key"]).toBeUndefined();
+    expect(init.body).not.toContain("corr-LEAK-CHECK");
+  });
+
+  it("returns void on 200 (fire-and-forget; webhook drives state convergence)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "CANCELED" }));
+    const result = await makeClient(fetchMock).cancelTask({
+      session: SAMPLE_SESSION,
+      awb: SAMPLE_AWB,
+      correlationId: "corr-1",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("maps 401 to CredentialError, 4xx to ValidationError, 5xx to CredentialError, network to CredentialError", async () => {
+    const fetch401 = vi.fn().mockResolvedValue(plainResponse("nope", 401));
+    const fetch4xx = vi.fn().mockResolvedValue(plainResponse("nope", 422));
+    const fetch5xx = vi.fn().mockResolvedValue(plainResponse("oops", 503));
+    const fetchNet = vi.fn().mockRejectedValue(new TypeError("net"));
+
+    const args = { session: SAMPLE_SESSION, awb: SAMPLE_AWB, correlationId: "c" };
+    await expect(makeClient(fetch401).cancelTask(args)).rejects.toBeInstanceOf(CredentialError);
+    await expect(makeClient(fetch4xx).cancelTask(args)).rejects.toBeInstanceOf(ValidationError);
+    await expect(makeClient(fetch5xx).cancelTask(args)).rejects.toBeInstanceOf(CredentialError);
+    await expect(makeClient(fetchNet).cancelTask(args)).rejects.toBeInstanceOf(CredentialError);
+  });
+});
+
+describe("SuiteFleetTaskClient.bulkCancelTasks — numeric ids + aggregate parsing + partial-failure", () => {
+  const HAPPY = {
+    id: 1764,
+    tasksExecutedCount: 2,
+    expectedTasksCount: 2,
+    status: "COMPLETED",
+    bulkUpdateSource: "BULK_UPDATE",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("rejects empty sfTaskIds with ValidationError (no SF call)", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: [],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects AWB-shaped strings with ValidationError (defensive — bulk takes numeric ids)", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["MPL-12345"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects leading-zero ids (canonical positive-integer regex)", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["059414"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("issues PATCH /api/tasks/bulk/{ids} with comma-separated numeric ids", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(HAPPY));
+    await makeClient(fetchMock).bulkCancelTasks({
+      session: SAMPLE_SESSION,
+      sfTaskIds: ["59414", "59421"],
+      correlationId: "c",
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.suitefleet.com/api/tasks/bulk/59414,59421");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ status: "CANCELED" });
+    expect(init.headers["Content-Type"]).toBe("application/merge-patch+json");
+  });
+
+  it("returns aggregate BulkCancelResult on full-success 200", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(HAPPY));
+    const result = await makeClient(fetchMock).bulkCancelTasks({
+      session: SAMPLE_SESSION,
+      sfTaskIds: ["59414", "59421"],
+      correlationId: "c",
+    });
+    expect(result).toEqual({
+      jobId: "1764",
+      executedCount: 2,
+      expectedCount: 2,
+      status: "COMPLETED",
+    });
+  });
+
+  it("throws ValidationError on partial failure (executedCount < expectedCount)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ ...HAPPY, tasksExecutedCount: 1, expectedTasksCount: 2 }),
+    );
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["59414", "59421"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("throws ValidationError on non-JSON 200 body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(plainResponse("<html>", 200));
+    await expect(
+      makeClient(fetchMock).bulkCancelTasks({
+        session: SAMPLE_SESSION,
+        sfTaskIds: ["59414"],
+        correlationId: "c",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("maps 4xx / 5xx / network errors to ValidationError / CredentialError respectively", async () => {
+    const args = {
+      session: SAMPLE_SESSION,
+      sfTaskIds: ["59414", "59421"],
+      correlationId: "c",
+    };
+    await expect(
+      makeClient(vi.fn().mockResolvedValue(plainResponse("nope", 422))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      makeClient(vi.fn().mockResolvedValue(plainResponse("nope", 401))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(CredentialError);
+    await expect(
+      makeClient(vi.fn().mockResolvedValue(plainResponse("oops", 502))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(CredentialError);
+    await expect(
+      makeClient(vi.fn().mockRejectedValue(new TypeError("net"))).bulkCancelTasks(args),
+    ).rejects.toBeInstanceOf(CredentialError);
   });
 });

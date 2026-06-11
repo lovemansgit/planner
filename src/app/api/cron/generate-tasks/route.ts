@@ -1,43 +1,26 @@
-// Vercel Cron handler — Day 7 / C-2.
+// Day-14 cron materialization↔push decoupling — REWRITTEN HANDLER per
+// memory/plans/day-14-cron-decoupling.md §2.1 (6-phase model).
 //
-// GET /api/cron/generate-tasks
+// FEATURE-COMPLETE: all 6 phases implemented. Materialization-handler
+// side of the decoupling is done; queue-side handlers
+// (/api/queue/push-task per §5.1, /api/queue/push-task-failed per §5.2
+// amendment 5) are separate route files drafted in subsequent surfaces.
 //
-// Triggered by Vercel Cron at the schedule defined in vercel.json
-// (12:00 UTC = 16:00 Asia/Dubai per memory/decision_daily_cutoff_and_throughput.md).
-// Vercel Cron sends a GET request with `Authorization: Bearer <CRON_SECRET>`.
+// The handler runs at the existing `0 12 * * *` UTC cron schedule
+// (vercel.json — unchanged per plan §0.1). Materialization-only post-
+// rewrite: phase (a) generation + phase (b) inline SF push from the
+// pre-Day-14 handler is replaced by a 6-phase pattern that decouples
+// push to QStash. See plan §1.1 for the full model.
 //
-// Responsibilities:
-//   1. Verify the CRON_SECRET bearer header. Reject 401 on mismatch.
-//   2. Compute the [windowStart, windowEnd] timestamps and the
-//      `targetDate` (next-day calendar date in Asia/Dubai).
-//   3. Enumerate all tenants via withServiceRole.
-//   4. For each tenant, build a system RequestContext and call
-//      generateTasksForWindow.
-//   5. Aggregate the per-tenant outcomes into a summary payload.
-//   6. Return 200 with the summary on the all-completed / all-skipped
-//      / mixed path. Return 500 with a summary if ANY tenant hit
-//      'capped' or 'failed' so Vercel logs visibly flag the run for
-//      operations review (per memory/decision_daily_cutoff_and_throughput.md
-//      hard-cap semantics confirmed pre-C-2).
+// Response shape is FULL REDESIGN per plan §1.3 retirement table — no
+// legacy field name continuity (per_tenant.generation, summary.push,
+// PerTenantPair, RunSummary). The new shape reflects the 6-phase model
+// directly. Ops dashboards/alerting that grep the legacy shape need
+// rebuild post-cutover.
 //
-// Why GET, not POST: Vercel Cron historically uses GET requests for
-// scheduled invocations and forwards a query-string-empty Authorization
-// header. The endpoint is idempotent at the per-(tenant, window) layer
-// (run-level UNIQUE in 0012) so a retry — Vercel's GET semantics — is
-// safe.
-//
-// Window math:
-//   - Vercel Cron schedule "0 12 * * *" fires at 12:00 UTC, which is
-//     16:00 Asia/Dubai (no DST in UAE).
-//   - windowStart = the firing time (server-clock UTC at handler entry).
-//   - windowEnd   = windowStart + 1 hour (the 16:00–17:00 cutoff window
-//                   per the throughput memo).
-//   - targetDate  = the next calendar date in Asia/Dubai.
-//
-// Asia/Dubai date computation: Dubai is UTC+4 with no DST. The
-// "calendar day in Dubai" of a UTC instant `t` is the date part of
-// `(t + 4 hours)` formatted as YYYY-MM-DD. Implemented inline below
-// (no Intl-locale dependency to keep the date logic auditable).
+// HTTP status mirrors legacy posture: 500 if ANY tenant had abnormal
+// outcome (cap-gate fired, any phase threw, or Phase 5 chunk failure
+// > 0); 200 only on all-clean.
 
 import "server-only";
 
@@ -45,16 +28,15 @@ import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-import { generateTasksForWindow } from "@/modules/task-generation";
-import type { GenerateForWindowResult } from "@/modules/task-generation";
-import { nextCalendarDateInDubai } from "@/modules/task-generation/dubai-date";
-import { createSuiteFleetLastMileAdapter } from "@/modules/integration";
-import { pushTasksForTenant, type PushTenantOutcome } from "@/modules/task-push";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
-import type { Actor, RequestContext } from "@/shared/tenant-context";
+import { withServiceRole } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
+import { listReconciliationCandidatesByTenant } from "@/modules/tasks/repository";
+import { computeTargetDateInDubai } from "@/modules/task-materialization/dubai-date";
+import { enqueueTaskPushBatch } from "@/modules/task-materialization/queue";
+import { materializeTenant } from "@/modules/task-materialization/service";
 import { listCronEligibleTenantIds } from "./list-cron-eligible-tenants";
 
 export const dynamic = "force-dynamic";
@@ -63,31 +45,49 @@ export const revalidate = 0;
 // uses the postgres-js driver which requires Node sockets.
 export const runtime = "nodejs";
 
-/**
- * Hard cap from memory/decision_daily_cutoff_and_throughput.md. The
- * value is recorded on every task_generation_runs row in
- * cap_threshold so historical capped runs stay interpretable if this
- * constant ever changes.
- */
-const TASK_GENERATION_CAP = 7000;
-
-/** Window length: 16:00–17:00 Asia/Dubai → 1 hour. */
-const WINDOW_DURATION_MS = 60 * 60 * 1000;
-
 const log = logger.with({ component: "cron_generate_tasks" });
 
+/**
+ * Per-tenant outcome aggregated at handler exit for the Phase 6
+ * summary response. Captured at each terminal point inside the
+ * per-tenant loop — successful end-of-iteration OR `continue` on
+ * any-phase throw.
+ */
+interface PerTenantSummary {
+  tenantId: Uuid;
+  reconciliationCount: number;
+  newInsertedCount: number;
+  addressResolutionFailedCount: number;
+  advancedSubscriptionCount: number;
+  /** §4.4 conflict outcome kind; null when Phases 2-4 didn't run (Phase 1 throw) or threw. */
+  runRowOutcomeKind: string | null;
+  cappedByGate: boolean;
+  phase5EnqueuedCount: number;
+  phase5FailedChunks: number;
+  phase5TotalCount: number;
+  /**
+   * Which phase threw, if any. Captures observability one level
+   * finer than a single `threw: boolean` — surfaces at the per-row
+   * level whether the failure was in reconciliation, materialization,
+   * or enqueue.
+   */
+  failedPhase:
+    | "phase1_reconciliation"
+    | "phase2_4_materialize"
+    | "phase5_enqueue"
+    | null;
+}
+
 export async function GET(req: Request): Promise<Response> {
+  const handlerEntryMs = Date.now();
   const requestId = randomUUID();
   const requestLog = log.with({ request_id: requestId });
 
   // --------------------------------------------------------------------------
-  // 1. Verify CRON_SECRET
+  // Handler entry — CRON_SECRET verification (unchanged from pre-Day-14)
   // --------------------------------------------------------------------------
   const expected = process.env.CRON_SECRET;
   if (!expected) {
-    // Misconfiguration. Fail loud — a deploy without CRON_SECRET cannot
-    // process scheduled invocations safely. 500, not 401, because the
-    // endpoint itself is broken regardless of caller credentials.
     requestLog.error(
       { error_code: "missing_cron_secret_env" },
       "CRON_SECRET env var unset; refusing to run cron handler",
@@ -106,38 +106,39 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   // --------------------------------------------------------------------------
-  // 2. Compute window and targetDate
+  // Handler entry — compute target horizon date + window timestamps
+  // (Phase 0b per plan §2.1; window timestamps mirror legacy run-row shape)
   // --------------------------------------------------------------------------
+  // target_date = today + 14 days in Asia/Dubai per plan §3.2.
+  // Per-subscription cap to LEAST(target, COALESCE(end_date, target))
+  // is applied inside the §2.3 INSERT…SELECT (Phase 2 SQL); the handler-
+  // level value here is the unconditional 14-day horizon shared by all
+  // tenants on this invocation.
+  //
+  // windowStart / windowEnd preserve the legacy task_generation_runs
+  // window shape — runs carry both target_date AND window timestamps for
+  // operational continuity. windowEnd = windowStart + 1h matches the
+  // pre-Day-14 cutoff window semantic.
   const now = new Date();
+  const targetDate = computeTargetDateInDubai(now);
   const windowStart = now.toISOString();
-  const windowEnd = new Date(now.getTime() + WINDOW_DURATION_MS).toISOString();
-  const targetDate = nextCalendarDateInDubai(now);
-
-  const runLog = requestLog.with({
-    window_start: windowStart,
-    window_end: windowEnd,
-    target_date: targetDate,
-  });
-  runLog.info({}, "task generation cron invocation accepted");
+  const windowEnd = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  requestLog.info(
+    { target_date: targetDate, window_start: windowStart, window_end: windowEnd },
+    "target horizon date computed",
+  );
 
   // --------------------------------------------------------------------------
-  // 3. Enumerate cron-eligible tenants
+  // Handler entry — enumerate cron-eligible tenants (unchanged β filter)
   // --------------------------------------------------------------------------
-  // β (Day 8): the eligibility filter
-  // (`suitefleet_customer_code IS NOT NULL AND <> ''`) is at the
-  // enumeration layer. Tenants without a customer_code never enter
-  // the per-tenant loop. See list-cron-eligible-tenants.ts for the
-  // production-readiness-gate rationale.
   let tenantIds: readonly Uuid[];
   try {
     tenantIds = await listCronEligibleTenantIds();
   } catch (err) {
-    runLog.error(
+    requestLog.error(
       { error: err instanceof Error ? err.message : String(err) },
       "failed to enumerate tenants for cron run",
     );
-    // Day-7 / C-6: cron run aborted before any per-tenant work; this
-    // is an outage signal worth waking ops up for.
     captureException(err, {
       component: "cron_generate_tasks",
       operation: "list_cron_eligible_tenants",
@@ -145,375 +146,342 @@ export async function GET(req: Request): Promise<Response> {
     });
     return new Response(null, { status: 500 });
   }
-  runLog.info(
+  requestLog.info(
     { tenant_count: tenantIds.length },
     "cron-eligible tenants enumerated (filter: suitefleet_customer_code present)",
   );
 
   // --------------------------------------------------------------------------
-  // 4. Per-tenant generation + push
+  // Per-tenant 6-phase loop — feature-complete materialization handler.
+  // Each tenant captures a PerTenantSummary into perTenantMap at its
+  // terminal point (successful end-of-iteration OR `continue` on throw).
+  // Phase 6 aggregates the map into the handler-level summary at exit.
   // --------------------------------------------------------------------------
-  // D8-4a: each tenant pass is now two phases:
-  //   (a) generateTasksForWindow — C-2 (Day 7), generates next-day
-  //       tasks from active subscriptions.
-  //   (b) pushTasksForTenant     — D8-4a (today), walks all unpushed
-  //       tasks for the tenant and pushes them to SF with the 5
-  //       req/sec throttle + the two fail-closed guards.
-  //
-  // The push phase runs regardless of the generation outcome —
-  // unpushed tasks may exist from prior runs (e.g. yesterday's
-  // 'capped' generation left unpushed leftovers). The push phase
-  // walks all unpushed tasks per tenant, so we always give the
-  // backlog a chance to drain.
-  //
-  // Adapter constructed once at the top of the handler and shared
-  // across all tenants. Per-tenant credentials resolve inside the
-  // adapter on each call.
-  const adapter = createSuiteFleetLastMileAdapter({
-    fetch: globalThis.fetch,
-    clock: () => new Date(),
-  });
-
-  // D8-4a: per-tenant accumulator is a Map keyed by tenantId carrying
-  // BOTH phase outcomes (generation + push). Single entry per tenant
-  // in the response — clearer than two flat-array entries with
-  // different `kind` discriminators per tenant. Ops triage on a 500:
-  // open the response payload, find the tenant, see both phases at a
-  // glance.
-  const perTenantMap = new Map<Uuid, PerTenantPair>();
-  let anyAbnormal = false;
+  const perTenantMap = new Map<Uuid, PerTenantSummary>();
   for (const tenantId of tenantIds) {
-    const ctx = buildSystemContext(tenantId, requestId);
+    const tenantLog = requestLog.with({ tenant_id: tenantId });
 
-    // ----- Phase (a): generation ---------------------------------------------
-    let outcome: GenerateForWindowResult;
+    // ----- PHASE 1 — Reconciliation scan -------------------------------------
+    // Per plan §1.1 / §2.1: scan for tasks pinned at
+    // `pushed_to_external_at IS NULL AND address_id IS NOT NULL`.
+    // These are: (a) rows that crashed between Phase 4 commit and
+    // Phase 5 enqueue on a previous tick; (b) the cutover backlog
+    // (per §0.4 Q3 probe: 114 fresh-butchers tasks at Day-14 plan time).
+    // Self-healing on every tick.
+    //
+    // The address_id filter is the §2.2 quarantine guard at the cron
+    // side — null-address rows stay quarantined until operator-actionable
+    // resolution; they are NOT re-enqueued.
+    //
+    // Result feeds Phase 5 (post-commit batchJSON enqueue), which will
+    // union these reconciliation tuples with any newly-INSERTed rows
+    // from Phase 2.
+    //
+    // Phase 1 runs OUTSIDE the Phase 2-4 transaction (separate withServiceRole
+    // call). The TOCTOU window between Phase 1 read and Phase 5 enqueue is
+    // benign:
+    //   - New rows inserted by Phase 2 are unioned in by Phase 5 explicitly.
+    //   - No path nulls pushed_to_external_at once set, so Phase 1's snapshot
+    //     can't become stale in a way that affects correctness.
+    // Future contributors should not "optimize" by collapsing Phase 1 into the
+    // tx — that would couple reconciliation to materialization durability,
+    // breaking the §1.1 self-healing contract.
+    let reconciliationTaskIds: readonly Uuid[];
     try {
-      outcome = await generateTasksForWindow(ctx, {
-        tenantId,
-        windowStart,
-        windowEnd,
-        targetDate,
-        capThreshold: TASK_GENERATION_CAP,
-      });
-    } catch (err) {
-      runLog.error(
-        {
-          tenant_id: tenantId,
-          error: err instanceof Error ? err.message : String(err),
-        },
-        "task generation threw for tenant",
+      reconciliationTaskIds = await withServiceRole(
+        `cron:reconciliation_scan for tenant ${tenantId}`,
+        async (tx) => listReconciliationCandidatesByTenant(tx, tenantId),
       );
-      // Day-7 / C-6: per-tenant Sentry visibility. Without this, the
-      // cron-summary 500 collapses every per-tenant failure into one
-      // event — ops can't tell whether one tenant or all tenants
-      // tripped tonight without reading the per-tenant payload.
+    } catch (err) {
+      tenantLog.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        "phase 1 reconciliation scan threw",
+      );
       captureException(err, {
         component: "cron_generate_tasks",
-        operation: "per_tenant_generate",
+        operation: "phase1_reconciliation_scan",
+        tenant_id: tenantId,
+        request_id: requestId,
+      });
+      // Per plan §1.1: Phase 1 failures are logged but the per-tenant
+      // loop continues to the next tenant. A failed reconciliation scan
+      // means we miss self-healing this tick for this tenant; the next
+      // tick re-attempts. Don't abort the whole cron run.
+      perTenantMap.set(tenantId, {
+        tenantId,
+        reconciliationCount: 0,
+        newInsertedCount: 0,
+        addressResolutionFailedCount: 0,
+        advancedSubscriptionCount: 0,
+        runRowOutcomeKind: null,
+        cappedByGate: false,
+        phase5EnqueuedCount: 0,
+        phase5FailedChunks: 0,
+        phase5TotalCount: 0,
+        failedPhase: "phase1_reconciliation",
+      });
+      continue;
+    }
+    tenantLog.info(
+      { reconciliation_count: reconciliationTaskIds.length },
+      "phase 1 reconciliation scan complete",
+    );
+
+    // ----- PHASES 2-3 — bulk INSERT…SELECT + horizon advance ----------------
+    // Phase 2: bulk INSERT into tasks with 4-layer COALESCE address
+    // resolution (override_one_off → override_forward → rotation → primary)
+    // + skip-the-date EXISTS guards (skip + pause_window) + refuse-to-
+    // materialize guard (§2.2 — COALESCE IS NOT NULL) + RETURNING id for
+    // Phase 5 enqueue. The §2.2 quarantine counter emission runs in a
+    // second statement INSIDE the same tx (option-b two-pass per §2.2
+    // amendment direction).
+    //
+    // Phase 3: UPDATE subscription_materialization to advance
+    // materialized_through_date for every active subscription whose
+    // current horizon is below the per-subscription cap of
+    // LEAST(targetDate, COALESCE(end_date, targetDate)). Advances for ALL
+    // qualifying subs regardless of whether Phase 2 produced INSERTs for
+    // them (implementation choice (c) per Phase 3 review).
+    //
+    // Both phases run inside a single withServiceRole tx; Phase 4 (run-row
+    // write with §4.4 stale-running CAS branching) extends the same tx in
+    // the next surface before commit. Re-INSERT idempotency for Phase 2
+    // holds via the partial UNIQUE per 0012:230-232; re-UPDATE idempotency
+    // for Phase 3 is natural — re-running with same materialized_through_date
+    // is filtered out by the WHERE predicate.
+    let newInsertedTaskIds: readonly Uuid[];
+    let addressResolutionFailedCount: number;
+    let advancedSubscriptionIds: readonly Uuid[];
+    let runRowOutcomeKind: string;
+    let cappedByGate: boolean;
+    try {
+      const phaseResult = await withServiceRole(
+        `cron:materialize for tenant ${tenantId}`,
+        async (tx) =>
+          materializeTenant(tx, {
+            tenantId,
+            targetDate,
+            windowStart,
+            windowEnd,
+            requestId,
+          }),
+      );
+      newInsertedTaskIds = phaseResult.newInsertedTaskIds;
+      addressResolutionFailedCount = phaseResult.addressResolutionFailedCount;
+      advancedSubscriptionIds = phaseResult.advancedSubscriptionIds;
+      runRowOutcomeKind = phaseResult.runRowOutcome.kind;
+      cappedByGate = phaseResult.cappedByGate;
+    } catch (err) {
+      tenantLog.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        "phases 2-4 materialization threw",
+      );
+      captureException(err, {
+        component: "cron_generate_tasks",
+        operation: "materialize",
+        tenant_id: tenantId,
+        request_id: requestId,
+      });
+      // Per plan §1.1 self-healing posture: per-tenant continue on
+      // failure; next tick re-attempts. Phase 5 enqueue does NOT run
+      // for this tenant on this tick.
+      perTenantMap.set(tenantId, {
+        tenantId,
+        reconciliationCount: reconciliationTaskIds.length,
+        newInsertedCount: 0,
+        addressResolutionFailedCount: 0,
+        advancedSubscriptionCount: 0,
+        runRowOutcomeKind: null,
+        cappedByGate: false,
+        phase5EnqueuedCount: 0,
+        phase5FailedChunks: 0,
+        phase5TotalCount: 0,
+        failedPhase: "phase2_4_materialize",
+      });
+      continue;
+    }
+    tenantLog.info(
+      {
+        new_inserted_count: newInsertedTaskIds.length,
+        address_resolution_failed_count: addressResolutionFailedCount,
+        advanced_subscription_count: advancedSubscriptionIds.length,
+        run_row_outcome: runRowOutcomeKind,
+        capped_by_gate: cappedByGate,
+      },
+      "phases 2-4 materialization complete",
+    );
+
+    // ----- PHASE 3 — UPDATE subscription_materialization (per §3.2) ----------
+    // Folded into the materializeTenant call above (Phases 2-3 single tx).
+    // See src/modules/task-materialization/service.ts for the UPDATE.
+
+    // ----- PHASE 4 — INSERT task_generation_runs row (per §4.4) --------------
+    // Folded into the materializeTenant call above (Phases 2-3-4 single tx).
+    // See src/modules/task-materialization/run-row.ts for the §4.4 6-status
+    // conflict-resolution state machine + stale-running CAS recovery branch.
+
+    // ----- (commit boundary — Phases 2-4 single tx) --------------------------
+
+    // ----- PHASE 5 — post-commit batchJSON enqueue (per §1.1, §5.2, §6.3) ----
+    // Phase 5 runs OUTSIDE the Phase 2-4 tx (the withServiceRole block above
+    // has already committed). Already-committed materialization rows are
+    // durable; failed Phase 5 enqueue does NOT roll back.
+    //
+    // Even on capped path (Phases 2-3 SKIPped, newInsertedTaskIds empty),
+    // Phase 1 reconciliation rows from earlier ticks are still enqueued —
+    // capped only blocks NEW materialization, not draining prior-tick
+    // backlog. Per Q4 direction.
+    //
+    // Per Q5 (b): chunk failures inside enqueueTaskPushBatch are logged +
+    // Sentry-captured + counted but do NOT throw. enqueueTaskPushBatch
+    // throws ONLY on env-var misconfiguration (QSTASH_TOKEN /
+    // PUBLIC_BASE_URL / QSTASH_FLOW_CONTROL_KEY missing); a throw here
+    // means the cron handler is misconfigured. Per-tenant continue per
+    // §1.1 self-healing — next tick re-attempts.
+    const phase5TaskIds = [...reconciliationTaskIds, ...newInsertedTaskIds];
+    let phase5Enqueued = 0;
+    let phase5FailedChunks = 0;
+    try {
+      const phase5Result = await enqueueTaskPushBatch({
+        tenantId,
+        taskIds: phase5TaskIds,
+        requestId,
+      });
+      phase5Enqueued = phase5Result.enqueuedCount;
+      phase5FailedChunks = phase5Result.failedChunks;
+    } catch (err) {
+      tenantLog.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        "phase 5 enqueue threw on env-var misconfig",
+      );
+      captureException(err, {
+        component: "cron_generate_tasks",
+        operation: "phase5_enqueue",
         tenant_id: tenantId,
         request_id: requestId,
       });
       perTenantMap.set(tenantId, {
         tenantId,
-        generation: {
-          kind: "failed",
-          message: err instanceof Error ? err.message : String(err),
-        },
-        push: { kind: "skipped_due_to_generation_failure" },
+        reconciliationCount: reconciliationTaskIds.length,
+        newInsertedCount: newInsertedTaskIds.length,
+        addressResolutionFailedCount,
+        advancedSubscriptionCount: advancedSubscriptionIds.length,
+        runRowOutcomeKind,
+        cappedByGate,
+        phase5EnqueuedCount: 0,
+        phase5FailedChunks: 0,
+        phase5TotalCount: phase5TaskIds.length,
+        failedPhase: "phase5_enqueue",
       });
-      anyAbnormal = true;
-      // Skip the push phase if generation threw — generation throwing
-      // is a hard infrastructure error (tenant_id missing, DB connection
-      // dead) that the push phase will likely repeat. Continue to the
-      // next tenant.
       continue;
     }
+    tenantLog.info(
+      {
+        phase5_enqueued: phase5Enqueued,
+        phase5_failed_chunks: phase5FailedChunks,
+        phase5_total: phase5TaskIds.length,
+      },
+      "phase 5 enqueue complete",
+    );
 
-    const generation = summariseGenerationOutcome(outcome);
-    if (outcome.kind === "capped" || outcome.kind === "failed") {
-      anyAbnormal = true;
-    }
-
-    // ----- Phase (b): push (D8-4a) -------------------------------------------
-    // Push runs even if generation was 'capped' or returned
-    // 'skipped_already_run' — the unpushed-tasks backlog is
-    // independent of THIS run's generate phase.
-    let push: PushOutcomeSummary;
-    try {
-      const pushOutcome = await pushTasksForTenant(ctx, tenantId, adapter);
-      push = summarisePushOutcome(pushOutcome);
-      if (pushOutcome.kind === "tenant_skipped") {
-        // operationally meaningful — operator needs to backfill
-        // customer_code; flag for Vercel-logs surfacing.
-        anyAbnormal = true;
-      }
-      if (
-        pushOutcome.kind === "pushed" &&
-        (pushOutcome.failedToDLQ > 0 || pushOutcome.awbExists > 0)
-      ) {
-        anyAbnormal = true;
-      }
-    } catch (err) {
-      runLog.error(
-        {
-          tenant_id: tenantId,
-          error: err instanceof Error ? err.message : String(err),
-        },
-        "task push threw for tenant",
-      );
-      captureException(err, {
-        component: "cron_generate_tasks",
-        operation: "per_tenant_push",
-        tenant_id: tenantId,
-        request_id: requestId,
-      });
-      push = {
-        kind: "push_failed",
-        message: err instanceof Error ? err.message : String(err),
-      };
-      anyAbnormal = true;
-    }
-
-    perTenantMap.set(tenantId, { tenantId, generation, push });
+    // Successful end-of-iteration: capture full per-tenant summary.
+    perTenantMap.set(tenantId, {
+      tenantId,
+      reconciliationCount: reconciliationTaskIds.length,
+      newInsertedCount: newInsertedTaskIds.length,
+      addressResolutionFailedCount,
+      advancedSubscriptionCount: advancedSubscriptionIds.length,
+      runRowOutcomeKind,
+      cappedByGate,
+      phase5EnqueuedCount: phase5Enqueued,
+      phase5FailedChunks,
+      phase5TotalCount: phase5TaskIds.length,
+      failedPhase: null,
+    });
   }
 
   // --------------------------------------------------------------------------
-  // 5. Aggregate + return summary
-  // --------------------------------------------------------------------------
-  // Per-tenant array is enumerated in the same order tenants were
-  // walked (Map preserves insertion order in JS). The response body
-  // carries both per-tenant pairs AND a top-level summary rollup so
-  // ops triage doesn't require counting per-tenant entries.
+  // PHASE 6 — handler-exit summary log + return.
   //
-  // Status:
-  //   200 if every tenant landed cleanly (no anomalies).
-  //   500 if ANY tenant hit an abnormal outcome (generation capped /
-  //       failed; push tenant_skipped / push_failed; or any failedToDLQ
-  //       / awbExists > 0). Vercel logs flag this as a failed cron
-  //       invocation — operational signal for ops triage. The structured
-  //       per-tenant body lets ops see WHICH phase failed for WHICH
-  //       tenant without parsing message strings.
-  const perTenant = Array.from(perTenantMap.values());
-  const summary = computeRunSummary(perTenant);
-  const status = anyAbnormal ? 500 : 200;
+  // Aggregates per-tenant outcomes from perTenantMap into the handler-
+  // level summary. Response shape is full-redesign per plan §1.3 retirement
+  // table — no legacy field name continuity. Ops dashboards that grep
+  // legacy field names need rebuild.
+  //
+  // HTTP status:
+  //   200 — every tenant landed on the all-clean path (failedPhase=null,
+  //         cappedByGate=false, phase5FailedChunks=0)
+  //   500 — ANY tenant hit an abnormal outcome. Vercel cron logs flag
+  //         the run for ops triage; the structured per_tenant body lets
+  //         ops see WHICH phase failed for WHICH tenant without parsing
+  //         message strings.
+  // --------------------------------------------------------------------------
+  const handlerExitMs = Date.now();
+  const totalWallClockMs = handlerExitMs - handlerEntryMs;
+
+  const perTenantSummaries = Array.from(perTenantMap.values());
+  const cappedTenants = perTenantSummaries.filter((t) => t.cappedByGate).length;
+  const failedPhase1 = perTenantSummaries.filter(
+    (t) => t.failedPhase === "phase1_reconciliation",
+  ).length;
+  const failedPhase2_4 = perTenantSummaries.filter(
+    (t) => t.failedPhase === "phase2_4_materialize",
+  ).length;
+  const failedPhase5 = perTenantSummaries.filter(
+    (t) => t.failedPhase === "phase5_enqueue",
+  ).length;
+
+  const summary = {
+    total_wall_clock_ms: totalWallClockMs,
+    tenant_count: tenantIds.length,
+    capped_tenants: cappedTenants,
+    failed_phase1_reconciliation: failedPhase1,
+    failed_phase2_4_materialize: failedPhase2_4,
+    failed_phase5_enqueue: failedPhase5,
+    total_reconciliation: perTenantSummaries.reduce(
+      (s, t) => s + t.reconciliationCount,
+      0,
+    ),
+    total_inserted: perTenantSummaries.reduce(
+      (s, t) => s + t.newInsertedCount,
+      0,
+    ),
+    total_advanced: perTenantSummaries.reduce(
+      (s, t) => s + t.advancedSubscriptionCount,
+      0,
+    ),
+    total_address_resolution_failed: perTenantSummaries.reduce(
+      (s, t) => s + t.addressResolutionFailedCount,
+      0,
+    ),
+    total_phase5_enqueued: perTenantSummaries.reduce(
+      (s, t) => s + t.phase5EnqueuedCount,
+      0,
+    ),
+    total_phase5_failed_chunks: perTenantSummaries.reduce(
+      (s, t) => s + t.phase5FailedChunks,
+      0,
+    ),
+    abnormal: perTenantSummaries.some(
+      (t) =>
+        t.cappedByGate ||
+        t.failedPhase !== null ||
+        t.phase5FailedChunks > 0,
+    ),
+  };
+
+  const status = summary.abnormal ? 500 : 200;
   const body = {
     request_id: requestId,
+    target_date: targetDate,
     window_start: windowStart,
     window_end: windowEnd,
-    target_date: targetDate,
-    tenant_count: tenantIds.length,
-    abnormal: anyAbnormal,
     summary,
-    per_tenant: perTenant,
+    per_tenant: perTenantSummaries,
   };
-  runLog.info({ status, abnormal: anyAbnormal, summary }, "task generation cron run complete");
+  requestLog.info(
+    { status, summary },
+    "phase 6 handler exit — materialization cron run complete",
+  );
   return NextResponse.json(body, { status });
 }
-
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
-
-/**
- * Build a system RequestContext for one per-tenant invocation. The
- * permissions Set is empty: the cron's authorisation lives in the
- * CRON_SECRET check above, not in the user-permission catalogue. The
- * generateTasksForWindow service uses `assertSystemActor`, not
- * `requirePermission`, so the empty permissions set is correct.
- */
-function buildSystemContext(tenantId: Uuid, requestId: string): RequestContext {
-  const actor: Actor = {
-    kind: "system",
-    system: "cron:generate_tasks",
-    tenantId,
-    permissions: new Set(),
-  };
-  return {
-    actor,
-    tenantId,
-    requestId,
-    path: "/api/cron/generate-tasks",
-  };
-}
-
-// -----------------------------------------------------------------------------
-// Response body shape (D8-4a — per-tenant pair structure)
-// -----------------------------------------------------------------------------
-// Per-tenant entry carries BOTH phase outcomes side-by-side. Ops
-// triage opens the response, finds the tenant, sees:
-//   - generation: { kind: 'completed' | 'capped' | ... , ... }
-//   - push:       { kind: 'pushed' | 'tenant_skipped' | ... , ... }
-// without having to parse a flat array with mixed-kind entries.
-//
-// The top-level `summary` rollup counts each phase-kind across all
-// tenants — saves ops from counting entries by hand on a 500.
-
-type GenerationOutcomeSummary =
-  | {
-      kind: "completed";
-      runId: Uuid;
-      subscriptionsWalked: number;
-      tasksCreated: number;
-      tasksSkippedExisting: number;
-    }
-  | {
-      kind: "capped";
-      runId: Uuid;
-      projectedCount: number;
-      capThreshold: number;
-    }
-  | {
-      kind: "skipped_already_run";
-      runId: Uuid;
-    }
-  | {
-      kind: "failed";
-      runId?: Uuid;
-      message: string;
-    };
-
-type PushOutcomeSummary =
-  | {
-      kind: "pushed";
-      attemptedCount: number;
-      succeeded: number;
-      failedToDLQ: number;
-      skippedDistrict: number;
-      awbExists: number;
-      awbExistsReconciled: number;
-    }
-  | {
-      kind: "tenant_skipped";
-      reason: "missing_customer_code";
-      skippedTaskCount: number;
-    }
-  | {
-      kind: "push_failed";
-      message: string;
-    }
-  | {
-      // Generation phase threw — push never attempted. Distinct from
-      // 'push_failed' (which means push WAS attempted and threw) so
-      // ops can tell the failure mode at a glance.
-      kind: "skipped_due_to_generation_failure";
-    };
-
-interface PerTenantPair {
-  tenantId: Uuid;
-  generation: GenerationOutcomeSummary;
-  push: PushOutcomeSummary;
-}
-
-interface RunSummary {
-  generation: {
-    completed: number;
-    capped: number;
-    skipped_already_run: number;
-    failed: number;
-  };
-  push: {
-    pushed_passes: number;
-    tenant_skipped: number;
-    push_failed: number;
-    skipped_due_to_generation_failure: number;
-    total_attempted: number;
-    total_succeeded: number;
-    total_failed_to_dlq: number;
-    total_skipped_district: number;
-    total_awb_exists: number;
-    total_awb_exists_reconciled: number;
-  };
-}
-
-function summariseGenerationOutcome(outcome: GenerateForWindowResult): GenerationOutcomeSummary {
-  switch (outcome.kind) {
-    case "completed":
-      return {
-        kind: "completed",
-        runId: outcome.run.id,
-        subscriptionsWalked: outcome.subscriptionsWalked,
-        tasksCreated: outcome.tasksCreated,
-        tasksSkippedExisting: outcome.tasksSkippedExisting,
-      };
-    case "capped":
-      return {
-        kind: "capped",
-        runId: outcome.run.id,
-        projectedCount: outcome.projectedCount,
-        capThreshold: outcome.capThreshold,
-      };
-    case "skipped_already_run":
-      return {
-        kind: "skipped_already_run",
-        runId: outcome.existingRun.id,
-      };
-    case "failed":
-      return {
-        kind: "failed",
-        runId: outcome.run.id,
-        message: outcome.errorText,
-      };
-  }
-}
-
-function summarisePushOutcome(outcome: PushTenantOutcome): PushOutcomeSummary {
-  if (outcome.kind === "tenant_skipped") {
-    return {
-      kind: "tenant_skipped",
-      reason: outcome.reason,
-      skippedTaskCount: outcome.skippedTaskCount,
-    };
-  }
-  return {
-    kind: "pushed",
-    attemptedCount: outcome.attemptedCount,
-    succeeded: outcome.succeeded,
-    failedToDLQ: outcome.failedToDLQ,
-    skippedDistrict: outcome.skippedDistrict,
-    awbExists: outcome.awbExists,
-    awbExistsReconciled: outcome.awbExistsReconciled,
-  };
-}
-
-function computeRunSummary(perTenant: readonly PerTenantPair[]): RunSummary {
-  const summary: RunSummary = {
-    generation: { completed: 0, capped: 0, skipped_already_run: 0, failed: 0 },
-    push: {
-      pushed_passes: 0,
-      tenant_skipped: 0,
-      push_failed: 0,
-      skipped_due_to_generation_failure: 0,
-      total_attempted: 0,
-      total_succeeded: 0,
-      total_failed_to_dlq: 0,
-      total_skipped_district: 0,
-      total_awb_exists: 0,
-      total_awb_exists_reconciled: 0,
-    },
-  };
-  for (const entry of perTenant) {
-    summary.generation[entry.generation.kind] += 1;
-    switch (entry.push.kind) {
-      case "pushed":
-        summary.push.pushed_passes += 1;
-        summary.push.total_attempted += entry.push.attemptedCount;
-        summary.push.total_succeeded += entry.push.succeeded;
-        summary.push.total_failed_to_dlq += entry.push.failedToDLQ;
-        summary.push.total_skipped_district += entry.push.skippedDistrict;
-        summary.push.total_awb_exists += entry.push.awbExists;
-        summary.push.total_awb_exists_reconciled += entry.push.awbExistsReconciled;
-        break;
-      case "tenant_skipped":
-        summary.push.tenant_skipped += 1;
-        break;
-      case "push_failed":
-        summary.push.push_failed += 1;
-        break;
-      case "skipped_due_to_generation_failure":
-        summary.push.skipped_due_to_generation_failure += 1;
-        break;
-    }
-  }
-  return summary;
-}
-

@@ -145,9 +145,18 @@ export function buildWebhookUrl(tenantId: Uuid, baseUrl: string): string {
 const FALLBACK_BASE_URL = "https://planner-olive-sigma.vercel.app";
 
 /**
- * Resolve the public base URL from env. Returns the configured
- * PUBLIC_BASE_URL or the current Production alias as fallback.
+ * Resolve the public base URL from env. Resolution chain:
+ *   1. PUBLIC_BASE_URL — operator-configured override (per scope)
+ *   2. VERCEL_URL      — Vercel-auto-injected per-deploy alias; covers
+ *                        preview deploys without per-branch env-var setup
+ *                        (Day-22n /vercel-url-fallback)
+ *   3. FALLBACK_BASE_URL — hard-coded production alias as final safety
+ *                        net (preserves the pre-existing fail-silent
+ *                        posture so the webhook-config page never 500s
+ *                        on a missing env var)
  */
 export function resolvePublicBaseUrl(env: Readonly<Record<string, string | undefined>> = process.env): string {
-  return env.PUBLIC_BASE_URL ?? FALLBACK_BASE_URL;
+  if (env.PUBLIC_BASE_URL) return env.PUBLIC_BASE_URL;
+  if (env.VERCEL_URL) return `https://${env.VERCEL_URL}`;
+  return FALLBACK_BASE_URL;
 }

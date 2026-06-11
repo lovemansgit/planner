@@ -173,6 +173,52 @@ export interface TaskByAwbResult {
 }
 
 /**
+ * Day 21 / Phase 1. Internal-language input for `updateTask`.
+ *
+ * RFC 7396 merge-patch semantics: only present fields are updated
+ * provider-side. Absent fields are unchanged on the SF task; an
+ * explicit `null` is the canonical "clear this field" signal (notes
+ * only — date/window/consignee never legitimately go null).
+ *
+ * Editable surface mirrors planner brief §3.3.3 click-into-day popover
+ * actions: delivery window (date + start/end times), address (via
+ * full consignee snapshot replacement — same convention as
+ * `TaskCreateRequest` to avoid a second address-only mutation path on
+ * the wire), and free-text notes.
+ *
+ * Out of scope for Phase 1 (locked NO at plan-PR §B.2):
+ *   - `consignee_id` change (cancel + recreate flow)
+ *   - `customer_order_number` change (immutable identifier)
+ *   - `internal_status` change (system-managed via SF webhooks)
+ */
+export interface TaskUpdatePatchRequest {
+  readonly window?: DeliveryWindow;
+  readonly consignee?: ConsigneeSnapshot;
+  readonly notes?: string | null;
+}
+
+/**
+ * Day 21 / Phase 1. Aggregate result returned by `bulkCancelTasks`.
+ *
+ * SF's `PATCH /api/tasks/bulk/{ids}` returns a single bulk-job summary,
+ * NOT per-task results — Day-21 sandbox probe empirically confirmed
+ * (see code-PR §3.6 thread). When `executedCount < expectedCount`, the
+ * caller cannot determine WHICH tasks failed from this response; treat
+ * the whole batch as DLQ-routable.
+ *
+ * The doc-verified Q3 memo claim ("comma-separated AWB list") was
+ * empirically wrong; the bulk endpoint expects numeric SF task ids
+ * (the path-param name `{ids}` was the tell). See `bulkCancelTasks`
+ * adapter docstring + the side-finding section of the §3.6 thread.
+ */
+export interface BulkCancelResult {
+  readonly jobId: string;
+  readonly executedCount: number;
+  readonly expectedCount: number;
+  readonly status: string;
+}
+
+/**
  * Minimal headers contract — matches the web `Headers` API so a real
  * request object can be passed straight in, but tests can supply a
  * trivial `{ get: (name) => ... }` mock without faking the full class.

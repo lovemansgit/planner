@@ -170,12 +170,34 @@ describe("resolvePublicBaseUrl", () => {
     );
   });
 
-  it("falls back to the current Production alias when PUBLIC_BASE_URL absent", () => {
+  it("PUBLIC_BASE_URL wins over VERCEL_URL when both are set", () => {
+    expect(
+      resolvePublicBaseUrl({
+        PUBLIC_BASE_URL: "https://custom.example.com",
+        VERCEL_URL: "preview-deploy.vercel.app",
+      }),
+    ).toBe("https://custom.example.com");
+  });
+
+  it("falls back to https://VERCEL_URL when PUBLIC_BASE_URL absent (Day-22n preview-deploy fallback)", () => {
+    expect(
+      resolvePublicBaseUrl({ VERCEL_URL: "planner-git-some-branch.vercel.app" }),
+    ).toBe("https://planner-git-some-branch.vercel.app");
+  });
+
+  it("falls back to the current Production alias when both PUBLIC_BASE_URL and VERCEL_URL absent", () => {
     expect(resolvePublicBaseUrl({})).toBe("https://planner-olive-sigma.vercel.app");
   });
 
   it("falls back when PUBLIC_BASE_URL is undefined", () => {
     expect(resolvePublicBaseUrl({ PUBLIC_BASE_URL: undefined })).toBe(
+      "https://planner-olive-sigma.vercel.app",
+    );
+  });
+
+  it("falls back to FALLBACK_BASE_URL when PUBLIC_BASE_URL is empty string", () => {
+    // Empty string is falsy — should skip to next chain step.
+    expect(resolvePublicBaseUrl({ PUBLIC_BASE_URL: "" })).toBe(
       "https://planner-olive-sigma.vercel.app",
     );
   });

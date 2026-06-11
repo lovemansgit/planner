@@ -52,4 +52,29 @@ export function parsePageParam(raw: string | string[] | undefined): number {
   return n;
 }
 
-export const PAGE_SIZE = 50;
+// Day 17 / Session B — page-size dropdown.
+//
+// Default stays at 50 (pre-Day-17 behaviour); the dropdown widens the
+// viewport so an operator running a high-volume morning batch can hold
+// the whole tenant in one selection without paging. 500 matches the SF
+// label-endpoint cap (probed Day 17 — see commit message + PR notes).
+export const PAGE_SIZE_DEFAULT = 50;
+export const ALLOWED_PAGE_SIZES = [50, 100, 300, 500] as const;
+export type AllowedPageSize = (typeof ALLOWED_PAGE_SIZES)[number];
+
+/** Back-compat alias — existing callers continue to work. */
+export const PAGE_SIZE = PAGE_SIZE_DEFAULT;
+
+/**
+ * Parse the `?perPage=` query param. Clamps invalid / unknown values
+ * to PAGE_SIZE_DEFAULT so that bookmarks with stale query strings
+ * degrade to the safe default rather than 4xx-ing the operator.
+ */
+export function parsePerPageParam(raw: string | string[] | undefined): AllowedPageSize {
+  if (typeof raw !== "string") return PAGE_SIZE_DEFAULT;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return PAGE_SIZE_DEFAULT;
+  return (ALLOWED_PAGE_SIZES as readonly number[]).includes(n)
+    ? (n as AllowedPageSize)
+    : PAGE_SIZE_DEFAULT;
+}

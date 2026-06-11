@@ -9,7 +9,7 @@ import { sql as sqlTag, type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
-import { insertFailedPush } from "../repository";
+import { insertFailedPush, listUnresolvedByTenant } from "../repository";
 import type { RecordFailedPushInput } from "../types";
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
@@ -137,6 +137,46 @@ describe("insertFailedPush", () => {
   it("throws if INSERT … RETURNING produces zero rows (unexpected anomaly)", async () => {
     const tx = makeStubTx([[]]);
     await expect(insertFailedPush(tx, TENANT_ID, baseInput)).rejects.toThrow(/zero rows/);
+  });
+});
+
+describe("listUnresolvedByTenant", () => {
+  it("base SELECT joins tasks + filters resolved_at IS NULL with no searchTerm", async () => {
+    const tx = makeStubTx([[]]);
+    await listUnresolvedByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/FROM failed_pushes fp/i);
+    expect(captured.sql).toMatch(/INNER JOIN tasks t ON t\.id\s*=\s*fp\.task_id/i);
+    expect(captured.sql).toMatch(/fp\.tenant_id\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/fp\.resolved_at\s+IS\s+NULL/i);
+    expect(captured.sql).toMatch(/ORDER BY fp\.last_attempted_at\s+DESC/i);
+    expect(captured.sql).not.toMatch(/ILIKE/i);
+    expect(captured.params).toContain(TENANT_ID);
+  });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listUnresolvedByTenant(tx, TENANT_ID);
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listUnresolvedByTenant(tx, TENANT_ID, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against AWB and task_id::text when searchTerm is set", async () => {
+      const tx = makeStubTx([[]]);
+      await listUnresolvedByTenant(tx, TENANT_ID, { searchTerm: "MPL-789" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/t\.external_tracking_number\s+ILIKE/i);
+      expect(captured.sql).toMatch(/fp\.task_id::text\s+ILIKE/i);
+      expect(captured.params).toContain("%MPL-789%");
+    });
   });
 });
 

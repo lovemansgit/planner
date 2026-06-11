@@ -1,0 +1,77 @@
+[
+  {
+    "action": "TASK_HAS_BEEN_ORDERED",
+    "id": 9000001,
+    "awb": "MPL-25193918",
+    "eventTimestamp": "2026-05-08T08:00:00.000Z",
+    "deliveryInformation": {
+      "recipientName": null,
+      "signature": null,
+      "consigneeRating": null,
+      "consigneeComment": null,
+      "driverComment": null,
+      "numberOfAttempts": 0,
+      "failureReasonComment": null,
+      "completionLatitude": null,
+      "completionLongitude": null,
+      "photos": null,
+      "bagsReturned": null,
+      "icePacksReturned": null
+    }
+  },
+  {
+    "action": "TASK_HAS_BEEN_UPDATED",
+    "id": 9000002,
+    "awb": "MPL-25193919",
+    "eventTimestamp": "2026-05-08T09:30:00.000Z",
+    "delivery_date": "2026-05-09",
+    "deliveryStartTime": "08:00:00",
+    "deliveryEndTime": "10:00:00",
+    "consignee": {
+      "name": "Synthetic Test Consignee",
+      "location": {
+        "addressLine1": "Test Building 1",
+        "district": "Test District",
+        "city": "Dubai",
+        "countryCode": "AE"
+      }
+    },
+    "deliveryInformation": {
+      "recipientName": null,
+      "signature": null,
+      "consigneeRating": null,
+      "consigneeComment": null,
+      "driverComment": "Updated delivery window",
+      "numberOfAttempts": 1,
+      "failureReasonComment": null,
+      "completionLatitude": null,
+      "completionLongitude": null,
+      "photos": null,
+      "bagsReturned": null,
+      "icePacksReturned": null
+    }
+  },
+  {
+    "action": "TASK_STATUS_UPDATED_TO_DELIVERED",
+    "id": 9000003,
+    "awb": "MPL-25193920",
+    "eventTimestamp": "2026-05-08T10:45:00.000Z",
+    "deliveryInformation": {
+      "recipientName": "Test Recipient",
+      "signature": null,
+      "consigneeRating": 5,
+      "consigneeComment": "Test comment, sanitised",
+      "driverComment": "Test driver comment",
+      "numberOfAttempts": 1,
+      "failureReasonComment": null,
+      "completionLatitude": 25.197,
+      "completionLongitude": 55.274,
+      "photos": [
+        "https://test-fixture.example.com/pod-1.jpg",
+        "https://test-fixture.example.com/pod-2.jpg"
+      ],
+      "bagsReturned": null,
+      "icePacksReturned": null
+    }
+  }
+]

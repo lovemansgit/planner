@@ -21,6 +21,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
+  { label: "Calendar", path: "/calendar", permission: "task:read" },
   { label: "Tasks", path: "/tasks", permission: "task:read" },
   { label: "Subscriptions", path: "/subscriptions", permission: "subscription:read" },
   { label: "Consignees", path: "/consignees", permission: "consignee:read" },
@@ -52,16 +53,44 @@ export function isActiveNavPath(currentPath: string, item: NavItem): boolean {
 
 /**
  * Landing-page card spec. Mirrors the workflow-shortcut design from
- * the P4 plan §3 — two card destinations gated independently.
+ * the P4 plan §3.
+ *
+ * `permission` is the primary gate. `extraPermissions` (added Day-22
+ * §3.3.9 completion) lists additional perms an operator must ALSO
+ * hold — used for the Onboard card, whose underlying wizard creates
+ * both consignee + subscription rows and so demands both create
+ * permissions to be operationally meaningful.
  */
 export interface LandingCard {
   readonly label: string;
   readonly path: string;
   readonly description: string;
   readonly permission: PermissionId;
+  readonly extraPermissions?: ReadonlyArray<PermissionId>;
 }
 
 export const LANDING_CARDS: readonly LandingCard[] = [
+  {
+    label: "Onboard new consignee",
+    path: "/consignees/new",
+    description: "Start a new merchant subscriber with one wizard.",
+    permission: "consignee:create",
+    extraPermissions: ["subscription:create"],
+  },
+  {
+    label: "Subscriber base",
+    path: "/consignees",
+    description: "Search and manage all consignees.",
+    permission: "consignee:read",
+  },
+  {
+    // Day-23 /calendar route lands tomorrow per brief §3.3.4. Card
+    // structure landed today; route follows.
+    label: "Today's deliveries",
+    path: "/calendar",
+    description: "Consolidated operations view across all consignees.",
+    permission: "task:read",
+  },
   {
     label: "Today's tasks",
     path: "/tasks",
@@ -79,5 +108,63 @@ export const LANDING_CARDS: readonly LandingCard[] = [
 export function visibleLandingCards(
   permissions: ReadonlySet<Permission>,
 ): readonly LandingCard[] {
-  return LANDING_CARDS.filter((card) => permissions.has(card.permission));
+  return LANDING_CARDS.filter((card) => {
+    if (!permissions.has(card.permission)) return false;
+    if (card.extraPermissions) {
+      for (const extra of card.extraPermissions) {
+        if (!permissions.has(extra)) return false;
+      }
+    }
+    return true;
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Day 18 / C1 — Transcorp-staff admin nav (parallel to NAV_ITEMS).
+//
+// Lives alongside the operator NAV_ITEMS rather than merged into it
+// because the (admin)/ route group has its own shell — the brief
+// (§3.2.2) frames Transcorp-staff cross-tenant admin as a distinct
+// surface from tenant-scoped operator UI. Mirroring this split in
+// nav-config keeps each layout's nav source-of-truth declarative
+// without leaking admin items into the operator menu (which would be
+// the case if we merged into NAV_ITEMS gated only by permission).
+//
+// Each entry's permission gate is the systemOnly merchant:* family
+// (registered at permissions.ts:526-560); only `transcorp-sysadmin`
+// resolves to the merchant:read_all permission needed to render the
+// Merchants nav item. Tenant operators never see this nav.
+// -----------------------------------------------------------------------------
+
+export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
+  // Calendar lives on a dedicated /admin/calendar route so the
+  // Transcorp variant renders under the (admin)/ shell + AdminTopNav.
+  // The tenant /calendar route keeps the tenant variant + tenant nav
+  // shell. Previously this entry pointed to /calendar which dropped
+  // Transcorp staff into the tenant nav (Day-24 dry-run bug, fixed
+  // PR #257). Day-24 PM reorder puts Calendar first to match the
+  // tenant NAV_ITEMS ordering — operator mental model is "calendar is
+  // the home view, lists are drill-downs."
+  { label: "Calendar", path: "/admin/calendar", permission: "task:read_all" },
+  { label: "Merchants", path: "/admin/merchants", permission: "merchant:read_all" },
+  { label: "Tasks", path: "/admin/tasks", permission: "task:read_all" },
+  { label: "Consignees", path: "/admin/consignees", permission: "consignee:read_all" },
+  { label: "Subscriptions", path: "/admin/subscriptions", permission: "subscription:read_all" },
+  // Users entry (Day-24) — Transcorp-staff surface for creating
+  // tenant-admins / ops-managers / sysadmins. Gated on
+  // `merchant:read_all` because user creation across tenants is a
+  // Transcorp-only operation; tenant-admins manage their own users
+  // via Phase 1.5 (deferred per memory/followup_team_management_ui.md).
+  { label: "Users", path: "/admin/users", permission: "merchant:read_all" },
+] as const;
+
+/**
+ * Filter admin nav items by an actor's resolved permission set.
+ * Mirrors visibleNavItems' shape so the (admin)/ layout consumes
+ * the same {label, path, active} contract via TopNav-style rendering.
+ */
+export function visibleAdminNavItems(
+  permissions: ReadonlySet<Permission>,
+): readonly NavItem[] {
+  return ADMIN_NAV_ITEMS.filter((item) => permissions.has(item.permission));
 }

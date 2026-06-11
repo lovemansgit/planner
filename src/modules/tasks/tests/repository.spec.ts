@@ -15,9 +15,14 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  countAllTasksRows,
+  countTasksByTenant,
   deleteTask,
   findTaskById,
   insertTaskWithPackages,
+  listAllTaskIdsByTenant,
+  listAllTasksRows,
+  listTasksBySubscription,
   listTasksByTenant,
   updateTask,
 } from "../repository";
@@ -311,6 +316,345 @@ describe("listTasksByTenant", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/i);
     expect(captured.params).toContain(TENANT_ID);
+  });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause and consignee join when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID);
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+      expect(captured.sql).not.toMatch(/JOIN consignees/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against AWB, customer_order_number, and consignee name with a LEFT JOIN", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "MPL-645" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
+      expect(captured.sql).toMatch(/external_tracking_number\s+ILIKE/i);
+      expect(captured.sql).toMatch(/customer_order_number\s+ILIKE/i);
+      expect(captured.sql).toMatch(/c\.name\s+ILIKE/i);
+      expect(captured.params).toContain("%MPL-645%");
+    });
+
+    it("composes searchTerm with the status filter (both clauses present)", async () => {
+      const tx = makeStubTx([[]]);
+      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "Sarah", status: "DELIVERED" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/internal_status\s*=\s*\$/i);
+      expect(captured.sql).toMatch(/ILIKE/i);
+      expect(captured.params).toContain("DELIVERED");
+      expect(captured.params).toContain("%Sarah%");
+    });
+  });
+});
+
+describe("listAllTasksRows", () => {
+  it("base SELECT joins tenants + consignees with no extra filters when filters are empty", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, {});
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/FROM tasks t/i);
+    expect(captured.sql).toMatch(/JOIN tenants ten/i);
+    expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
+    expect(captured.sql).not.toMatch(/ILIKE/i);
+    expect(captured.sql).not.toMatch(/internal_status\s*=/i);
+    expect(captured.sql).not.toMatch(/ten\.slug\s*=/i);
+  });
+
+  describe("searchTerm filter", () => {
+    it("omits the ILIKE clause when searchTerm is undefined", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, {});
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("omits the ILIKE clause when searchTerm is whitespace-only", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, { searchTerm: "   " });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ILIKE/i);
+    });
+
+    it("ILIKEs against AWB, consignee name, and merchant name when searchTerm is set", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, { searchTerm: "MPL-645" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/t\.external_tracking_number\s+ILIKE/i);
+      expect(captured.sql).toMatch(/c\.name\s+ILIKE/i);
+      expect(captured.sql).toMatch(/ten\.name\s+ILIKE/i);
+      expect(captured.params).toContain("%MPL-645%");
+    });
+
+    it("composes searchTerm with status + merchantSlug (all clauses present)", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllTasksRows(tx, {
+        searchTerm: "Sarah",
+        status: "DELIVERED",
+        merchantSlug: "mpl",
+      });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/t\.internal_status\s*=/i);
+      expect(captured.sql).toMatch(/ten\.slug\s*=/i);
+      expect(captured.sql).toMatch(/ILIKE/i);
+      expect(captured.params).toContain("DELIVERED");
+      expect(captured.params).toContain("mpl");
+      expect(captured.params).toContain("%Sarah%");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 2 — listTasksBySubscription
+// ---------------------------------------------------------------------------
+
+describe("listTasksBySubscription", () => {
+  const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
+
+  it("scopes SELECT to (tenant_id, subscription_id), ORDER BY delivery_date ASC, LIMIT 30 default", async () => {
+    const tx = makeStubTx([[]]);
+    await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID);
+
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/FROM tasks t/i);
+    expect(captured.sql).toMatch(/t\.tenant_id\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/t\.subscription_id\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/ORDER BY t\.delivery_date ASC/i);
+    expect(captured.sql).toMatch(/LIMIT \$/i);
+    expect(captured.params).toContain(TENANT_ID);
+    expect(captured.params).toContain(SUBSCRIPTION_ID);
+    expect(captured.params).toContain(30);
+  });
+
+  it("clamps the limit at 200", async () => {
+    const tx = makeStubTx([[]]);
+    await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID, 9999);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.params).toContain(200);
+  });
+
+  it("returns mapped rows in input order (delivery_date ASC at the SQL layer)", async () => {
+    const tx = makeStubTx([
+      [
+        taskRowWithPackagesFixture([], { id: "row-1", delivery_date: "2026-05-12" }),
+        taskRowWithPackagesFixture([], { id: "row-2", delivery_date: "2026-05-13" }),
+      ],
+    ]);
+    const result = await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID);
+    expect(result).toHaveLength(2);
+    expect(result[0].deliveryDate).toBe("2026-05-12");
+    expect(result[1].deliveryDate).toBe("2026-05-13");
+  });
+
+  it("returns an empty array when the subscription has no materialised tasks yet", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listTasksBySubscription(tx, TENANT_ID, SUBSCRIPTION_ID);
+    expect(result).toEqual([]);
+  });
+});
+
+describe("listAllTasksRows — archive filter", () => {
+  // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
+  // belonging to archived tenants so the bulk CI-leak archive doesn't
+  // leak rows through /admin/tasks at demo time.
+  it("includes the ten.status != 'archived' predicate", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+  });
+});
+
+describe("listAllTasksRows — date range filter (Day-24 PM)", () => {
+  it("omits the date predicates when neither dateFrom nor dateTo is set", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).not.toMatch(/t\.delivery_date\s*>=/i);
+    expect(captured.sql).not.toMatch(/t\.delivery_date\s*<=/i);
+  });
+
+  it("adds AND t.delivery_date >= ${dateFrom}::date when dateFrom is set", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { dateFrom: "2026-05-15" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=\s*\$\d+::date/i);
+    expect(captured.params).toContain("2026-05-15");
+  });
+
+  it("adds AND t.delivery_date <= ${dateTo}::date when dateTo is set", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { dateTo: "2026-05-15" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*<=\s*\$\d+::date/i);
+    expect(captured.params).toContain("2026-05-15");
+  });
+
+  it("composes both bounds + other filters together", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, {
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-15",
+      status: "DELIVERED",
+      merchantSlug: "mpl",
+      searchTerm: "sarah",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=\s*\$\d+::date/i);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*<=\s*\$\d+::date/i);
+    expect(captured.sql).toMatch(/t\.internal_status\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/ten\.slug\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/ILIKE/i);
+    expect(captured.params).toContain("2026-05-01");
+    expect(captured.params).toContain("2026-05-15");
+    expect(captured.params).toContain("DELIVERED");
+    expect(captured.params).toContain("mpl");
+    expect(captured.params).toContain("%sarah%");
+  });
+});
+
+describe("countAllTasksRows (Day-24 PM)", () => {
+  it("emits SELECT COUNT(*)::int on the same JOIN topology as listAllTasksRows", async () => {
+    const tx = makeStubTx([[{ count: 0 }]]);
+    await countAllTasksRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT\s+COUNT\(\*\)::int\s+AS\s+count/i);
+    expect(captured.sql).toMatch(/FROM tasks t/i);
+    expect(captured.sql).toMatch(/JOIN tenants ten/i);
+    expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
+    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    expect(captured.sql).not.toMatch(/ORDER BY/i);
+    expect(captured.sql).not.toMatch(/LIMIT/i);
+  });
+
+  it("returns 0 when the result set is empty", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await countAllTasksRows(tx);
+    expect(result).toBe(0);
+  });
+
+  it("returns the parsed count value", async () => {
+    const tx = makeStubTx([[{ count: 42 }]]);
+    const result = await countAllTasksRows(tx);
+    expect(result).toBe(42);
+  });
+
+  it("composes all filter fragments (status, merchantSlug, searchTerm, dateFrom, dateTo)", async () => {
+    const tx = makeStubTx([[{ count: 7 }]]);
+    await countAllTasksRows(tx, {
+      status: "FAILED",
+      merchantSlug: "mpl",
+      searchTerm: "MPL-AWB",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-15",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.params).toContain("FAILED");
+    expect(captured.params).toContain("mpl");
+    expect(captured.params).toContain("%MPL-AWB%");
+    expect(captured.params).toContain("2026-05-01");
+    expect(captured.params).toContain("2026-05-15");
+  });
+});
+
+describe("countTasksByTenant — Day-24 PM date range extension", () => {
+  it("adds the date-range predicates when dateFrom/dateTo are set", async () => {
+    const tx = makeStubTx([[{ count: 3 }]]);
+    await countTasksByTenant(tx, TENANT_ID, {
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-15",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=\s*\$\d+::date/i);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*<=\s*\$\d+::date/i);
+    expect(captured.params).toContain("2026-05-01");
+    expect(captured.params).toContain("2026-05-15");
+  });
+
+  it("composes date range with status + searchTerm", async () => {
+    const tx = makeStubTx([[{ count: 1 }]]);
+    await countTasksByTenant(tx, TENANT_ID, {
+      dateFrom: "2026-05-15",
+      dateTo: "2026-05-15",
+      status: "DELIVERED",
+      searchTerm: "Sarah",
+    });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/t\.delivery_date\s*>=/i);
+    expect(captured.sql).toMatch(/t\.internal_status\s*=/i);
+    expect(captured.sql).toMatch(/ILIKE/i);
+  });
+
+  it("returns 0 when no rows match (empty count row)", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await countTasksByTenant(tx, TENANT_ID, {
+      dateFrom: "2099-01-01",
+      dateTo: "2099-01-01",
+    });
+    expect(result).toBe(0);
+  });
+});
+
+describe("listAllTaskIdsByTenant", () => {
+  it("returns mapped IDs in input order", async () => {
+    const tx = makeStubTx([
+      [
+        { id: "11111111-1111-1111-1111-111111111111" },
+        { id: "22222222-2222-2222-2222-222222222222" },
+      ],
+    ]);
+    const result = await listAllTaskIdsByTenant(tx, TENANT_ID);
+    expect(result).toEqual([
+      "11111111-1111-1111-1111-111111111111",
+      "22222222-2222-2222-2222-222222222222",
+    ]);
+  });
+
+  it("returns an empty array when the tenant has no tasks", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listAllTaskIdsByTenant(tx, TENANT_ID);
+    expect(result).toEqual([]);
+  });
+
+  it("issues SELECT id FROM tasks with the defence-in-depth tenant_id predicate", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/SELECT\s+id\s+FROM\s+tasks/i);
+    expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/i);
+    expect(captured.params).toContain(TENANT_ID);
+  });
+
+  it("does not select task_packages or any heavy columns (lightweight by design)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).not.toMatch(/task_packages/i);
+    expect(captured.sql).not.toMatch(/json_agg/i);
+  });
+
+  it("appends the status filter when provided", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID, { status: "DELIVERED" });
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/internal_status\s*=\s*\$/i);
+    expect(captured.params).toContain("DELIVERED");
+  });
+
+  it("orders by created_at DESC to match listTasksByTenant", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTaskIdsByTenant(tx, TENANT_ID);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(/ORDER\s+BY\s+created_at\s+DESC/i);
   });
 });
 

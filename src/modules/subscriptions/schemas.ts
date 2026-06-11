@@ -91,6 +91,41 @@ export const CreateSubscriptionBodySchema = z
 export const LifecycleNoBodySchema = z.object({}).strict();
 
 /**
+ * Day-16 / Block 4-C — body shape for `POST /api/subscriptions/:id/pause`
+ * per merged plan §6.1 + brief §3.1.7. All fields required (idempotency_key
+ * is ALWAYS client-supplied per merged plan §6.5 idempotency-key locked
+ * Zod contract).
+ */
+const ISO_DATE_REGEX_PAUSE = /^\d{4}-\d{2}-\d{2}$/;
+export const PauseSubscriptionBodySchema = z
+  .object({
+    pause_start: z
+      .string()
+      .regex(ISO_DATE_REGEX_PAUSE, { message: "pause_start must be YYYY-MM-DD" }),
+    pause_end: z
+      .string()
+      .regex(ISO_DATE_REGEX_PAUSE, { message: "pause_end must be YYYY-MM-DD" }),
+    reason: z.string().optional(),
+    idempotency_key: z
+      .string()
+      .uuid({ message: "idempotency_key must be a uuid" }),
+  })
+  .strict();
+
+/**
+ * Day-16 / Block 4-C — body shape for `POST /api/subscriptions/:id/resume`.
+ * Manual resume only (auto-resume is internal — cron handler bypasses
+ * the route). idempotency_key required per §6.5 contract.
+ */
+export const ResumeSubscriptionBodySchema = z
+  .object({
+    idempotency_key: z
+      .string()
+      .uuid({ message: "idempotency_key must be a uuid" }),
+  })
+  .strict();
+
+/**
  * Body shape for `PATCH /api/subscriptions/:id`. Mirrors
  * `UpdateSubscriptionPatch`: every field optional. Lifecycle columns
  * (`status`, `pausedAt`, `endedAt`) are NOT in this schema —

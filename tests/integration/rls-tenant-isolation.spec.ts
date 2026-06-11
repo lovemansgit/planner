@@ -1109,11 +1109,16 @@ describe("R-3 — RLS tenant isolation under withTenant / withServiceRole", () =
       // withServiceRole to insert run rows for whichever tenant it's
       // walking).
       await withServiceRole("C-2 RLS-block setup", async (tx) => {
+        // target_date NOT NULL added by migration 0020; computed as
+        // window_start + 1 day in Asia/Dubai per the migration's backfill
+        // form (16:00 Dubai for the canonical 12:00 UTC tick → next day).
         const rows = await tx.execute<IdRow>(sqlTag`
           INSERT INTO task_generation_runs (
-            tenant_id, window_start, window_end, status, cap_threshold
+            tenant_id, window_start, window_end, target_date,
+            status, cap_threshold
           ) VALUES (
             ${TENANT_A}, ${RUN_WINDOW_START}, ${RUN_WINDOW_END},
+            ((${RUN_WINDOW_START}::timestamptz AT TIME ZONE 'Asia/Dubai')::date + 1),
             'completed', 7000
           )
           RETURNING id

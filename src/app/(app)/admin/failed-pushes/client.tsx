@@ -8,13 +8,22 @@
 //   - "Retry selected" bulk action that paces the API calls at
 //     200ms apart (5 req/sec — same as the cron's per-task pacing).
 //
+// Day-33 PR-D (Plan #317 §3.7 CLEANUP-1, §6 OQ-4 (a)+(b)):
+//   - "Resolve selected" button — opens a reason-prompt modal, POSTs
+//     one bulk request to /api/failed-pushes/bulk-resolve, removes the
+//     resolved rows from the table on success. ONE audit emit
+//     (failed_push.bulk_resolved) per click — distinct from the
+//     N-events-per-bulk-retry shape because resolve is a single
+//     operator decision over many rows, not N independent SF calls.
+//
 // The bulk-retry throttle is INTENTIONALLY client-side. The brief
 // requires "5 req/sec throttle (same as cron) so bulk operation
 // doesn't hammer SF" and the cleanest way to honour that without
 // adding a server bulk endpoint is sequential `await fetch(...)`
 // + `await sleep(200)` between dispatches. Each retry remains
 // independently audited via `failed_push.retried` (one event per
-// retry, not one event per bulk operation).
+// retry, not one event per bulk operation). Bulk-resolve is different:
+// no SF call, no throttle needed, one atomic DB UPDATE + one audit emit.
 //
 // Failure handling: a single row's retry-failure (404, 400, 403,
 // 502) does NOT abort the bulk run. Each row's outcome is recorded
@@ -41,11 +50,26 @@ type RowState =
   | { readonly kind: "succeeded"; readonly outcome: SinglePushOutcome }
   | { readonly kind: "failed"; readonly message: string };
 
+const RESOLUTION_NOTES_MAX_LEN = 500;
+
+interface BulkResolveBanner {
+  readonly kind: "success" | "error";
+  readonly text: string;
+}
+
+interface BulkResolveResponseEnvelope {
+  readonly resolved: readonly FailedPush[];
+  readonly notFoundIds: readonly string[];
+}
+
 export function FailedPushesAdmin({ initialRows }: { initialRows: readonly FailedPush[] }) {
   const [rows, setRows] = useState<readonly FailedPush[]>(initialRows);
   const [rowStates, setRowStates] = useState<Record<string, RowState>>({});
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [bulkInFlight, setBulkInFlight] = useState(false);
+  const [resolveModalOpen, setResolveModalOpen] = useState(false);
+  const [resolveInFlight, setResolveInFlight] = useState(false);
+  const [resolveBanner, setResolveBanner] = useState<BulkResolveBanner | null>(null);
 
   const allSelected = rows.length > 0 && selected.size === rows.length;
   const anySelected = selected.size > 0;
@@ -130,21 +154,105 @@ export function FailedPushesAdmin({ initialRows }: { initialRows: readonly Faile
     setBulkInFlight(false);
   };
 
+  const submitBulkResolve = async (resolutionNotes: string) => {
+    if (!anySelected || resolveInFlight) return;
+    setResolveInFlight(true);
+    setResolveBanner(null);
+    const ids = Array.from(selected);
+    try {
+      const res = await fetch("/api/failed-pushes/bulk-resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ failedPushIds: ids, resolutionNotes }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as
+          | { error?: { message?: string } }
+          | null;
+        const message = body?.error?.message ?? `HTTP ${res.status}`;
+        setResolveBanner({ kind: "error", text: `Bulk-resolve failed: ${message}` });
+        return;
+      }
+      const envelope = (await res.json()) as BulkResolveResponseEnvelope;
+      const resolvedIds = new Set(envelope.resolved.map((r) => r.id));
+      setRows((prev) => prev.filter((r) => !resolvedIds.has(r.id)));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const id of resolvedIds) next.delete(id);
+        return next;
+      });
+      setResolveModalOpen(false);
+      const resolvedCount = envelope.resolved.length;
+      const notFoundCount = envelope.notFoundIds.length;
+      const partial =
+        notFoundCount > 0
+          ? ` (${notFoundCount} were already resolved or wrong tenant)`
+          : "";
+      setResolveBanner({
+        kind: resolvedCount > 0 ? "success" : "error",
+        text:
+          resolvedCount > 0
+            ? `Resolved ${resolvedCount} row${resolvedCount === 1 ? "" : "s"}${partial}.`
+            : `No rows resolved${partial}.`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "network error";
+      setResolveBanner({ kind: "error", text: `Bulk-resolve failed: ${message}` });
+    } finally {
+      setResolveInFlight(false);
+    }
+  };
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between gap-4">
         <p className="text-sm text-[color:var(--color-text-secondary)]">
           {selected.size} of {rows.length} selected
         </p>
-        <button
-          type="button"
-          onClick={retrySelected}
-          disabled={!anySelected || bulkInFlight}
-          className="border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
-        >
-          {bulkInFlight ? "Retrying…" : "Retry selected"}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setResolveBanner(null);
+              setResolveModalOpen(true);
+            }}
+            disabled={!anySelected || bulkInFlight || resolveInFlight}
+            className="border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
+          >
+            Resolve selected
+          </button>
+          <button
+            type="button"
+            onClick={retrySelected}
+            disabled={!anySelected || bulkInFlight || resolveInFlight}
+            className="border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
+          >
+            {bulkInFlight ? "Retrying…" : "Retry selected"}
+          </button>
+        </div>
       </div>
+
+      {resolveBanner !== null ? (
+        <div
+          role="status"
+          className={`mb-6 border px-4 py-3 text-sm ${
+            resolveBanner.kind === "success"
+              ? "border-[color:var(--color-border-default)] bg-[color:var(--color-surface-secondary)] text-navy"
+              : "border-red bg-[color:var(--color-surface-primary)] text-red"
+          }`}
+        >
+          {resolveBanner.text}
+        </div>
+      ) : null}
+
+      {resolveModalOpen ? (
+        <BulkResolveModal
+          selectedCount={selected.size}
+          inFlight={resolveInFlight}
+          onCancel={() => setResolveModalOpen(false)}
+          onConfirm={(notes) => submitBulkResolve(notes)}
+        />
+      ) : null}
 
       <table className="w-full border-collapse text-sm">
         <thead>
@@ -281,6 +389,8 @@ function humanizeOutcome(outcome: SinglePushOutcome): string {
       return `Already pushed (${outcome.externalId})`;
     case "task_not_found":
       return `Task not found`;
+    case "past_dated_no_push":
+      return `Skipped — past-dated (${outcome.deliveryDate})`;
   }
 }
 
@@ -308,4 +418,78 @@ function formatTimestamp(iso: string): string {
   const hours = String(d.getUTCHours()).padStart(2, "0");
   const minutes = String(d.getUTCMinutes()).padStart(2, "0");
   return `${month} ${day} ${hours}:${minutes}`;
+}
+
+function BulkResolveModal({
+  selectedCount,
+  inFlight,
+  onCancel,
+  onConfirm,
+}: {
+  selectedCount: number;
+  inFlight: boolean;
+  onCancel: () => void;
+  onConfirm: (notes: string) => void;
+}) {
+  const [notes, setNotes] = useState("");
+  const trimmed = notes.trim();
+  const canSubmit =
+    !inFlight && trimmed.length > 0 && trimmed.length <= RESOLUTION_NOTES_MAX_LEN;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="bulk-resolve-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-navy/50 p-6"
+    >
+      <div className="w-full max-w-lg border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] p-8 text-navy">
+        <h2
+          id="bulk-resolve-modal-title"
+          className="text-lg font-semibold tracking-tight"
+        >
+          Resolve {selectedCount} failed push{selectedCount === 1 ? "" : "es"}
+        </h2>
+        <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
+          Mark the selected rows as resolved without retrying. A reason is
+          required and is recorded in the audit ledger + per-row resolution
+          notes.
+        </p>
+        <label className="mt-6 block text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
+          Resolution reason
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            disabled={inFlight}
+            maxLength={RESOLUTION_NOTES_MAX_LEN}
+            required
+            rows={4}
+            placeholder="e.g. past-dated rows accepted; SF rejected without reschedule"
+            className="mt-2 block w-full border border-[color:var(--color-border-strong)] bg-paper px-3 py-2 text-sm font-normal normal-case tracking-normal text-navy focus:outline-none focus:ring-1 focus:ring-navy disabled:opacity-40"
+          />
+        </label>
+        <p className="mt-2 text-xs text-[color:var(--color-text-tertiary)] tabular-nums">
+          {trimmed.length}/{RESOLUTION_NOTES_MAX_LEN}
+        </p>
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={inFlight}
+            className="border border-[color:var(--color-border-default)] bg-[color:var(--color-surface-primary)] px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfirm(trimmed)}
+            disabled={!canSubmit}
+            className="border border-[color:var(--color-border-strong)] bg-navy px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-paper transition-opacity hover:opacity-80 disabled:opacity-40"
+          >
+            {inFlight ? "Resolving…" : "Resolve"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
