@@ -39,3 +39,24 @@ Love's options (one word each):
 1. **Re-check SF-side** — confirm on SF OpsPortal the pair belongs to client `transcorpsb` and is active; re-enter (right fields) on the credentials page → say "re-entered" and the one-shot proof re-runs.
 2. **Authorize one diagnostic probe** — `scripts/probe-sf-api-key-auth.mjs` run with Love pasting the values into his own shell (header-shape discrimination; still no plaintext through the builder).
 3. **Rollback** — two admin actions per runbook §7 (switch back to OAuth, re-enter OAuth pair); only on your word.
+
+---
+
+## Day-53 annotation (append-only) — RE-RUN PASSED on Love's "re-entered": all four legs 200, Q4 CLOSED
+
+Love re-checked the pair on SF OpsPortal and re-entered it (fresh `credentials.set` 2026-06-11 11:27:50Z). The one-shot proof re-ran at ~11:29Z — **every leg passed**:
+
+| Leg | Result | Timing |
+|---|---|---|
+| A — resolver | `auth_method=api_key`, `override_active=true`, `apiKey_len=20`, **`secretKey_len=40`** | 794ms |
+| B — login | **HTTP 200 via `loginApiKey`** (headers `clientId`/`clientApiKey`/`clientSecretKey`), token_len=506, session cached via the standard token-cache path (second `getSession` = cache hit, zero extra wire calls) | 869ms |
+| C — authenticated read | GET task-activities `DMB-03169762` → **HTTP 200**, 2 activities | 150ms |
+| D — refresh observation | **ACCEPTED** — the OAuth-shaped refresh wire (GET `/api/auth/refresh`, `Cookie: refreshToken=…`) returned NEW tokens for the api_key session | 140ms |
+
+**Root cause of the original 401 — resolved: wrong secret value on first entry.** First entry had `secretKey_len=20`; the working pair has `secretKey_len=40`. The header shape was never the problem.
+
+**Observed token TTLs diverge from the documented 30-day/180-day:** access-token expiration came back **2029-06-10** (~3 years) and refresh **2034-08-28** (~8 years), both runs. Recorded verbatim; the token cache keys off the returned expirations, so no code is affected — but the documented TTLs should not be relied on for ops planning.
+
+Disclosure: the suite executed twice (the second run re-captured per-leg output), so the wire saw 2 logins + 2 refreshes — all 200. Corroborating evidence, not a retry-loop; there was no failure to retry.
+
+**Standing state:** Demo Bistro is LIVE on api_key on the sandbox region — the first proven api_key merchant. All other merchants remain on OAuth untouched. The temp proof spec was deleted after this run (never committed). Follow-on (not built here): rotate the ⚠️ PROBE-GATED comment block in `auth-client.ts` to wire-verified, and revisit the token-cache's api_key-skips-refresh strategy now that leg D proves the refresh wire — both are code changes for a future cleared PR.
