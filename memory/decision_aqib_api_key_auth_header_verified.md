@@ -102,3 +102,14 @@ This memo's probe-gate section asserts "There is NO sandbox api_key path. The sa
 - The empty body cannot distinguish wrong header names/casing from a wrong/inactive key pair (pair was entered post-flip by Love; lengths 20/20; SF-side scoping unverifiable from Planner).
 - **Q4 (refresh wire) remains OPEN** — no session was ever issued, the observation step never fired.
 - The Rule-A production-provisioning gate stays CLOSED: this header shape is still wire-unconfirmed. Next step is Love's call (re-check/re-enter the SF pair, authorize a header-shape diagnostic probe, or rollback).
+
+---
+
+## Day-53 annotation (append-only) — header shape WIRE-VERIFIED; Q4 CLOSED on sandbox evidence
+
+2026-06-11 ~11:29Z, Demo Bistro proof re-run after Love re-entered the pair (the earlier 401 was a wrong secret value on first entry — `secretKey_len` 20 → 40; full record in `decision_d53_demo_bistro_apikey_wire_evidence.md`):
+
+- **The verified header shape (`clientId`/`clientApiKey`/`clientSecretKey` on POST `/api/auth/authenticate`) authenticated 200 on the real wire** — the probe-gate's empirical confirmation, obtained on sandbox per the Day-54 annotation above. An authenticated read on the same session also returned 200.
+- **Q4 (api_key refresh wire) is CLOSED — ACCEPTED:** the OAuth-shaped refresh wire (GET `/api/auth/refresh`, refresh token via cookie) returned new tokens for an api_key session, observed twice. The token-cache's login-only renewal strategy for api_key is now a conservative choice rather than a necessity; revisiting it is a future cleared PR.
+- **TTL observation:** returned expirations were ~3 years (access) / ~8 years (refresh), NOT the documented 30-day/180-day. Values recorded verbatim in the evidence memo.
+- **Rule-A consequence:** the header-shape precondition on production provisioning is now met. Production provisioning still waits on Love's named go + production credential entry by Love/Aqib via the admin screen (standing park-flags unchanged).
