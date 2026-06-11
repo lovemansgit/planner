@@ -38,6 +38,7 @@ import {
 } from "../_calendar-actions";
 import type { AuditEventCursor } from "@/modules/audit";
 import type { TaskHistoryEntry } from "@/modules/tasks";
+import { TASK_HISTORY_METADATA_ALLOW_LIST } from "@/modules/tasks/history-metadata";
 
 interface TaskTimelineDrawerProps {
   readonly consigneeId: string;
@@ -286,65 +287,14 @@ function formatMetadataValue(value: unknown): string {
 }
 
 /**
- * Render-layer allow-list for expanded-row metadata (Love's Day-52
- * metadata ruling: operator-meaningful fields only, not the raw
- * payload). Keys NOT in this set never render — notably internal
- * record/correlation UUIDs (task_id, subscription_id, exception_id,
- * correlation_id, webhook_events_id, idempotency_key, task_ids,
- * skipped_task_ids …), raw vendor error text (last_error), SF action
- * codes (sf_action), and outbound plumbing (outbound_emission,
- * enqueued_count, failed_chunks, format).
- *
- * Built against the REAL emit-site metadata shapes (tasks,
- * subscriptions, subscription-exceptions services + the webhook
- * appliers) — the per-event mapping is tabled on PR #356. Events
- * whose fields are all hidden/empty fall back to the existing
- * "No further detail recorded." line.
+ * Belt-and-braces re-filter on the shared allow-list. Since the Day-53
+ * server-side strip (followup_r8_server_side_metadata_strip.md), the
+ * canonical filtering happens in getTaskHistory before the payload
+ * leaves the server; this client pass re-applies the SAME shared set
+ * (src/modules/tasks/history-metadata.ts) so a future service
+ * regression cannot silently widen what renders.
  */
-const METADATA_ALLOW_LIST: ReadonlySet<string> = new Set([
-  // what changed
-  "changed_fields",
-  "previous_status",
-  "new_status",
-  "to_internal_status",
-  "bulk_operation",
-  // dates & windows
-  "scheduled_for",
-  "start_date",
-  "target_date_override",
-  "compensating_date",
-  "effective_from",
-  "pause_start",
-  "pause_end",
-  "actual_resume_date",
-  "previous_end_date",
-  "new_end_date",
-  "event_timestamp",
-  // counts
-  "canceled_task_count",
-  "restored_task_count",
-  "pushed_task_count",
-  "failure_count",
-  "requested_count",
-  "printed_count",
-  "skipped_count",
-  "photo_count",
-  // kind / why
-  "type",
-  "scope",
-  "triggered_by",
-  "skip_without_append",
-  "is_auto_resume",
-  "completed_via",
-  // operator-supplied + note deltas
-  "reason",
-  "previous_notes_length",
-  "new_notes_length",
-  // operator-facing references
-  "awb",
-  "suitefleet_task_id",
-  "customer_order_number",
-]);
+const METADATA_ALLOW_LIST = TASK_HISTORY_METADATA_ALLOW_LIST;
 
 type HistoryState =
   | { kind: "collapsed" }

@@ -109,6 +109,7 @@ import type {
 import { sql as sqlTag } from "drizzle-orm";
 
 import { isCutOffElapsedForDate } from "../task-materialization/dubai-date";
+import { filterTaskHistoryMetadata } from "./history-metadata";
 import type { TenantStatus } from "../merchants/types";
 
 import {
@@ -2001,7 +2002,12 @@ export async function getTaskHistory(
       actorKind: event.actorKind,
       actorId: event.actorId,
       actorLabel: actorLabelFor(event, userNames),
-      metadata: event.metadata,
+      // Day-53 PM hardening (followup_r8_server_side_metadata_strip.md,
+      // Love-ruled UAT-blocking): the R8 allow-list is applied HERE so
+      // hidden fields (last_error, correlation/idempotency plumbing,
+      // internal UUIDs) never leave the server. The drawer re-filters on
+      // the same shared set as belt-and-braces.
+      metadata: filterTaskHistoryMetadata(event.metadata),
     }));
 
     const last = entries[entries.length - 1];
