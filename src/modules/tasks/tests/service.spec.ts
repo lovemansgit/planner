@@ -112,6 +112,7 @@ import {
   createTask,
   getTask,
   getTaskHistory,
+  getPodPhotoSourceUrl,
   getTasksForSubscription,
   getTaskTimeline,
   listAllTaskIds,
@@ -1786,6 +1787,84 @@ describe("getTaskHistory — Day-52 / R8", () => {
     expect(result.entries).toHaveLength(TASK_HISTORY_BATCH_SIZE);
     const last = result.entries[result.entries.length - 1];
     expect(result.nextCursor).toEqual({ occurredAt: last.occurredAt, id: last.id });
+  });
+
+  it("strips non-allow-listed metadata keys server-side — hidden fields never leave the service (Day-53 UAT hardening)", async () => {
+    // followup_r8_server_side_metadata_strip.md: pre-fix, getTaskHistory
+    // returned each event's full metadata jsonb and the strip happened
+    // only client-side at render — last_error / correlation UUIDs were
+    // fishable from the network payload. Post-fix the R8 allow-list is
+    // applied in the service, so the wire payload equals the rendered set.
+    mockFindById.mockResolvedValueOnce(taskFixture({ subscriptionId: null }));
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "subscription.auto_paused",
+        metadata: {
+          // hidden: plumbing + raw vendor text
+          last_error: "SF 502: upstream gateway error at /api/tasks",
+          correlation_id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+          idempotency_key: "key-MPL-123-2026",
+          webhook_events_id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+          sf_action: "TASK_HAS_BEEN_UPDATED",
+          outbound_emission: { kind: "cancel" },
+          // allowed: operator-meaningful
+          reason: "operator-entered reason",
+          changed_fields: [{ field: "delivery_date", previous: "a", new: "b" }],
+          pushed_task_count: 2,
+          is_auto_resume: false,
+        },
+      }),
+    ]);
+
+    const result = await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+
+    expect(result.entries).toHaveLength(1);
+    const metadata = result.entries[0].metadata;
+    expect(metadata).not.toHaveProperty("last_error");
+    expect(metadata).not.toHaveProperty("correlation_id");
+    expect(metadata).not.toHaveProperty("idempotency_key");
+    expect(metadata).not.toHaveProperty("webhook_events_id");
+    expect(metadata).not.toHaveProperty("sf_action");
+    expect(metadata).not.toHaveProperty("outbound_emission");
+    expect(metadata).toEqual({
+      reason: "operator-entered reason",
+      changed_fields: [{ field: "delivery_date", previous: "a", new: "b" }],
+      pushed_task_count: 2,
+      is_auto_resume: false,
+    });
+  });
+
+  it("getPodPhotoSourceUrl — gate, bounds, and raw stored URL (Day-53 POD proxy)", async () => {
+    // The proxy route resolves the RAW stored pre-signed URL server-side;
+    // the browser only ever sees the same-origin proxy path.
+    const STORED = [
+      "https://s3.eu-central-1.amazonaws.com/sf-bucket/a.jpg?X-Amz-Signature=x",
+      "https://s3.eu-central-1.amazonaws.com/sf-bucket/b.jpg?X-Amz-Signature=y",
+    ];
+
+    await expect(
+      getPodPhotoSourceUrl(userCtx([]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: null }));
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: STORED }));
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 2),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: STORED }));
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 1),
+    ).resolves.toBe(STORED[1]);
   });
 
   it("threads the before-cursor into the task-event query", async () => {

@@ -120,7 +120,16 @@ export function createSuiteFleetTokenCache(
     try {
       const credentials = await deps.resolveCredentials(tenantId);
 
-      if (cached !== undefined) {
+      // Day-53 api_key renewal strategy (plan
+      // memory/plans/day-53-sf-apikey-production-auth-lane.md §2): the
+      // refresh wire is OAuth-verified ONLY — the api_key refresh wire
+      // is decision_aqib_api_key_auth_header_verified.md's Q4 residual.
+      // api_key sessions skip the refresh attempt and renew via full
+      // loginApiKey below (30-day tokens → renewal fires ~monthly), so
+      // no unverified wire is ever exercised in the production auth
+      // path. The probe's refresh-wire observation step is the evidence
+      // gate for revisiting this.
+      if (credentials.auth_method === "oauth" && cached !== undefined) {
         const renewalExpiresAtMs = Date.parse(cached.renewalTokenExpiresAt);
         const renewalNow = deps.clock().getTime();
         if (renewalNow < renewalExpiresAtMs) {
