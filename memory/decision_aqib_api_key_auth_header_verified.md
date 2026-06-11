@@ -92,3 +92,13 @@ This memo's probe-gate section asserts "There is NO sandbox api_key path. The sa
 - The header-shape probe AND the Q4 refresh-wire residual are provable on **sandbox** Client Credentials — production credentials and production-probe authorization are no longer prerequisites for closing them.
 - The production provisioning gate itself is unchanged: the first production-region merchant still waits on the probe's empirical confirmation — the probe just gained a sandbox target (Demo Bistro, on Love's clearance).
 - Original text above left intact per the append-only discipline.
+
+---
+
+## Day-53 annotation (append-only) — first wire observation: login REJECTED 401 (cause undetermined)
+
+2026-06-11 10:30:56Z, the first-ever wire test of the §-verified header shape fired — Demo Bistro proof run, Planner's own resolver→Vault→`loginApiKey` chain, sandbox client `transcorpsb` (full evidence: `decision_d53_demo_bistro_apikey_wire_evidence.md`). **One** `POST /api/auth/authenticate` with `clientId`/`clientApiKey`/`clientSecretKey` headers → **HTTP 401, empty body**. Stopped per dispatch; no retry.
+
+- The empty body cannot distinguish wrong header names/casing from a wrong/inactive key pair (pair was entered post-flip by Love; lengths 20/20; SF-side scoping unverifiable from Planner).
+- **Q4 (refresh wire) remains OPEN** — no session was ever issued, the observation step never fired.
+- The Rule-A production-provisioning gate stays CLOSED: this header shape is still wire-unconfirmed. Next step is Love's call (re-check/re-enter the SF pair, authorize a header-shape diagnostic probe, or rollback).
