@@ -136,6 +136,26 @@ export async function listAddressesByConsignee(
 }
 
 /**
+ * Existence probe for a consignee within the current tenant scope.
+ * Runs under the caller's `withTenant` tx, so RLS hides other tenants'
+ * rows — a cross-tenant id reads as "does not exist" (default-deny).
+ *
+ * Owned here rather than imported from consignees/repository per the
+ * module-boundary discipline (modules query the consignees table
+ * directly where needed — same precedent as subscription-addresses
+ * and tasks repositories).
+ */
+export async function consigneeExistsInTenant(
+  tx: DbTx,
+  consigneeId: Uuid,
+): Promise<boolean> {
+  const rows = await tx.execute<{ id: string }>(sqlTag`
+    SELECT id FROM consignees WHERE id = ${consigneeId}
+  `);
+  return rows.length > 0;
+}
+
+/**
  * SELECT one address by id. Returns null if missing or RLS-hidden.
  * Mirrors findConsigneeById posture.
  */
