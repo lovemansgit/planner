@@ -25,3 +25,10 @@ ORCH-PARK — PR #394, head `328ce16`. Parked `needs-directional-ruling` (Shape-
 
 **Clears on:** Love's one-line confirm → merges → rides tonight's routine promote.
 
+## PR #396 — fix(admin): merchant detail AUTH METHOD shows effective method (override-aware)
+
+- Label: `parked-t2`
+- Head SHA: `399c0d960339dc62e1320578150748d91dbca374`
+
+(no ORCH-PARK summary comment found — the builder must post one when parking)
+
