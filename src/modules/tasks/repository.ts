@@ -1439,6 +1439,59 @@ export async function markTaskAddressOverridden(
 }
 
 /**
+ * R5 (calendar-management lane Phase 1, plan-PR #335 §2.R5; Day-53
+ * correction) — apply a forward address override to EVERY upcoming
+ * materialized task on the subscription (`delivery_date >=
+ * start_date`, no upper date bound). Bulk sibling of
+ * `markTaskAddressOverridden` directly above: same SET shape
+ * (address_id + the 'pending_update' CASE flip on pushed rows,
+ * migration 0029). Same terminal+SKIPPED status exclusion as the
+ * one-off variant.
+ *
+ * Day-53 ruling correction (Love, 2026-06-11): the Day-52 ruling's
+ * "CURRENT_DATE + 14 days" window was stale framing from before the
+ * Day-28 horizon bump (MATERIALIZATION_HORIZON_DAYS = 21,
+ * dubai-date.ts). A literal 14-day bound left materialized tasks
+ * 15-21 days out on the OLD address forever — the materializer's
+ * INSERTs are ON CONFLICT DO NOTHING, so re-materialization never
+ * repairs an existing row. No upper bound is the correct shape: no
+ * tasks exist beyond the horizon, and the query stays correct across
+ * any future horizon change.
+ *
+ * Returns ALL updated rows (RETURNING tuple per row) so the caller can
+ * fan out SF updates for the pushed subset — mirrors
+ * `markTasksCanceledInWindow` (R2) below. Empty array = nothing
+ * materialized from start_date on; the exception row alone carries the
+ * override forward.
+ */
+export async function markTasksAddressOverriddenForward(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  startDate: string,
+  addressId: Uuid,
+): Promise<readonly { taskId: Uuid; externalTrackingNumber: string | null }[]> {
+  const result = (await tx.execute(sqlTag`
+    UPDATE tasks
+    SET address_id = ${addressId},
+        outbound_sync_state = CASE
+          WHEN external_tracking_number IS NOT NULL THEN 'pending_update'
+          ELSE outbound_sync_state
+        END
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date >= ${startDate}
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'SKIPPED')
+    RETURNING id, external_tracking_number
+  `)) as readonly { id: string; external_tracking_number: string | null }[];
+
+  return result.map((row) => ({
+    taskId: row.id as Uuid,
+    externalTrackingNumber: row.external_tracking_number,
+  }));
+}
+
+/**
  * Day-16 / Block 4-C Service B — bulk-flip tasks in a pause window
  * to internal_status='CANCELED'. Used by `pauseSubscription` step 9
  * per merged plan §4.1 + brief §3.1.7.
