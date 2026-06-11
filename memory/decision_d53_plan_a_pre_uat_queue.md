@@ -34,6 +34,14 @@ builder pairs in parallel under the scaling-rules memo** (see "Dependencies").
 | **merchant secret-method switches** | Per-merchant SF auth-method override (api_key vs oauth) — the override model already built+parked (#387/#388, migration 0030). | **Gated on the Demo Bistro proof** (the api_key wire-proof on the Demo Bistro merchant). Runbook: `memory/runbooks/day-54-demo-bistro-apikey-proof.md`. |
 | **Tier-2 redesign** | The Tier-2 UI/UX structural recommendations from the audit. | **Gated on Love's item-by-item ruling session** — Love rules each Tier-2 item before it's built. Source: `memory/uiux_audit_day53.md` (Tier-2 split). |
 
+> **Forward-note (Day-53 PM, append-only):** the Tier-2 ruling session above
+> has happened — Love ruled all Tier-2 items build PRE-UAT except 8a proper
+> (responsive-nav, post-UAT), with click-reduction flows still parking
+> per-flow; H3 moves to the durable-photo-storage lane; Tier-2 UI runs in
+> Session B's lane after R6. Ruling of record:
+> `memory/decision_d53_tier2_pre_uat_ruling.md`. The original gate row is
+> unchanged above.
+
 ## Clearance mechanic in force (Love's amendment, 2026-06-11)
 
 > "Love's amendment, 2026-06-11: firing a dispatch prompt constitutes Love's
