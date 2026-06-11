@@ -97,8 +97,9 @@ delivery** — do them **last**, and on deliveries you won't need afterward.
 ### H. Pause / resume (reversible)
 
 - **Do (pause):** Fatima → Calendar → open a delivery → **Pause from this date** → set a short window (a couple of days) → confirm.
-- **Should see:** the deliveries inside the window switch to **Canceled**; the subscription's end date extends to make up for them.
+- **Should see:** the deliveries inside the window switch to **Canceled**; the subscription's end date extends to make up for them. SuiteFleet is told to cancel the paused deliveries.
 - **Do (resume / undo):** _(if the build exposes a resume action, use it to restore; otherwise this is the one window to leave paused for the demo)._ Flag to Love if resume isn't surfaced.
+- **⚠️ Known limitation to say out loud (don't skip):** **Resume restores the schedule in Planner immediately; the delivery-vendor (SuiteFleet) re-sync for resumed deliveries ships right after this UAT.** So on resume the calendar is correct in Planner, but re-activating those deliveries on SuiteFleet's side is the very next build (R16). Demo this honestly — it's a known, scheduled gap, not a surprise.
 - **State note:** changes the calendar but is designed to be reversible — keep the paused window small.
 
 ### I. Skip — ⚠️ consumes a delivery

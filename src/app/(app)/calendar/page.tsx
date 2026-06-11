@@ -14,7 +14,7 @@
 //
 // URL state (read at the page boundary, threaded through children
 // without intermediate parsing):
-//   view   week | month | day      (default: week)
+//   view   week | month | day      (default: month — Day-53 Love ruling)
 //   week   ISO YYYY-MM-DD Monday  (default: current week's Monday in Asia/Dubai)
 //   month  ISO YYYY-MM-01         (default: current month start)
 //   date   ISO YYYY-MM-DD         (default: today in Dubai)
@@ -82,8 +82,13 @@ interface CalendarPageProps {
 }
 
 function parseView(raw: string | undefined): CalendarConsolidatedView {
-  if (raw === "month" || raw === "day") return raw;
-  return "week";
+  // Day-53 (Love's ruling): all calendar views default to MONTHLY. Week +
+  // day remain available via explicit ?view= (no view/toggle removed); only
+  // the no-param landing default changes from week → month. Supersedes
+  // brief §6.2.1 / §3.3.3 week-default per the Day-53 calendar-default
+  // amendment.
+  if (raw === "week" || raw === "day") return raw;
+  return "month";
 }
 
 function isIsoDate(raw: string | undefined): raw is string {

@@ -9,7 +9,7 @@
 //
 // Close affordances: ESC, backdrop click, X button. Pattern matches
 // CrmStateModal + DayActionPopover (role="dialog", aria-modal="true",
-// bg-navy/20 overlay, click-outside via ref containment check).
+// bg-scrim overlay, click-outside via ref containment check).
 //
 // Image rendering: plain <img src={url}>. No remote-loader config; the
 // SF-side URLs are stored verbatim per Option (A) plain string array
@@ -71,7 +71,7 @@ export function PodLightboxModal({
       aria-modal="true"
       aria-label={title}
       onMouseDown={handleBackdropMousedown}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-navy/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
     >
       <div
         ref={panelRef}
@@ -85,13 +85,13 @@ export function PodLightboxModal({
             type="button"
             onClick={onClose}
             aria-label="Close proof-of-delivery viewer"
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
+            className="rounded-sm text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:text-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
           >
             ✕
           </button>
         </div>
 
-        <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-stone-200/30">
+        <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-ivory">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={current}
@@ -111,7 +111,7 @@ export function PodLightboxModal({
                 onClick={() =>
                   setIndex((i) => (i - 1 + photos.length) % photos.length)
                 }
-                className="absolute left-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary/90 px-3 py-2 text-sm text-navy hover:bg-surface-primary"
+                className="absolute left-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary px-3 py-2 text-sm text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
               >
                 ←
               </button>
@@ -119,7 +119,7 @@ export function PodLightboxModal({
                 type="button"
                 aria-label="Next photo"
                 onClick={() => setIndex((i) => (i + 1) % photos.length)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary/90 px-3 py-2 text-sm text-navy hover:bg-surface-primary"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm border border-stone-200 bg-surface-primary px-3 py-2 text-sm text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
               >
                 →
               </button>

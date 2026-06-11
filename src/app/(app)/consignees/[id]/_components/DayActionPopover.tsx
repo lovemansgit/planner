@@ -669,13 +669,13 @@ function outboundSyncStateBadge(
     case "pending_cancel":
       return {
         label: "SF cancel pending",
-        classes: "bg-stone-100 text-stone-700",
+        classes: "bg-ivory text-[color:var(--color-stone-600)]",
       };
     case "pending_reschedule":
       // Phase 2 — defensive render; Phase 1 code does not write this state.
       return {
         label: "SF reschedule pending",
-        classes: "bg-stone-100 text-stone-700",
+        classes: "bg-ivory text-[color:var(--color-stone-600)]",
       };
     case "pending_update":
       // R4/R5 (plan-PR #335 OQ-1 ruling (a) / migration 0029) — an
@@ -683,12 +683,12 @@ function outboundSyncStateBadge(
       // in flight. Same stone palette as the cancel/reschedule pendings.
       return {
         label: "Sending to SuiteFleet",
-        classes: "bg-stone-100 text-stone-700",
+        classes: "bg-ivory text-[color:var(--color-stone-600)]",
       };
     case "failed":
       return {
         label: "SF sync failed — see ops",
-        classes: "bg-amber-50 text-amber-900",
+        classes: "bg-amber-100 text-amber-deep",
       };
     case "pending":
     case "synced":
@@ -792,14 +792,14 @@ export function DayActionPopover({
         ref={triggerRef}
         type="button"
         onClick={openPopover}
-        className={`block w-full rounded-sm px-1.5 py-1 text-left text-[10px] font-medium uppercase tracking-[0.1em] transition-opacity duration-[120ms] ease-out hover:opacity-80 ${statusClasses}`}
+        className={`block w-full rounded-sm px-1.5 py-1 text-left text-[10px] font-medium uppercase tracking-[0.1em] transition-opacity duration-[120ms] ease-out hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1 `}
       >
         <span className="block truncate">{statusLabel}</span>
         <span className="block tabular-nums opacity-70">{timeWindow}</span>
         <AddressIndicator label={addressLabel} />
         {syncBadge !== null ? (
           <span
-            className={`mt-0.5 block truncate rounded-sm px-1 py-px text-[8px] font-medium uppercase tracking-[0.08em] ${syncBadge.classes}`}
+            className={`mt-0.5 block truncate rounded-sm px-1 py-px text-[8px] font-medium uppercase tracking-[0.1em] ${syncBadge.classes}`}
           >
             {syncBadge.label}
           </span>
@@ -814,7 +814,7 @@ export function DayActionPopover({
         */}
         {failedPush ? (
           <span
-            className="mt-0.5 block truncate rounded-sm bg-amber-50 px-1 py-px text-[8px] font-medium uppercase tracking-[0.08em] text-amber-900"
+            className="mt-0.5 block truncate rounded-sm bg-amber-100 px-1 py-px text-[8px] font-medium uppercase tracking-[0.1em] text-amber-deep"
           >
             Failed push — see ops
           </span>
@@ -826,7 +826,7 @@ export function DayActionPopover({
           role="dialog"
           aria-modal="true"
           aria-label={`Delivery on ${deliveryDate}`}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-navy/20 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
         >
           <div
             ref={panelRef}
@@ -874,7 +874,7 @@ export function DayActionPopover({
                 <div className="flex items-center justify-between">
                   <dt className="text-[color:var(--color-text-secondary)]">SuiteFleet push</dt>
                   <dd>
-                    <span className="inline-flex items-center rounded-sm bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-amber-900">
+                    <span className="inline-flex items-center rounded-sm bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-amber-deep">
                       Failed — see ops
                     </span>
                   </dd>
@@ -906,7 +906,7 @@ export function DayActionPopover({
                     key={action.mode}
                     type="button"
                     onClick={() => setMode(action.mode)}
-                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy"
+                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy focus-visible:outline-none focus-visible:border-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
                   >
                     <span className="block text-xs font-medium text-navy">{action.label}</span>
                     <span className="mt-0.5 block text-[10px] text-[color:var(--color-text-secondary)]">
@@ -918,7 +918,7 @@ export function DayActionPopover({
                   <button
                     type="button"
                     onClick={() => setTimelineOpen(true)}
-                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy"
+                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy focus-visible:outline-none focus-visible:border-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
                   >
                     <span className="block text-xs font-medium text-navy">View task timeline</span>
                     <span className="mt-0.5 block text-[10px] text-[color:var(--color-text-secondary)]">
@@ -932,7 +932,7 @@ export function DayActionPopover({
                 <button
                   type="button"
                   onClick={() => setMode("menu")}
-                  className="mt-5 text-[10px] uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy"
+                  className="mt-5 text-[10px] uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:text-navy focus-visible:underline focus-visible:underline-offset-2"
                 >
                   ← Back to actions
                 </button>
@@ -1003,7 +1003,7 @@ export function DayActionPopover({
               <button
                 type="button"
                 onClick={closePopover}
-                className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy"
+                className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] transition-opacity duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:text-navy focus-visible:underline focus-visible:underline-offset-2"
               >
                 Close
               </button>

@@ -53,7 +53,7 @@ export function ConsigneesTable({ rows, query }: Props) {
               <div className="flex items-center gap-2">
                 <Link
                   href={`/consignees/${c.id}`}
-                  className="text-navy hover:underline"
+                  className="rounded-sm text-navy hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
                 >
                   {c.name}
                 </Link>
@@ -84,7 +84,7 @@ export function ConsigneesTable({ rows, query }: Props) {
 function NoTasksBadge() {
   return (
     <span
-      className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em]"
+      className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em]"
       style={{
         backgroundColor: "var(--color-amber-300)",
         color: "var(--color-amber-deep)",
