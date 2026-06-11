@@ -379,6 +379,7 @@ describe("addSubscriptionException — permission matrix", () => {
         addressOverrideId: ADDRESS_ID,
       }),
     ]); // 3. INSERT
+    mockExecute.mockResolvedValueOnce([]); // 4. R4 markTaskAddressOverridden — unit fixture date unmaterialized
 
     const ctx = ctxWith(["subscription:change_address_one_off"]);
     const result = await addSubscriptionException(ctx, SUBSCRIPTION_ID, input, { now: NOW });
@@ -779,6 +780,7 @@ describe("addSubscriptionException — audit emission per type", () => {
         addressOverrideId: ADDRESS_ID,
       }),
     ]);
+    mockExecute.mockResolvedValueOnce([]); // R4 markTaskAddressOverridden — unit fixture date unmaterialized
 
     const ctx = ctxWith(["subscription:change_address_one_off"]);
     await addSubscriptionException(

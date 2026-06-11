@@ -11,6 +11,7 @@
 import "server-only";
 
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
+import { sql as sqlTag } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { withServiceRole } from "@/shared/db";
@@ -119,15 +120,33 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
   try {
     const dlqRow = await withServiceRole(
       `queue:update_task_failed insert ${taskId}`,
-      async (tx) =>
-        insertOutboundPushFailure(tx, tenantId, {
+      async (tx) => {
+        const row = await insertOutboundPushFailure(tx, tenantId, {
           taskId,
           operation: "update",
           correlationId,
           failureReason,
           failurePayload,
           retryCount: qstashFailure.retried ?? 0,
-        }),
+        });
+
+        // R4/R5 (plan-PR #335 OQ-1 ruling (a) / migration 0029): flip
+        // outbound_sync_state to 'failed' alongside the DLQ row insert,
+        // in the same withServiceRole tx — mirrors cancel-task-failed.
+        // Gates on 'pending_update' so pre-R4 update flows (date /
+        // window / notes, which never wrote an in-flight state) are
+        // unchanged, as are rows already 'failed'. The DLQ row IS the
+        // authoritative failure record; the column flip is the
+        // read-side UI signal.
+        await tx.execute(sqlTag`
+          UPDATE tasks
+          SET outbound_sync_state = 'failed'
+          WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND outbound_sync_state = 'pending_update'
+        `);
+
+        return row;
+      },
     );
     requestLog.warn(
       {
@@ -137,7 +156,7 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
         http_status: qstashFailure.status,
         retried_count: qstashFailure.retried,
       },
-      "update-task-failed: recorded to outbound_push_failures DLQ",
+      "update-task-failed: recorded to outbound_push_failures DLQ + outbound_sync_state flipped to 'failed' for pending_update rows",
     );
     return NextResponse.json(
       { outcome: "recorded", outbound_push_failure_id: dlqRow.id },

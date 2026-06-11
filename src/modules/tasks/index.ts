@@ -64,6 +64,7 @@ export {
   listTasks,
   printLabelsForTasks,
   updateTask,
+  updateTaskAndPushOutbound,
   PRINT_LABELS_FORMAT,
   PRINT_LABELS_MAX_TASKS_PER_REQUEST,
   type BulkCreateResult,

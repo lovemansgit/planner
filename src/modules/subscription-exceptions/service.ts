@@ -46,9 +46,10 @@ import type { Actor, RequestContext } from "@/shared/tenant-context";
 import type { Uuid } from "@/shared/types";
 
 import { emit } from "@/modules/audit";
+import type { ConsigneeSnapshot } from "@/modules/integration";
 import { requirePermission } from "@/modules/identity";
 import type { PermissionId } from "@/modules/identity/permissions";
-import { enqueueCancelTask } from "@/modules/task-outbound-queue";
+import { enqueueCancelTask, enqueueUpdateTask } from "@/modules/task-outbound-queue";
 import { invokeOnDemandMaterialization } from "@/modules/task-materialization/service";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
@@ -57,7 +58,13 @@ import { captureException } from "@/shared/sentry-capture";
 // addSubscriptionException to reject malformed operator inputs
 // (passing consignee A's address as override for consignee B's
 // subscription within same tenant; RLS does NOT catch this).
-import { findAddressForConsignee } from "@/modules/subscription-addresses";
+// R4 (plan-PR #335 §2.R4) adds buildConsigneeSnapshotForAddress —
+// the ruled option B server-side ConsigneeSnapshot construction for
+// the address-override SF push.
+import {
+  buildConsigneeSnapshotForAddress,
+  findAddressForConsignee,
+} from "@/modules/subscription-addresses";
 
 import {
   computeCompensatingDate as pureComputeCompensatingDate,
@@ -85,7 +92,7 @@ import {
   listForConsigneeCalendar,
   listRecentExceptionsForSubscription,
 } from "./repository";
-import { markTaskSkipped } from "@/modules/tasks/repository";
+import { markTaskAddressOverridden, markTaskSkipped } from "@/modules/tasks/repository";
 
 // -----------------------------------------------------------------------------
 // Helpers (mirrors subscriptions/service.ts pattern — four-line copies
@@ -558,6 +565,39 @@ export async function addSubscriptionException(
       skippedTask = await markTaskSkipped(tx, tenantId, subscriptionId, skipDate);
     }
 
+    // 12b. R4 (plan-PR #335 §2.R4, Love-ruled Day-52) — one-off address
+    // override backfills the single materialized task's address_id and
+    // flips pushed rows to outbound_sync_state='pending_update'
+    // (migration 0029). null result = unmaterialized date: the
+    // exception row is the durable record and the materializer CTE's
+    // one-off branch applies it when the horizon reaches the date —
+    // no task UPDATE, no outbound enqueue (sub-case 13a analog).
+    //
+    // For pushed tasks the ConsigneeSnapshot for the SF update is built
+    // HERE, inside the tx (ruled option B — server-side, from the
+    // override address row + consignee row; ownership was validated at
+    // step 5b in this same tx). The enqueue itself stays post-commit,
+    // mirroring the skip→cancel posture.
+    let overriddenTask: { taskId: Uuid; externalTrackingNumber: string | null } | null = null;
+    let overrideSnapshot: ConsigneeSnapshot | null = null;
+    if (input.type === "address_override_one_off") {
+      overriddenTask = await markTaskAddressOverridden(
+        tx,
+        tenantId,
+        subscriptionId,
+        skipDate,
+        input.addressOverrideId as Uuid,
+      );
+      if (overriddenTask !== null && overriddenTask.externalTrackingNumber !== null) {
+        overrideSnapshot = await buildConsigneeSnapshotForAddress(
+          tx,
+          tenantId,
+          subscription.consigneeId,
+          input.addressOverrideId as Uuid,
+        );
+      }
+    }
+
     return {
       replay: null,
       exception,
@@ -565,6 +605,8 @@ export async function addSubscriptionException(
       compensatingDate,
       endDateExtended,
       skippedTask,
+      overriddenTask,
+      overrideSnapshot,
     } as const;
   });
 
@@ -574,7 +616,8 @@ export async function addSubscriptionException(
     return idempotentReplayResult(txResult.replay);
   }
 
-  const { exception, newEndDate, endDateExtended, skippedTask } = txResult;
+  const { exception, newEndDate, endDateExtended, skippedTask, overriddenTask, overrideSnapshot } =
+    txResult;
 
   // Day-29 §D(2) Phase-1 (plan-PR #302 §7 + §3.6 OQ-3 ruling Option A):
   // compute the outbound_emission metadata field for the
@@ -709,6 +752,82 @@ export async function addSubscriptionException(
         exception_id: exception.id,
       });
       throw err;
+    }
+  }
+
+  // R4 (plan-PR #335 §2.R4) — outbound SF update enqueue for the one-off
+  // address override on a pushed task. Same post-commit posture as the
+  // skip→cancel block above: local DB is committed; a publisher throw
+  // does NOT roll back — we re-throw so the form action surfaces "saved
+  // locally; SF push pending", and the task row stays in
+  // outbound_sync_state='pending_update' (set by markTaskAddressOverridden
+  // in the tx) until the update-task consumer's success convergence or
+  // ops triage. The typed task.address_override_pushed event fires only
+  // on a SUCCESSFUL enqueue (R3 emit-then-throw precedent: the event has
+  // no failure field, so it can only honestly mean "push enqueued").
+  //
+  // overrideSnapshot null here is a should-not-happen race (ownership
+  // was validated in the same tx that built it): warn + skip the
+  // enqueue rather than fail the committed operation; the row stays in
+  // 'pending_update' for ops triage via the partial index.
+  if (
+    input.type === "address_override_one_off" &&
+    overriddenTask !== null &&
+    overriddenTask.externalTrackingNumber !== null
+  ) {
+    if (overrideSnapshot === null) {
+      logger.warn(
+        {
+          operation: "address_override_enqueue_update_task",
+          tenant_id: tenantId,
+          task_id: overriddenTask.taskId,
+          exception_id: exception.id,
+        },
+        "addSubscriptionException: override snapshot unavailable post-commit — skipping SF enqueue; task stays pending_update for ops triage",
+      );
+    } else {
+      try {
+        await enqueueUpdateTask({
+          tenant_id: tenantId,
+          task_id: overriddenTask.taskId,
+          awb: overriddenTask.externalTrackingNumber,
+          patch: { consignee: overrideSnapshot },
+          correlation_id: exception.correlationId,
+        });
+      } catch (err) {
+        logger.error(
+          {
+            operation: "address_override_enqueue_update_task",
+            tenant_id: tenantId,
+            task_id: overriddenTask.taskId,
+            exception_id: exception.id,
+            error: err instanceof Error ? err.message : String(err),
+          },
+          "addSubscriptionException: local DB committed; QStash update enqueue failed (caller surfaces)",
+        );
+        captureException(err, {
+          component: "subscription_exceptions_service_add_exception",
+          operation: "enqueue_update_task",
+          tenant_id: tenantId,
+          task_id: overriddenTask.taskId,
+          exception_id: exception.id,
+        });
+        throw err;
+      }
+
+      await emit({
+        ...baseEmit,
+        eventType: "task.address_override_pushed",
+        resourceType: "task",
+        resourceId: overriddenTask.taskId,
+        metadata: {
+          task_id: overriddenTask.taskId,
+          awb: overriddenTask.externalTrackingNumber,
+          exception_id: exception.id,
+          address_override_id: exception.addressOverrideId,
+          correlation_id: exception.correlationId,
+        },
+      });
     }
   }
 

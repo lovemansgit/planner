@@ -1382,6 +1382,63 @@ export async function markTaskSkipped(
 }
 
 /**
+ * R4 (calendar-management lane Phase 1, plan-PR #335 §2.R4) — apply a
+ * one-off address override to the single materialized task at
+ * (subscription_id, delivery_date). Sibling of `markTaskSkipped`
+ * directly above; same single-row UPDATE-by-tuple shape, same
+ * return contract, same CASE flip on outbound_sync_state — but to
+ * 'pending_update' (migration 0029) instead of 'pending_cancel',
+ * because the outbound leg is an SF update, not a cancel.
+ *
+ * Status filter additionally excludes 'SKIPPED' (markTaskSkipped's
+ * own target state): a skipped delivery has no SF-live row to
+ * re-address — its cancel is already in flight or done — and
+ * re-pointing its address locally would imply a delivery that is not
+ * happening.
+ *
+ * Return contract (mirrors markTaskSkipped):
+ *   - { taskId, externalTrackingNumber }: task existed and now
+ *     carries the override address. externalTrackingNumber null ⇒
+ *     never pushed; the caller skips the SF enqueue (cron's first
+ *     push reads tasks.address_id → already correct).
+ *   - null: no materialized task at that date (sub-case 13a analog).
+ *     The subscription_exceptions row IS the durable record; the
+ *     materializer CTE's one-off branch (cte-builder.ts
+ *     resolved_addresses layer 1) applies the override when the
+ *     horizon reaches that date. No outbound enqueue.
+ */
+export async function markTaskAddressOverridden(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  deliveryDate: string,
+  addressId: Uuid,
+): Promise<{ taskId: Uuid; externalTrackingNumber: string | null } | null> {
+  const result = (await tx.execute(sqlTag`
+    UPDATE tasks
+    SET address_id = ${addressId},
+        outbound_sync_state = CASE
+          WHEN external_tracking_number IS NOT NULL THEN 'pending_update'
+          ELSE outbound_sync_state
+        END
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date = ${deliveryDate}
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'SKIPPED')
+    RETURNING id, external_tracking_number
+  `)) as readonly { id: string; external_tracking_number: string | null }[];
+
+  if (result.length === 0) {
+    return null;
+  }
+  const row = result[0];
+  return {
+    taskId: row.id as Uuid,
+    externalTrackingNumber: row.external_tracking_number,
+  };
+}
+
+/**
  * Day-16 / Block 4-C Service B — bulk-flip tasks in a pause window
  * to internal_status='CANCELED'. Used by `pauseSubscription` step 9
  * per merged plan §4.1 + brief §3.1.7.

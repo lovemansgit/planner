@@ -7,6 +7,9 @@
 //     imports it for its address_override branches per §B B1)
 //   - listAddressesForConsignee (Day-22 / PR-B; picker source for
 //     calendar popover address-override actions 4 + 5 per brief §3.3.3)
+//   - buildConsigneeSnapshotForAddress (R4/R5 — server-side
+//     ConsigneeSnapshot for address-bearing outbound pushes; option B
+//     per the Day-52 ruling on followup_address_edit_sf_outbound_gap)
 
 export type {
   AddressOwnershipRow,
@@ -19,5 +22,9 @@ export type {
   SubscriptionForRotation,
 } from "./types";
 
-export { findAddressForConsignee, listAddressesForConsignee } from "./repository";
+export {
+  buildConsigneeSnapshotForAddress,
+  findAddressForConsignee,
+  listAddressesForConsignee,
+} from "./repository";
 export { changeAddressRotation, listConsigneeAddresses } from "./service";

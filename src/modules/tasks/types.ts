@@ -52,11 +52,14 @@ export type TaskInternalStatus =
   | "SKIPPED";
 
 /**
- * 5-value outbound sync state. Mirrors the CHECK constraint on
+ * 6-value outbound sync state. Mirrors the CHECK constraint on
  * tasks.outbound_sync_state. Originally introduced in 0026 (Day-29
  * §D(2) Phase-1 per plan-PR #302 §6.3 / §3.6 OQ-7 ruling Option A);
  * extended to admit 'pending' in 0028 per plan-PR #317 §6 OQ-2
- * ruling (b) — the pre-push truthful default.
+ * ruling (b) — the pre-push truthful default; extended to admit
+ * 'pending_update' in 0029 per plan-PR #335 §5 OQ-1 ruling (a) —
+ * in-flight visibility for operator-initiated update-style pushes
+ * (R4/R5 address overrides).
  *
  * Tracks the per-task lifecycle of outbound state vs SuiteFleet:
  * both the create-push lane (cron / ad-hoc / subscription INSERT →
@@ -78,6 +81,13 @@ export type TaskInternalStatus =
  *                          /api/queue/cancel-task-failed.
  * - 'pending_reschedule' — Phase 2 placeholder (move-to-date variant).
  *                          NOT written by Phase 1 code; CHECK admits.
+ * - 'pending_update'     — operator address override committed locally
+ *                          on a pushed task (R4 one-off / R5 forward);
+ *                          SF update queued. Flips to 'synced' on
+ *                          QStash 2xx success at /api/queue/update-task.
+ *                          Flips to 'failed' on failureCallback at
+ *                          /api/queue/update-task-failed. Requires
+ *                          migration 0029 on the live DB.
  * - 'failed'             — push or cancel failed; unresolved DLQ row
  *                          exists for ops triage. For create-push:
  *                          written by recordFailedPushAttempt in the
@@ -92,6 +102,7 @@ export type TaskOutboundSyncState =
   | "synced"
   | "pending_cancel"
   | "pending_reschedule"
+  | "pending_update"
   | "failed";
 
 /** 2-value task kind. Mirrors the CHECK constraint on tasks.task_kind. */

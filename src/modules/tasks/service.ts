@@ -88,7 +88,12 @@ import type { IsoTimestamp, Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
 
-import type { LastMileAdapter } from "../integration";
+import type { ConsigneeSnapshot, LastMileAdapter } from "../integration";
+
+// R4 ConsigneeSnapshot option B (Day-52 ruling) — server-side snapshot
+// construction for the addressId → consignee wire-mapping in
+// updateTaskAndPushOutbound.
+import { buildConsigneeSnapshotForAddress } from "../subscription-addresses";
 
 import {
   enqueueBulkCancelTasks,
@@ -2048,18 +2053,22 @@ export async function updateTaskAndPushOutbound(
   }
 
   // Build the integration-internal patch from the changed-field patch.
-  // Only fields that have a wire-mapping land in the SF merge-patch:
+  // Every field with a wire-mapping lands in the SF merge-patch:
   //   - delivery_date / time-window → window
   //   - notes → notes
-  // address change (addressId) requires building a ConsigneeSnapshot from
-  // the new address row — the form action can either pre-build the snapshot
-  // and pass it via this wrapper's future ConsigneeSnapshot patch parameter
-  // OR rely on the cron-side path to re-push. For v1 the address-change
-  // outbound push is left to the form action; it constructs the snapshot
-  // client-side and calls SuiteFleetTaskClient via a dedicated service-fn
-  // (Day-22+ scope). Wire-mappable fields here cover delivery date + window
-  // + notes only.
-  const integrationPatch: { window?: { date: string; startTime: string; endTime: string }; notes?: string | null } = {};
+  //   - addressId → consignee (full ConsigneeSnapshot replacement — the
+  //     wire has no address-only mutation; same convention as
+  //     TaskCreateRequest)
+  // The snapshot is built INLINE, SERVER-SIDE, from the new address row
+  // + consignee row (Day-52 ruling: option B on
+  // memory/followup_address_edit_sf_outbound_gap.md — retires the
+  // "next scheduled push pass" deferral on this path; the extra DB
+  // round-trip per address edit is the accepted cost).
+  const integrationPatch: {
+    window?: { date: string; startTime: string; endTime: string };
+    notes?: string | null;
+    consignee?: ConsigneeSnapshot;
+  } = {};
   if (
     patch.deliveryDate !== undefined ||
     patch.deliveryStartTime !== undefined ||
@@ -2074,10 +2083,36 @@ export async function updateTaskAndPushOutbound(
   if (patch.notes !== undefined) {
     integrationPatch.notes = updated.notes ?? null;
   }
+  if (patch.addressId !== undefined) {
+    // updateTask already validated the address-FK (ownership +
+    // existence) before committing; a null snapshot here is a
+    // should-not-happen race (address deleted between commit and this
+    // read). Warn + push whatever other fields changed rather than
+    // fail the committed edit.
+    const snapshot = await withTenant(ctx.tenantId as Uuid, async (tx) =>
+      buildConsigneeSnapshotForAddress(
+        tx,
+        ctx.tenantId as Uuid,
+        updated.consigneeId,
+        patch.addressId as Uuid,
+      ),
+    );
+    if (snapshot === null) {
+      logger.warn(
+        {
+          operation: "update_task_and_push_outbound_snapshot",
+          tenant_id: ctx.tenantId,
+          task_id: taskId,
+          address_id: patch.addressId,
+        },
+        "updateTaskAndPushOutbound: address snapshot unavailable post-commit — SF patch omits consignee",
+      );
+    } else {
+      integrationPatch.consignee = snapshot;
+    }
+  }
 
-  // Empty integration patch (e.g. only addressId changed without consignee
-  // snapshot mapping wired) → skip enqueue. Future Day-22+ work extends the
-  // wrapper to handle address-change outbound by building the snapshot.
+  // Empty integration patch → nothing wire-mappable changed; skip enqueue.
   if (Object.keys(integrationPatch).length === 0) {
     return updated;
   }
