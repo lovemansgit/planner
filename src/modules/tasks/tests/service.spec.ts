@@ -1788,6 +1788,51 @@ describe("getTaskHistory — Day-52 / R8", () => {
     expect(result.nextCursor).toEqual({ occurredAt: last.occurredAt, id: last.id });
   });
 
+  it("strips non-allow-listed metadata keys server-side — hidden fields never leave the service (Day-53 UAT hardening)", async () => {
+    // followup_r8_server_side_metadata_strip.md: pre-fix, getTaskHistory
+    // returned each event's full metadata jsonb and the strip happened
+    // only client-side at render — last_error / correlation UUIDs were
+    // fishable from the network payload. Post-fix the R8 allow-list is
+    // applied in the service, so the wire payload equals the rendered set.
+    mockFindById.mockResolvedValueOnce(taskFixture({ subscriptionId: null }));
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "subscription.auto_paused",
+        metadata: {
+          // hidden: plumbing + raw vendor text
+          last_error: "SF 502: upstream gateway error at /api/tasks",
+          correlation_id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+          idempotency_key: "key-MPL-123-2026",
+          webhook_events_id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+          sf_action: "TASK_HAS_BEEN_UPDATED",
+          outbound_emission: { kind: "cancel" },
+          // allowed: operator-meaningful
+          reason: "operator-entered reason",
+          changed_fields: [{ field: "delivery_date", previous: "a", new: "b" }],
+          pushed_task_count: 2,
+          is_auto_resume: false,
+        },
+      }),
+    ]);
+
+    const result = await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+
+    expect(result.entries).toHaveLength(1);
+    const metadata = result.entries[0].metadata;
+    expect(metadata).not.toHaveProperty("last_error");
+    expect(metadata).not.toHaveProperty("correlation_id");
+    expect(metadata).not.toHaveProperty("idempotency_key");
+    expect(metadata).not.toHaveProperty("webhook_events_id");
+    expect(metadata).not.toHaveProperty("sf_action");
+    expect(metadata).not.toHaveProperty("outbound_emission");
+    expect(metadata).toEqual({
+      reason: "operator-entered reason",
+      changed_fields: [{ field: "delivery_date", previous: "a", new: "b" }],
+      pushed_task_count: 2,
+      is_auto_resume: false,
+    });
+  });
+
   it("threads the before-cursor into the task-event query", async () => {
     mockFindById.mockResolvedValueOnce(taskFixture());
     const before = {
