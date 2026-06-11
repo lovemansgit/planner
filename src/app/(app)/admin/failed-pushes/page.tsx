@@ -21,6 +21,7 @@
 
 import { randomUUID } from "node:crypto";
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { SearchBar } from "@/components/SearchBar";
@@ -74,6 +75,14 @@ export default async function FailedPushesAdminPage({
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Unresolved task pushes that hit the dead-letter queue. Retry one or many; bulk retry
             paces at 5 requests per second so SuiteFleet doesn&apos;t get hammered.
+          </p>
+          <p className="mt-2 text-sm">
+            <Link
+              href="/admin/failed-pushes/resolved"
+              className="text-[color:var(--color-text-secondary)] underline underline-offset-2 hover:text-navy"
+            >
+              View resolved →
+            </Link>
           </p>
         </header>
 

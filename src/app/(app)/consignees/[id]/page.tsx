@@ -75,6 +75,7 @@ import {
   resolveCalendarView,
 } from "./_components/CalendarViewToggle";
 import { CalendarYearView } from "./_components/CalendarYearView";
+import { AddAddressDialog } from "./_components/AddAddressDialog";
 import { AdHocTaskDialog } from "./_components/AdHocTaskDialog";
 import { CrmStateBadge, CRM_STATE_LABELS } from "./_components/CrmStateBadge";
 import { CrmStateModal } from "./_components/CrmStateModal";
@@ -221,9 +222,13 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     // Single SELECT with two count subqueries (no joins).
     onboardStats = await getConsigneeOnboardingStats(ctx, id as Uuid);
 
-    // For the Overview empty state, fetch addresses (Phase-2 multi-
-    // address would expand the dropdown; v1 has one primary).
-    if (activeTab === "overview" && canAddAdHocTask) {
+    // Overview fetches the address book unconditionally (Day-53): the
+    // tab now renders an Addresses section (all rows, primary badged)
+    // alongside the ad-hoc dialog's dropdown, and the add-address
+    // dialog needs the page revalidation to show the new row. The page
+    // itself already requires consignee:read, which is the same gate
+    // listConsigneeAddresses enforces.
+    if (activeTab === "overview") {
       overviewAddresses = await listConsigneeAddresses(ctx, id as Uuid);
     }
 
@@ -404,10 +409,12 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
               stats={onboardStats}
               canCreateSubscription={canCreateSubscription}
               canAddAdHocTask={canAddAdHocTask}
+              canEditConsignee={canEditConsignee}
               addresses={overviewAddresses.map((a) => ({
                 id: a.id,
                 label: `${a.label} — ${a.line}`,
               }))}
+              addressBook={overviewAddresses}
             />
           ) : null}
           {activeTab === "history" ? <HistoryTab events={history} /> : null}
@@ -497,7 +504,11 @@ interface OverviewTabProps {
   readonly stats: { readonly subscriptionCount: number; readonly taskCount: number };
   readonly canCreateSubscription: boolean;
   readonly canAddAdHocTask: boolean;
+  readonly canEditConsignee: boolean;
   readonly addresses: readonly { readonly id: string; readonly label: string }[];
+  // Day-53 — full address rows for the Addresses section (the ad-hoc
+  // dialog keeps the compact {id, label} shape above).
+  readonly addressBook: readonly ConsigneeAddressRow[];
 }
 
 function OverviewTab({
@@ -505,7 +516,9 @@ function OverviewTab({
   stats,
   canCreateSubscription,
   canAddAdHocTask,
+  canEditConsignee,
   addresses,
+  addressBook,
 }: OverviewTabProps) {
   // Day-25 / brief v1.12 §3.3.3 empty-state branch.
   const isEmpty = stats.subscriptionCount === 0 && stats.taskCount === 0;
@@ -589,6 +602,41 @@ function OverviewTab({
             <dd className="mt-0.5 max-w-prose text-navy">{consignee.addressLine}</dd>
           </div>
         </dl>
+      </section>
+
+      <section>
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+            Addresses
+          </p>
+          {canEditConsignee ? <AddAddressDialog consigneeId={consignee.id} /> : null}
+        </div>
+        {addressBook.length === 0 ? (
+          <p className="mt-2 text-sm text-[color:var(--color-text-secondary)]">
+            No addresses on file.
+          </p>
+        ) : (
+          <ul className="mt-2 divide-y divide-stone-200 border-y border-stone-200">
+            {addressBook.map((a) => (
+              <li key={a.id} className="flex items-baseline justify-between gap-4 py-2.5 text-sm">
+                <div>
+                  <span className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+                    {a.label}
+                  </span>
+                  <span className="ml-3 text-navy">{a.line}</span>
+                  <span className="ml-2 text-[color:var(--color-text-secondary)]">
+                    {a.district}
+                  </span>
+                </div>
+                {a.isPrimary ? (
+                  <span className="shrink-0 rounded-sm border border-green/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-green">
+                    Primary
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

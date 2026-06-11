@@ -26,7 +26,7 @@ import { sql as sqlTag } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
-import type { FailedPush, FailureReason, RecordFailedPushInput } from "./types";
+import type { FailedPush, FailureReason, RecordFailedPushInput, ResolvedFailedPush } from "./types";
 
 // -----------------------------------------------------------------------------
 // Row shape and mapper
@@ -356,4 +356,62 @@ export async function findFailedPushById(
   `);
   if (rows.length === 0) return null;
   return mapRow(rows[0]);
+}
+
+type ResolvedFailedPushRow = {
+  id: string;
+  task_id: string;
+  failure_reason: FailureReason;
+  http_status: number | null;
+  attempt_count: number;
+  first_failed_at: Date | string;
+  resolved_at: Date | string;
+  resolved_by_email: string | null;
+  resolution_notes: string | null;
+} & Record<string, unknown>;
+
+/**
+ * Day-53 R12 — SELECT every RESOLVED failed_pushes row for the tenant,
+ * newest resolution first. Read-only review-log query for
+ * /admin/failed-pushes/resolved (Path B per
+ * memory/followup_resolved_rows_visibility_gap.md).
+ *
+ * LEFT JOIN users (not INNER) so system-resolved rows
+ * (resolved_by IS NULL per the markFailedPushResolved convention) and
+ * rows whose resolver was since deleted both survive with a NULL
+ * email. Cross-module table read mirrors the existing
+ * `INNER JOIN tasks` in listUnresolvedByTenant.
+ */
+export async function listResolvedByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+): Promise<readonly ResolvedFailedPush[]> {
+  const rows = await tx.execute<ResolvedFailedPushRow>(sqlTag`
+    SELECT
+      fp.id,
+      fp.task_id,
+      fp.failure_reason,
+      fp.http_status,
+      fp.attempt_count,
+      fp.first_failed_at,
+      fp.resolved_at,
+      u.email AS resolved_by_email,
+      fp.resolution_notes
+    FROM failed_pushes fp
+    LEFT JOIN users u ON u.id = fp.resolved_by
+    WHERE fp.tenant_id = ${tenantId}
+      AND fp.resolved_at IS NOT NULL
+    ORDER BY fp.resolved_at DESC
+  `);
+  return rows.map((row) => ({
+    id: row.id,
+    taskId: row.task_id,
+    failureReason: row.failure_reason,
+    httpStatus: row.http_status,
+    attemptCount: row.attempt_count,
+    firstFailedAt: toIso(row.first_failed_at),
+    resolvedAt: toIso(row.resolved_at),
+    resolvedByEmail: row.resolved_by_email,
+    resolutionNotes: row.resolution_notes,
+  }));
 }

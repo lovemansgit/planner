@@ -4,7 +4,31 @@
 // invariants without needing to render React. Server components
 // (page.tsx) and the server actions (_actions.ts) both consume.
 
+import type { RegionAuthMethod } from "@/modules/credentials";
 import type { TenantStatus } from "@/modules/merchants/types";
+
+/**
+ * Effective SF auth method for a merchant — the override when set,
+ * else the region's default. `overrideActive` mirrors the credentials
+ * page semantics (`override !== null`, not a value diff against the
+ * region): an explicit override is annotated "(merchant override)"
+ * even when it equals the region default, because the merchant no
+ * longer follows future region changes.
+ *
+ * Pure helper; exported for unit-test coverage. Mirrors the resolver's
+ * `override ?? region.auth_method` selection in
+ * credentials/suitefleet-resolver.ts so admin surfaces and the
+ * outbound auth path can never disagree.
+ */
+export function merchantEffectiveAuthMethod(
+  override: RegionAuthMethod | null,
+  regionMethod: RegionAuthMethod,
+): { method: RegionAuthMethod; overrideActive: boolean } {
+  return {
+    method: override ?? regionMethod,
+    overrideActive: override !== null,
+  };
+}
 
 /**
  * Normalise raw user input for slug — lowercase + trim. Does NOT

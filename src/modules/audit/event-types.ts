@@ -879,6 +879,17 @@ const EVENT_TYPES_DRAFT = {
   // the part-2 service change (additive at the call-site, semantic
   // refinement at the registration).
 
+  "consignee.address.added": {
+    id: "consignee.address.added",
+    resource: "consignee",
+    action: "address.added",
+    description:
+      "Day 53 / T3. Operator added a non-primary address from the consignee detail page (the add-address surface built per Love's Day-53 EVE ruling — before production merchants onboard). Emitted post-commit, same as consignee.created. The address becomes selectable in the R4/R5 override pickers and assignable to rotation immediately; it changes no routing until an operator explicitly selects it.",
+    metadataNotes:
+      "consignee_id (uuid), address_id (uuid), label ('home' | 'office' | 'other'), is_primary (boolean — always false from this surface; primary changes are Phase-2 setPrimaryAddress).",
+    systemOnly: false,
+  },
+
   "consignee.crm_state.changed": {
     id: "consignee.crm_state.changed",
     resource: "consignee",
