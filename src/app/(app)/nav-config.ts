@@ -137,15 +137,20 @@ export function visibleLandingCards(
 // -----------------------------------------------------------------------------
 
 export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
-  // Calendar lives on a dedicated /admin/calendar route so the
-  // Transcorp variant renders under the (admin)/ shell + AdminTopNav.
-  // The tenant /calendar route keeps the tenant variant + tenant nav
-  // shell. Previously this entry pointed to /calendar which dropped
-  // Transcorp staff into the tenant nav (Day-24 dry-run bug, fixed
-  // PR #257). Day-24 PM reorder puts Calendar first to match the
-  // tenant NAV_ITEMS ordering — operator mental model is "calendar is
-  // the home view, lists are drill-downs."
-  { label: "Calendar", path: "/admin/calendar", permission: "task:read_all" },
+  // "Overview" (the fleet dashboard) lives on a dedicated /admin/calendar
+  // route so the Transcorp variant renders under the (admin)/ shell +
+  // AdminTopNav. The tenant /calendar route keeps the tenant variant +
+  // tenant nav shell. Previously this entry pointed to /calendar which
+  // dropped Transcorp staff into the tenant nav (Day-24 dry-run bug, fixed
+  // PR #257). Day-24 PM reorder puts it first to match the tenant
+  // NAV_ITEMS ordering — the home view, lists are drill-downs.
+  //
+  // Label renamed "Calendar" → "Overview" on Day-53 (Love's audit ruling):
+  // there is no admin calendar surface — /admin/calendar renders the fleet
+  // overview dashboard (page <h1> "Fleet overview"), so "Calendar" mislabelled
+  // it. Admin persona ONLY; the tenant NAV_ITEMS "Calendar" entry (→ /calendar)
+  // is unchanged. Rename is label-only — the route stays /admin/calendar.
+  { label: "Overview", path: "/admin/calendar", permission: "task:read_all" },
   { label: "Merchants", path: "/admin/merchants", permission: "merchant:read_all" },
   { label: "Tasks", path: "/admin/tasks", permission: "task:read_all" },
   { label: "Consignees", path: "/admin/consignees", permission: "consignee:read_all" },

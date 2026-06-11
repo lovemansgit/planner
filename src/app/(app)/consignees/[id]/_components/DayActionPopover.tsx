@@ -51,7 +51,7 @@ import {
 } from "../_calendar-actions";
 
 import { AddressIndicator } from "./AddressIndicator";
-import { TaskTimelineDrawer } from "./TaskTimelineDrawer";
+import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
 
 // -----------------------------------------------------------------------------
 // Props + types

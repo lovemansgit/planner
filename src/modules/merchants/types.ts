@@ -26,6 +26,7 @@
 // module's surface is also nested for symmetry; the repository
 // flattens to schema columns at the persistence boundary.
 
+import type { RegionAuthMethod } from "@/modules/credentials";
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
 /**
@@ -108,6 +109,16 @@ export interface Merchant {
    * `client_id` are resolver inputs for SF auth.
    */
   readonly suitefleetRegionId: Uuid;
+  /**
+   * Per-merchant SF auth-method override (v1.19, migration 0030).
+   * NULL = the merchant follows its region's `auth_method`; non-null
+   * is an explicit, audited exception (set via
+   * `setMerchantAuthMethodOverride` in the credentials module, which
+   * owns the write path). Projected onto the DTO so read-only admin
+   * surfaces can render the EFFECTIVE method
+   * (`override ?? region.auth_method`) without a side query.
+   */
+  readonly suitefleetAuthMethodOverride: RegionAuthMethod | null;
   /**
    * Per-merchant SuiteFleet credentials Vault UUIDs (v1.14 + v1.15
    * dual-auth). Generic credential_1/credential_2 — semantics

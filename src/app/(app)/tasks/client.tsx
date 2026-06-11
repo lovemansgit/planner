@@ -27,9 +27,13 @@
 
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
+import Link from "next/link";
+
 import { podProxyPhotoPaths } from "@/modules/tasks/pod-proxy";
-import type { Task } from "@/modules/tasks/types";
+import type { Task, TaskListRow } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
+
+import { consigneeCellModel } from "./_components/consignee-cell";
 
 import {
   cancelTaskAction,
@@ -47,7 +51,7 @@ import { podCellState } from "./_components/pod-state";
 import { TASK_STATUS_FILTERS } from "./status";
 
 interface TasksClientProps {
-  readonly initialTasks: readonly Task[];
+  readonly initialTasks: readonly TaskListRow[];
   readonly failedPushTaskIds: readonly string[];
   /** Total tasks matching the current filter (across all pages). */
   readonly totalCount: number;
@@ -252,43 +256,47 @@ export function TasksClient({
         </p>
       ) : null}
 
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-[color:var(--color-border-strong)]">
-            <Th>
-              <input
-                type="checkbox"
-                aria-label="Select all on this page"
-                checked={allOnPageSelected}
-                onChange={toggleAllOnPage}
-                className="cursor-pointer"
+      {/* R6-part-1: horizontal scroll — the consignee-context columns
+          widen the table past narrow viewports. Responsive column
+          collapse stays Tier-2. */}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[64rem] border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-[color:var(--color-border-strong)]">
+              <Th>
+                <input
+                  type="checkbox"
+                  aria-label="Select all on this page"
+                  checked={allOnPageSelected}
+                  onChange={toggleAllOnPage}
+                  className="cursor-pointer"
+                />
+              </Th>
+              <Th>Date</Th>
+              <Th>AWB</Th>
+              <Th>Status</Th>
+              <Th>Consignee</Th>
+              <Th>Address</Th>
+              <Th>District</Th>
+              <Th>Emirate</Th>
+              <Th>Telephone</Th>
+              <Th>Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {initialTasks.map((task) => (
+              <Row
+                key={task.id}
+                task={task}
+                checked={selected.has(task.id)}
+                onToggle={() => toggle(task.id)}
+                failed={failedSet.has(task.id)}
+                onOpenPod={(photos) => setLightboxPhotos(photos)}
               />
-            </Th>
-            <Th>Status</Th>
-            <Th>Order #</Th>
-            <Th>Delivery date</Th>
-            <Th>Window</Th>
-            <Th>AWB</Th>
-            <Th>Issues</Th>
-            <Th>
-              <span className="sr-only">Proof of delivery</span>
-            </Th>
-            <Th>Actions</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {initialTasks.map((task) => (
-            <Row
-              key={task.id}
-              task={task}
-              checked={selected.has(task.id)}
-              onToggle={() => toggle(task.id)}
-              failed={failedSet.has(task.id)}
-              onOpenPod={(photos) => setLightboxPhotos(photos)}
-            />
-          ))}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {lightboxPhotos !== null ? (
         <PodLightboxModal
@@ -307,7 +315,7 @@ function Row({
   failed,
   onOpenPod,
 }: {
-  readonly task: Task;
+  readonly task: TaskListRow;
   readonly checked: boolean;
   readonly onToggle: () => void;
   readonly failed: boolean;
@@ -315,6 +323,7 @@ function Row({
 }) {
   const filter = TASK_STATUS_FILTERS.find((f) => f.value === task.internalStatus);
   const podTone = podCellState(task.podPhotos);
+  const cgn = consigneeCellModel(task);
   return (
     <tr
       className={
@@ -332,19 +341,7 @@ function Row({
           className="cursor-pointer"
         />
       </Td>
-      <Td>
-        <span
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
-        >
-          <StatusIcon status={task.internalStatus} />
-          {filter?.label ?? task.internalStatus}
-        </span>
-      </Td>
-      <Td className="font-mono text-xs tabular-nums">{task.customerOrderNumber}</Td>
-      <Td className="tabular-nums">{task.deliveryDate}</Td>
-      <Td className="tabular-nums">
-        {task.deliveryStartTime.slice(0, 5)} – {task.deliveryEndTime.slice(0, 5)}
-      </Td>
+      <Td className="whitespace-nowrap tabular-nums">{task.deliveryDate}</Td>
       <Td className="font-mono text-xs tabular-nums">
         {task.externalTrackingNumber !== null ? (
           <span className="flex flex-col gap-0.5">
@@ -358,21 +355,75 @@ function Row({
         )}
       </Td>
       <Td>
+        <span
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
+        >
+          <StatusIcon status={task.internalStatus} />
+          {filter?.label ?? task.internalStatus}
+        </span>
+        {/* R6: failed-push state folded onto the Status column (was its
+            own "Issues" column). */}
         {failed ? (
-          <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] bg-red/15 text-red">
+          <span className="mt-1 inline-flex items-center px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.1em] bg-red/15 text-red">
             Failed push
           </span>
-        ) : (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        )}
+        ) : null}
       </Td>
+      {/* R6.4: Consignee · Address · District · Emirate · Telephone form
+          ONE click target to the consignee detail page. The name cell is
+          the keyboard-focusable primary link; the rest are mouse targets
+          (tabIndex -1) so the block is one logical stop. Telephone is
+          plain text inside the link — NOT a tel: link. */}
+      <ConsigneeCell href={cgn.href} primary ariaLabel={`View consignee ${cgn.name}`}>
+        {cgn.name}
+      </ConsigneeCell>
+      <ConsigneeCell href={cgn.href}>{cgn.addressLine}</ConsigneeCell>
+      <ConsigneeCell href={cgn.href}>{cgn.district}</ConsigneeCell>
+      <ConsigneeCell href={cgn.href}>{cgn.emirate}</ConsigneeCell>
+      <ConsigneeCell href={cgn.href} mono>
+        {cgn.telephone}
+      </ConsigneeCell>
+      {/* R6: POD folded into Actions (was its own column). */}
       <Td>
-        <PodCell task={task} tone={podTone} onOpenPod={onOpenPod} />
-      </Td>
-      <Td>
-        <ActionsCell task={task} />
+        <div className="flex items-center gap-2">
+          <ActionsCell task={task} />
+          <PodCell task={task} tone={podTone} onOpenPod={onOpenPod} />
+        </div>
       </Td>
     </tr>
+  );
+}
+
+// R6.4 — one consignee column cell. Each cell links to the same
+// /consignees/[id] href so the Name·Address·District·Emirate·Telephone
+// block reads as a single click target. Padding matches `Td` (py-4) so
+// the link fills the cell and the hover tint signals the target.
+function ConsigneeCell({
+  href,
+  children,
+  primary = false,
+  ariaLabel,
+  mono = false,
+}: {
+  readonly href: string;
+  readonly children: React.ReactNode;
+  readonly primary?: boolean;
+  readonly ariaLabel?: string;
+  readonly mono?: boolean;
+}) {
+  return (
+    <td className="align-middle">
+      <Link
+        href={href}
+        aria-label={primary ? ariaLabel : undefined}
+        tabIndex={primary ? undefined : -1}
+        className={`block whitespace-nowrap py-4 text-navy transition-colors duration-[120ms] ease-out hover:bg-[color:var(--color-tint-navy-subtle)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-inset ${
+          mono ? "font-mono text-xs tabular-nums" : ""
+        }`}
+      >
+        {children}
+      </Link>
+    </td>
   );
 }
 

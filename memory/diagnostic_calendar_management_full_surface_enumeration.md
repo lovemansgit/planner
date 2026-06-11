@@ -821,3 +821,43 @@ Appended Day-51 (2026-06-09) while building plan-PR #337 PR-2 (R2 — pause SF c
 **Severity:** lower than R2 in practice — early manual resume is rarer than pause, and the safe-state reconcile (shipped in PR-2) prevents the corrupt `pending_cancel`-on-active-task state. But the operator-promise gap ("I resumed but the driver still didn't come") is real and should be scoped before the lane closes.
 
 **Status:** OPEN, deferred. Needs its own ruling (SF re-open vs re-create contract) at lane plan-PR build time. Not Aqib-gated for the cancel side; the re-activation wire contract may need an SF-side check.
+
+---
+
+# Day-53 PM amendment — R6 column-set reconciliation (Love-ruled)
+
+Appended Day-53 (2026-06-11) per Love's dispatch (Session B). Append-only;
+does NOT alter the Day-33 R6.1+R6.2 ruling above — it reconciles that ruled
+9-column layout with the `/tasks` table as it actually exists today (which has
+columns the Day-33 ruling did not enumerate, surfaced when Session B scoped the
+build against the running product).
+
+**The conflict:** the Day-33 R6.1+R6.2 ruling lists 9 columns (Date · AWB ·
+Status · Consignee Name · Address · District · Emirate · Telephone · Actions).
+The live `/tasks` table also carries: a leading **bulk-select checkbox** (drives
+bulk print-labels), a **POD** proof-of-delivery column (UAT run-sheet step D),
+an **Issues** failed-push indicator, **Order #**, and **Window**. Building the
+ruled 9 literally would delete all five.
+
+**Love's ruling (Day-53, cite this dispatch):** the 9 ruled columns are the
+**data/scan layout**. The proven-flow affordances are PRESERVED, not deleted:
+- **KEEP** the leading bulk-select checkbox (bulk print-labels stays intact).
+- **Fold POD into the Actions column** (UAT step D — proof-of-delivery viewing —
+  stays reachable as a per-row action).
+- **Render the Issues / failed-push state on the Status badge** (failed-push
+  visibility stays).
+- UAT step D, bulk print-labels, and failed-push visibility MUST remain
+  proven-intact.
+
+**Order # and Window:** not in the ruled 9 and not named in this reconciliation
+ruling. Session B's R6-part-1 build implements the ruled 9 + the three preserved
+affordances; Order # and Window are NOT standalone columns in the resulting
+table (Order # remains searchable via the existing search filter). Flagged to
+Love at build-park time for confirmation.
+
+**Split (Day-53, Ruling 3):** drawer relocation belongs to Session C's lane, so
+R6 ships in two parts. **R6-part-1** (this build) = data layer (unconditional
+consignee + addresses JOIN, effective-address projection with fall-through,
+`TaskListRow` type) + the table per this amendment. **R6-part-2** (the AWB→drawer
+entry point + the R6.3 partial-state banner) is split out, blocked on Session C's
+shared drawer-action relocation — see `memory/followup_r6_part2_awb_drawer.md`.

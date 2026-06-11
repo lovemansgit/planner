@@ -35,7 +35,7 @@ import {
   getTaskHistoryAction,
   getTaskTimelineAction,
   type GetTaskTimelineActionResult,
-} from "../_calendar-actions";
+} from "./actions";
 import type { AuditEventCursor } from "@/modules/audit";
 import type { TaskHistoryEntry } from "@/modules/tasks";
 import { TASK_HISTORY_METADATA_ALLOW_LIST } from "@/modules/tasks/history-metadata";

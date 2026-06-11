@@ -35,6 +35,7 @@ export type {
   TaskCreationSource,
   TaskInternalStatus,
   TaskKind,
+  TaskListRow,
   TaskPackage,
   TaskPackageStatus,
   UpdateTaskPatch,
