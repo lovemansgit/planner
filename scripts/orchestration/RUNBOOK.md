@@ -52,6 +52,20 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
   Verify-against-running-product. Path-gate + merge-Action lock as built
   (docs-only auto-merge in v1).
 
+## Three-pair scaling rules (Day-53, Love-ruled)
+
+Shape-3 runs as **three concurrent builder pairs** (Sessions A, B, C), each
+its own permanent two-party seam. Ruling of record:
+`memory/decision_d53_three_pair_scaling.md`. Three coordination rules:
+
+1. Every dispatch carries an explicit **do-not-touch list** naming the other
+   lanes' territories.
+2. **One EOD owner per day** — Session A by convention; other sessions feed
+   their closing state to it, never file their own EOD.
+3. **Product-brief version bumps are assigned by the reviewer surface in each
+   dispatch, never self-assigned** (prevents two lanes racing the same §9
+   version number).
+
 ## Pieces
 
 | Piece | Path | Role |

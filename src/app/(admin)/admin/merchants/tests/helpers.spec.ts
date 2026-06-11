@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  merchantEffectiveAuthMethod,
   normaliseSlug,
   parseCreateMerchantForm,
   parseEditMerchantForm,
@@ -620,5 +621,41 @@ describe("parseEditMerchantForm", () => {
       expect(result.fieldErrors.pickup_district).toBeTruthy();
       expect(result.fieldErrors.pickup_emirate).toBeTruthy();
     }
+  });
+});
+
+// Day-53 — merchant detail page must show the EFFECTIVE auth method
+// (override ?? region default), not the region's raw method. Love
+// found the defect live: Demo Bistro flipped to api_key showed OAUTH.
+describe("merchantEffectiveAuthMethod", () => {
+  it("no override → region default, unannotated", () => {
+    expect(merchantEffectiveAuthMethod(null, "oauth")).toEqual({
+      method: "oauth",
+      overrideActive: false,
+    });
+    expect(merchantEffectiveAuthMethod(null, "api_key")).toEqual({
+      method: "api_key",
+      overrideActive: false,
+    });
+  });
+
+  it("override wins over the region default and is annotated", () => {
+    expect(merchantEffectiveAuthMethod("api_key", "oauth")).toEqual({
+      method: "api_key",
+      overrideActive: true,
+    });
+    expect(merchantEffectiveAuthMethod("oauth", "api_key")).toEqual({
+      method: "oauth",
+      overrideActive: true,
+    });
+  });
+
+  it("override equal to the region default still reads as an explicit override", () => {
+    // Matches the credentials page semantics: the annotation reflects
+    // `override !== null`, not a value diff against the region.
+    expect(merchantEffectiveAuthMethod("oauth", "oauth")).toEqual({
+      method: "oauth",
+      overrideActive: true,
+    });
   });
 });
