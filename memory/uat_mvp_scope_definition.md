@@ -91,17 +91,20 @@ Legend: ✅ shipped & proven on real wire · 🔶 shipped, **not** proven on rea
 - **Task CANCEL (bulk shape)** — numeric-id bulk PATCH → 200, webhook reflection ~400ms (Day-21).
 - **LABELS** — 500-id batch → 200, real PDF.
 - **Webhook INBOUND** — SF fires events; embedded-delta handling grounded on real AWBs (`MPL-80355079`, `MPL-38610276`).
+- **Task UPDATE push (R4/R5 address override)** — **proven Day-53 PM.** R4 one-off (06-18 `MPL-46009060`, 06-19 `MPL-21097704`) + R5 forward-from-06-25 (fan-out echoes on `MPL-61377363`/`MPL-50803723`, boundary held at day 24 `MPL-44913455`). SF webhook echoes the `Updated` event back per task; `pending_update` badge sets + clears on ack. Evidence: `memory/handoffs/day-53-pm-proving-pass.md`.
 
 ### The "deaf integration" list — merged/looks-done but NOT proven on real wire
 These are the items most likely to embarrass at an Ops demo:
 
-> **Day-52 PM update (proving pass, post-filing):** items 1–3 below were **proven ALIVE on real wire** — R2 pause-cancel fan-out (2-task window, both SF-CANCELED: `MPL-28787105`, `MPL-01868399`), R3 note-push (SF webhook echoed the note text: `MPL-76890591`), skip→cancel (SF `CHANGE_STATUS → CANCELED`: `MPL-48882801`). Evidence in `memory/handoffs/day-52-eod.md` §C. Items 4–5 (task-UPDATE push, POD post-fix) remain unproven.
+> **Day-52 PM update (proving pass):** items 1–3 below were **proven ALIVE on real wire** — R2 pause-cancel fan-out (2-task window, both SF-CANCELED: `MPL-28787105`, `MPL-01868399`), R3 note-push (SF webhook echoed the note text: `MPL-76890591`), skip→cancel (SF `CHANGE_STATUS → CANCELED`: `MPL-48882801`). Evidence in `memory/handoffs/day-52-eod.md` §C.
+>
+> **Day-53 PM update (proving pass):** item 4 (task-UPDATE push, R4/R5 address override) is now **proven ALIVE on real wire** — see the Proven list above + `memory/handoffs/day-53-pm-proving-pass.md`. **Only item 5 (POD post-fix) remains unproven.** Caveat surfaced while proving R4/R5: v1 has **no UI to give a consignee a second address**, so the override is unreachable for UI-onboarded consignees — `memory/followup_no_ui_second_consignee_address.md` (demo-prep / Phase-2 item, not a wire failure).
 
-1. **R2 pause → SF cancel fan-out** (#342) — merged, **never fired against real SF.** A pause that doesn't actually stop dispatch is exactly the "deaf integration" risk.
-2. **R3 driver-note → SF push** (#344) — merged, **never fired against real SF.** A note the driver never receives.
-3. **Skip → cancel** — integration-tested on real Postgres, but the **QStash→SF leg is mocked**; no record of a real skip firing a real cancel.
-4. **Task UPDATE push** — shape doc-verified + a unit assertion, but **no live SF update round-trip on record.**
-5. **POD ingestion post-fix** — the status/date sync bug was fixed, but **real POD ingestion post-fix is unconfirmed.**
+1. **R2 pause → SF cancel fan-out** (#342) — ✅ proven Day-52 (`MPL-28787105`, `MPL-01868399`).
+2. **R3 driver-note → SF push** (#344) — ✅ proven Day-52 (`MPL-76890591`).
+3. **Skip → cancel** — ✅ proven Day-52 (`MPL-48882801`).
+4. **Task UPDATE push (R4/R5 address override)** — ✅ **proven Day-53** (see Proven list). Reachability caveat: no UI path to a second consignee address (Phase-2).
+5. **POD ingestion post-fix** — the status/date sync bug was fixed, but **real POD ingestion post-fix is unconfirmed.** *(Only remaining unproven leg.)*
 
 ### Hardening items (UAT-grade, not blockers but visible)
 - **Server-side metadata strip (R8)** (`#360`, filed today) — the audit allow-list filters *client-side*; raw SF error text + internal IDs still reach the browser payload (fishable via dev-tools). Fix: apply the allow-list server-side. *Low-risk now (same-tenant, authenticated); worth closing before Ops.*
