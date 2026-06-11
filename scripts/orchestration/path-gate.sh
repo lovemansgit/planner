@@ -18,6 +18,24 @@ sql=false
 
 # gh api --paginate, NOT `gh pr view --json files` — the latter caps at 100
 # files and a truncated list must never decide a merge.
+#
+# Day-53 fail-closed hardening (memory/followup_path_gate_fail_open_on_api_error.md,
+# Love-approved Day-53): the file list is captured FIRST and the gate parks on
+# any API error or an empty list. Previously the loop read from a process
+# substitution, whose failure escapes `set -euo pipefail` — a gh network error
+# produced zero lines, the loop never ran, and the gate fell through to
+# AUTO_MERGE_ELIGIBLE for a code PR (observed live on #365, Day-52 overnight).
+# An errored or empty list must never decide a merge: no legitimate PR has
+# zero changed files, so emptiness is only ever an error symptom.
+if ! files=$(gh api "repos/$repo/pulls/$pr/files" --paginate --jq '.[].filename'); then
+  echo "PARK"
+  exit 1
+fi
+if [ -z "$files" ]; then
+  echo "PARK"
+  exit 1
+fi
+
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   case "$f" in
@@ -27,7 +45,7 @@ while IFS= read -r f; do
     *.md) ;;
     *) park=true ;;
   esac
-done < <(gh api "repos/$repo/pulls/$pr/files" --paginate --jq '.[].filename')
+done <<< "$files"
 
 $sql && echo "SQL_TO_APPLY"
 if $park; then
