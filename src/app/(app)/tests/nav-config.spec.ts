@@ -154,9 +154,9 @@ describe("visibleAdminNavItems", () => {
   // (all systemOnly; only transcorp-sysadmin carries them).
   const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
 
-  it("transcorp-sysadmin sees all 6 admin nav items (Calendar first per Day-24 PM reorder; Users tail per Day-24 PR #259)", () => {
+  it("transcorp-sysadmin sees all 6 admin nav items (Overview first — the fleet-dashboard entry, renamed from 'Calendar' Day-53; Users tail per Day-24 PR #259)", () => {
     expect(visibleAdminNavItems(TRANSCORP_SYSADMIN).map((i) => i.label)).toEqual([
-      "Calendar",
+      "Overview",
       "Merchants",
       "Tasks",
       "Consignees",
@@ -178,14 +178,15 @@ describe("visibleAdminNavItems", () => {
     expect(visibleAdminNavItems(NONE)).toHaveLength(0);
   });
 
-  it("Calendar entry points to /admin/calendar (not tenant /calendar)", () => {
-    // Day-24 regression pin: dry-run surfaced that Calendar routed to
-    // /calendar (tenant shell), dropping Transcorp staff into the
-    // tenant nav. Calendar must stay on /admin/calendar so the
-    // (admin)/ layout renders.
-    const calendar = ADMIN_NAV_ITEMS.find((i) => i.label === "Calendar");
-    expect(calendar).toBeDefined();
-    expect(calendar?.path).toBe("/admin/calendar");
+  it("Overview entry points to /admin/calendar (not tenant /calendar)", () => {
+    // Day-24 regression pin: dry-run surfaced that this entry routed to
+    // /calendar (tenant shell), dropping Transcorp staff into the tenant
+    // nav. It must stay on /admin/calendar so the (admin)/ layout renders.
+    // (Label renamed 'Calendar'→'Overview' Day-53 per Love's audit ruling —
+    // the route is unchanged; it renders the fleet overview, not a calendar.)
+    const overview = ADMIN_NAV_ITEMS.find((i) => i.label === "Overview");
+    expect(overview).toBeDefined();
+    expect(overview?.path).toBe("/admin/calendar");
   });
 });
 
