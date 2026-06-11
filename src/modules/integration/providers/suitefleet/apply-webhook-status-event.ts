@@ -307,19 +307,17 @@ export async function applyWebhookStatusEvent(
   // driver actual-completion clock and is NEVER read here.
   const embedded = extractAndConvertEmbedded(rawPayload);
 
-  // Step 3-6 inside the withTenant transaction. We return both the
-  // outcome AND the audit metadata from the closure so TypeScript
-  // can flow-narrow the metadata cleanly outside.
-  let txBundle: { outcome: ApplyWebhookStatusEventResult; meta: AuditMeta | null };
-
+  // Step 4 — Tx-1, receipt only (R-C receipt-then-apply split, plan
+  // memory/plans/day-53-session-c-rc-receipt-tx-split.md §2): commit
+  // the forensic webhook_events receipt ALONE so a Tx-2 apply failure
+  // can no longer erase it (raw payload preserved, dedup slot
+  // occupied, queryable orphan). The 23505 dedup catch moves with the
+  // INSERT — nothing else can throw inside Tx-1, which also tightens
+  // duplicate attribution (the old whole-body catch would have
+  // mislabeled any other unique violation as 'duplicate').
+  let webhookEventsId: string;
   try {
-    txBundle = await withTenant(tenantId, async (tx) => {
-      // Step 4: INSERT webhook_events. Append-only — UNIQUE 23505
-      // bubbles out as a thrown error caught below.
-      //
-      // Forensic preservation: this INSERT runs BEFORE any short-circuit
-      // path below (task_not_found). raw_payload is always captured for
-      // downstream investigation even when the tasks UPDATE doesn't fire.
+    webhookEventsId = await withTenant(tenantId, async (tx) => {
       const insertResult = await tx.execute(sqlTag`
         INSERT INTO webhook_events (tenant_id, suitefleet_task_id, action, event_timestamp, raw_payload)
         VALUES (
@@ -331,8 +329,23 @@ export async function applyWebhookStatusEvent(
         )
         RETURNING id
       `);
-      const webhookEventsId = (insertResult[0] as { id: string }).id;
+      return (insertResult[0] as { id: string }).id;
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { applied: false, reason: "duplicate" };
+    }
+    throw err;
+  }
 
+  // Steps 5-6 — Tx-2, the apply; may roll back alone. A throw
+  // propagates to the route's per-event catch (Sentry capture, batch
+  // continues, 200 to SF) exactly as before the split — but the Tx-1
+  // receipt now survives as the forensic artifact. We return both the
+  // outcome AND the audit metadata from the closure so TypeScript
+  // can flow-narrow the metadata cleanly outside.
+  const txBundle: { outcome: ApplyWebhookStatusEventResult; meta: AuditMeta | null } =
+    await withTenant(tenantId, async (tx) => {
       // Day-31 A1 §3.6 #2 Finding 2: post-conversion wrap-inversion does
       // NOT short-circuit the event. Surface the wrap as a structured
       // warn signal; the inverted time PAIR is excluded from the
@@ -522,12 +535,6 @@ export async function applyWebhookStatusEvent(
         meta,
       };
     });
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      return { applied: false, reason: "duplicate" };
-    }
-    throw err;
-  }
 
   // Step 7: audit emits AFTER the tx commits.
   if (txBundle.outcome.applied && txBundle.meta !== null) {
