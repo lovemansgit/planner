@@ -2021,44 +2021,6 @@ export async function getTaskHistory(
 
 
 // =============================================================================
-// getPodPhotoSourceUrl — Day-53 POD proxy (Love-ruled UAT-blocking)
-// =============================================================================
-//
-// Resolves the RAW stored SF pre-signed URL for one POD photo so the
-// proxy route (/api/tasks/[id]/pod/[index]) can fetch it server-side.
-// See src/modules/tasks/pod-proxy.ts for the full grounding.
-//
-// Gate: task:read + tenant scope — the same visibility as the task row
-// the photo belongs to; RLS under withTenant hides cross-tenant rows
-// (404-shaped, same observable state per R-3). Missing photo index and
-// missing task are both NotFound: the proxy path namespace mirrors the
-// stored array exactly.
-
-export async function getPodPhotoSourceUrl(
-  ctx: RequestContext,
-  taskId: Uuid,
-  photoIndex: number,
-): Promise<string> {
-  requirePermission(ctx, "task:read");
-  assertTenantScoped(ctx, "task:read");
-  const tenantId = ctx.tenantId as Uuid;
-
-  return await withTenant(tenantId, async (tx) => {
-    const task = await findTaskById(tx, taskId);
-    if (!task) {
-      throw new NotFoundError(`task not found: ${taskId}`);
-    }
-    const url = task.podPhotos?.[photoIndex];
-    if (url === undefined) {
-      throw new NotFoundError(
-        `pod photo not found: task ${taskId} index ${photoIndex}`,
-      );
-    }
-    return url;
-  });
-}
-
-// =============================================================================
 // updateTaskAndPushOutbound — Day 22 / Phase 1 SF outbound
 // =============================================================================
 //

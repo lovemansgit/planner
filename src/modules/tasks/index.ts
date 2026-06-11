@@ -54,7 +54,6 @@ export {
   getConsigneeTasksForDateRange,
   getTask,
   getTaskHistory,
-  getPodPhotoSourceUrl,
   getTasksForSubscription,
   getTaskTimeline,
   listAllTaskIds,
@@ -101,6 +100,3 @@ export {
   markTasksCanceledInWindow,
   markTasksRestoredInWindow,
 } from "./repository";
-
-// Day-53 POD proxy — client-safe path helper (pure, no db import).
-export { podProxyPhotoPaths } from "./pod-proxy";

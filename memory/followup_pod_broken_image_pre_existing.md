@@ -155,21 +155,3 @@ Closest in the original four was **(a) "404 expired"**, but the distinction matt
 Filed Day-33 PM (2026-05-21) as a T1 docs-only PR off main HEAD `d25e812`. Single commit, single file. Memo-only — the institutional record is the diagnostic context preservation + the trigger-for-next-action enumeration. Branch: `docs/d33-followup-pod-broken-image-pre-existing`. Merged via PR #327 at main `3a3e2ea`.
 
 **Day-33 PM amendment** — Love ran the real-browser Network diagnostic (the trigger documented above) and captured the failing image request. Findings reclassify the 4-shape enumeration to a 5th narrower shape (e) S3 pre-signed URL signature stale relative to render time — OR a browser-policy reaction to the response body — rooted in the structural mismatch between SF's short-TTL signed-URL contract and Planner's verbatim-storage-and-render model. Memo amended with a new "Day-33 PM amendment — Network diagnostic findings" section between "Trigger for next-action" and "Cross-references"; cross-reference entry added for the reviewer handoff §4-B + operator browser capture anchor. Original sections (Origin, Status at filing, Scope of resolution unknown-shape enumeration, Standing, Non-goals, Trigger for next-action, Cross-references' prior entries) all unchanged. Three fix shapes enumerated with explicit tradeoffs (proxy / re-sign on read / download + re-host); memo does NOT pick — eventual lane plan-PR decides. Filed Day-33 PM as a T1 docs-only amendment PR off main HEAD `557126b`. Single commit. Branch: `docs/d33-pod-broken-image-network-diagnostic-amendment`.
-
-# Day-53 PM resolution — grounded scope + smallest Planner-only fix (PR'd)
-
-**Ruling:** Day-53 PM check-in (`memory/decision_d53_pm_uat_calls.md` ruling 4): UAT-blocking; scope the smallest Planner-only fix; vendor-needing paths fall back to Love's call.
-
-**Day-53 grounding (real rows, production DB, read-only):**
-- 18 pod_photos rows; 2 carry REAL SF URLs (rest are test fixtures). Both real URLs: S3 SigV4, `X-Amz-Expires=604800` (7 days), minted **~1 second** before their DELIVERED webhook landed (X-Amz-Date vs webhook event_timestamp) — at ingest, Planner holds an essentially full-TTL URL.
-- Server-side probe of an expired stored URL: `403 AccessDenied "Request has expired"` XML. Past-TTL rows are **vendor-dead** — no Planner-only recovery; only SF can re-sign.
-- The Day-33 within-TTL failure (`ERR_BLOCKED_BY_RESPONSE`) is a **browser** response-policy block; server-side fetches are immune.
-
-**Conclusion: a Planner-only fix IS achievable.** Chosen smallest shape = **render-time authenticated proxy** (fix-shape 1 of the Day-33 enumeration): operator surfaces render `/api/tasks/[id]/pod/[index]`; the route gates on `task:read` + tenant scope, resolves the stored URL server-side, fetches it (immune to browser policy), streams the bytes. Expired upstream → honest `410 Gone`. No migration, no storage, no new spend, no vendor dependency. Covers UAT, where PODs are same-day fresh.
-
-**Surfaces note:** the live operator POD surface is the `/tasks` POD cell → lightbox. `CalendarPodCard` (this memo's original anchor surface) is **orphaned dead code** since the calendar-management rework — no call sites. The admin POD cell (`/admin/tasks`) keeps raw URLs (separate read path + cross-tenant gate shape) — same pre-existing breakage class, NOT UAT-blocking, follow-on below.
-
-**Deferred follow-ons (not this PR):**
-1. **Durable ingest-time capture** — download bytes at DELIVERED-webhook receipt (URL is fresh) into Planner-owned storage; needs a migration + a storage decision (Postgres bytea vs Supabase Storage — the latter brushes the cost trigger). Post-UAT lane; also the only path that revives >7-day-old photos going forward (already-expired rows are unrecoverable regardless).
-2. **Admin POD cell** routing through a cross-tenant-gated variant of the proxy.
-3. **CalendarPodCard** — orphaned; delete or rewire at the next calendar UX touch.
