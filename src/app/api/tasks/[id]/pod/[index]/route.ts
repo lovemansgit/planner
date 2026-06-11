@@ -13,11 +13,25 @@
 // Same security posture as /api/tasks/labels: the operator browser
 // never sees the SF host or the signed URL — only this Planner path.
 //
+// Day-53 EVE (cleared #413 lane) — two changes:
+//   1. CAPTURED-FIRST: the durable copy in the private pod-photos
+//      bucket (migration 0031 + pod-capture module) is preferred over
+//      the vendor URL; the SF fetch only happens when nothing was
+//      captured (pre-capture history, or a capture that failed and
+//      sits in the DLQ).
+//   2. H3 (Tier-2 ruling memo, Love-assigned to this lane): the
+//      vendor-expired state serves a styled SVG placeholder (200,
+//      X-Planner-Pod-State: expired-at-vendor) instead of the bare
+//      410 — an <img> cannot render a 410 body, so every consumer
+//      surface showed the browser's broken-image icon. The run sheet's
+//      expired-state line is updated in the same PR (proven observable,
+//      Love-ruled change).
+//
 // Status mapping:
+//   captured copy exists  → 200, stored bytes, longer private cache
 //   200 image/*           → 200, bytes streamed, short private cache
-//   S3 403 (sig expired)  → 410 Gone — vendor-dead row, only SF can
-//                           re-sign; the UI's broken-image fallback is
-//                           honest here
+//   S3 403 (sig expired)  → 200 styled SVG placeholder +
+//                           X-Planner-Pod-State: expired-at-vendor (H3)
 //   anything else         → 502 upstream error
 //   fetch threw           → 502 upstream error
 
@@ -28,6 +42,11 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import {
+  createSupabasePodObjectStore,
+  getCapturedPodPhoto,
+  podExpiredPlaceholderSvg,
+} from "@/modules/pod-capture";
 import { getPodPhotoSourceUrl } from "@/modules/tasks";
 import { classifyPodUpstreamResponse } from "@/modules/tasks/pod-proxy";
 import { buildRequestContext } from "@/shared/request-context";
@@ -68,6 +87,28 @@ export async function GET(_req: Request, { params }: RouteContext): Promise<Resp
       `/api/tasks/${idResult.data}/pod/${indexResult.data}`,
       requestId,
     );
+
+    // Captured-first (Day-53 EVE): the durable copy outlives the
+    // vendor's 7-day TTL and skips the upstream round-trip entirely.
+    const captured = await getCapturedPodPhoto(
+      ctx,
+      idResult.data as Uuid,
+      indexResult.data,
+      { store: createSupabasePodObjectStore({ fetch: globalThis.fetch }) },
+    );
+    if (captured !== null) {
+      return new NextResponse(captured.bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": captured.contentType,
+          // Captured objects are immutable — a longer private cache is
+          // safe and keeps repeat views off the storage API.
+          "Cache-Control": "private, max-age=86400",
+          "X-Planner-Pod-State": "captured",
+        },
+      });
+    }
+
     const sourceUrl = await getPodPhotoSourceUrl(
       ctx,
       idResult.data as Uuid,
@@ -96,13 +137,25 @@ export async function GET(_req: Request, { params }: RouteContext): Promise<Resp
     const klass = classifyPodUpstreamResponse(upstream.status, contentType);
 
     if (klass === "expired") {
-      // Past-TTL pre-signed URL: vendor-dead, deterministic. 410 (not
-      // 404) so the failure is distinguishable from a missing task or
-      // index in logs and devtools.
-      return NextResponse.json(
-        { error: "pod photo url expired at the delivery vendor" },
-        { status: 410 },
-      );
+      // H3: past-TTL pre-signed URL with no captured copy — vendor-dead,
+      // deterministic. Serve the styled placeholder image (an <img>
+      // cannot render an error body); the response header keeps the
+      // state machine-distinguishable for tests and forensics.
+      log.info({
+        operation: "pod_proxy_fetch",
+        error_code: "expired_at_vendor",
+        task_id: idResult.data,
+        photo_index: indexResult.data,
+        request_id: requestId,
+      });
+      return new NextResponse(podExpiredPlaceholderSvg(), {
+        status: 200,
+        headers: {
+          "Content-Type": "image/svg+xml",
+          "Cache-Control": "private, max-age=3600",
+          "X-Planner-Pod-State": "expired-at-vendor",
+        },
+      });
     }
     if (klass === "upstream_error") {
       log.warn({
