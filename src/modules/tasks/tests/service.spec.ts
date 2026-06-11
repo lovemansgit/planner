@@ -112,6 +112,7 @@ import {
   createTask,
   getTask,
   getTaskHistory,
+  getPodPhotoSourceUrl,
   getTasksForSubscription,
   getTaskTimeline,
   listAllTaskIds,
@@ -1786,6 +1787,39 @@ describe("getTaskHistory — Day-52 / R8", () => {
     expect(result.entries).toHaveLength(TASK_HISTORY_BATCH_SIZE);
     const last = result.entries[result.entries.length - 1];
     expect(result.nextCursor).toEqual({ occurredAt: last.occurredAt, id: last.id });
+  });
+
+  it("getPodPhotoSourceUrl — gate, bounds, and raw stored URL (Day-53 POD proxy)", async () => {
+    // The proxy route resolves the RAW stored pre-signed URL server-side;
+    // the browser only ever sees the same-origin proxy path.
+    const STORED = [
+      "https://s3.eu-central-1.amazonaws.com/sf-bucket/a.jpg?X-Amz-Signature=x",
+      "https://s3.eu-central-1.amazonaws.com/sf-bucket/b.jpg?X-Amz-Signature=y",
+    ];
+
+    await expect(
+      getPodPhotoSourceUrl(userCtx([]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: null }));
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: STORED }));
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 2),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: STORED }));
+    await expect(
+      getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 1),
+    ).resolves.toBe(STORED[1]);
   });
 
   it("threads the before-cursor into the task-event query", async () => {
