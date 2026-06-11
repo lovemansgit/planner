@@ -1,14 +1,31 @@
 # Shape-3 orchestration — Layer 2 merge lock (Fork 4, Love-ruled).
-# This Action is the ONLY actor that merges. It triggers on the automerge-t1
-# label, re-computes the path gate server-side from main's trusted copy of the
-# script, and requires a reviewer APPROVE verdict pinned to the CURRENT head
-# SHA. Any check failing parks the PR. There is no code path from disagreement
-# to merge.
-name: orch-automerge-t1
+# This Action is the ONLY actor that merges. Two modes, resolved server-side
+# from the PR's labels:
+#
+#   t1        (label automerge-t1)  — docs-only auto-merge. Path gate
+#             re-computed from main's trusted copy of the script, plus the
+#             reviewer-verdict gate.
+#   clearance (label love-cleared)  — Love-cleared off-allowlist PR
+#             (memory/followup_clearance_merge_into_action.md). The path gate
+#             is relaxed ONLY here; an ORCH-CLEARANCE comment quoting Love's
+#             ruling must be on the thread, the reviewer-verdict gate still
+#             applies, and the Action records route + SHAs on the PR. This
+#             replaces the temporary builder-side clearance-merge bridge so
+#             the builder never holds a direct merge capability.
+#
+# Triggers: label application, AND verdict-comment creation (Day-54
+# hardening) — a green PR whose ORCH-VERDICT lands AFTER its label no longer
+# stalls unmerged (#429 class). All gates re-verify regardless of trigger.
+# Any check failing parks the PR loudly. There is no code path from
+# disagreement to merge.
+
+name: orch-automerge
 
 on:
   pull_request_target:
     types: [labeled]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -16,21 +33,60 @@ permissions:
 
 jobs:
   gate-and-merge:
-    if: github.event.label.name == 'automerge-t1'
+    if: >-
+      (github.event_name == 'pull_request_target' &&
+        (github.event.label.name == 'automerge-t1' ||
+         github.event.label.name == 'love-cleared')) ||
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, 'ORCH-VERDICT'))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      PR: ${{ github.event.pull_request.number }}
+      PR: ${{ github.event.pull_request.number || github.event.issue.number }}
       REPO: ${{ github.repository }}
     steps:
-      # pull_request_target checks out the BASE ref (main). The PR's own copy
+      # Both triggers check out the BASE/default ref (main). The PR's own copy
       # of the gate script is never executed.
       - uses: actions/checkout@v4
 
-      - name: "Layer 2: re-compute path gate from main's trusted copy"
+      - name: "Resolve mode server-side from the PR's labels"
+        id: mode
+        run: |
+          state=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
+          labels=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          mode=none
+          if [ "$state" = "OPEN" ]; then
+            case ",$labels," in
+              *,automerge-t1,*) mode=t1 ;;
+              *,love-cleared,*) mode=clearance ;;
+            esac
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Resolved mode: $mode (state=$state labels=$labels)"
+
+      - name: "Layer 2: re-compute path gate from main's trusted copy (t1)"
+        if: steps.mode.outputs.mode == 't1'
         run: bash scripts/orchestration/path-gate.sh "$PR"
 
+      # The path gate is relaxed ONLY on a recorded Love clearance. The
+      # ORCH-CLEARANCE comment must quote Love's ruling sentence so the
+      # clearance basis is auditable on the thread itself. Attribution
+      # limitation (open question for Love, memo §"Open questions"): builder
+      # and Love currently share one GitHub identity, so the label/comment is
+      # not yet cryptographically Love-only — this Action makes execution
+      # server-side and auditable; un-spoofable attribution needs a second
+      # identity or label-protection, which is Love's call.
+      - name: "Clearance gate: Love-clearance recorded on the PR (clearance)"
+        if: steps.mode.outputs.mode == 'clearance'
+        run: |
+          n=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[].body | select(startswith("ORCH-CLEARANCE"))] | length')
+          [ "$n" -ge 1 ] \
+            || { echo "FAIL: no ORCH-CLEARANCE comment quoting Love's ruling"; exit 1; }
+
       - name: "Require reviewer APPROVE verdict at the current head SHA"
+        if: steps.mode.outputs.mode != 'none'
         run: |
           head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
           last_verdict=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
@@ -45,17 +101,43 @@ jobs:
       # is enabled this step fails; continue-on-error keeps the (still
       # protection-gated) merge step below as the single decider.
       - name: "Approve as the sanctioned review path"
+        if: steps.mode.outputs.mode != 'none'
         continue-on-error: true
         run: |
           gh pr review "$PR" --repo "$REPO" --approve \
-            --body "orch-automerge-t1: path gate + head-SHA verdict re-verified server-side."
+            --body "orch-automerge (${{ steps.mode.outputs.mode }}): gates re-verified server-side."
 
       - name: "Enable auto-merge (waits on required CI checks)"
+        if: steps.mode.outputs.mode != 'none'
         run: gh pr merge "$PR" --repo "$REPO" --squash --auto
 
-      - name: "Park on any gate failure"
-        if: failure()
+      # Day-54 hardening: an armed auto-merge on a CONFLICTING PR sits
+      # silently forever (#416 class). Probe after arming; a dirty PR parks
+      # loudly instead.
+      - name: "Loud-park probe: armed auto-merge must not sit on a dirty PR"
+        if: steps.mode.outputs.mode != 'none'
         run: |
-          gh pr edit "$PR" --repo "$REPO" --remove-label automerge-t1 --add-label parked-t3
+          m=UNKNOWN
+          for _ in 1 2 3 4 5 6; do
+            m=$(gh pr view "$PR" --repo "$REPO" --json mergeable --jq .mergeable)
+            [ "$m" != "UNKNOWN" ] && break
+            sleep 10
+          done
+          [ "$m" != "CONFLICTING" ] \
+            || { echo "FAIL: PR is CONFLICTING — armed auto-merge would stall silently"; exit 1; }
+          echo "mergeable=$m"
+
+      - name: "Record route + SHAs on the PR (clearance)"
+        if: steps.mode.outputs.mode == 'clearance'
+        run: |
+          head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          gh pr comment "$PR" --repo "$REPO" --body "orch-automerge clearance-merge: route = GitHub Action squash auto-merge (run ${{ github.run_id }}); head SHA at arming = \`$head\`. Gates re-verified server-side: ORCH-CLEARANCE present, ORCH-VERDICT APPROVE at head, CI enforced by auto-merge."
+
+      - name: "Park on any gate failure"
+        if: failure() && steps.mode.outputs.mode != 'none'
+        run: |
+          gh pr edit "$PR" --repo "$REPO" --remove-label automerge-t1 || true
+          gh pr edit "$PR" --repo "$REPO" --remove-label love-cleared || true
+          gh pr edit "$PR" --repo "$REPO" --add-label parked-t3
           gh pr comment "$PR" --repo "$REPO" \
-            --body "ORCH-PARK — parked by orch-automerge-t1: a server-side gate check failed (see the Action run for which step). This PR does not auto-merge."
+            --body "ORCH-PARK — parked by orch-automerge: a server-side gate check failed (see the Action run for which step). This PR does not auto-merge."
