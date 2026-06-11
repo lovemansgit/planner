@@ -6,41 +6,23 @@ _the park labels on open PRs are the source of truth._
 ## PR #368 — feat(d52): R5 — forward address override backfills in-horizon tasks + fans out SF updates (PR-5)
 
 - Label: `parked-t3`
-- Head SHA: `1575a7a0301663ae7896ba1019036742d1df2953`
+- Head SHA: `650d0197ff4a811d4faf56d9d7d8e2e94dcbed43`
 
 ORCH-PARK
 
-**What this PR does (plain English):** "Change address (from this delivery onwards)" now actually moves the upcoming deliveries. Before: the next ~14 days of deliveries silently kept the old address and SuiteFleet was never told — only far-future deliveries picked up the change. After: every upcoming delivery on this subscription is re-pointed at the new address, SuiteFleet gets an update for each one already dispatched, and the operator first confirms via an inline popup with the exact ruled wording ("Are you sure you want to update the address for all future tasks on this subscription?"). Other subscriptions for the same consignee are untouched (ruled). Also bumps the product brief to v1.18 (the ruled documentation amendment) and fixes a test-infrastructure gap: two existing UI test files were silently never running; they now run and pass (test gate grew 1984 → 2001).
+**What this PR does (plain English):** "Change address (from this delivery onwards)" now moves EVERY upcoming delivery on that subscription to the new address and tells SuiteFleet about each one already dispatched, after the operator confirms via an inline popup with the exact ruled wording ("Are you sure you want to update the address for all future tasks on this subscription?"). Other subscriptions for the same consignee are untouched. Includes the brief v1.18 amendment and a test-infrastructure fix (two silently-dead UI test files now run; gate 1984 → 2001).
 
-**What it touches:** exception service + tasks repository (data path), one new audit event, the calendar popover confirm dialog (new small component), the product brief, vitest config. 9 files.
+**Day-53 fix round (Love-confirmed):** round-1 used the Day-52 ruling's literal 14-day window — stale framing from before the horizon bump to 21 days; deliveries 15-21 days out would have silently kept the old address forever. Per Love's Day-53 confirmation ("every upcoming delivery on the subscription — full materializer horizon"), the date cap is removed entirely, with a +18-day regression test, corrected comments/memo/brief text, and a rebase onto current main after #367's merge.
 
-**Reviewer verdict (1 line):** APPROVE, round 1 — no Love-triggers flagged.
+**Reviewer verdict trail (separate context, opus):** r1 APPROVE @1575a7a (pre-correction) → r2 REQUEST_CHANGES @e81e44e (substance approved + Love-authorized; blocked ONLY on the mechanically-unmergeable unrebased stack after #367's squash-merge, LOVE-TRIGGER 1 flagged on that state) → **r3 APPROVE @650d019** (clean rebase, body-read at the new pinned SHA; the r2 trigger condition no longer exists).
 
 **Why parked:** all code parks for Love (Shape-3 v1).
 
-**SQL TO APPLY: no** (this PR) — depends on PR #364's migration 0029 via PR #367. **Clearance order: #364 (apply 0029 first) → #367 → this (#368).**
+**SQL TO APPLY: no** — migration 0029 is already applied to production and verified (#364, Day-53).
 
-**CI note:** stacked PR — CI fires when the base auto-retargets to main after #367 merges; verify green there before merging. Local: unit 2001/2001, integration 474/474 on the local 0029-provisioned Postgres (production untouched).
+**CI:** GREEN on this PR at 650d019 (lint+unit pass, integration pass — base is main now). Local: unit 2001/2001; integration 477/477 on a FRESH provisioned local DB. Side-note for ops: two pre-existing cross-tenant pagination specs (consignees + subscriptions variants) lack an ORDER BY tiebreaker and flake under accumulated local DB state — followup-worthy, not this PR's scope.
 
-## PR #367 — feat(d52): R4 — one-off address override backfills task + pushes SF update (PR-4)
-
-- Label: `parked-t3`
-- Head SHA: `18c2a6d74b45b7057255d2428a8cdea84830c649`
-- **SQL TO APPLY: yes — supabase/migrations changed. Love applies manually via the Supabase SQL editor.**
-
-ORCH-PARK
-
-**What this PR does (plain English):** "Change address (this delivery only)" on the calendar now actually changes the delivery. Before: it wrote a note in the database and nothing else — the driver still went to the old address. After: the delivery task itself is re-pointed at the new address, the new address is sent to SuiteFleet immediately (with the address details built safely on the server), and the calendar shows a "Sending to SuiteFleet" badge until SF confirms. Bonus fold (ruled option B): the /tasks page address edit now also pushes to SuiteFleet — its old "will reflect on the next scheduled push pass" small-print is retired.
-
-**What it touches:** exception service + tasks repository/service (data path), the SF update queue routes, the calendar popover badge, the /tasks edit action copy, one new audit event type. 18 files, ~1,090 lines (mostly tests + the in-branch Day-52 rulings memo).
-
-**Reviewer verdict (1 line):** APPROVE, round 1 — no Love-triggers flagged by the reviewer.
-
-**Why parked:** all code parks for Love (Shape-3 v1; park lane regardless of verdict).
-
-**SQL TO APPLY: no** (this PR) — but it DEPENDS on PR #364's migration 0029. **Clearance order: #364 (apply 0029 first) → this (#367) → PR-5.** Promoting this before 0029 is applied breaks every address override with a CHECK violation.
-
-**Tests:** unit 1984/1984; integration 469/469 (77 files) on a local 0029-provisioned Postgres — production untouched.
+**This is the LAST item of calendar-management Phase 1** — merging it closes R1-R5.
 
 ## PR #370 — fix(d53): path-gate fails CLOSED on gh api error or empty file list
 
