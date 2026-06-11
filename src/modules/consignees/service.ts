@@ -24,23 +24,65 @@
 //     a paste-from-Excel re-edit that lands on the same canonical
 //     phone does NOT count as a change.
 
+import { sql as sqlTag } from "drizzle-orm";
+
 import { emit } from "../audit";
-import { withTenant } from "../../shared/db";
-import { NotFoundError, ValidationError } from "../../shared/errors";
+import { withServiceRole, withTenant } from "../../shared/db";
+import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors";
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
+import type { TenantStatus } from "../merchants/types";
+
+import { insertAddress, type AddressLabel } from "../addresses";
 
 import { normaliseToE164 } from "./phone";
 import {
+  countAllConsigneesRows,
+  countConsigneesByTenantRows,
   deleteConsignee as deleteConsigneeRow,
   findConsigneeById,
+  findConsigneeForCrmUpdate,
   insertConsignee,
+  insertConsigneeCrmEvent,
+  type ListAllConsigneesFilters,
+  listAllConsigneesRows,
   listConsigneesByTenant,
+  listConsigneesWithTaskCountByTenant,
+  selectCrmHistoryForConsignee,
+  selectTimelineForConsignee,
   updateConsignee as updateConsigneeRow,
+  updateConsigneeCrmState,
 } from "./repository";
-import type { Consignee, CreateConsigneeInput, UpdateConsigneePatch } from "./types";
+
+export type { ListAllConsigneesFilters } from "./repository";
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant admin row shape returned by
+ * listAllConsignees. Wraps the tenant-scoped Consignee plus the
+ * merchant surface columns from the repo's JOIN tenants. Per merged
+ * plan §4.4 OQ-4 ruling.
+ */
+export interface AdminConsigneeRow {
+  readonly consignee: Consignee;
+  readonly merchant: {
+    readonly tenantId: Uuid;
+    readonly slug: string;
+    readonly name: string;
+    readonly status: TenantStatus;
+  };
+}
+import { canTransition } from "./transitions";
+import type {
+  ChangeConsigneeCrmStateInput,
+  ChangeConsigneeCrmStateResult,
+  Consignee,
+  ConsigneeCrmEvent,
+  CreateConsigneeInput,
+  TimelineEvent,
+  UpdateConsigneePatch,
+} from "./types";
 
 /**
  * Same actor → audit-id mapping as identity/service.ts. Local copy
@@ -92,16 +134,28 @@ function assertTenantScoped(
 // -----------------------------------------------------------------------------
 
 /**
- * Create a single consignee. Validates required fields, normalises the
- * phone to E.164, inserts inside `withTenant`, and emits
- * `consignee.created` post-commit with `source: "planner"` (this code
- * path IS the planner; the SuiteFleet ingress will land its own
- * service path with `source: "suitefleet"`).
+ * Create a single consignee + primary address atomically. Brief v1.12
+ * §3.1.4 — `createConsignee(ctx, { identity, address })`. Replaces the
+ * v1.11 `createConsigneeWithSubscription` orchestration; subscription
+ * creation moves to its own surface via the Overview-tab CTA.
+ *
+ * Behavior inside one `withTenant` tx:
+ *   1. INSERT consignees row — legacy inline address columns
+ *      (`address_line` / `district` / `emirate_or_region`) populated
+ *      from `input.address.*` for back-compat with downstream readers
+ *      pending the migration-0014 Phase-2 deprecation.
+ *   2. INSERT addresses row with `is_primary=true`. The schema's
+ *      partial UNIQUE on `(consignee_id) WHERE is_primary=true` catches
+ *      any drift.
+ *
+ * Post-commit (outside tx):
+ *   - emit `consignee.created` with metadata
+ *     `{ consignee_id, source: "planner", onboarded_via: "flat_form" }`.
  *
  * Throws:
  *   - ForbiddenError    actor lacks `consignee:create`.
- *   - ValidationError   missing required fields, malformed phone, or
- *                       no tenant context.
+ *   - ValidationError   missing required fields, malformed phone,
+ *                       invalid address label, or no tenant context.
  */
 export async function createConsignee(
   ctx: RequestContext,
@@ -110,21 +164,50 @@ export async function createConsignee(
   requirePermission(ctx, "consignee:create");
   assertTenantScoped(ctx, "consignee:create");
 
-  const normalised: CreateConsigneeInput = {
-    name: requireNonEmpty(input.name, "name"),
-    phone: normaliseToE164(input.phone),
-    addressLine: requireNonEmpty(input.addressLine, "addressLine"),
-    emirateOrRegion: requireNonEmpty(input.emirateOrRegion, "emirateOrRegion"),
-    district: requireNonEmpty(input.district, "district"),
-    email: optionalTrim(input.email),
-    deliveryNotes: optionalTrim(input.deliveryNotes),
-    externalRef: optionalTrim(input.externalRef),
-    notesInternal: optionalTrim(input.notesInternal),
-  };
+  const identityName = requireNonEmpty(input.identity.name, "identity.name");
+  const identityPhone = normaliseToE164(input.identity.phone);
+  const identityEmail = optionalTrim(input.identity.email);
+  const identityDeliveryNotes = optionalTrim(input.identity.deliveryNotes);
+  const identityExternalRef = optionalTrim(input.identity.externalRef);
+  const identityNotesInternal = optionalTrim(input.identity.notesInternal);
+
+  const addressLabel: AddressLabel = input.address.label;
+  if (!["home", "office", "other"].includes(addressLabel)) {
+    throw new ValidationError(
+      `address.label must be home | office | other; got ${addressLabel}`,
+    );
+  }
+  const addressLine = requireNonEmpty(input.address.line, "address.line");
+  const addressDistrict = requireNonEmpty(input.address.district, "address.district");
+  const addressEmirate = requireNonEmpty(input.address.emirate, "address.emirate");
+  const addressLat = input.address.lat ?? null;
+  const addressLng = input.address.lng ?? null;
 
   const tenantId = ctx.tenantId;
   const created = await withTenant(tenantId, async (tx) => {
-    return insertConsignee(tx, tenantId, normalised);
+    const consignee = await insertConsignee(tx, tenantId, {
+      name: identityName,
+      phone: identityPhone,
+      email: identityEmail,
+      addressLine,
+      emirateOrRegion: addressEmirate,
+      district: addressDistrict,
+      deliveryNotes: identityDeliveryNotes,
+      externalRef: identityExternalRef,
+      notesInternal: identityNotesInternal,
+    });
+
+    await insertAddress(tx, tenantId, consignee.id, {
+      label: addressLabel,
+      isPrimary: true,
+      line: addressLine,
+      district: addressDistrict,
+      emirate: addressEmirate,
+      lat: addressLat,
+      lng: addressLng,
+    });
+
+    return consignee;
   });
 
   await emit({
@@ -134,7 +217,11 @@ export async function createConsignee(
     tenantId,
     resourceType: "consignee",
     resourceId: created.id,
-    metadata: { consignee_id: created.id, source: "planner" },
+    metadata: {
+      consignee_id: created.id,
+      source: "planner",
+      onboarded_via: "flat_form",
+    },
     requestId: ctx.requestId,
   });
 
@@ -160,12 +247,142 @@ export async function getConsignee(ctx: RequestContext, id: Uuid): Promise<Consi
 
 /**
  * List every consignee in the actor's tenant, newest first.
+ *
+ * Optional `searchTerm` filters via case-insensitive ILIKE on the
+ * consignee name and digit-stripped phone — see
+ * `listConsigneesByTenant` in repository.ts for the semantics.
  */
-export async function listConsignees(ctx: RequestContext): Promise<readonly Consignee[]> {
+export async function listConsignees(
+  ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly Consignee[]> {
   requirePermission(ctx, "consignee:read");
   assertTenantScoped(ctx, "consignee:read");
   return withTenant(ctx.tenantId, async (tx) => {
-    return listConsigneesByTenant(tx, ctx.tenantId!);
+    return listConsigneesByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day-25 / brief v1.12 §3.4 — list consignees with per-row task counts.
+ * Same auth surface + tenant scope as listConsignees; the difference is
+ * the row shape. Powers the amber NO TASKS badge on `/consignees`.
+ */
+export async function listConsigneesWithTaskCount(
+  ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly (Consignee & { taskCount: number })[]> {
+  requirePermission(ctx, "consignee:read");
+  assertTenantScoped(ctx, "consignee:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listConsigneesWithTaskCountByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day-25 / brief v1.12 §3.3.3 — return subscription + task counts for
+ * one consignee. Drives the Overview-tab empty-state branch ("no
+ * subscription, no tasks" → render the two CTAs prominently). Single
+ * round-trip via two correlated subqueries; both tables RLS-isolated.
+ */
+export async function getConsigneeOnboardingStats(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+): Promise<{ subscriptionCount: number; taskCount: number }> {
+  requirePermission(ctx, "consignee:read");
+  assertTenantScoped(ctx, "consignee:read");
+  const tenantId = ctx.tenantId;
+  return withTenant(tenantId, async (tx) => {
+    const rows = await tx.execute<{ sub_count: number | string; task_count: number | string }>(
+      sqlTag`
+        SELECT
+          (SELECT COUNT(*) FROM subscriptions WHERE consignee_id = ${consigneeId})::int AS sub_count,
+          (SELECT COUNT(*) FROM tasks         WHERE consignee_id = ${consigneeId})::int AS task_count
+      `,
+    );
+    const row = rows[0] ?? { sub_count: 0, task_count: 0 };
+    return {
+      subscriptionCount: Number(row.sub_count),
+      taskCount: Number(row.task_count),
+    };
+  });
+}
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of consignees across all
+ * merchants. Read-only; no audit emit per R-4. Joined with tenants
+ * for merchant-side surface columns. Optional merchantSlug filter;
+ * unknown slug throws ValidationError per merged plan §3.6 OQ-3 ruling.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `consignee:read_all`.
+ *   - ValidationError   merchantSlug filter does not resolve to an
+ *                       existing tenant.
+ */
+export async function listAllConsignees(
+  ctx: RequestContext,
+  filters: ListAllConsigneesFilters = {},
+): Promise<readonly AdminConsigneeRow[]> {
+  requirePermission(ctx, "consignee:read_all");
+
+  return withServiceRole("transcorp_staff:list_all_consignees", async (tx) => {
+    if (filters.merchantSlug !== undefined) {
+      const rows = await tx.execute(
+        sqlTag`SELECT 1 FROM tenants WHERE slug = ${filters.merchantSlug} LIMIT 1`,
+      );
+      if (rows.length === 0) {
+        throw new ValidationError(
+          `merchantSlug filter does not resolve to an existing tenant: ${filters.merchantSlug}`,
+        );
+      }
+    }
+    return listAllConsigneesRows(tx, filters);
+  });
+}
+
+/**
+ * Day-24 PM — cross-tenant COUNT of consignees matching the same
+ * filter set as `listAllConsignees`. Powers the hero count card on
+ * `/admin/consignees`.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `consignee:read_all`.
+ *   - ValidationError   merchantSlug filter does not resolve to an
+ *                       existing tenant.
+ */
+export async function countAllConsignees(
+  ctx: RequestContext,
+  filters: Omit<ListAllConsigneesFilters, "limit" | "offset"> = {},
+): Promise<number> {
+  requirePermission(ctx, "consignee:read_all");
+
+  return withServiceRole("transcorp_staff:count_all_consignees", async (tx) => {
+    if (filters.merchantSlug !== undefined) {
+      const rows = await tx.execute(
+        sqlTag`SELECT 1 FROM tenants WHERE slug = ${filters.merchantSlug} LIMIT 1`,
+      );
+      if (rows.length === 0) {
+        throw new ValidationError(
+          `merchantSlug filter does not resolve to an existing tenant: ${filters.merchantSlug}`,
+        );
+      }
+    }
+    return countAllConsigneesRows(tx, filters);
+  });
+}
+
+/**
+ * Day-24 PM — tenant-scoped COUNT of consignees. Powers the hero
+ * count card on tenant `/consignees`.
+ */
+export async function countConsigneesByTenant(
+  ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<number> {
+  requirePermission(ctx, "consignee:read");
+  assertTenantScoped(ctx, "consignee:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return countConsigneesByTenantRows(tx, ctx.tenantId!, opts);
   });
 }
 
@@ -349,5 +566,223 @@ export async function deleteConsignee(ctx: RequestContext, id: Uuid): Promise<vo
     resourceId: id,
     metadata: { consignee_id: id },
     requestId: ctx.requestId,
+  });
+}
+
+// -----------------------------------------------------------------------------
+// changeConsigneeCrmState (Day 16 / Block 4-D — Service C)
+// -----------------------------------------------------------------------------
+//
+// Transitions a consignee between the six CRM states per brief §3.1.1
+// + merged plan PR #155 §10.4 matrix lock. Single-event audit (no
+// correlation pair); the consignee_crm_events table carries the same
+// fact in append-only structured form for direct query, and the
+// audit_events stream mirrors it for cross-resource forensic queries.
+//
+// Behavior in single transaction:
+//   1. Permission gate (consignee:change_crm_state).
+//   2. Tenant-context check (consignee:change_crm_state requires a
+//      tenant; system actor with tenantId=null is rejected — same
+//      posture as the existing 5 CRUD fns).
+//   3. Reason normalization — trim; reject empty.
+//   4. SELECT consignee FOR UPDATE; reject NotFound if missing /
+//      RLS-hidden / cross-tenant.
+//   5. Same-state short-circuit — fromState === toState returns no_op
+//      with status='no_op'; no DB write, no audit emit. The 200
+//      response surfaces the desired state was already in place.
+//   6. canTransition matrix gate — invalid_transition → ConflictError
+//      422-equivalent; reactivation_keyword_required → ConflictError
+//      with the keyword-guard message.
+//   7. UPDATE consignees.crm_state.
+//   8. INSERT consignee_crm_events (carries from_state, to_state,
+//      reason, actor — NOT NULL on those four; also occurred_at is
+//      DB-defaulted).
+//   9. Post-commit: emit consignee.crm_state.changed audit event with
+//      metadata { consignee_id, from_state, to_state, reason } per
+//      registered metadataNotes at audit/event-types.ts:683-684.
+//
+// Errors:
+//   - ForbiddenError    actor lacks consignee:change_crm_state.
+//   - ValidationError   no tenant context, empty/whitespace reason.
+//   - NotFoundError     consignee not found in this tenant.
+//   - ConflictError     transition not allowed by §10.4 matrix, or
+//                       CHURNED → ACTIVE without 'reactivation' keyword.
+//
+// Audit timing: emit fires AFTER the withTenant block returns
+// post-commit, mirroring the existing createConsignee / updateConsignee
+// / deleteConsignee pattern. A failed tx never produces a ghost event.
+
+export async function changeConsigneeCrmState(
+  ctx: RequestContext,
+  id: Uuid,
+  input: ChangeConsigneeCrmStateInput,
+): Promise<ChangeConsigneeCrmStateResult> {
+  requirePermission(ctx, "consignee:change_crm_state");
+  assertTenantScoped(ctx, "consignee:change_crm_state");
+
+  const reason = requireNonEmpty(input.reason, "reason");
+  const toState = input.toState;
+
+  const tenantId = ctx.tenantId;
+  const result = await withTenant(tenantId, async (tx) => {
+    const before = await findConsigneeForCrmUpdate(tx, tenantId, id);
+    if (!before) {
+      throw new NotFoundError(`consignee not found: ${id}`);
+    }
+
+    // Same-state short-circuit. The matrix does NOT include same-state
+    // in any from-state's allowed set, so the canTransition helper
+    // would (correctly per its contract) return invalid_transition for
+    // a same-state pair. The "operator wanted state X, state X is
+    // already set" case maps to no_op success at the API surface.
+    if (before.crmState === toState) {
+      return { kind: "no_op" as const, fromState: before.crmState };
+    }
+
+    const check = canTransition(before.crmState, toState, reason);
+    if (!check.ok) {
+      if (check.errorCode === "reactivation_keyword_required") {
+        throw new ConflictError(
+          `CHURNED → ACTIVE requires 'reactivation' keyword in reason`,
+        );
+      }
+      // invalid_transition
+      throw new ConflictError(
+        `CRM state transition not allowed: ${before.crmState} → ${toState}`,
+      );
+    }
+
+    const updated = await updateConsigneeCrmState(tx, tenantId, id, toState);
+    if (!updated) {
+      // Row vanished between the FOR UPDATE lock and the UPDATE — a
+      // concurrent DELETE would have to bypass the row lock to do this,
+      // which RLS + the ON DELETE CASCADE pattern shouldn't allow. If
+      // it happens anyway, surface as NotFound for consistent caller
+      // semantics with the rest of this module.
+      throw new NotFoundError(`consignee not found: ${id}`);
+    }
+
+    const event = await insertConsigneeCrmEvent(tx, {
+      consigneeId: id,
+      tenantId,
+      fromState: before.crmState,
+      toState,
+      reason,
+      actor: actorIdFor(ctx.actor) as Uuid,
+    });
+
+    return {
+      kind: "updated" as const,
+      fromState: before.crmState,
+      eventId: event.id,
+    };
+  });
+
+  if (result.kind === "no_op") {
+    return {
+      status: "no_op",
+      consigneeId: id,
+      fromState: result.fromState,
+      toState,
+    };
+  }
+
+  await emit({
+    eventType: "consignee.crm_state.changed",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "consignee",
+    resourceId: id,
+    metadata: {
+      consignee_id: id,
+      from_state: result.fromState,
+      to_state: toState,
+      reason,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return {
+    status: "updated",
+    consigneeId: id,
+    fromState: result.fromState,
+    toState,
+    eventId: result.eventId,
+  };
+}
+
+
+// -----------------------------------------------------------------------------
+// getConsigneeCrmHistory (Day 17 — CRM state UI History tab)
+// -----------------------------------------------------------------------------
+//
+// Read-side companion to changeConsigneeCrmState. Powers the History
+// tab on /consignees/[id] per CRM state UI plan §3.3 + §5. Returns
+// chronological transition entries newest-first; pagination via the
+// optional `before` ISO-timestamp cursor on `occurred_at`.
+//
+// Permission: consignee:read (held by tenant_admin / operations_manager
+// / customer_service_agent — same set that can view the consignee at
+// all). NOT a separate consignee:read_crm_history permission; the
+// existing read perm covers history because the events are
+// consignee-scoped facts, not a separate resource.
+//
+// No audit emit — read-only fetch. RLS + explicit tenant_id predicate
+// at the repository layer is the security envelope.
+
+export async function getConsigneeCrmHistory(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly ConsigneeCrmEvent[]> {
+  requirePermission(ctx, "consignee:read");
+  if (ctx.tenantId === null) {
+    throw new ValidationError("getConsigneeCrmHistory requires a tenant context");
+  }
+  const tenantId = ctx.tenantId;
+
+  return await withTenant(tenantId, async (tx) => {
+    return await selectCrmHistoryForConsignee(tx, tenantId, consigneeId, options);
+  });
+}
+
+
+// -----------------------------------------------------------------------------
+// getConsigneeTimeline (Day 22 — brief §3.3.7 unified timeline)
+// -----------------------------------------------------------------------------
+//
+// Read-side companion to changeConsigneeCrmState + the
+// subscription-exceptions + task lifecycle services. Powers the
+// History tab on /consignees/[id] per brief §3.3.7. Returns
+// chronological events newest-first across the three projections
+// the consignee_timeline_events VIEW UNIONs:
+//
+//   - crm_state              (consignee_crm_events)
+//   - subscription_exception (subscription_exceptions JOIN subscriptions)
+//   - task_status            (terminal task statuses: DELIVERED /
+//                             FAILED / SKIPPED / CANCELED)
+//
+// Permission: consignee:read — same gate as getConsigneeCrmHistory,
+// because timeline events are consignee-scoped facts derived from
+// already-readable tables. No separate consignee:read_timeline perm.
+//
+// No audit emit — read-only fetch. RLS (via the view's
+// security_invoker = true posture) + the explicit tenant_id predicate
+// in the repository fn are the security envelope.
+
+export async function getConsigneeTimeline(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly TimelineEvent[]> {
+  requirePermission(ctx, "consignee:read");
+  if (ctx.tenantId === null) {
+    throw new ValidationError("getConsigneeTimeline requires a tenant context");
+  }
+  const tenantId = ctx.tenantId;
+
+  return await withTenant(tenantId, async (tx) => {
+    return await selectTimelineForConsignee(tx, tenantId, consigneeId, options);
   });
 }

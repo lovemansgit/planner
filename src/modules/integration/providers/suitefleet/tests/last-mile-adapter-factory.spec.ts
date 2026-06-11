@@ -88,6 +88,7 @@ const SAMPLE_SESSION: AuthenticatedSession = {
 };
 
 const SAMPLE_CREDENTIALS: SuiteFleetCredentials = {
+  auth_method: "oauth",
   username: "u",
   password: "p",
   clientId: "client-588",

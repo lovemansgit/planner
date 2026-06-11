@@ -43,32 +43,65 @@ ALTER TABLE consignees ALTER COLUMN district SET NOT NULL;
 
 
 -- =============================================================================
--- Section 2: tenants.suitefleet_customer_code  — merchant scoping key
+-- Section 2: tenants.suitefleet_customer_code  — per-merchant customerId (DB-backed)
 -- =============================================================================
--- Live webhook capture confirms SF identifies each pilot merchant via
--- a `customer.code` field (e.g. "TBC" for Tabchilli) on every task
--- create POST. Without it, SF can't scope the create to the right
--- merchant. The cron's payload-build (D8-4) reads this column per-
--- tenant and passes it as `customer.code` on every push.
+-- THE COLUMN NAME IS HISTORICAL AND MISLEADING. It does NOT store a
+-- SuiteFleet `customer.code` AWB-prefix value. It stores the per-merchant
+-- numeric `customerId` (588 MPL / 586 DNR / 578 FBU in sandbox), which
+-- is the SuiteFleet routing identifier returned by the credential resolver
+-- and threaded into every createTask POST as the wire body's `customerId`
+-- field.
 --
--- Nullability: column is added NULLABLE in this migration. Backfill
--- happens out-of-band on production via operator-side UPDATE, ONE
--- ROW PER PILOT TENANT:
+-- Historical framing (now corrected):
 --
---   UPDATE tenants SET suitefleet_customer_code = 'TBC' WHERE slug = '<tabchilli-slug>';
---   UPDATE tenants SET suitefleet_customer_code = '<code>' WHERE slug = '<merchant-2-slug>';
---   UPDATE tenants SET suitefleet_customer_code = '<code>' WHERE slug = '<merchant-3-slug>';
+--   * Day 8 / D8-2 (this migration's authoring): framed the column as
+--     the merchant scoping key SF requires in wire body as `customer.code`.
+--   * Day 10 (3 May 2026): static analysis surfaced the wire body never
+--     carries `customer.code`. The column was reframed as a cron-gate
+--     field only — see memory/followup_migration_0013_customer_code_comment_amendment.md.
+--   * Day 18 (8 May 2026): A1 architectural correction surfaced the
+--     three-identifier-layer model — region `client_id` (env-backed),
+--     per-merchant `customerId` (this column, DB-backed), AWB prefix
+--     `customer.code` (cosmetic, no routing role). See
+--     memory/followup_per_tenant_merchant_id_routing.md and
+--     memory/decision_brief_v1_7_amendment_sf_identifier_model.md.
 --
--- Codes for merchants 2 and 3 are pending from Love (TBC for Tabchilli
--- is the only one currently known). SET NOT NULL lands in a follow-up
--- migration once all three pilot tenants are backfilled and the
--- production state is known-good.
+-- Resolution path post-A1 (Day 18):
+--   src/modules/credentials/suitefleet-resolver.ts reads this column via
+--   withServiceRole + sqlTag SELECT keyed by tenant_id, validates against
+--   the positive-integer regex /^[1-9]\d*$/, parses to integer, returns
+--   as `customerId: number` on SuiteFleetCredentials.
 --
--- D8-4 cron-service guard: the per-tenant push code MUST fail-closed
--- if suitefleet_customer_code IS NULL — emit a `task.push_failed` audit
--- event with reason='missing_customer_code', skip the push, leave the
--- task for the next cron pass. Better than pushing without the field
--- and getting a SF rejection downstream.
+-- Validation contract (Option A — resolver throws):
+--   - tenant row not found              → CredentialError (tenant_not_found)
+--   - column NULL/empty/whitespace-only → CredentialError (missing_customer_code)
+--   - column non-positive-integer       → CredentialError (invalid_customer_code)
+--   - canonical positive integer        → returned as parsed number
+--
+-- Three-layer defense-in-depth at runtime (post-A1, intentional —
+-- see memory/followup_a1_plan_section_2_5_premise_correction.md):
+--   1. β cron filter (list-cron-eligible-tenants.ts:80) excludes tenants
+--      where suitefleet_customer_code IS NULL OR ''.
+--   2. Per-task race-condition belt (task-push/service.ts:364-394) catches
+--      the window where the value was cleared between β enumeration and
+--      queue-worker pickup; emits `tenant.push_skipped`.
+--   3. Resolver throws at adapter.authenticate — fail-loud for direct
+--      probe scripts, future non-cron callers, or any state where the
+--      first two layers failed.
+--
+-- Nullability: column is NULLABLE. SET NOT NULL deferred until every
+-- production tenant is backfilled and the production state is known-good.
+--
+-- Backfill convention (operator-driven, post-onboarding, numeric):
+--
+--   UPDATE tenants SET suitefleet_customer_code = '588' WHERE slug = 'meal-plan-scheduler';
+--   UPDATE tenants SET suitefleet_customer_code = '586' WHERE slug = 'dr-nutrition';
+--   UPDATE tenants SET suitefleet_customer_code = '578' WHERE slug = 'fresh-butchers';
+--
+-- Schema-level column rename to `suitefleet_customer_id` is desirable
+-- (column name would align with stored value semantics) but deferred
+-- under forward-only-migrations rule + churn cost. This comment is the
+-- canonical pointer for future readers.
 -- =============================================================================
 
 ALTER TABLE tenants ADD COLUMN suitefleet_customer_code text;

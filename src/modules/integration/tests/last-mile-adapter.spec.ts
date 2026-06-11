@@ -70,6 +70,9 @@ class StubAdapter implements LastMileAdapter {
   async refreshSession(session: AuthenticatedSession): Promise<AuthenticatedSession> {
     return session;
   }
+  invalidateSession(_tenantId: Uuid): void {
+    // no-op stub for tests; production adapter drops the cached session.
+  }
   async createTask(
     session: AuthenticatedSession,
     task: TaskCreateRequest,
@@ -121,6 +124,38 @@ class StubAdapter implements LastMileAdapter {
     void session;
     void awb;
     return [];
+  }
+  async updateTask(
+    session: AuthenticatedSession,
+    awb: string,
+    patch: import("../types").TaskUpdatePatchRequest,
+  ): Promise<void> {
+    void session;
+    void awb;
+    void patch;
+  }
+  async cancelTask(
+    session: AuthenticatedSession,
+    awb: string,
+    correlationId: string,
+  ): Promise<void> {
+    void session;
+    void awb;
+    void correlationId;
+  }
+  async bulkCancelTasks(
+    session: AuthenticatedSession,
+    sfTaskIds: readonly string[],
+    correlationId: string,
+  ): Promise<import("../types").BulkCancelResult> {
+    void session;
+    void correlationId;
+    return {
+      jobId: "stub-bulk-job",
+      executedCount: sfTaskIds.length,
+      expectedCount: sfTaskIds.length,
+      status: "COMPLETED",
+    };
   }
 }
 

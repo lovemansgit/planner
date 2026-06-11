@@ -32,6 +32,8 @@
 //   - listUnresolvedByTenant — Day-7 cron iteration target; also
 //     post-MVP operator UI's queue view.
 
+import { sql as sqlTag } from "drizzle-orm";
+
 import { emit } from "../audit";
 import { requirePermission } from "../identity";
 import type { LastMileAdapter } from "../integration";
@@ -52,6 +54,7 @@ import type { Uuid } from "../../shared/types";
 import type { SinglePushOutcome } from "../task-push";
 
 import {
+  bulkMarkUnresolvedAsResolved,
   findFailedPushById,
   insertFailedPush,
   listUnresolvedByTenant,
@@ -69,6 +72,7 @@ const VALID_FAILURE_REASONS: ReadonlySet<FailureReason> = new Set<FailureReason>
   "client_4xx",
   "timeout",
   "unknown",
+  "past_dated",
 ]);
 
 /**
@@ -292,20 +296,78 @@ export async function recordFailedPushAttempt(
   const recorded = await withServiceRole(
     `task:push_failed_attempt for tenant ${tenantId} (task ${taskId})`,
     async (tx) => {
+      // Plan #317 §10 ruling addendum at f0ef560: wrap insertFailedPush
+      // in a SAVEPOINT (Drizzle nested transaction → postgres-js
+      // SAVEPOINT under the hood) so a 23505 from the partial UNIQUE
+      // rolls back ONLY the savepoint, not the outer service-role
+      // transaction. The pre-existing pattern (try/catch around
+      // insertFailedPush directly on the parent tx) was broken since
+      // Day-8: postgres-js marks the parent transaction as failed on
+      // the first 23505, and the subsequent updateFailedPushAttempt
+      // would fail with "current transaction is aborted, commands
+      // ignored until end of transaction block" — except in the
+      // observed CI failure the original 23505 surfaces instead.
+      //
+      // First exercised by PR-B's F-4 LOAD-BEARING integration spec at
+      // tests/integration/failed-push-callback-attempt-count-increments.spec.ts.
+      // Existing callers (past-dated guard at task-push/service.ts:459,
+      // unknown-district guard at :515, AWB-exists reconcile-fail at
+      // :576, non-AWB DLQ at :689) all hit this as a first-failure
+      // path — insertFailedPush succeeds inside the savepoint, catch
+      // never fires, behavior unchanged.
+      let row: FailedPush;
       try {
-        return await insertFailedPush(tx, tenantId, normalised);
+        row = await tx.transaction(async (sp) =>
+          insertFailedPush(sp, tenantId, normalised),
+        );
       } catch (err) {
         // SQLSTATE 23505 from the partial UNIQUE: an unresolved row
-        // already exists for this task. Route to UPDATE-attempt path.
-        const code = (err as { code?: string }).code;
+        // already exists for this task. The savepoint above rolled
+        // back; route to UPDATE-attempt path on the parent tx (which
+        // is still healthy because the failure was contained inside
+        // the savepoint).
+        //
+        // Drizzle 0.45 wraps postgres-js errors in DrizzleQueryError
+        // with the original error on `.cause`; the legacy Day-8 check
+        // of `(err as { code?: string }).code === "23505"` never
+        // matched on the wrapper, which is the second half of why
+        // recordFailedPushAttempt's upsert path was silently broken
+        // pre-PR-B. Unwrap both layers defensively.
+        const code =
+          (err as { code?: string }).code ??
+          ((err as { cause?: { code?: string } }).cause?.code);
         if (code === "23505") {
-          return updateFailedPushAttempt(tx, tenantId, normalised);
+          row = await updateFailedPushAttempt(tx, tenantId, normalised);
+        } else {
+          // 23503 (FK violation) / P0001 (tenant-match trigger) / etc.
+          // surface as-is — these are programming errors, not retry
+          // conditions.
+          throw err;
         }
-        // 23503 (FK violation) / P0001 (tenant-match trigger) / etc.
-        // surface as-is — these are programming errors, not retry
-        // conditions.
-        throw err;
       }
+
+      // Day-33 PR-C / F-3 (b) per plan-PR #317 §3.3: flip
+      // tasks.outbound_sync_state to 'failed' in the SAME withServiceRole
+      // tx as the failed_pushes write. Atomic with the row insert/update
+      // above — readers see either "no DLQ row + no 'failed' state" or
+      // "DLQ row + 'failed' state", never a partial split.
+      //
+      // Gated to PRESERVE the operator-cancel lane states ('pending_cancel'
+      // / 'pending_reschedule') — those are owned by the cancel-task /
+      // cancel-task-failed convergence writers (Day-29 §D(2) Phase-1)
+      // and the create-push DLQ writer must not override them. The push
+      // path's own state machine (pre-push → 'pending', failure → 'failed',
+      // success → 'synced') stays within {pending, synced, failed}; the
+      // gate's allowlist matches that domain. Plan §3.3 lifecycle note
+      // "skip / cancel paths UNCHANGED".
+      await tx.execute(sqlTag`
+        UPDATE tasks
+        SET outbound_sync_state = 'failed'
+        WHERE id = ${taskId} AND tenant_id = ${tenantId}
+          AND outbound_sync_state IN ('pending', 'synced', 'failed')
+      `);
+
+      return row;
     },
   );
 
@@ -329,6 +391,143 @@ export async function recordFailedPushAttempt(
 }
 
 // =============================================================================
+// bulkResolveFailedPushes — Day-33 PR-D (Plan #317 §3.7 CLEANUP-1)
+// =============================================================================
+
+/**
+ * Discriminator for which entry point invoked the bulk-resolve. Stored
+ * verbatim in the audit event's `source` metadata field per the
+ * event-types.ts registration. The contract is the registration; this
+ * union is the runtime mirror.
+ */
+export type BulkResolveSource = "admin_ui" | "cli";
+
+export interface BulkResolveFailedPushesInput {
+  readonly failedPushIds: readonly Uuid[];
+  readonly resolutionNotes: string;
+  readonly source: BulkResolveSource;
+}
+
+export interface BulkResolveFailedPushesResult {
+  readonly resolved: readonly FailedPush[];
+  /** IDs submitted but NOT resolved (already-resolved, wrong-tenant, unknown). */
+  readonly notFoundIds: readonly Uuid[];
+}
+
+const RESOLUTION_NOTES_MAX_LEN = 500;
+const BULK_RESOLVE_MAX_BATCH = 200;
+
+/**
+ * Day-33 PR-D (Plan #317 §3.7 CLEANUP-1 + §6 OQ-4 ruling (a)+(b) at
+ * SHA f0ef560). Atomically resolve up to BULK_RESOLVE_MAX_BATCH
+ * unresolved failed_pushes rows with one operator-provided reason.
+ *
+ * Permission: `failed_pushes:resolve` — distinct verb from `:retry`
+ * (retry tries SF again; resolve = give up without retrying). Tenant
+ * Admin holds it via TENANT_SCOPED auto-pickup; CS Agent + Ops Manager
+ * are excluded. Same posture as `:retry`.
+ *
+ * Atomicity: one withServiceRole tx wraps the UPDATE + the audit emit
+ * is fired AFTER tx commit (matches the recordFailedPushAttempt pattern).
+ * If the UPDATE succeeds but the emit fails, the rows ARE resolved and
+ * the emit failure surfaces via Sentry — the rows are still durable in
+ * the table; the audit gap is loud not silent.
+ *
+ * Single audit emit per bulk operation (mirrors task.bulk_created +
+ * consignee.bulk_created precedent — ONE meta-event with `count` +
+ * `failed_push_ids[]`, NOT N per-row events). The per-row durable
+ * record lives in failed_pushes.resolved_at + resolution_notes columns.
+ *
+ * Source discrimination: admin_ui vs cli. Carried into the audit
+ * metadata's `source` field per the event-types.ts registration.
+ *
+ * Partial-success reporting: any submitted ID that fails to UPDATE
+ * (already-resolved, wrong-tenant, unknown) is silently dropped from
+ * the RETURNING. The caller compares the resolved-set to the submitted-set
+ * to surface `notFoundIds` — the UI shows "3 of 5 resolved; 2 were
+ * already resolved or wrong tenant"; the CLI prints the same in its
+ * apply-mode output.
+ *
+ * Throws:
+ *   - ForbiddenError    caller lacks failed_pushes:resolve.
+ *   - ValidationError   empty failedPushIds, empty resolutionNotes,
+ *                       notes > 500 chars, > BULK_RESOLVE_MAX_BATCH IDs,
+ *                       or no tenant context.
+ */
+export async function bulkResolveFailedPushes(
+  ctx: RequestContext,
+  input: BulkResolveFailedPushesInput,
+): Promise<BulkResolveFailedPushesResult> {
+  requirePermission(ctx, "failed_pushes:resolve");
+  assertTenantScoped(ctx, "failed_pushes:bulk_resolve");
+
+  if (input.failedPushIds.length === 0) {
+    throw new ValidationError("failedPushIds must contain at least one id");
+  }
+  if (input.failedPushIds.length > BULK_RESOLVE_MAX_BATCH) {
+    throw new ValidationError(
+      `failedPushIds may contain at most ${BULK_RESOLVE_MAX_BATCH} ids per batch (got ${input.failedPushIds.length})`,
+    );
+  }
+  const trimmedNotes = input.resolutionNotes.trim();
+  if (trimmedNotes.length === 0) {
+    throw new ValidationError("resolutionNotes must be non-empty");
+  }
+  if (trimmedNotes.length > RESOLUTION_NOTES_MAX_LEN) {
+    throw new ValidationError(
+      `resolutionNotes must be ≤${RESOLUTION_NOTES_MAX_LEN} chars (got ${trimmedNotes.length})`,
+    );
+  }
+
+  // Deduplicate the submitted IDs before the SQL round-trip — a UI
+  // double-select or CLI input dupe shouldn't pad the partial-success
+  // accounting nor cost extra SQL parameter binding.
+  const uniqueIds = Array.from(new Set(input.failedPushIds));
+
+  // resolved_by is the userId when actor.kind === 'user' (UI path).
+  // For the CLI's synthetic system actor, resolved_by stays NULL —
+  // failed_pushes.resolved_by is a FK to users(id) and won't admit a
+  // 'cli:resolve_failed_pushes' string. The audit emit's actor identity
+  // carries the CLI attribution instead.
+  const resolvedBy: Uuid | null =
+    ctx.actor.kind === "user" ? (ctx.actor.userId as Uuid) : null;
+
+  const tenantId = ctx.tenantId;
+  const resolved = await withServiceRole(
+    `failed_push:bulk_resolved for tenant ${tenantId} (${uniqueIds.length} ids, source=${input.source})`,
+    async (tx) =>
+      bulkMarkUnresolvedAsResolved(tx, tenantId, uniqueIds, resolvedBy, trimmedNotes),
+  );
+
+  const resolvedIds = new Set(resolved.map((r) => r.id));
+  const notFoundIds = uniqueIds.filter((id) => !resolvedIds.has(id));
+
+  // Audit emit fires regardless of resolved-count (including 0) — the
+  // operator's action IS the auditable event, not just the side-effects.
+  // A 0-resolved bulk operation means every submitted ID was stale; the
+  // operator's intent is still recorded for forensic reconstruction.
+  // Metadata shape MUST match the event-types.ts registration verbatim
+  // per the §A registered-metadata-wins rule.
+  await emit({
+    eventType: "failed_push.bulk_resolved",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId,
+    resourceType: "failed_push",
+    metadata: {
+      failed_push_ids: resolved.map((r) => r.id),
+      count: resolved.length,
+      resolution_notes: trimmedNotes,
+      source: input.source,
+      not_found_count: notFoundIds.length,
+    },
+    requestId: ctx.requestId,
+  });
+
+  return { resolved, notFoundIds };
+}
+
+// =============================================================================
 // listUnresolvedFailedPushes — Day 8 / D8-5
 // =============================================================================
 
@@ -347,11 +546,47 @@ export async function recordFailedPushAttempt(
  */
 export async function listUnresolvedFailedPushes(
   ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly FailedPush[]> {
   requirePermission(ctx, "failed_pushes:retry");
   assertTenantScoped(ctx, "failed_pushes:list");
   const tenantId = ctx.tenantId;
-  return withTenant(tenantId, async (tx) => listUnresolvedByTenant(tx, tenantId));
+  return withTenant(tenantId, async (tx) => listUnresolvedByTenant(tx, tenantId, opts));
+}
+
+// =============================================================================
+// listFailedPushTaskIdsForTenant — Day-30 / Fix-A2 (Aqib UAT 2026-05-18)
+// =============================================================================
+
+/**
+ * Day-30 / Fix-A2 — read-only set of task IDs with unresolved
+ * failed_pushes rows for the tenant. Powers the failed-push indicator
+ * on merchant task views (consignee calendar, /tasks). Gated on the
+ * NEW `failed_pushes:read` permission — split from `failed_pushes:retry`
+ * (which stays Tenant-Admin-only). The split was pre-blessed in the
+ * failed_pushes:retry registration ("If we later want a CS-readable
+ * surface (no retry button), split into two perms").
+ *
+ * Returns a Set<Uuid> rather than the full row payload — call sites
+ * only need set-membership for badge rendering. Keeps the wire-shape
+ * minimal and avoids leaking failure_payload / failure_reason to
+ * roles that have read-but-not-retry authority (CS Agent / Ops
+ * Manager); those fields stay accessible only via the existing
+ * Tenant-Admin-gated listUnresolvedFailedPushes.
+ *
+ * Tenant-scoped via withTenant. Read-not-audited per R-4 (no state
+ * change; matches listUnresolvedFailedPushes posture).
+ */
+export async function listFailedPushTaskIdsForTenant(
+  ctx: RequestContext,
+): Promise<ReadonlySet<Uuid>> {
+  requirePermission(ctx, "failed_pushes:read");
+  assertTenantScoped(ctx, "failed_pushes:list_task_ids");
+  const tenantId = ctx.tenantId;
+  const rows = await withTenant(tenantId, async (tx) =>
+    listUnresolvedByTenant(tx, tenantId),
+  );
+  return new Set(rows.map((r) => r.taskId as Uuid));
 }
 
 // =============================================================================

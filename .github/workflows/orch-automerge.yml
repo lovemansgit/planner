@@ -1,0 +1,61 @@
+# Shape-3 orchestration — Layer 2 merge lock (Fork 4, Love-ruled).
+# This Action is the ONLY actor that merges. It triggers on the automerge-t1
+# label, re-computes the path gate server-side from main's trusted copy of the
+# script, and requires a reviewer APPROVE verdict pinned to the CURRENT head
+# SHA. Any check failing parks the PR. There is no code path from disagreement
+# to merge.
+name: orch-automerge-t1
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  gate-and-merge:
+    if: github.event.label.name == 'automerge-t1'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      # pull_request_target checks out the BASE ref (main). The PR's own copy
+      # of the gate script is never executed.
+      - uses: actions/checkout@v4
+
+      - name: "Layer 2: re-compute path gate from main's trusted copy"
+        run: bash scripts/orchestration/path-gate.sh "$PR"
+
+      - name: "Require reviewer APPROVE verdict at the current head SHA"
+        run: |
+          head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          last_verdict=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[].body | select(startswith("ORCH-VERDICT"))] | last // ""')
+          echo "$last_verdict" | grep -q "SHA: $head" \
+            || { echo "FAIL: latest ORCH-VERDICT is not for head $head"; exit 1; }
+          echo "$last_verdict" | grep -q "VERDICT: APPROVE" \
+            || { echo "FAIL: latest ORCH-VERDICT is not APPROVE"; exit 1; }
+
+      # Needed once Love sets required-approving-reviews=1 on main. Until the
+      # repo setting "Allow GitHub Actions to create and approve pull requests"
+      # is enabled this step fails; continue-on-error keeps the (still
+      # protection-gated) merge step below as the single decider.
+      - name: "Approve as the sanctioned review path"
+        continue-on-error: true
+        run: |
+          gh pr review "$PR" --repo "$REPO" --approve \
+            --body "orch-automerge-t1: path gate + head-SHA verdict re-verified server-side."
+
+      - name: "Enable auto-merge (waits on required CI checks)"
+        run: gh pr merge "$PR" --repo "$REPO" --squash --auto
+
+      - name: "Park on any gate failure"
+        if: failure()
+        run: |
+          gh pr edit "$PR" --repo "$REPO" --remove-label automerge-t1 --add-label parked-t3
+          gh pr comment "$PR" --repo "$REPO" \
+            --body "ORCH-PARK — parked by orch-automerge-t1: a server-side gate check failed (see the Action run for which step). This PR does not auto-merge."

@@ -31,6 +31,16 @@ export default async function LandingPage() {
     if (ctx.actor.kind !== "user") {
       throw new UnauthorizedError("non-user actor in operator UI");
     }
+    // Day 19 / Phase 1.5 (PR #213) — Transcorp staff land on the
+    // cross-tenant admin home, not the merchant-operator dashboard.
+    // Permission-gated (not role-name-based) so future Transcorp-staff
+    // roles inherit the redirect without code change. See
+    // memory/followup_transcorp_sysadmin_perm_scope_phase_2.md for the
+    // architectural posture (Posture 1 — transcorp-sysadmin keeps ALL
+    // perms; this redirect is the demo-readiness fix).
+    if (ctx.actor.permissions.has("merchant:read_all")) {
+      redirect("/admin/merchants");
+    }
     cards = visibleLandingCards(ctx.actor.permissions);
     greeting = ctx.actor.displayName ?? ctx.actor.email ?? "operator";
   } catch (err) {
@@ -50,7 +60,7 @@ export default async function LandingPage() {
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription planner
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Welcome back</h1>
+          <h1 className="mt-3 text-5xl font-bold tracking-tighter">Welcome back</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Signed in as {greeting}.
           </p>
@@ -64,7 +74,7 @@ export default async function LandingPage() {
               <Link
                 key={card.path}
                 href={card.path}
-                className="block border border-[color:var(--color-border-strong)] p-8 transition-opacity hover:opacity-80"
+                className="block border border-[color:var(--color-border-strong)] p-8 transition-colors duration-150 hover:border-t-green"
               >
                 <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
                   Shortcut

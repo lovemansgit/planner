@@ -20,6 +20,12 @@
 //   4. Cross-tenant isolation: a user's resolution does not leak grants
 //      from a different tenant on a shared role row
 //   5. No mirror row: returns null (caller maps to UnauthorizedError)
+//   6. Day-16 §10.5 — `tenants.status = 'active'` filter: users on
+//      provisioning / suspended / inactive tenants resolve to null
+//      (caller maps to UnauthorizedError → 401 / login redirect).
+//      The deactivateMerchant flow's session-revocation property
+//      depends on this gate: flipping a tenant to 'inactive' must
+//      invalidate every member's session on next request.
 
 import { randomUUID } from "node:crypto";
 
@@ -42,21 +48,40 @@ const TENANT_B = randomUUID();
 const SLUG_A = `auth-test-${RUN_ID}-a`;
 const SLUG_B = `auth-test-${RUN_ID}-b`;
 
+// Day-16 §10.5 — 4-state tenants.status matrix tenants. Each carries one
+// member with a tenant-admin role assignment so the only material
+// difference vs TENANT_A's resolving path is the tenants.status value.
+const TENANT_PROVISIONING = randomUUID();
+const TENANT_SUSPENDED = randomUUID();
+const TENANT_INACTIVE = randomUUID();
+const SLUG_PROVISIONING = `auth-test-${RUN_ID}-prov`;
+const SLUG_SUSPENDED = `auth-test-${RUN_ID}-susp`;
+const SLUG_INACTIVE = `auth-test-${RUN_ID}-inac`;
+
 const USER_ADMIN = randomUUID();
 const USER_AGENT = randomUUID();
 const USER_DISABLED = randomUUID();
 const USER_NO_MIRROR = randomUUID();
 const USER_MULTI = randomUUID();
 const USER_TENANT_B = randomUUID();
+const USER_PROVISIONING = randomUUID();
+const USER_SUSPENDED = randomUUID();
+const USER_INACTIVE = randomUUID();
 
 describe("Day-10 P2 — buildRequestContext / resolveUserContext (integration)", () => {
   beforeAll(async () => {
     await withServiceRole("auth-end-to-end integration setup", async (tx) => {
-      // Tenants
+      // Tenants. Day-16 §10.5 — explicit status set on every test tenant.
+      // TENANT_A + TENANT_B are 'active' so the existing resolution
+      // tests pass post-§10.5; the three new tenants exercise the
+      // non-active branches that must resolve to null.
       await tx.execute(sqlTag`
-        INSERT INTO tenants (id, slug, name) VALUES
-          (${TENANT_A}, ${SLUG_A}, 'Auth Test Tenant A'),
-          (${TENANT_B}, ${SLUG_B}, 'Auth Test Tenant B')
+        INSERT INTO tenants (id, slug, name, status) VALUES
+          (${TENANT_A},            ${SLUG_A},            'Auth Test Tenant A',            'active'),
+          (${TENANT_B},            ${SLUG_B},            'Auth Test Tenant B',            'active'),
+          (${TENANT_PROVISIONING}, ${SLUG_PROVISIONING}, 'Auth Test Tenant Provisioning', 'provisioning'),
+          (${TENANT_SUSPENDED},    ${SLUG_SUSPENDED},    'Auth Test Tenant Suspended',    'suspended'),
+          (${TENANT_INACTIVE},     ${SLUG_INACTIVE},     'Auth Test Tenant Inactive',     'inactive')
       `);
 
       // Built-in role rows. These are normally seeded once globally
@@ -76,21 +101,27 @@ describe("Day-10 P2 — buildRequestContext / resolveUserContext (integration)",
       // CI; in production this is GoTrue's table).
       await tx.execute(sqlTag`
         INSERT INTO auth.users (id, email) VALUES
-          (${USER_ADMIN},     ${"admin-" + RUN_ID + "@auth-test.example"}),
-          (${USER_AGENT},     ${"agent-" + RUN_ID + "@auth-test.example"}),
-          (${USER_DISABLED},  ${"disabled-" + RUN_ID + "@auth-test.example"}),
-          (${USER_NO_MIRROR}, ${"orphan-" + RUN_ID + "@auth-test.example"}),
-          (${USER_MULTI},     ${"multi-" + RUN_ID + "@auth-test.example"}),
-          (${USER_TENANT_B},  ${"tenant-b-" + RUN_ID + "@auth-test.example"})
+          (${USER_ADMIN},        ${"admin-" + RUN_ID + "@auth-test.example"}),
+          (${USER_AGENT},        ${"agent-" + RUN_ID + "@auth-test.example"}),
+          (${USER_DISABLED},     ${"disabled-" + RUN_ID + "@auth-test.example"}),
+          (${USER_NO_MIRROR},    ${"orphan-" + RUN_ID + "@auth-test.example"}),
+          (${USER_MULTI},        ${"multi-" + RUN_ID + "@auth-test.example"}),
+          (${USER_TENANT_B},     ${"tenant-b-" + RUN_ID + "@auth-test.example"}),
+          (${USER_PROVISIONING}, ${"prov-" + RUN_ID + "@auth-test.example"}),
+          (${USER_SUSPENDED},    ${"susp-" + RUN_ID + "@auth-test.example"}),
+          (${USER_INACTIVE},     ${"inac-" + RUN_ID + "@auth-test.example"})
       `);
 
       // public.users mirrors. USER_NO_MIRROR has auth.users only — no mirror row.
       await tx.execute(sqlTag`
         INSERT INTO users (id, tenant_id, email) VALUES
-          (${USER_ADMIN},    ${TENANT_A}, ${"admin-" + RUN_ID + "@auth-test.example"}),
-          (${USER_AGENT},    ${TENANT_A}, ${"agent-" + RUN_ID + "@auth-test.example"}),
-          (${USER_MULTI},    ${TENANT_A}, ${"multi-" + RUN_ID + "@auth-test.example"}),
-          (${USER_TENANT_B}, ${TENANT_B}, ${"tenant-b-" + RUN_ID + "@auth-test.example"})
+          (${USER_ADMIN},        ${TENANT_A},            ${"admin-" + RUN_ID + "@auth-test.example"}),
+          (${USER_AGENT},        ${TENANT_A},            ${"agent-" + RUN_ID + "@auth-test.example"}),
+          (${USER_MULTI},        ${TENANT_A},            ${"multi-" + RUN_ID + "@auth-test.example"}),
+          (${USER_TENANT_B},     ${TENANT_B},            ${"tenant-b-" + RUN_ID + "@auth-test.example"}),
+          (${USER_PROVISIONING}, ${TENANT_PROVISIONING}, ${"prov-" + RUN_ID + "@auth-test.example"}),
+          (${USER_SUSPENDED},    ${TENANT_SUSPENDED},    ${"susp-" + RUN_ID + "@auth-test.example"}),
+          (${USER_INACTIVE},     ${TENANT_INACTIVE},     ${"inac-" + RUN_ID + "@auth-test.example"})
       `);
 
       // USER_DISABLED gets a mirror row WITH disabled_at set.
@@ -125,6 +156,26 @@ describe("Day-10 P2 — buildRequestContext / resolveUserContext (integration)",
       await tx.execute(sqlTag`
         INSERT INTO role_assignments (user_id, role_id, tenant_id)
         SELECT ${USER_TENANT_B}, r.id, ${TENANT_B} FROM roles r
+        WHERE r.tenant_id IS NULL AND r.slug = 'tenant-admin'
+      `);
+      // Day-16 §10.5 4-state matrix users — each carries tenant-admin
+      // scoped to their respective non-active tenant. The only
+      // differentiator from USER_ADMIN is the tenants.status value;
+      // resolveUserContext must return null for all three because
+      // the JOIN tenants + status='active' filter excludes their row.
+      await tx.execute(sqlTag`
+        INSERT INTO role_assignments (user_id, role_id, tenant_id)
+        SELECT ${USER_PROVISIONING}, r.id, ${TENANT_PROVISIONING} FROM roles r
+        WHERE r.tenant_id IS NULL AND r.slug = 'tenant-admin'
+      `);
+      await tx.execute(sqlTag`
+        INSERT INTO role_assignments (user_id, role_id, tenant_id)
+        SELECT ${USER_SUSPENDED}, r.id, ${TENANT_SUSPENDED} FROM roles r
+        WHERE r.tenant_id IS NULL AND r.slug = 'tenant-admin'
+      `);
+      await tx.execute(sqlTag`
+        INSERT INTO role_assignments (user_id, role_id, tenant_id)
+        SELECT ${USER_INACTIVE}, r.id, ${TENANT_INACTIVE} FROM roles r
         WHERE r.tenant_id IS NULL AND r.slug = 'tenant-admin'
       `);
     });
@@ -188,5 +239,30 @@ describe("Day-10 P2 — buildRequestContext / resolveUserContext (integration)",
     expect(a?.tenantId).toBe(TENANT_A);
     expect(b?.tenantId).toBe(TENANT_B);
     expect(a?.tenantId).not.toBe(b?.tenantId);
+  });
+
+  // Day-16 §10.5 — 4-state tenants.status matrix.
+  //
+  // The three negative cases below pin the JOIN tenants + status='active'
+  // filter at the real-DB layer. Each user carries a fully provisioned
+  // mirror row + role assignment; the only thing keeping them from
+  // resolving is the tenants.status value. This is the load-bearing
+  // verification that deactivateMerchant's session-revocation property
+  // holds (the session itself isn't deleted; the next request through
+  // resolveUserContext returns null and the caller maps it to 401).
+
+  it("returns null for a user on a 'provisioning' tenant (§10.5)", async () => {
+    const resolved = await resolveUserContext(USER_PROVISIONING);
+    expect(resolved).toBeNull();
+  });
+
+  it("returns null for a user on a 'suspended' tenant (§10.5)", async () => {
+    const resolved = await resolveUserContext(USER_SUSPENDED);
+    expect(resolved).toBeNull();
+  });
+
+  it("returns null for a user on an 'inactive' tenant (§10.5 — deactivateMerchant cutover)", async () => {
+    const resolved = await resolveUserContext(USER_INACTIVE);
+    expect(resolved).toBeNull();
   });
 });

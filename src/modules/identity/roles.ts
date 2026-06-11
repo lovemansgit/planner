@@ -45,9 +45,22 @@ const ALL: readonly PermissionId[] = Object.freeze(Object.keys(PERMISSIONS) as P
 /** Filter: every non-systemOnly permission. */
 const TENANT_SCOPED: readonly PermissionId[] = ALL.filter((id) => !SYSTEM_ONLY_PERMISSIONS.has(id));
 
-/** Filter: every permission whose resource matches `resource`. */
+/**
+ * Filter: every NON-systemOnly permission whose resource matches `resource`.
+ *
+ * Used by tenant-facing roles (Tenant Admin, Ops Manager, CS Agent) to
+ * spread "all perms for this resource" without inadvertently capturing
+ * systemOnly perms that are added later in the resource family. Day-19
+ * Phase 1.5 added `task:read_all` / `consignee:read_all` /
+ * `subscription:read_all` — three systemOnly perms in the task /
+ * consignee / subscription resource families that would have leaked
+ * into Ops Manager's set without this filter, breaking the
+ * `systemOnlyPermissionsAreNotInTenantRoles` invariant.
+ */
 function permsFor(resource: string): readonly PermissionId[] {
-  return ALL.filter((id) => PERMISSIONS[id].resource === resource);
+  return ALL.filter(
+    (id) => PERMISSIONS[id].resource === resource && !SYSTEM_ONLY_PERMISSIONS.has(id),
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -100,6 +113,12 @@ const ROLES_DRAFT = {
       // belongs to OM same as TA. Explicit add because ops-manager doesn't
       // auto-pickup tenant/webhook_config-resource perms.
       "webhook_config:read",
+      // Day-30 / Fix-A2 — read-only failed-push visibility for the merchant
+      // task views. Parallels webhook_config:read (operational-debugging
+      // surface that Ops Manager needs without retry-tier authority).
+      // No corresponding `failed_pushes:retry` add here — retry stays
+      // Tenant-Admin-only per the existing failed_pushes:retry posture.
+      "failed_pushes:read",
     ]),
   },
 
@@ -129,7 +148,42 @@ const ROLES_DRAFT = {
       // but not be able to print their labels — operationally wrong
       // for support investigations where they need the AWB sheet.
       "task:print_labels",
+      // Day-19 / Phase 1 — single-task cancel. §J-5 ruling: CS Agent
+      // owns daily-ops single cancellations (recipient cancels, address
+      // dispute escalations) but NOT bulk variants — `task:bulk_cancel`
+      // and `task:bulk_update` stay Ops-Manager-only via permsFor("task")
+      // auto-pickup at line 109. Single-row mutation matches the existing
+      // CS Agent posture (consignee:update, consignee:delete already in
+      // the list).
+      "task:cancel",
       "audit_event:read",
+      // Day 13 / T3 part 1 — exception-model surface. Brief §3.1.3
+      // gives CS Agent the default skip + address change workflows
+      // + CRM state transition. Explicitly NOT included:
+      // subscription:override_skip_rules (skip overrides are reserved
+      // to Tenant Admin and Ops Manager per the brief — CS Agent
+      // exercises default skip rules only).
+      "subscription:skip",
+      "subscription:change_address_rotation",
+      "subscription:change_address_one_off",
+      "subscription:change_address_forward",
+      "consignee:change_crm_state",
+      // Day-22 / PR-B — calendar popover actions 7 + 8. Both are
+      // customer-service-facing routine surfaces with no destructive
+      // cascade: add-note appends free-text on tasks.notes (D2 ruling),
+      // view-timeline is read-only over webhook_events (D3 ruling).
+      // Explicit add because CS Agent's task perms are hand-rolled
+      // (line 138 above); permsFor("task") auto-pickup applies to Ops
+      // Manager but not CS Agent.
+      "task:add_note",
+      "task:view_timeline",
+      // Day-30 / Fix-A2 — read-only failed-push visibility for the
+      // merchant calendar surface. CS Agent needs the failure signal
+      // during case investigation (operator-reported "where's my
+      // delivery?" → CS sees the failed-push indicator instead of an
+      // unhelpful "Created" state). Read-only — retry stays
+      // Tenant-Admin-only via the unchanged failed_pushes:retry gate.
+      "failed_pushes:read",
     ]),
   },
 

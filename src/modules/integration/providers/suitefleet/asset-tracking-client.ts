@@ -242,15 +242,21 @@ export function createSuiteFleetAssetTrackingClient(
         );
       }
       if (response.status >= 500) {
+        // Plan #317 §3.1 / F-1: read 5xx body before throwing — mirrors
+        // task-client.ts's 5xx branches so downstream failure_detail
+        // (via CredentialError.message) carries SF's own error text.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
         log.warn({
           operation: "fetch_asset_tracking",
           awb,
           tenant_id: session.tenantId,
           status: response.status,
           error_code: "server_5xx",
+          response_excerpt: responseText.slice(0, 400),
         });
         throw new CredentialError(
-          `SuiteFleet asset-tracking fetch returned ${response.status}`,
+          `SuiteFleet asset-tracking fetch returned ${response.status}: ${responseText.slice(0, 2000)}`,
         );
       }
       if (response.status >= 400) {

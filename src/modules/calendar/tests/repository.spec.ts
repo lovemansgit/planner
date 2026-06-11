@@ -1,0 +1,536 @@
+// Day-22n PR-C-A + Day-23n polish — Calendar repository unit tests.
+//
+// Mocks `tx.execute` directly so SQL building (filter clauses,
+// per-day grouping, distinct-value lookups, 5-metric snapshots) and
+// the row mappers can be exercised without a real Postgres
+// connection. Cross-tenant isolation lives in RLS + tested in
+// tests/integration/*; these specs verify the *shape* of the
+// queries we send.
+
+import { type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  buildWeekDays,
+  computeMetrics,
+  computeTranscorpAdminMetrics,
+  countTasksGroupedByDay,
+  listDistinctCrmStates,
+  listDistinctDistricts,
+  listDistinctTaskStatuses,
+  listPerMerchantBreakdown,
+  listTasksForDayAcrossConsignees,
+  listTopMerchantsTodayWithTaskCount,
+} from "../repository";
+import type { CalendarFilters } from "../types";
+
+const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
+
+const dialect = new PgDialect();
+
+function compile(query: unknown): { sql: string; params: unknown[] } {
+  const compiled = dialect.sqlToQuery(query as SQL);
+  return { sql: compiled.sql, params: compiled.params };
+}
+
+function makeStubTx(executeReturns: unknown[]) {
+  let call = 0;
+  const execute = vi.fn(async () => {
+    const value = executeReturns[call] ?? [];
+    call += 1;
+    return value;
+  });
+  return { execute } as unknown as Parameters<typeof countTasksGroupedByDay>[0] & {
+    execute: ReturnType<typeof vi.fn>;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// countTasksGroupedByDay
+// ---------------------------------------------------------------------------
+
+describe("countTasksGroupedByDay", () => {
+  const WEEK_START = "2026-05-11"; // Monday
+  const WEEK_END = "2026-05-17"; // Sunday
+
+  it("issues one execute() call with the tenant + range predicates bound", async () => {
+    const tx = makeStubTx([
+      [{ delivery_date: "2026-05-12", total: 5, has_high_risk: true }],
+    ]);
+    await countTasksGroupedByDay(tx, TENANT_ID, WEEK_START, WEEK_END, {});
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM tasks t/);
+    expect(sql).toMatch(/JOIN consignees c/);
+    expect(sql).toMatch(/GROUP BY t.delivery_date/);
+    expect(sql).toMatch(/bool_or\(c.crm_state = 'HIGH_RISK'\)/);
+    expect(params).toContain(TENANT_ID);
+    expect(params).toContain(WEEK_START);
+    expect(params).toContain(WEEK_END);
+  });
+
+  it("maps rows to the camelCase domain shape with total coerced to number", async () => {
+    const tx = makeStubTx([
+      [
+        { delivery_date: "2026-05-12", total: "5", has_high_risk: false },
+        { delivery_date: "2026-05-13", total: 3, has_high_risk: true },
+      ],
+    ]);
+    const rows = await countTasksGroupedByDay(tx, TENANT_ID, WEEK_START, WEEK_END, {});
+    expect(rows).toEqual([
+      { date: "2026-05-12", total: 5, hasHighRisk: false },
+      { date: "2026-05-13", total: 3, hasHighRisk: true },
+    ]);
+  });
+
+  it("threads the q filter through as ILIKE with %wrap%", async () => {
+    const tx = makeStubTx([[]]);
+    await countTasksGroupedByDay(tx, TENANT_ID, WEEK_START, WEEK_END, { q: "Sarah" });
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/c\.name ILIKE/);
+    expect(params).toContain("%Sarah%");
+  });
+
+  it("threads the crm + district + status filters as exact-match predicates", async () => {
+    const filters: CalendarFilters = {
+      crm: "HIGH_RISK",
+      district: "Al Quoz",
+      status: "FAILED",
+    };
+    const tx = makeStubTx([[]]);
+    await countTasksGroupedByDay(tx, TENANT_ID, WEEK_START, WEEK_END, filters);
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/c\.crm_state = /);
+    expect(sql).toMatch(/c\.district = /);
+    expect(sql).toMatch(/t\.internal_status = /);
+    expect(params).toContain("HIGH_RISK");
+    expect(params).toContain("Al Quoz");
+    expect(params).toContain("FAILED");
+  });
+
+  it("does NOT emit any delivery_start_time predicate (window filter dropped Day-23n)", async () => {
+    const tx = makeStubTx([[]]);
+    await countTasksGroupedByDay(tx, TENANT_ID, WEEK_START, WEEK_END, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).not.toMatch(/t\.delivery_start_time/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeMetrics (tenant-scoped)
+// ---------------------------------------------------------------------------
+
+describe("computeMetrics", () => {
+  const TODAY = "2026-05-11";
+
+  it("returns the five metrics from a single round-trip", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          active_consignees: 42,
+          today_deliveries_scheduled: 12,
+          delivered_today: 5,
+          out_for_delivery: 3,
+          failed_at_risk: 2,
+        },
+      ],
+    ]);
+    const result = await computeMetrics(tx, TENANT_ID, TODAY, {});
+    expect(tx.execute).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      activeConsignees: 42,
+      todayDeliveriesScheduled: 12,
+      deliveredToday: 5,
+      outForDelivery: 3,
+      failedAtRisk: 2,
+    });
+  });
+
+  it("returns zeros when the row set is empty", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await computeMetrics(tx, TENANT_ID, TODAY, {});
+    expect(result).toEqual({
+      activeConsignees: 0,
+      todayDeliveriesScheduled: 0,
+      deliveredToday: 0,
+      outForDelivery: 0,
+      failedAtRisk: 0,
+    });
+  });
+
+  it("coerces bigint strings to numbers", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          active_consignees: "42",
+          today_deliveries_scheduled: "12",
+          delivered_today: "5",
+          out_for_delivery: "3",
+          failed_at_risk: "2",
+        },
+      ],
+    ]);
+    const result = await computeMetrics(tx, TENANT_ID, TODAY, {});
+    expect(result.activeConsignees).toBe(42);
+    expect(typeof result.activeConsignees).toBe("number");
+  });
+
+  it("emits the 7-day FAILED window via INTERVAL '7 days' arithmetic", async () => {
+    const tx = makeStubTx([[]]);
+    await computeMetrics(tx, TENANT_ID, TODAY, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/INTERVAL '7 days'/);
+    expect(sql).toMatch(/t\.internal_status = 'FAILED'/);
+    expect(sql).toMatch(/c\.crm_state = 'HIGH_RISK'/);
+  });
+
+  it("anchors activeConsignees on crm_state IN ('ACTIVE', 'HIGH_RISK')", async () => {
+    const tx = makeStubTx([[]]);
+    await computeMetrics(tx, TENANT_ID, TODAY, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/c\.crm_state IN \('ACTIVE', 'HIGH_RISK'\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeTranscorpAdminMetrics (cross-tenant)
+// ---------------------------------------------------------------------------
+
+describe("computeTranscorpAdminMetrics", () => {
+  const TODAY = "2026-05-11";
+
+  it("returns the five cross-tenant metrics from a single round-trip", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          active_merchants: 4,
+          total_deliveries_today: 120,
+          delivered_today: 45,
+          in_transit: 18,
+          failed_last_7_days: 6,
+        },
+      ],
+    ]);
+    const result = await computeTranscorpAdminMetrics(tx, TODAY);
+    expect(tx.execute).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      activeMerchants: 4,
+      totalDeliveriesToday: 120,
+      deliveredToday: 45,
+      inTransit: 18,
+      failedLast7Days: 6,
+    });
+  });
+
+  it("emits no tenant-scoped WHERE predicate (cross-tenant aggregate)", async () => {
+    const tx = makeStubTx([[]]);
+    await computeTranscorpAdminMetrics(tx, TODAY);
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).not.toMatch(/tenant_id\s*=/);
+    expect(sql).toMatch(/FROM tenants/);
+    expect(sql).toMatch(/status = 'active'/);
+    expect(sql).toMatch(/internal_status = 'DELIVERED'/);
+    expect(sql).toMatch(/internal_status = 'IN_TRANSIT'/);
+    expect(sql).toMatch(/internal_status = 'FAILED'/);
+    expect(sql).toMatch(/INTERVAL '7 days'/);
+    expect(params).toContain(TODAY);
+  });
+
+  it("coerces bigint strings to numbers", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          active_merchants: "4",
+          total_deliveries_today: "120",
+          delivered_today: "45",
+          in_transit: "18",
+          failed_last_7_days: "6",
+        },
+      ],
+    ]);
+    const result = await computeTranscorpAdminMetrics(tx, TODAY);
+    expect(result.activeMerchants).toBe(4);
+    expect(typeof result.totalDeliveriesToday).toBe("number");
+  });
+
+  it("returns zeros when row set is empty", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await computeTranscorpAdminMetrics(tx, TODAY);
+    expect(result).toEqual({
+      activeMerchants: 0,
+      totalDeliveriesToday: 0,
+      deliveredToday: 0,
+      inTransit: 0,
+      failedLast7Days: 0,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listTopMerchantsTodayWithTaskCount (Day-23n fleet panels)
+// ---------------------------------------------------------------------------
+
+describe("listTopMerchantsTodayWithTaskCount", () => {
+  const TODAY = "2026-05-12";
+
+  it("issues one execute() call with today + active-tenant predicate + LIMIT", async () => {
+    const tx = makeStubTx([[]]);
+    await listTopMerchantsTodayWithTaskCount(tx, TODAY, 10);
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM tasks/);
+    expect(sql).toMatch(/JOIN tenants/);
+    expect(sql).toMatch(/tasks\.delivery_date = /);
+    expect(sql).toMatch(/t\.status = 'active'/);
+    expect(sql).toMatch(/GROUP BY t\.id, t\.name, t\.slug/);
+    expect(sql).toMatch(/ORDER BY task_count DESC/);
+    expect(sql).toMatch(/LIMIT /);
+    expect(params).toContain(TODAY);
+    expect(params).toContain(10);
+  });
+
+  it("clamps limit to [1, 100]", async () => {
+    const tx = makeStubTx([[], []]);
+    await listTopMerchantsTodayWithTaskCount(tx, TODAY, 0);
+    const { params: lowParams } = compile(tx.execute.mock.calls[0][0]);
+    expect(lowParams).toContain(1);
+    await listTopMerchantsTodayWithTaskCount(tx, TODAY, 9999);
+    const { params: highParams } = compile(tx.execute.mock.calls[1][0]);
+    expect(highParams).toContain(100);
+  });
+
+  it("maps rows to the CalendarTopMerchantToday domain shape", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          tenant_id: "tenant-1",
+          tenant_name: "MPL",
+          tenant_slug: "mpl",
+          task_count: "42",
+        },
+        {
+          tenant_id: "tenant-2",
+          tenant_name: "DNR",
+          tenant_slug: "dnr",
+          task_count: 18,
+        },
+      ],
+    ]);
+    const rows = await listTopMerchantsTodayWithTaskCount(tx, TODAY);
+    expect(rows).toEqual([
+      { tenantId: "tenant-1", tenantName: "MPL", tenantSlug: "mpl", taskCount: 42 },
+      { tenantId: "tenant-2", tenantName: "DNR", tenantSlug: "dnr", taskCount: 18 },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listPerMerchantBreakdown (Day-23n fleet panels)
+// ---------------------------------------------------------------------------
+
+describe("listPerMerchantBreakdown", () => {
+  const TODAY = "2026-05-12";
+
+  it("uses FILTER-aggregate clauses in a single round-trip", async () => {
+    const tx = makeStubTx([[]]);
+    await listPerMerchantBreakdown(tx, TODAY);
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER \(WHERE tasks\.delivery_date = /);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER[\s\S]*internal_status = 'DELIVERED'/);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER[\s\S]*internal_status = 'IN_TRANSIT'/);
+    expect(sql).toMatch(/COUNT\(\*\) FILTER[\s\S]*internal_status = 'FAILED'/);
+    expect(sql).toMatch(/INTERVAL '7 days'/);
+    expect(params).toContain(TODAY);
+  });
+
+  it("LEFT JOINs tasks on tenant_id (zero-task merchants still appear)", async () => {
+    const tx = makeStubTx([[]]);
+    await listPerMerchantBreakdown(tx, TODAY);
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM tenants t\s*LEFT JOIN tasks/);
+    expect(sql).toMatch(/t\.status = 'active'/);
+    expect(sql).toMatch(/ORDER BY t\.name ASC/);
+  });
+
+  it("maps rows to CalendarPerMerchantBreakdownRow with bigint coercion", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          tenant_id: "tenant-1",
+          tenant_name: "MPL",
+          tenant_slug: "mpl",
+          total_today: "42",
+          delivered_today: 10,
+          in_transit: "5",
+          failed_last_7_days: 2,
+        },
+      ],
+    ]);
+    const rows = await listPerMerchantBreakdown(tx, TODAY);
+    expect(rows).toEqual([
+      {
+        tenantId: "tenant-1",
+        tenantName: "MPL",
+        tenantSlug: "mpl",
+        totalToday: 42,
+        deliveredToday: 10,
+        inTransit: 5,
+        failedLast7Days: 2,
+      },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listDistinctDistricts / CrmStates / TaskStatuses
+// ---------------------------------------------------------------------------
+
+describe("listDistinctDistricts", () => {
+  it("filters out empty + null values and returns the strings sorted", async () => {
+    const tx = makeStubTx([
+      [{ value: "Al Quoz" }, { value: "Jumeirah" }, { value: "" }, { value: null }],
+    ]);
+    const rows = await listDistinctDistricts(tx, TENANT_ID);
+    expect(rows).toEqual(["Al Quoz", "Jumeirah"]);
+  });
+});
+
+describe("listDistinctCrmStates", () => {
+  it("returns the crm_state values that exist for the tenant", async () => {
+    const tx = makeStubTx([[{ value: "ACTIVE" }, { value: "HIGH_RISK" }]]);
+    const rows = await listDistinctCrmStates(tx, TENANT_ID);
+    expect(rows).toEqual(["ACTIVE", "HIGH_RISK"]);
+  });
+});
+
+describe("listDistinctTaskStatuses", () => {
+  it("returns the internal_status values that exist for the tenant", async () => {
+    const tx = makeStubTx([
+      [{ value: "CREATED" }, { value: "DELIVERED" }, { value: "FAILED" }],
+    ]);
+    const rows = await listDistinctTaskStatuses(tx, TENANT_ID);
+    expect(rows).toEqual(["CREATED", "DELIVERED", "FAILED"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildWeekDays — pure assembly helper
+// ---------------------------------------------------------------------------
+
+describe("buildWeekDays", () => {
+  const WEEK_START = "2026-05-11"; // Monday
+  const WEEK_END = "2026-05-17"; // Sunday
+
+  it("returns exactly 7 days even when only one has data", () => {
+    const days = buildWeekDays(
+      WEEK_START,
+      WEEK_END,
+      [{ date: "2026-05-12", total: 5, hasHighRisk: true }],
+    );
+    expect(days).toHaveLength(7);
+    expect(days[0].date).toBe(WEEK_START);
+    expect(days[6].date).toBe(WEEK_END);
+  });
+
+  it("fills missing days with total=0 and hasHighRisk=false", () => {
+    const days = buildWeekDays(
+      WEEK_START,
+      WEEK_END,
+      [{ date: "2026-05-13", total: 2, hasHighRisk: false }],
+    );
+    const monday = days.find((d) => d.date === "2026-05-11");
+    expect(monday).toEqual({
+      date: "2026-05-11",
+      total: 0,
+      hasHighRisk: false,
+    });
+  });
+
+  it("propagates hasHighRisk from count rows to the corresponding day", () => {
+    const days = buildWeekDays(
+      WEEK_START,
+      WEEK_END,
+      [{ date: "2026-05-15", total: 1, hasHighRisk: true }],
+    );
+    expect(days.find((d) => d.date === "2026-05-15")?.hasHighRisk).toBe(true);
+    expect(days.find((d) => d.date === "2026-05-14")?.hasHighRisk).toBe(false);
+  });
+
+  it("works for a 42-day month-grid range (range-agnostic, reused by month view)", () => {
+    // Month-grid range for May 2026: Mon 27-Apr → Sun 7-Jun (42 days).
+    const days = buildWeekDays("2026-04-27", "2026-06-07", []);
+    expect(days).toHaveLength(42);
+    expect(days[0].date).toBe("2026-04-27");
+    expect(days[41].date).toBe("2026-06-07");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-23 PM — listTasksForDayAcrossConsignees
+// ---------------------------------------------------------------------------
+
+describe("listTasksForDayAcrossConsignees", () => {
+  const DATE = "2026-05-15";
+
+  it("issues a JOIN query bound to tenant + date predicates", async () => {
+    const tx = makeStubTx([[]]);
+    await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
+    expect(tx.execute).toHaveBeenCalledOnce();
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/FROM tasks t/);
+    expect(sql).toMatch(/JOIN consignees c/);
+    expect(sql).toMatch(/ORDER BY t.delivery_start_time ASC/);
+    expect(params).toContain(TENANT_ID);
+    expect(params).toContain(DATE);
+  });
+
+  it("returns empty array for a day with no matching tasks", async () => {
+    const tx = makeStubTx([[]]);
+    const result = await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
+    expect(result).toEqual([]);
+  });
+
+  it("maps DB row columns to the CalendarDayTaskRow camelCase shape", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          task_id: "t1",
+          consignee_id: "c1",
+          consignee_name: "Sarah Khouri",
+          district: "Dubai Marina",
+          crm_state: "HIGH_RISK",
+          internal_status: "FAILED",
+          delivery_start_time: "08:00:00",
+          delivery_end_time: "10:00:00",
+          external_tracking_number: "AWB-001",
+          subscription_id: "s1",
+        },
+      ],
+    ]);
+    const rows = await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      taskId: "t1",
+      consigneeId: "c1",
+      consigneeName: "Sarah Khouri",
+      district: "Dubai Marina",
+      crmState: "HIGH_RISK",
+      status: "FAILED",
+      deliveryWindowStart: "08:00:00",
+      deliveryWindowEnd: "10:00:00",
+      externalTrackingNumber: "AWB-001",
+      subscriptionId: "s1",
+    });
+  });
+
+  it("applies filter predicates (crm, status) into the WHERE bound params", async () => {
+    const tx = makeStubTx([[]]);
+    const filters: CalendarFilters = { crm: "HIGH_RISK", status: "FAILED" };
+    await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, filters);
+    const { params } = compile(tx.execute.mock.calls[0][0]);
+    expect(params).toContain("HIGH_RISK");
+    expect(params).toContain("FAILED");
+  });
+});

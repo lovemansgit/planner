@@ -152,6 +152,10 @@ export function createSuiteFleetAuthClient(
     const maxAttempts = retryDelays.length + 1;
     let lastNetworkError: unknown = null;
     let lastServerStatus: number | null = null;
+    // Plan #317 §3.1 / F-1: track the most recent 5xx body so the
+    // retry-exhaustion throw below carries SF's own error text into
+    // failure_detail downstream (via CredentialError.message).
+    let lastServerBody: string | null = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let response: Response | null = null;
@@ -173,14 +177,28 @@ export function createSuiteFleetAuthClient(
         }
         lastServerStatus = response.status;
         lastNetworkError = null;
-        log.warn({ operation, attempt, status: response.status, error_code: "server_5xx" });
+        // Read body once per 5xx attempt — Response is single-use so
+        // the read happens here and the body is discarded after the
+        // last attempt becomes the throw message.
+        try { lastServerBody = await response.text(); } catch { lastServerBody = ""; }
+        log.warn({
+          operation,
+          attempt,
+          status: response.status,
+          error_code: "server_5xx",
+          response_excerpt: (lastServerBody ?? "").slice(0, 400),
+        });
       }
 
       if (attempt === maxAttempts) {
         const cause = lastNetworkError instanceof Error ? lastNetworkError : undefined;
+        const bodyExcerpt =
+          lastServerBody !== null && lastServerBody.length > 0
+            ? `: ${lastServerBody.slice(0, 2000)}`
+            : "";
         const reason =
           lastServerStatus !== null
-            ? `SuiteFleet ${operation} returned ${lastServerStatus} after ${maxAttempts} attempts`
+            ? `SuiteFleet ${operation} returned ${lastServerStatus} after ${maxAttempts} attempts${bodyExcerpt}`
             : `SuiteFleet ${operation} unreachable after ${maxAttempts} attempts`;
         throw new CredentialError(reason, cause ? { cause } : undefined);
       }
@@ -201,50 +219,176 @@ export function createSuiteFleetAuthClient(
     }
   }
 
-  function rejectClientError(operation: "login" | "refresh", status: number): never {
-    log.warn({ operation, status, error_code: "client_4xx" });
+  // Plan #317 §3.1 / §6 OQ-1 ruling (a) at SHA f0ef560: extended signature
+  // takes optional responseText so 4xx call sites can read body once before
+  // calling. Threads the body excerpt into the thrown CredentialError so
+  // failure_detail downstream carries SF's own error text (e.g. credential
+  // rotation messages) rather than an opaque status-only string.
+  function rejectClientError(
+    operation: "login" | "refresh",
+    status: number,
+    responseText?: string,
+  ): never {
+    const excerpt = responseText !== undefined ? responseText.slice(0, 400) : "";
+    log.warn({
+      operation,
+      status,
+      error_code: "client_4xx",
+      response_excerpt: excerpt,
+    });
+    const bodyExcerpt =
+      responseText !== undefined && responseText.length > 0
+        ? `: ${responseText.slice(0, 2000)}`
+        : "";
     if (status === 401) {
-      throw new CredentialError(`SuiteFleet ${operation} rejected — credentials invalid`);
+      throw new CredentialError(
+        `SuiteFleet ${operation} rejected — credentials invalid${bodyExcerpt}`,
+      );
     }
-    throw new CredentialError(`SuiteFleet ${operation} rejected with status ${status}`);
+    throw new CredentialError(
+      `SuiteFleet ${operation} rejected with status ${status}${bodyExcerpt}`,
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // OAuth login — existing flow preserved as-is per v1.15 amendment §5.2.
+  // Sandbox region uses this path; the discriminator narrows the typed
+  // credential pair to { username, password, clientId, customerId }.
+  // -------------------------------------------------------------------
+  async function loginOAuth(
+    credentials: SuiteFleetCredentials & { auth_method: "oauth" },
+  ): Promise<SuiteFleetTokenSet> {
+    const url = new URL(`${baseUrl}/api/auth/authenticate`);
+    url.searchParams.set("username", credentials.username);
+    url.searchParams.set("password", credentials.password);
+
+    const response = await callWithRetry("login", () =>
+      deps.fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          Clientid: credentials.clientId,
+          Accept: "application/json",
+        },
+      }),
+    );
+
+    if (response.status >= 400) {
+      // Plan #317 §3.1 / F-1: read body once before invoking the
+      // signature-extended rejectClientError so SF's response text
+      // reaches downstream failure_detail.
+      let responseText: string;
+      try { responseText = await response.text(); } catch { responseText = ""; }
+      rejectClientError("login", response.status, responseText);
+    }
+
+    const body = await readJson(response, "login");
+    const tokens = parseTokenSet(body);
+
+    const now = deps.clock().getTime();
+    if (tokens.accessTokenExpiresAt.getTime() <= now) {
+      throw new CredentialError(
+        "SuiteFleet login returned a token whose expiration is in the past",
+      );
+    }
+
+    log.info({
+      operation: "login",
+      status: response.status,
+      auth_method: "oauth",
+      access_expires_at: tokens.accessTokenExpiresAt.toISOString(),
+      refresh_expires_at: tokens.refreshTokenExpiresAt.toISOString(),
+    });
+
+    return tokens;
+  }
+
+  // -------------------------------------------------------------------
+  // API Key login — implemented per Aqib's SF OpsPortal reply (Day-52
+  // auth-unblock; see memory/decision_aqib_api_key_auth_header_verified.md
+  // and the now-resolved memory/followup_aqib_api_key_auth_header_pending.md).
+  //
+  // Mirrors loginOAuth, with one wire difference: credentials travel in
+  // the request HEADERS (clientId + clientApiKey + clientSecretKey), NOT
+  // the query string. Same POST /api/auth/authenticate endpoint; same
+  // response body shape (so parseTokenSet is reused unchanged); TTLs differ
+  // (30-day access / 180-day refresh vs OAuth's 24h / 6mo — a value, not a
+  // shape change).
+  //
+  // ⚠️ PROBE-GATED ON PRODUCTION PROVISIONING (not on merge): the verified
+  // header names/casing matched NEITHER candidate in the pending memo, so
+  // this shape is documentation-asserted until scripts/probe-sf-api-key-auth.mjs
+  // confirms it against a live api_key-region endpoint (bulk-cancel-AWB
+  // precedent). This code is merged; that does NOT make api_key auth
+  // production-ready — no production-region merchant may be credential-
+  // provisioned until the probe passes. See the decision memo's Rule-A caveat.
+  // -------------------------------------------------------------------
+  async function loginApiKey(
+    credentials: SuiteFleetCredentials & { auth_method: "api_key" },
+  ): Promise<SuiteFleetTokenSet> {
+    const url = `${baseUrl}/api/auth/authenticate`;
+
+    const response = await callWithRetry("login", () =>
+      deps.fetch(url, {
+        method: "POST",
+        headers: {
+          clientId: credentials.clientId,
+          clientApiKey: credentials.apiKey,
+          clientSecretKey: credentials.secretKey,
+          Accept: "application/json",
+        },
+      }),
+    );
+
+    if (response.status >= 400) {
+      // Read the body once before the signature-extended rejectClientError
+      // so SF's response text reaches downstream failure_detail (mirrors
+      // loginOAuth / Plan #317 §3.1 / F-1).
+      let responseText: string;
+      try {
+        responseText = await response.text();
+      } catch {
+        responseText = "";
+      }
+      rejectClientError("login", response.status, responseText);
+    }
+
+    const body = await readJson(response, "login");
+    const tokens = parseTokenSet(body);
+
+    const now = deps.clock().getTime();
+    if (tokens.accessTokenExpiresAt.getTime() <= now) {
+      throw new CredentialError(
+        "SuiteFleet login returned a token whose expiration is in the past",
+      );
+    }
+
+    log.info({
+      operation: "login",
+      status: response.status,
+      auth_method: "api_key",
+      access_expires_at: tokens.accessTokenExpiresAt.toISOString(),
+      refresh_expires_at: tokens.refreshTokenExpiresAt.toISOString(),
+    });
+
+    return tokens;
   }
 
   return {
     async login(credentials: SuiteFleetCredentials): Promise<SuiteFleetTokenSet> {
-      const url = new URL(`${baseUrl}/api/auth/authenticate`);
-      url.searchParams.set("username", credentials.username);
-      url.searchParams.set("password", credentials.password);
-
-      const response = await callWithRetry("login", () =>
-        deps.fetch(url.toString(), {
-          method: "POST",
-          headers: {
-            Clientid: credentials.clientId,
-            Accept: "application/json",
-          },
-        }),
-      );
-
-      if (response.status >= 400) rejectClientError("login", response.status);
-
-      const body = await readJson(response, "login");
-      const tokens = parseTokenSet(body);
-
-      const now = deps.clock().getTime();
-      if (tokens.accessTokenExpiresAt.getTime() <= now) {
-        throw new CredentialError(
-          "SuiteFleet login returned a token whose expiration is in the past",
-        );
+      switch (credentials.auth_method) {
+        case "oauth":
+          return loginOAuth(credentials);
+        case "api_key":
+          return loginApiKey(credentials);
+        default: {
+          // Exhaustiveness guard. If `credentials` here is anything
+          // other than `never`, it's because a new auth_method variant
+          // was added to the discriminated union without being handled
+          // above — tsc fails to compile this assignment.
+          const _exhaustive: never = credentials;
+          return _exhaustive;
+        }
       }
-
-      log.info({
-        operation: "login",
-        status: response.status,
-        access_expires_at: tokens.accessTokenExpiresAt.toISOString(),
-        refresh_expires_at: tokens.refreshTokenExpiresAt.toISOString(),
-      });
-
-      return tokens;
     },
 
     async refresh(input: SuiteFleetRefreshInput): Promise<SuiteFleetTokenSet> {
@@ -261,7 +405,13 @@ export function createSuiteFleetAuthClient(
         }),
       );
 
-      if (response.status >= 400) rejectClientError("refresh", response.status);
+      if (response.status >= 400) {
+        // Plan #317 §3.1 / F-1: read body once before invoking the
+        // signature-extended rejectClientError.
+        let responseText: string;
+        try { responseText = await response.text(); } catch { responseText = ""; }
+        rejectClientError("refresh", response.status, responseText);
+      }
 
       const body = await readJson(response, "refresh");
       const tokens = parseTokenSet(body);

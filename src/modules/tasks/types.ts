@@ -29,7 +29,18 @@
 
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
-/** 7-value internal status. Mirrors the CHECK constraint on tasks.internal_status. */
+/**
+ * 8-value internal status. Mirrors the CHECK constraint on tasks.internal_status
+ * after `supabase/migrations/0019_tasks_internal_status_skipped.sql` (Day-13)
+ * extended the original 7-value enum with 'SKIPPED' for human-driven skip
+ * exceptions per brief §3.1.1.
+ *
+ * The TS union had drifted from the DB CHECK since Day-13 — the missing
+ * 'SKIPPED' entry hid a non-exhaustive switch in
+ * `src/app/(app)/consignees/[id]/_components/DayDisplayStatus.ts` that
+ * surfaced as a production TypeError on the consignee calendar (Day-28
+ * fix lane; digest 4172237023).
+ */
 export type TaskInternalStatus =
   | "CREATED"
   | "ASSIGNED"
@@ -37,7 +48,62 @@ export type TaskInternalStatus =
   | "DELIVERED"
   | "FAILED"
   | "CANCELED"
-  | "ON_HOLD";
+  | "ON_HOLD"
+  | "SKIPPED";
+
+/**
+ * 6-value outbound sync state. Mirrors the CHECK constraint on
+ * tasks.outbound_sync_state. Originally introduced in 0026 (Day-29
+ * §D(2) Phase-1 per plan-PR #302 §6.3 / §3.6 OQ-7 ruling Option A);
+ * extended to admit 'pending' in 0028 per plan-PR #317 §6 OQ-2
+ * ruling (b) — the pre-push truthful default; extended to admit
+ * 'pending_update' in 0029 per plan-PR #335 §5 OQ-1 ruling (a) —
+ * in-flight visibility for operator-initiated update-style pushes
+ * (R4/R5 address overrides).
+ *
+ * Tracks the per-task lifecycle of outbound state vs SuiteFleet:
+ * both the create-push lane (cron / ad-hoc / subscription INSERT →
+ * pushSingleTask) and the operator-cancel lane (markTaskSkipped →
+ * /api/queue/cancel-task).
+ *
+ * - 'pending'            — newly-minted task; not yet pushed to SF.
+ *                          Default for new INSERTs post-0028. The
+ *                          truthful pre-push state — replaces the
+ *                          earlier 'synced'-by-default lie.
+ * - 'synced'             — task is in sync with SF; AWB exists.
+ *                          Written by markTaskPushed (create-push
+ *                          success) and the /api/queue/cancel-task
+ *                          success convergence.
+ * - 'pending_cancel'     — skip committed locally; SF cancel queued.
+ *                          Flips to 'synced' on QStash 2xx success at
+ *                          /api/queue/cancel-task. Flips to 'failed'
+ *                          on failureCallback at
+ *                          /api/queue/cancel-task-failed.
+ * - 'pending_reschedule' — Phase 2 placeholder (move-to-date variant).
+ *                          NOT written by Phase 1 code; CHECK admits.
+ * - 'pending_update'     — operator address override committed locally
+ *                          on a pushed task (R4 one-off / R5 forward);
+ *                          SF update queued. Flips to 'synced' on
+ *                          QStash 2xx success at /api/queue/update-task.
+ *                          Flips to 'failed' on failureCallback at
+ *                          /api/queue/update-task-failed. Requires
+ *                          migration 0029 on the live DB.
+ * - 'failed'             — push or cancel failed; unresolved DLQ row
+ *                          exists for ops triage. For create-push:
+ *                          written by recordFailedPushAttempt in the
+ *                          same withServiceRole tx as the failed_pushes
+ *                          insert/update. Cleared to 'synced' on
+ *                          subsequent SF 2xx (any successful
+ *                          convergence implies merchant + SF reached
+ *                          consistency).
+ */
+export type TaskOutboundSyncState =
+  | "pending"
+  | "synced"
+  | "pending_cancel"
+  | "pending_reschedule"
+  | "pending_update"
+  | "failed";
 
 /** 2-value task kind. Mirrors the CHECK constraint on tasks.task_kind. */
 export type TaskKind = "DELIVERY" | "PICKUP";
@@ -133,6 +199,39 @@ export interface Task {
   readonly deliverToCustomerOnly: boolean;
   /** ISO 8601 with timezone; null until the Day-7 cron pushes the task. */
   readonly pushedToExternalAt: IsoTimestamp | null;
+  /**
+   * FK to addresses(id) per migration 0014. Nullable per Day-13 part-1
+   * plan §1.3.1 Condition 3 — existing pre-Day-13 task rows have NULL
+   * (no backfill); the Day-14 materialization-cron path always populates
+   * via the §2.3 4-layer COALESCE chain (refuse-to-materialize on NULL
+   * per §2.2). Future operator-create paths may opt into NULL until
+   * address resolution surfaces; the queue handler at /api/queue/push-task
+   * defends against NULL via §5.1 amendment 2 (DLQ via failureCallback).
+   */
+  readonly addressId: Uuid | null;
+  /**
+   * POD photo URLs. NULL = no POD received yet (or non-DELIVERED). When
+   * populated, an array of zero-or-more URL strings — Option (A) plain
+   * string array shape per A2 plan §4.4 ruling. Written by the Layer-3
+   * webhook handler on TASK_STATUS_UPDATED_TO_DELIVERED only.
+   */
+  readonly podPhotos: readonly string[] | null;
+  /**
+   * Day-20 §3.3.3 calendar — Home/Office/Other label resolved from the
+   * task's resolved `address_id` via LEFT JOIN to addresses(id). Only
+   * populated by the calendar fetch path
+   * (`listTasksByConsigneeAndDateRange`); other read paths leave this
+   * NULL. Address-rotation indicator renders this on each calendar day
+   * cell per brief §3.3.3 line 487.
+   */
+  readonly addressLabel: "home" | "office" | "other" | null;
+  /**
+   * Day-29 §D(2) Phase-1 (plan-PR #302 §6.3): per-task outbound sync
+   * lifecycle marker. Set in tx by markTaskSkipped on the skip path;
+   * converged by the QStash cancel-task success route or DLQ failure
+   * route. See TaskOutboundSyncState union for full semantics.
+   */
+  readonly outboundSyncState: TaskOutboundSyncState;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
   /** Zero or more packages, ordered by `position` ascending. */
@@ -166,6 +265,13 @@ export interface CreateTaskPackageInput {
 export interface CreateTaskInput {
   readonly consigneeId: Uuid;
   readonly subscriptionId?: Uuid;
+  /**
+   * Day-25 / brief v1.12 ad-hoc task lane. When provided, the row's
+   * `address_id` column is populated at insert time. The cron-side
+   * materialization path resolves address via its own CTE; that path
+   * uses a separate INSERT and does not touch this field.
+   */
+  readonly addressId?: Uuid;
   /**
    * Optional. SQL DEFAULT is 'subscription' (the cron path). Callers
    * that don't have a subscriptionId MUST pass 'manual_admin' or
@@ -221,4 +327,16 @@ export interface UpdateTaskPatch {
   readonly signatureRequired?: boolean;
   readonly smsNotifications?: boolean;
   readonly deliverToCustomerOnly?: boolean;
+  /**
+   * Day-19 / Phase 1 / OQ-5. Reassign the task to a different address
+   * within the same consignee. The address must belong to the task's
+   * `consigneeId` (FK consistency check) — cross-consignee assignment
+   * is refused with ValidationError. Use null/omit to leave unchanged.
+   *
+   * To clear addressId back to NULL via this patch is intentionally
+   * NOT supported (mirrors the file-header note about nullable-column
+   * clearing). If a clear-flow is ever needed, extend the patch shape
+   * to `addressId?: Uuid | null` with an explicit sentinel.
+   */
+  readonly addressId?: Uuid;
 }

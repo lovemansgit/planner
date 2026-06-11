@@ -100,7 +100,7 @@ import {
   type TaskCreateRequest,
 } from "../integration";
 import { SuiteFleetAwbExistsError } from "../integration";
-import { listUnpushedTasksByTenant, markTaskPushed } from "../tasks/repository";
+import { markTaskPushed } from "../tasks/repository";
 import type { Task } from "../tasks/types";
 
 import { withServiceRole } from "../../shared/db";
@@ -114,12 +114,9 @@ import { sql as sqlTag } from "drizzle-orm";
 
 import { findTaskById } from "../tasks/repository";
 
-import type { PushTenantOutcome, SinglePushOutcome } from "./types";
+import type { SinglePushOutcome } from "./types";
 
 const log = logger.with({ component: "task_push_service" });
-
-/** 5 req/sec — sequential await sleep(200ms) between SF calls. */
-const SF_THROTTLE_MS = 200;
 
 /** Sentinel value the D8-2 schema migration backfilled for missing district. */
 const UNKNOWN_DISTRICT_SENTINEL = "UNKNOWN";
@@ -171,10 +168,6 @@ function assertSystemActor(ctx: RequestContext, op: string): void {
   }
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * Translate adapter-layer errors to the failed_pushes failure_reason
  * enum. The DB CHECK is restrictive (network | server_5xx |
@@ -190,8 +183,12 @@ async function sleep(ms: number): Promise<void> {
  * shape inline via `classifyReconcileError` so the failure_detail
  * carries the load-bearing `awb_exists_reconcile_failed:` prefix.
  */
+// Day-32 PR-A / F-5: return type narrowed via Exclude so 'past_dated'
+// (a planner-side guard reason, NOT an adapter-error class) is not in
+// the adapter-classifier surface. Every branch below produces one of
+// the five adapter-error reasons; the narrow union is exhaustive.
 function classifyAdapterError(err: unknown): {
-  reason: FailureReason;
+  reason: Exclude<FailureReason, "past_dated">;
   detail: string;
   httpStatus?: number;
 } {
@@ -202,7 +199,7 @@ function classifyAdapterError(err: unknown): {
     // message. Categorise as 'unknown' — operators see the
     // failure_detail for the actual cause.
     const msg = err.message;
-    const reason: FailureReason = msg.includes("network error")
+    const reason: Exclude<FailureReason, "past_dated"> = msg.includes("network error")
       ? "network"
       : msg.includes("5") && msg.includes("0") // 500/502/503/504 — sloppy but adequate
         ? "server_5xx"
@@ -237,7 +234,7 @@ function classifyAdapterError(err: unknown): {
  * detail string carries the explicit parse-error message regardless.
  */
 function classifyReconcileError(awb: string, err: unknown): {
-  reason: FailureReason;
+  reason: Exclude<FailureReason, "past_dated">;
   detail: string;
   httpStatus?: number;
 } {
@@ -309,479 +306,6 @@ function buildTaskCreateRequest(
   };
 }
 
-// -----------------------------------------------------------------------------
-// pushTasksForTenant — public entry point
-// -----------------------------------------------------------------------------
-
-/**
- * D8-4a — bulk push for one tenant. Caller is the cron handler.
- *
- * Outcome union (see ./types):
- *   - 'tenant_skipped' — fail-closed at the tenant level (e.g.
- *                        missing customer_code).
- *   - 'pushed'         — normal completion with per-task counters.
- *
- * Throws (caller's top-level try/catch logs + Sentry-captures):
- *   - ForbiddenError  user actor reached this path.
- */
-export async function pushTasksForTenant(
-  ctx: RequestContext,
-  tenantId: Uuid,
-  adapter: LastMileAdapter,
-): Promise<PushTenantOutcome> {
-  assertSystemActor(ctx, "task-push:push_for_tenant");
-
-  const pushLog = log.with({ tenant_id: tenantId, request_id: ctx.requestId });
-
-  // ---------------------------------------------------------------------------
-  // Step 1: load tenant config (suitefleet_customer_code)
-  // ---------------------------------------------------------------------------
-  const config = await withServiceRole(
-    `task-push:load_config for tenant ${tenantId}`,
-    async (tx) => {
-      const rows = await tx.execute<TenantConfigRow>(sqlTag`
-        SELECT suitefleet_customer_code
-        FROM tenants
-        WHERE id = ${tenantId}
-      `);
-      const row = rows[0];
-      if (!row) {
-        // Defensive: tenant doesn't exist. Shouldn't happen — the
-        // cron's tenant enumeration is the source. Surface as a
-        // validation error to the caller (cron logs + Sentry).
-        throw new ValidationError(`task-push: tenant ${tenantId} not found`);
-      }
-      return {
-        tenantId,
-        suitefleetCustomerCode: row.suitefleet_customer_code,
-      } satisfies TenantPushConfig;
-    },
-  );
-
-  // ---------------------------------------------------------------------------
-  // GUARD 1: missing_customer_code (tenant-level fail-closed)
-  // ---------------------------------------------------------------------------
-  const customerCode = config.suitefleetCustomerCode?.trim();
-  if (!customerCode) {
-    // Count unpushed tasks for the metadata. Single COUNT query,
-    // separate from the listUnpushedTasksByTenant call (which we
-    // skip entirely on this path).
-    const skippedTaskCount = await withServiceRole(
-      `task-push:count_unpushed for tenant ${tenantId}`,
-      async (tx) => {
-        type CountRow = { n: number } & Record<string, unknown>;
-        const rows = await tx.execute<CountRow>(sqlTag`
-          SELECT count(*)::int AS n
-          FROM tasks
-          WHERE tenant_id = ${tenantId}
-            AND pushed_to_external_at IS NULL
-        `);
-        return rows[0]?.n ?? 0;
-      },
-    );
-
-    pushLog.warn(
-      { skipped_task_count: skippedTaskCount, reason: "missing_customer_code" },
-      "task-push tenant_skipped — suitefleet_customer_code is null/empty",
-    );
-
-    await emit({
-      eventType: "tenant.push_skipped",
-      actorKind: ctx.actor.kind,
-      actorId: actorIdFor(ctx.actor),
-      tenantId,
-      resourceType: "tenant",
-      resourceId: tenantId,
-      metadata: {
-        tenant_id: tenantId,
-        reason: "missing_customer_code",
-        skipped_task_count: skippedTaskCount,
-      },
-      requestId: ctx.requestId,
-    });
-
-    return {
-      kind: "tenant_skipped",
-      tenantId,
-      reason: "missing_customer_code",
-      skippedTaskCount,
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Step 2: list unpushed tasks
-  // ---------------------------------------------------------------------------
-  const tasks = await withServiceRole(
-    `task-push:list_unpushed for tenant ${tenantId}`,
-    async (tx) => listUnpushedTasksByTenant(tx, tenantId),
-  );
-
-  if (tasks.length === 0) {
-    pushLog.info({}, "task-push no unpushed tasks for tenant");
-    return {
-      kind: "pushed",
-      tenantId,
-      attemptedCount: 0,
-      succeeded: 0,
-      failedToDLQ: 0,
-      skippedDistrict: 0,
-      awbExists: 0,
-      awbExistsReconciled: 0,
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Step 3: authenticate once per tenant (token cached in adapter)
-  // ---------------------------------------------------------------------------
-  const session = await adapter.authenticate(tenantId);
-
-  // ---------------------------------------------------------------------------
-  // Step 4: per-task push loop with 5 req/sec throttle
-  // ---------------------------------------------------------------------------
-  let succeeded = 0;
-  let failedToDLQ = 0;
-  let skippedDistrict = 0;
-  let awbExists = 0;
-  let awbExistsReconciled = 0;
-
-  for (let i = 0; i < tasks.length; i++) {
-    const task = tasks[i];
-    const taskLog = pushLog.with({ task_id: task.id });
-
-    // Per-task consignee fetch (N+1 — fine at pilot scale, optimise
-    // to a JOIN if 7K-tasks/night becomes the bottleneck).
-    const consignee = await withServiceRole(
-      `task-push:load_consignee for task ${task.id}`,
-      async (tx) => {
-        const rows = await tx.execute<ConsigneeRow>(sqlTag`
-          SELECT id, name, phone, email, address_line, emirate_or_region, district
-          FROM consignees
-          WHERE id = ${task.consigneeId}
-        `);
-        const row = rows[0];
-        if (!row) {
-          throw new ValidationError(
-            `task-push: consignee ${task.consigneeId} not found for task ${task.id}`,
-          );
-        }
-        return {
-          id: row.id,
-          name: row.name,
-          phone: row.phone,
-          email: row.email,
-          addressLine: row.address_line,
-          emirateOrRegion: row.emirate_or_region,
-          district: row.district,
-        } satisfies ConsigneePushSnapshot;
-      },
-    );
-
-    // -------------------------------------------------------------------------
-    // GUARD 2: unknown_district (per-task fail-closed)
-    // -------------------------------------------------------------------------
-    if (consignee.district === UNKNOWN_DISTRICT_SENTINEL) {
-      taskLog.warn(
-        { reason: "unknown_district", consignee_id: consignee.id },
-        "task-push skipping task — consignee.district is the UNKNOWN sentinel",
-      );
-      try {
-        await recordFailedPushAttempt(ctx, {
-          taskId: task.id,
-          taskPayload: { skipped_pre_flight: true, reason: "unknown_district" },
-          failureReason: "unknown",
-          failureDetail: `unknown_district: consignee ${consignee.id} (${consignee.name}) carries the 'UNKNOWN' district sentinel — not pushable until backfilled (see D8-2 migration)`,
-        });
-      } catch (err) {
-        // Audit-side or DB-side failure on the DLQ write. Log + Sentry,
-        // continue — we don't want to block the rest of the batch on
-        // a telemetry failure.
-        captureException(err, {
-          component: "task_push_service",
-          operation: "guard_unknown_district_dlq_write",
-          tenant_id: tenantId,
-          task_id: task.id,
-        });
-      }
-      skippedDistrict++;
-      // Note: still throttle — the next iteration may make a real
-      // SF call, and pacing the loop simplifies the rate-limit math.
-      if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
-      continue;
-    }
-
-    // -------------------------------------------------------------------------
-    // Build payload + push
-    // -------------------------------------------------------------------------
-    // customer_code is captured here for the wire body via the
-    // adapter's downstream resolver. The buildTaskCreateRequest helper
-    // doesn't carry customer_code today (it goes through the credential
-    // resolver path inside last-mile-adapter-factory). The factory
-    // resolves customerId (numeric) per-tenant; the new
-    // suitefleet_customer_code (string) lookup that the wire shape
-    // needs lands when D8-4b's reconcile path finalises the customer
-    // block — for D8-4a, customerCode is captured for forensic logs
-    // and to demonstrate the guard worked.
-    const request = buildTaskCreateRequest(tenantId, task, consignee);
-
-    let pushResult;
-    try {
-      // Cast bridges the cron-path Omit<...,'shipFrom'> shape to the
-      // public TaskCreateRequest contract. buildSuiteFleetTaskBody's
-      // conditional shipFrom spread handles the runtime-undefined
-      // case. See header `shipFrom posture` for the full rationale.
-      pushResult = await adapter.createTask(session, request as TaskCreateRequest);
-    } catch (err) {
-      // ---------------------------------------------------------------------
-      // D8-4b: AWB-exists reconcile branch
-      // ---------------------------------------------------------------------
-      // SF returned 23505/AWB-exists. Try to close the loop by GETting
-      // the existing SF task by AWB and marking the local row pushed
-      // with the recovered SF id.
-      if (err instanceof SuiteFleetAwbExistsError) {
-        const reconcileLog = taskLog.with({ awb: err.awb });
-        let reconcileResult;
-        try {
-          reconcileResult = await adapter.getTaskByAwb(session, err.awb);
-        } catch (reconcileErr) {
-          const classified = classifyReconcileError(err.awb, reconcileErr);
-          reconcileLog.warn(
-            {
-              failure_reason: classified.reason,
-              http_status: classified.httpStatus,
-            },
-            "task-push AWB-exists reconcile failed — recording to DLQ",
-          );
-          try {
-            await recordFailedPushAttempt(ctx, {
-              taskId: task.id,
-              taskPayload: request as unknown as Record<string, unknown>,
-              failureReason: classified.reason,
-              failureDetail: classified.detail,
-              httpStatus: classified.httpStatus,
-            });
-          } catch (dlqErr) {
-            captureException(dlqErr, {
-              component: "task_push_service",
-              operation: "dlq_write_reconcile_failed",
-              tenant_id: tenantId,
-              task_id: task.id,
-              awb: err.awb,
-            });
-          }
-          // Reconcile failure counts as awbExists per reviewer-locked
-          // counter posture (two counters, not three — see
-          // PushTenantOutcome jsdoc).
-          awbExists++;
-          if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
-          continue;
-        }
-
-        // Reconcile success: mark task pushed with the recovered SF id;
-        // tracking_number = the AWB itself (we already have it).
-        let priorFailedPushResolved = false;
-        try {
-          await withServiceRole(
-            `task-push:mark_pushed_via_reconcile for task ${task.id}`,
-            async (tx) =>
-              markTaskPushed(tx, tenantId, task.id, reconcileResult.externalId, err.awb),
-          );
-          // Idempotent — null when no unresolved DLQ row existed.
-          // The boolean lands in the audit metadata so operators can
-          // trace which reconciles closed out a prior parse-only-era
-          // DLQ entry vs first-time AWB-exists with no DLQ history.
-          const resolved = await markFailedPushResolved(
-            ctx,
-            task.id,
-            "reconciled-via-awb-D8-4b",
-          );
-          priorFailedPushResolved = resolved !== null;
-        } catch (markErr) {
-          // Local-side write failed AFTER SF confirmed the task
-          // exists. The task is still unpushed locally; the next cron
-          // pass will re-attempt and hit AWB-exists again. Sentry
-          // loud — manual investigation needed (DB write failure on
-          // the reconcile path is a different shape from the
-          // post-create local write failure handled below).
-          captureException(markErr, {
-            component: "task_push_service",
-            operation: "mark_pushed_via_reconcile",
-            tenant_id: tenantId,
-            task_id: task.id,
-            awb: err.awb,
-            external_id: reconcileResult.externalId,
-          });
-
-          // Day 9 / D8-4b operator-visibility: write a DLQ row so
-          // /admin/failed-pushes surfaces this case. failure_detail
-          // prefix is `reconcile_recovered_but_mark_pushed_failed:`,
-          // distinct from D8-4a's `awb_exists:` and D8-4b's
-          // `awb_exists_reconcile_failed:` so the three forensic
-          // prefixes grep apart in the DLQ. Carries the recovered
-          // SF id in the detail so the operator can cut-and-paste
-          // a manual UPDATE to set external_id without re-fetching
-          // from SF. Captured pre-D8-4b at
-          // memory/followup_reconcile_recovered_local_write_failure.md.
-          const markErrMessage = markErr instanceof Error ? markErr.message : "unknown";
-          const recoveryDetail = `reconcile_recovered_but_mark_pushed_failed: '${err.awb}' (sf_id: ${reconcileResult.externalId}); error: ${markErrMessage}`.slice(0, 4000);
-          try {
-            await recordFailedPushAttempt(ctx, {
-              taskId: task.id,
-              taskPayload: request as unknown as Record<string, unknown>,
-              failureReason: "unknown",
-              failureDetail: recoveryDetail,
-              // httpStatus omitted — local DB write failure has no HTTP context.
-            });
-          } catch (dlqErr) {
-            // DLQ write itself failed — Sentry-loud (parallels the
-            // dlq_write_reconcile_failed path above), but don't
-            // re-throw: the awbExists counter still increments and
-            // the loop continues so other tasks aren't blocked.
-            captureException(dlqErr, {
-              component: "task_push_service",
-              operation: "dlq_write_reconcile_recovered_mark_failed",
-              tenant_id: tenantId,
-              task_id: task.id,
-              awb: err.awb,
-              external_id: reconcileResult.externalId,
-            });
-          }
-
-          awbExists++;
-          if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
-          continue;
-        }
-
-        await emit({
-          eventType: "task.pushed_via_reconcile",
-          actorKind: ctx.actor.kind,
-          actorId: actorIdFor(ctx.actor),
-          tenantId,
-          resourceType: "task",
-          resourceId: task.id,
-          metadata: {
-            task_id: task.id,
-            external_id: reconcileResult.externalId,
-            awb: err.awb,
-            customer_order_number: request.customerOrderNumber,
-            prior_failed_push_resolved: priorFailedPushResolved,
-          },
-          requestId: ctx.requestId,
-        });
-
-        reconcileLog.info(
-          {
-            external_id: reconcileResult.externalId,
-            prior_failed_push_resolved: priorFailedPushResolved,
-          },
-          "task-push AWB-exists reconcile ok",
-        );
-        awbExistsReconciled++;
-        if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
-        continue;
-      }
-
-      // ---------------------------------------------------------------------
-      // Non-AWB push failure — classified DLQ write
-      // ---------------------------------------------------------------------
-      const classified = classifyAdapterError(err);
-
-      taskLog.warn(
-        {
-          failure_reason: classified.reason,
-          http_status: classified.httpStatus,
-        },
-        "task-push createTask failed — recording to DLQ",
-      );
-
-      try {
-        await recordFailedPushAttempt(ctx, {
-          taskId: task.id,
-          taskPayload: request as unknown as Record<string, unknown>,
-          failureReason: classified.reason,
-          failureDetail: classified.detail,
-          httpStatus: classified.httpStatus,
-        });
-      } catch (dlqErr) {
-        captureException(dlqErr, {
-          component: "task_push_service",
-          operation: "dlq_write",
-          tenant_id: tenantId,
-          task_id: task.id,
-          original_error: classified.detail.slice(0, 200),
-        });
-      }
-
-      failedToDLQ++;
-
-      if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
-      continue;
-    }
-
-    // -------------------------------------------------------------------------
-    // Success: mark task pushed
-    // -------------------------------------------------------------------------
-    try {
-      await withServiceRole(
-        `task-push:mark_pushed for task ${task.id}`,
-        async (tx) =>
-          markTaskPushed(
-            tx,
-            tenantId,
-            task.id,
-            pushResult.externalId,
-            pushResult.trackingNumber,
-          ),
-      );
-      succeeded++;
-      taskLog.info(
-        {
-          external_id: pushResult.externalId,
-          tracking_number: pushResult.trackingNumber,
-        },
-        "task-push createTask ok",
-      );
-    } catch (err) {
-      // SF accepted but our local UPDATE failed. The task still has
-      // the SF id we just wrote in pushResult; the next cron pass
-      // will see it as unpushed and re-attempt — duplicate physical
-      // delivery risk. Sentry-capture loud.
-      captureException(err, {
-        component: "task_push_service",
-        operation: "mark_pushed_after_sf_success",
-        tenant_id: tenantId,
-        task_id: task.id,
-        external_id: pushResult.externalId,
-      });
-      // Count as DLQ-failed for the outcome — operator needs to know.
-      failedToDLQ++;
-    }
-
-    if (i < tasks.length - 1) await sleep(SF_THROTTLE_MS);
-  }
-
-  pushLog.info(
-    {
-      attempted: tasks.length,
-      succeeded,
-      failed_to_dlq: failedToDLQ,
-      skipped_district: skippedDistrict,
-      awb_exists: awbExists,
-      awb_exists_reconciled: awbExistsReconciled,
-    },
-    "task-push tenant pass complete",
-  );
-
-  return {
-    kind: "pushed",
-    tenantId,
-    attemptedCount: tasks.length,
-    succeeded,
-    failedToDLQ,
-    skippedDistrict,
-    awbExists,
-    awbExistsReconciled,
-  };
-}
 
 // =============================================================================
 // pushSingleTask — Day 8 / D8-5
@@ -842,8 +366,18 @@ export async function pushSingleTask(
   });
 
   // ---------------------------------------------------------------------------
-  // Step 1: tenant config + customer_code guard
+  // Step 1: tenant config + customer_code race-condition belt
   // ---------------------------------------------------------------------------
+  // Race-condition belt between β cron enumeration
+  // (list-cron-eligible-tenants.ts:80-82) and per-task push invocation.
+  // β filter is upstream at enumeration time; this guard re-checks at
+  // push time to catch the window where suitefleet_customer_code was
+  // cleared between β enumeration and queue-worker pickup. Resolver runs
+  // downstream at adapter.authenticate (Step 4) and throws on missing
+  // customer_code post-A1 — third layer of defence-in-depth. A1 plan
+  // §2.5 originally framed this guard as removable; that framing was
+  // based on the empirically-incorrect "resolver upstream of guard"
+  // premise. See memory/followup_a1_plan_section_2_5_premise_correction.md.
   const config = await withServiceRole(
     `task-push:single load_config for tenant ${tenantId}`,
     async (tx) => {
@@ -890,6 +424,58 @@ export async function pushSingleTask(
       "push_single_task task_already_pushed — idempotent no-op",
     );
     return { kind: "task_already_pushed", externalId: task.externalId };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 2.5: past-dated guard (Day-32 PR-A / F-5)
+  // ---------------------------------------------------------------------------
+  // Plan-PR #317 §3.5 Surface 1 + §6 OQ-3 ruling (a) at SHA f0ef560:
+  // short-circuit when task.delivery_date < CURRENT_DATE (Dubai-local
+  // via Postgres clock; NOT JS Date per §8 R-4 — avoids edge-clock vs
+  // Postgres-clock skew on midnight-Dubai mints). Fires BEFORE
+  // adapter.authenticate (Step 4) so the credentials resolve, token
+  // cache, and SF auth round-trip are all skipped on past-dated rows.
+  // SF rejects strict past-dated with 400 ("deliveryDate must be a
+  // date in the present or in the future"); the production MPL
+  // 2026-05-11 row is the load-bearing observation. Recorded to DLQ
+  // via the W1 writer with failure_reason='past_dated' so ops triage
+  // at /admin/failed-pushes can separate planner-side guard-rejects
+  // from SF-side 4xx-rejects.
+  const pastDated = await withServiceRole(
+    `task-push:single past_dated_check for task ${task.id}`,
+    async (tx) => {
+      const rows = await tx.execute<{ past_dated: boolean }>(sqlTag`
+        SELECT (${task.deliveryDate}::date < CURRENT_DATE) AS past_dated
+      `);
+      return rows[0]?.past_dated ?? false;
+    },
+  );
+  if (pastDated) {
+    taskLog.warn(
+      { reason: "past_dated_no_push", delivery_date: task.deliveryDate },
+      "push_single_task past-dated guard fired — skipping SF push",
+    );
+    try {
+      await recordFailedPushAttempt(ctx, {
+        taskId: task.id,
+        taskPayload: {
+          skipped_pre_flight: true,
+          reason: "past_dated",
+          delivery_date: task.deliveryDate,
+        },
+        failureReason: "past_dated",
+        failureDetail:
+          "Task delivery_date is in the past at push-time (Dubai-local). SF rejects past-dated tasks. Skipped to avoid SF 400.",
+      });
+    } catch (err) {
+      captureException(err, {
+        component: "task_push_service",
+        operation: "single_task_past_dated_dlq_write",
+        tenant_id: tenantId,
+        task_id: task.id,
+      });
+    }
+    return { kind: "past_dated_no_push", deliveryDate: task.deliveryDate };
   }
 
   // ---------------------------------------------------------------------------
@@ -946,17 +532,33 @@ export async function pushSingleTask(
   // ---------------------------------------------------------------------------
   // Step 4: authenticate + push
   // ---------------------------------------------------------------------------
-  const session = await adapter.authenticate(tenantId);
-  const request = buildTaskCreateRequest(tenantId, task, consignee);
-
+  // Plan #317 §3.2 / F-2 fix at SHA f0ef560: hoist session + request as
+  // nullable lets and move adapter.authenticate + buildTaskCreateRequest
+  // INTO the try block. Previously both ran ungaurded above the try, so
+  // any throw from auth (5xx after retry exhaustion, network blip on the
+  // SF /auth endpoint, expired refresh token) or from buildTaskCreateRequest
+  // (malformed delivery_date) escaped pushSingleTask entirely, landed in
+  // the route handler's catch, and got re-thrown to QStash. QStash exhausted,
+  // failureCallback fired, the W2 writer at push-task-failed/route.ts wrote
+  // a DLQ row with QStash-snapshot taskPayload + no task.push_failed audit.
+  //
+  // Type invariant: SuiteFleetAwbExistsError is only thrown by
+  // adapter.createTask AFTER session + request both resolved, so both are
+  // guaranteed non-null when the AWB-exists branch enters. The non-AWB DLQ
+  // branch may see either or both still null (auth-throw or build-throw
+  // path) — uses a defensive pre-push stub for taskPayload in that case.
   let pushResult;
+  let session: Awaited<ReturnType<LastMileAdapter["authenticate"]>> | null = null;
+  let request: CronTaskCreateRequest | null = null;
   try {
+    session = await adapter.authenticate(tenantId);
+    request = buildTaskCreateRequest(tenantId, task, consignee);
     pushResult = await adapter.createTask(session, request as TaskCreateRequest);
   } catch (err) {
     // ---------------------------------------------------------------------
     // D8-4b reconcile branch (mirror of pushTasksForTenant)
     // ---------------------------------------------------------------------
-    if (err instanceof SuiteFleetAwbExistsError) {
+    if (err instanceof SuiteFleetAwbExistsError && session !== null && request !== null) {
       const reconcileLog = taskLog.with({ awb: err.awb });
       let reconcileResult;
       try {
@@ -1058,18 +660,35 @@ export async function pushSingleTask(
     // ---------------------------------------------------------------------
     // Non-AWB push failure → DLQ
     // ---------------------------------------------------------------------
+    // Plan #317 §3.2 / F-2: request may be null here when authenticate or
+    // buildTaskCreateRequest threw (now caught inside the try block per
+    // F-2 fix). In that case record a pre-push stub payload that names
+    // the failure stage — ops triage at /admin/failed-pushes still gets a
+    // failure_detail (carried by classified.detail from the thrown error's
+    // message, including SF body excerpts via F-1) plus the task_id, and
+    // can correlate with the auth-side warning log line.
     const classified = classifyAdapterError(err);
     taskLog.warn(
       {
         failure_reason: classified.reason,
         http_status: classified.httpStatus,
+        pre_push_stage: request === null,
       },
       "push_single_task createTask failed — recording to DLQ",
     );
+    const dlqPayload: Record<string, unknown> =
+      request !== null
+        ? (request as unknown as Record<string, unknown>)
+        : {
+            stage: "pre_push_failure",
+            reason_class: classified.reason,
+            note:
+              "authenticate or buildTaskCreateRequest threw before SF createTask was attempted (Plan #317 / F-2 fix surface)",
+          };
     try {
       await recordFailedPushAttempt(ctx, {
         taskId: task.id,
-        taskPayload: request as unknown as Record<string, unknown>,
+        taskPayload: dlqPayload,
         failureReason: classified.reason,
         failureDetail: classified.detail,
         httpStatus: classified.httpStatus,

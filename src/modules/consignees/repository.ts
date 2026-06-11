@@ -39,7 +39,17 @@ import { sql as sqlTag, type SQL } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
-import type { Consignee, CreateConsigneeInput, UpdateConsigneePatch } from "./types";
+import type { TenantStatus } from "../merchants/types";
+
+import type {
+  Consignee,
+  ConsigneeCrmEvent,
+  ConsigneeCrmState,
+  SubscriptionExceptionType,
+  TaskTerminalStatus,
+  TimelineEvent,
+  UpdateConsigneePatch,
+} from "./types";
 
 // -----------------------------------------------------------------------------
 // Row shape and mapper
@@ -68,6 +78,12 @@ type ConsigneeRow = {
   delivery_notes: string | null;
   external_ref: string | null;
   notes_internal: string | null;
+  /**
+   * Day 16 / Block 4-D — column added by migration 0016 (NOT NULL
+   * DEFAULT 'ACTIVE'); always present on read. Mapped to camelCase
+   * `crmState` on the Consignee shape.
+   */
+  crm_state: string;
   created_at: Date | string;
   updated_at: Date | string;
 } & Record<string, unknown>;
@@ -89,6 +105,7 @@ function mapRow(row: ConsigneeRow): Consignee {
     deliveryNotes: row.delivery_notes,
     externalRef: row.external_ref,
     notesInternal: row.notes_internal,
+    crmState: row.crm_state as ConsigneeCrmState,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -107,10 +124,28 @@ function mapRow(row: ConsigneeRow): Consignee {
  * Returns the inserted row, including DB-defaulted columns
  * (id, created_at, updated_at).
  */
+/**
+ * Internal flat insert shape for the consignees-row write. The service
+ * layer's nested CreateConsigneeInput (brief v1.12 `{ identity, address }`)
+ * is flattened by the service before reaching this repo helper. Keeps
+ * the SQL-binding contract small and ergonomic.
+ */
+export interface InsertConsigneeRow {
+  readonly name: string;
+  readonly phone: string;
+  readonly email?: string;
+  readonly addressLine: string;
+  readonly emirateOrRegion: string;
+  readonly district: string;
+  readonly deliveryNotes?: string;
+  readonly externalRef?: string;
+  readonly notesInternal?: string;
+}
+
 export async function insertConsignee(
   tx: DbTx,
   tenantId: Uuid,
-  input: CreateConsigneeInput
+  input: InsertConsigneeRow,
 ): Promise<Consignee> {
   const rows = await tx.execute<ConsigneeRow>(sqlTag`
     INSERT INTO consignees (
@@ -165,17 +200,212 @@ export async function findConsigneeById(tx: DbTx, id: Uuid): Promise<Consignee |
  * SELECT every consignee for `tenantId`, newest first. The tenant
  * filter is explicit alongside RLS — same value, same result, but
  * the WHERE clause makes the query self-describing in logs and pg_stat.
+ *
+ * Optional `searchTerm` narrows the result set with case-insensitive
+ * ILIKE against `name`, and against `phone` after stripping non-digits
+ * from the query (so operators can paste either E.164 `+971501234567`
+ * or local format `050 123 4567` and match the same row).
  */
 export async function listConsigneesByTenant(
   tx: DbTx,
-  tenantId: Uuid
+  tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly Consignee[]> {
+  const searchFilter = buildConsigneeSearchFilter(opts.searchTerm);
   const rows = await tx.execute<ConsigneeRow>(sqlTag`
     SELECT * FROM consignees
     WHERE tenant_id = ${tenantId}
+      ${searchFilter}
     ORDER BY created_at DESC
   `);
   return rows.map(mapRow);
+}
+
+/**
+ * Day-25 / brief v1.12 §3.4 — list consignees with their task counts.
+ * Powers the amber NO TASKS badge on `/consignees`. Single round-trip
+ * via LEFT JOIN + GROUP BY on `tasks.consignee_id` (already indexed
+ * per migration 0006). All `internal_status` values count toward the
+ * total per brief — "Flag clears the moment the first task lands."
+ */
+export async function listConsigneesWithTaskCountByTenant(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly (Consignee & { taskCount: number })[]> {
+  const searchFilter = buildConsigneeSearchFilter(opts.searchTerm);
+  const rows = await tx.execute<ConsigneeRow & { task_count: number | string }>(sqlTag`
+    SELECT c.*, COALESCE(COUNT(t.id), 0)::int AS task_count
+    FROM consignees c
+    LEFT JOIN tasks t ON t.consignee_id = c.id AND t.tenant_id = c.tenant_id
+    WHERE c.tenant_id = ${tenantId}
+      ${searchFilter}
+    GROUP BY c.id
+    ORDER BY c.created_at DESC
+  `);
+  return rows.map((row) => ({
+    ...mapRow(row),
+    taskCount: Number(row.task_count),
+  }));
+}
+
+function buildConsigneeSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const phoneDigits = trimmed.replace(/\D/g, "");
+  const namePattern = `%${trimmed}%`;
+  if (phoneDigits.length > 0) {
+    const phonePattern = `%${phoneDigits}%`;
+    return sqlTag`AND (name ILIKE ${namePattern} OR phone ILIKE ${phonePattern})`;
+  }
+  return sqlTag`AND name ILIKE ${namePattern}`;
+}
+
+// -----------------------------------------------------------------------------
+// Day 19 / Phase 1.5 — cross-tenant admin list
+// -----------------------------------------------------------------------------
+
+/**
+ * Filters for listAllConsigneesRows. Optional merchantSlug narrows
+ * to a single tenant; limit/offset for pagination (defaults applied
+ * at fn body — default 50, max 500 per merged plan scope item 8).
+ *
+ * `searchTerm` runs case-insensitive ILIKE across consignee name +
+ * phone (digits-stripped — mirrors `buildConsigneeSearchFilter` above)
+ * + merchant name. Caller is responsible for trim + min-length; the
+ * helper collapses empty/whitespace to the no-filter SQL fragment.
+ */
+export interface ListAllConsigneesFilters {
+  readonly merchantSlug?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly searchTerm?: string;
+}
+
+type AdminConsigneeJoinRow = ConsigneeRow & {
+  readonly merchant_tenant_id: string;
+  readonly merchant_slug: string;
+  readonly merchant_name: string;
+  readonly merchant_status: TenantStatus;
+};
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of consignees across all
+ * merchants. Caller is in withServiceRole; no RLS predicate. JOIN
+ * tenants for merchant surface columns per merged plan §5.2.
+ *
+ * ORDER BY created_at DESC per merged plan scope item 9.
+ */
+export async function listAllConsigneesRows(
+  tx: DbTx,
+  filters: ListAllConsigneesFilters = {},
+): Promise<
+  readonly {
+    consignee: Consignee;
+    merchant: {
+      tenantId: Uuid;
+      slug: string;
+      name: string;
+      status: TenantStatus;
+    };
+  }[]
+> {
+  const limit = Math.min(filters.limit ?? 50, 500);
+  const offset = filters.offset ?? 0;
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+  const searchFilter = buildAdminConsigneeSearchFilter(filters.searchTerm);
+
+  const rows = await tx.execute<AdminConsigneeJoinRow>(sqlTag`
+    SELECT
+      c.*,
+      ten.id   AS merchant_tenant_id,
+      ten.slug AS merchant_slug,
+      ten.name AS merchant_name,
+      ten.status AS merchant_status
+    FROM consignees c
+    JOIN tenants ten ON ten.id = c.tenant_id
+    WHERE 1 = 1
+      AND ten.status != 'archived'
+      ${merchantFilter}
+      ${searchFilter}
+    ORDER BY c.created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  return rows.map((row) => ({
+    consignee: mapRow(row),
+    merchant: {
+      tenantId: row.merchant_tenant_id as Uuid,
+      slug: row.merchant_slug,
+      name: row.merchant_name,
+      status: row.merchant_status,
+    },
+  }));
+}
+
+function buildAdminConsigneeSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const namePattern = `%${trimmed}%`;
+  const phoneDigits = trimmed.replace(/\D/g, "");
+  if (phoneDigits.length > 0) {
+    const phonePattern = `%${phoneDigits}%`;
+    return sqlTag`AND (c.name ILIKE ${namePattern} OR c.phone ILIKE ${phonePattern} OR ten.name ILIKE ${namePattern})`;
+  }
+  return sqlTag`AND (c.name ILIKE ${namePattern} OR ten.name ILIKE ${namePattern})`;
+}
+
+/**
+ * Day-24 PM: cross-tenant COUNT of consignees matching the same
+ * filter set as `listAllConsigneesRows`. Powers the hero count card
+ * on /admin/consignees. Drops ORDER BY + LIMIT/OFFSET; returns a
+ * single integer.
+ */
+export async function countAllConsigneesRows(
+  tx: DbTx,
+  filters: Omit<ListAllConsigneesFilters, "limit" | "offset"> = {},
+): Promise<number> {
+  const merchantFilter =
+    filters.merchantSlug !== undefined
+      ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
+      : sqlTag``;
+  const searchFilter = buildAdminConsigneeSearchFilter(filters.searchTerm);
+
+  const rows = await tx.execute<{ count: number }>(sqlTag`
+    SELECT COUNT(*)::int AS count
+    FROM consignees c
+    JOIN tenants ten ON ten.id = c.tenant_id
+    WHERE 1 = 1
+      AND ten.status != 'archived'
+      ${merchantFilter}
+      ${searchFilter}
+  `);
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Day-24 PM: tenant-scoped COUNT of consignees matching `searchTerm`.
+ * Powers the hero count card on tenant `/consignees`. Tenant-scoped
+ * via explicit predicate + RLS (caller wraps in `withTenant`).
+ */
+export async function countConsigneesByTenantRows(
+  tx: DbTx,
+  tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<number> {
+  const searchFilter = buildConsigneeSearchFilter(opts.searchTerm);
+  const rows = await tx.execute<{ count: number }>(sqlTag`
+    SELECT COUNT(*)::int AS count
+    FROM consignees
+    WHERE tenant_id = ${tenantId}
+      ${searchFilter}
+  `);
+  return rows[0]?.count ?? 0;
 }
 
 /**
@@ -258,4 +488,285 @@ export async function deleteConsignee(tx: DbTx, tenantId: Uuid, id: Uuid): Promi
         ? result.length
         : 0;
   return count > 0;
+}
+
+// -----------------------------------------------------------------------------
+// CRM state operations (Day 16 / Block 4-D — Service C)
+// -----------------------------------------------------------------------------
+
+/**
+ * SELECT one consignee FOR UPDATE within the current tx — row-locks the
+ * consignee for the duration of the transaction. Used by
+ * `changeConsigneeCrmState` to read the current crm_state, run the
+ * matrix gate against it, and then UPDATE it atomically without a
+ * read-after-write race against a concurrent caller.
+ *
+ * Defence-in-depth tenant_id predicate alongside RLS, same as
+ * updateConsignee / deleteConsignee.
+ *
+ * Returns null when the row is missing, RLS-hidden, or tenant_id
+ * mismatch — same observable null-on-deny posture as findConsigneeById.
+ */
+export async function findConsigneeForCrmUpdate(
+  tx: DbTx,
+  tenantId: Uuid,
+  id: Uuid,
+): Promise<Consignee | null> {
+  const rows = await tx.execute<ConsigneeRow>(sqlTag`
+    SELECT * FROM consignees
+    WHERE id = ${id} AND tenant_id = ${tenantId}
+    FOR UPDATE
+  `);
+  return rows[0] ? mapRow(rows[0]) : null;
+}
+
+/**
+ * UPDATE consignees.crm_state for one row, scoped to tenantId. Returns
+ * `true` on a successful single-row update, `false` if no row matched
+ * (vanished mid-tx — the caller's findConsigneeForCrmUpdate should
+ * have row-locked, so a `false` here is a programming error or the
+ * lock was lost; either way the caller maps to NotFoundError).
+ *
+ * No `updated_at` touch — the column has its own DB-level trigger
+ * established in 0004 (`set_updated_at` BEFORE-UPDATE). Don't
+ * double-write here.
+ */
+export async function updateConsigneeCrmState(
+  tx: DbTx,
+  tenantId: Uuid,
+  id: Uuid,
+  toState: ConsigneeCrmState,
+): Promise<boolean> {
+  const rows = await tx.execute<{ id: string } & Record<string, unknown>>(sqlTag`
+    UPDATE consignees
+    SET crm_state = ${toState}
+    WHERE id = ${id} AND tenant_id = ${tenantId}
+    RETURNING id
+  `);
+  return rows.length > 0;
+}
+
+/**
+ * INSERT one consignee_crm_events row. Returns the inserted row mapped
+ * to camelCase. RLS WITH CHECK requires tenant_id to match the
+ * `app.current_tenant_id` session value; the explicit `${tenantId}`
+ * value below must equal the session value or the WITH CHECK clause
+ * raises.
+ *
+ * `from_state` is the prior state; nullable per migration 0016 to
+ * accommodate initial-create rows from a future onboarding-emit path.
+ * The Service C call site always passes a non-null fromState because
+ * the consignee row already exists when a transition fires.
+ */
+export async function insertConsigneeCrmEvent(
+  tx: DbTx,
+  input: {
+    consigneeId: Uuid;
+    tenantId: Uuid;
+    fromState: ConsigneeCrmState | null;
+    toState: ConsigneeCrmState;
+    reason: string | null;
+    actor: Uuid;
+  },
+): Promise<ConsigneeCrmEvent> {
+  type Row = {
+    id: string;
+    consignee_id: string;
+    tenant_id: string;
+    from_state: string | null;
+    to_state: string;
+    reason: string | null;
+    actor: string;
+    occurred_at: Date | string;
+  } & Record<string, unknown>;
+
+  const rows = await tx.execute<Row>(sqlTag`
+    INSERT INTO consignee_crm_events (
+      consignee_id,
+      tenant_id,
+      from_state,
+      to_state,
+      reason,
+      actor
+    ) VALUES (
+      ${input.consigneeId},
+      ${input.tenantId},
+      ${input.fromState},
+      ${input.toState},
+      ${input.reason},
+      ${input.actor}
+    )
+    RETURNING *
+  `);
+
+  if (rows.length === 0) {
+    throw new Error(
+      "insertConsigneeCrmEvent: INSERT … RETURNING produced zero rows",
+    );
+  }
+  const row = rows[0];
+  return {
+    id: row.id,
+    consigneeId: row.consignee_id,
+    tenantId: row.tenant_id,
+    fromState: row.from_state as ConsigneeCrmState | null,
+    toState: row.to_state as ConsigneeCrmState,
+    reason: row.reason,
+    actor: row.actor,
+    occurredAt: toIso(row.occurred_at),
+  };
+}
+
+/**
+ * Day 17 — SELECT consignee_crm_events history for a single consignee,
+ * newest-first. Powers the History tab on `/consignees/[id]` per CRM
+ * state UI plan §3.3 + §5. Tenant-scoped via RLS + explicit tenant_id
+ * predicate (defence-in-depth — same posture as listConsigneesByTenant).
+ *
+ * `limit` defaults to 50 and is clamped at 200 to prevent unbounded
+ * fetches. `before` is an optional ISO timestamp cursor used for
+ * pagination; rows older than `before` are returned newest-first.
+ *
+ * Returns rows mapped to ConsigneeCrmEvent. Empty input results return
+ * [].
+ */
+export async function selectCrmHistoryForConsignee(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly ConsigneeCrmEvent[]> {
+  const limit = Math.min(options?.limit ?? 50, 200);
+  const before = options?.before ?? null;
+
+  type Row = {
+    id: string;
+    consignee_id: string;
+    tenant_id: string;
+    from_state: string | null;
+    to_state: string;
+    reason: string | null;
+    actor: string;
+    occurred_at: Date | string;
+  } & Record<string, unknown>;
+
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id, consignee_id, tenant_id, from_state, to_state, reason, actor, occurred_at
+    FROM consignee_crm_events
+    WHERE consignee_id = ${consigneeId}
+      AND tenant_id = ${tenantId}
+      ${before ? sqlTag`AND occurred_at < ${before}::timestamptz` : sqlTag``}
+    ORDER BY occurred_at DESC
+    LIMIT ${limit}
+  `);
+
+  return rows.map((row) => ({
+    id: row.id,
+    consigneeId: row.consignee_id,
+    tenantId: row.tenant_id,
+    fromState: row.from_state as ConsigneeCrmState | null,
+    toState: row.to_state as ConsigneeCrmState,
+    reason: row.reason,
+    actor: row.actor,
+    occurredAt: toIso(row.occurred_at),
+  }));
+}
+
+// -----------------------------------------------------------------------------
+// Day 22 / §3.3.7 — consignee_timeline_events VIEW consumer
+// -----------------------------------------------------------------------------
+//
+// Reads the chronological event projection across CRM transitions,
+// subscription exceptions, and terminal task statuses. The VIEW
+// (migration 0016 §3) is SECURITY INVOKER so RLS on the underlying
+// tables applies — the caller must be inside a `withTenant` block. The
+// explicit `tenant_id = ${tenantId}` predicate is defence in depth.
+//
+// `payload` is jsonb; postgres-js parses it to an unknown record. We
+// narrow per `event_kind` via the dispatch below; unknown kinds throw
+// (the view's UNION is closed-set; a new kind landing without code
+// support is a coding bug we want loud).
+
+interface TimelineRowBase {
+  readonly event_kind: "crm_state" | "subscription_exception" | "task_status";
+  readonly occurred_at: Date | string;
+  readonly payload: Record<string, unknown>;
+  readonly actor_id: string | null;
+}
+
+type TimelineRow = TimelineRowBase & Record<string, unknown>;
+
+/**
+ * Day 22 — SELECT the unified timeline for a single consignee from
+ * `consignee_timeline_events`, newest-first. Powers the History tab
+ * on `/consignees/[id]` per brief §3.3.7.
+ *
+ * `limit` defaults to 50 and is clamped at 200. `before` is an
+ * optional ISO timestamp cursor for paging (rows older than `before`).
+ */
+export async function selectTimelineForConsignee(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+  options?: { limit?: number; before?: string },
+): Promise<readonly TimelineEvent[]> {
+  const limit = Math.min(options?.limit ?? 50, 200);
+  const before = options?.before ?? null;
+
+  const rows = await tx.execute<TimelineRow>(sqlTag`
+    SELECT event_kind, occurred_at, payload, actor_id
+    FROM consignee_timeline_events
+    WHERE consignee_id = ${consigneeId}
+      AND tenant_id = ${tenantId}
+      ${before ? sqlTag`AND occurred_at < ${before}::timestamptz` : sqlTag``}
+    ORDER BY occurred_at DESC
+    LIMIT ${limit}
+  `);
+
+  return rows.map((row) => mapTimelineRow(row));
+}
+
+function mapTimelineRow(row: TimelineRow): TimelineEvent {
+  const eventAt = toIso(row.occurred_at);
+  const payload = row.payload;
+
+  switch (row.event_kind) {
+    case "crm_state":
+      return {
+        kind: "crm_state",
+        eventAt,
+        fromState: (payload.from_state as ConsigneeCrmState | null) ?? null,
+        toState: payload.to_state as ConsigneeCrmState,
+        reason: (payload.reason as string | null) ?? null,
+        actor: (row.actor_id ?? "") as Uuid,
+      };
+    case "subscription_exception":
+      return {
+        kind: "subscription_exception",
+        eventAt,
+        type: payload.type as SubscriptionExceptionType,
+        subscriptionId: payload.subscription_id as Uuid,
+        startDate: payload.start_date as string,
+        endDate: (payload.end_date as string | null) ?? null,
+        compensatingDate: (payload.compensating_date as string | null) ?? null,
+        reason: (payload.reason as string | null) ?? null,
+        actor: (row.actor_id ?? "") as Uuid,
+      };
+    case "task_status":
+      return {
+        kind: "task_status",
+        eventAt,
+        taskId: payload.task_id as Uuid,
+        internalStatus: payload.internal_status as TaskTerminalStatus,
+        deliveryDate: payload.delivery_date as string,
+      };
+    default: {
+      // Closed-set switch guard. A new event_kind from the VIEW without
+      // matching code support is a coding bug — surface loud.
+      const _exhaustive: never = row.event_kind;
+      throw new Error(
+        `selectTimelineForConsignee: unknown event_kind '${_exhaustive as string}'`,
+      );
+    }
+  }
 }

@@ -237,6 +237,52 @@ export async function markUnresolvedAsResolved(
 }
 
 /**
+ * Day-33 PR-D (Plan #317 §3.7 CLEANUP-1). Bulk-resolve up to N unresolved
+ * failed_pushes rows by `failed_pushes.id` (not task_id — operator
+ * selected rows from the admin UI which renders by row id, AND the
+ * CLI takes failed_push_ids in its JSON input).
+ *
+ * Tenant-scoped via the `tenant_id = $1` predicate alongside RLS. IDs
+ * that don't match (wrong tenant, already-resolved, unknown) are silently
+ * dropped from the RETURNING — the caller compares the returned set to
+ * the submitted IDs to surface partial-success ("3 of 5 resolved; 2
+ * were already resolved or wrong tenant").
+ *
+ * One UPDATE statement regardless of input length (bulk-friendly via
+ * `id = ANY($ids)`). Postgres handles the array via the postgres-js
+ * tagged template — the array binds as a single uuid[] parameter.
+ *
+ * Returns the affected rows ordered by id. Empty `failedPushIds` returns
+ * `[]` without a round-trip.
+ */
+export async function bulkMarkUnresolvedAsResolved(
+  tx: DbTx,
+  tenantId: Uuid,
+  failedPushIds: readonly Uuid[],
+  resolvedBy: Uuid | null,
+  resolutionNotes: string,
+): Promise<readonly FailedPush[]> {
+  if (failedPushIds.length === 0) return [];
+  // Pattern E per src/shared/sql-helpers.ts — Drizzle 0.45 + postgres-js
+  // splats `${jsArr}` into a record tuple, not a Postgres array; build
+  // the array literal server-side as a string. Safe for uuid[] (no
+  // delimiter conflicts).
+  const idsLiteral = "{" + failedPushIds.join(",") + "}";
+  const rows = await tx.execute<FailedPushRow>(sqlTag`
+    UPDATE failed_pushes
+    SET
+      resolved_at      = now(),
+      resolved_by      = ${resolvedBy},
+      resolution_notes = ${resolutionNotes}
+    WHERE id = ANY(${idsLiteral}::uuid[])
+      AND tenant_id = ${tenantId}
+      AND resolved_at IS NULL
+    RETURNING *
+  `);
+  return rows.map(mapRow);
+}
+
+/**
  * Day 8 / D8-5 — read path for the /admin/failed-pushes UI.
  *
  * Returns unresolved failed_pushes rows for the tenant, ordered by
@@ -250,19 +296,39 @@ export async function markUnresolvedAsResolved(
  *
  * Tenant-scoped via WHERE clause (defence-in-depth alongside RLS).
  * Returns `[]` for tenants with no unresolved rows.
+ *
+ * Day-24: optional `searchTerm` narrows the result via case-insensitive
+ * ILIKE across the parent task's AWB (`tasks.external_tracking_number`)
+ * and the failed_pushes UUID `task_id::text`. The INNER JOIN to `tasks`
+ * is structurally safe — `failed_pushes.task_id REFERENCES tasks(id)
+ * ON DELETE CASCADE` (0008_failed_pushes.sql:140) plus a BEFORE-INSERT
+ * trigger (failed_pushes_assert_tenant_match, 0008:211) make orphan
+ * failed_pushes impossible. INNER vs LEFT JOIN return the same set.
  */
 export async function listUnresolvedByTenant(
   tx: DbTx,
   tenantId: Uuid,
+  opts: { readonly searchTerm?: string } = {},
 ): Promise<readonly FailedPush[]> {
+  const searchFilter = buildFailedPushSearchFilter(opts.searchTerm);
   const rows = await tx.execute<FailedPushRow>(sqlTag`
-    SELECT *
-    FROM failed_pushes
-    WHERE tenant_id = ${tenantId}
-      AND resolved_at IS NULL
-    ORDER BY last_attempted_at DESC
+    SELECT fp.*
+    FROM failed_pushes fp
+    INNER JOIN tasks t ON t.id = fp.task_id
+    WHERE fp.tenant_id = ${tenantId}
+      AND fp.resolved_at IS NULL
+      ${searchFilter}
+    ORDER BY fp.last_attempted_at DESC
   `);
   return rows.map(mapRow);
+}
+
+function buildFailedPushSearchFilter(searchTerm: string | undefined) {
+  if (!searchTerm) return sqlTag``;
+  const trimmed = searchTerm.trim();
+  if (trimmed.length === 0) return sqlTag``;
+  const pattern = `%${trimmed}%`;
+  return sqlTag`AND (t.external_tracking_number ILIKE ${pattern} OR fp.task_id::text ILIKE ${pattern})`;
 }
 
 /**

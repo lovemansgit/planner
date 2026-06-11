@@ -96,14 +96,24 @@ function stubAdapter(overrides: Partial<LastMileAdapter> = {}): LastMileAdapter 
 }
 
 /**
- * Stub withTenant so that listVisibleTaskIds (the only call inside
- * printLabelsForTasks's withTenant block) returns the given IDs as
- * `[{ id }]` rows.
+ * Stub withTenant so that listVisibleTaskExternalIds (the only call
+ * inside printLabelsForTasks's withTenant block as of Day-17 hotfix
+ * #1B) returns rows shaped per the new repository function:
+ * `[{ id, external_id, pushed_to_external_at }]`. By default every
+ * row is treated as PUSHED (external_id + pushed_to_external_at both
+ * non-null) so the existing tests pass through the eligibility filter
+ * cleanly. Tests that need to exercise the partition use stubVisibleIdsMixed.
  */
 function stubVisibleIds(visibleIds: readonly string[]) {
   mockWithTenant.mockImplementation(async (_tenantId, fn) => {
     const tx = {
-      execute: vi.fn(async () => visibleIds.map((id) => ({ id }))),
+      execute: vi.fn(async () =>
+        visibleIds.map((id, i) => ({
+          id,
+          external_id: `SF-${10000 + i}`,
+          pushed_to_external_at: "2026-05-05T07:55:19.321Z",
+        })),
+      ),
     };
     return fn(tx as never);
   });
@@ -159,7 +169,10 @@ describe("D8-6 printLabelsForTasks — visibility filter (silent drop)", () => {
 
     expect(adapter.printLabels).toHaveBeenCalledTimes(1);
     const printArgs = adapter.printLabels.mock.calls[0];
-    expect(printArgs[1]).toEqual([TASK_ID_A, TASK_ID_B]);
+    // Day-17 hotfix #1B — adapter receives SF external_ids (NOT
+    // Planner UUIDs). The stub's deterministic external_id assignment
+    // makes the first visible row map to SF-10000, second to SF-10001.
+    expect(printArgs[1]).toEqual(["SF-10000", "SF-10001"]);
     expect(result.requestedCount).toBe(3);
     expect(result.printedCount).toBe(2);
   });
@@ -212,11 +225,15 @@ describe("D8-6 printLabelsForTasks — audit + result shape", () => {
     expect(emitArg.metadata).toEqual({
       // task_ids: pre-filter list (what the operator submitted) —
       // forensic record of the click. printed_count is the
-      // post-filter count.
+      // post-filter count. Day-17 hotfix #1B added skipped_count +
+      // skipped_task_ids to the canonical shape; both are zero here
+      // because all stubbed rows are PUSHED (per stubVisibleIds default).
       task_ids: [TASK_ID_A, TASK_ID_B, TASK_ID_C],
       format: "indv-small",
       requested_count: 3,
       printed_count: 2,
+      skipped_count: 0,
+      skipped_task_ids: [],
     });
   });
 
@@ -234,7 +251,12 @@ describe("D8-6 printLabelsForTasks — audit + result shape", () => {
     expect(result.format).toBe("indv-small");
     expect(result.requestedCount).toBe(3);
     expect(result.printedCount).toBe(2);
+    // printedTaskIds remains the Planner-UUID mirror (for audit + UI);
+    // SF external_ids are passed to the adapter separately. Day-17
+    // hotfix #1B adds skippedCount + skippedTaskIds; both zero here.
     expect(result.printedTaskIds).toEqual([TASK_ID_A, TASK_ID_B]);
+    expect(result.skippedCount).toBe(0);
+    expect(result.skippedTaskIds).toEqual([]);
     expect(result.pdfBuffer).toBeInstanceOf(Buffer);
     expect(result.pdfBuffer.toString("utf8")).toBe("MULTI-PAGE-PDF-BYTES");
   });

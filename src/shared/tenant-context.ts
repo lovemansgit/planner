@@ -39,7 +39,30 @@ export type SystemActor =
   // operator-layer audit event (failed_push.retried, user actor);
   // this system-actor identity surfaces only on the system-layer
   // emits (task.pushed_via_reconcile / task.push_failed).
-  | "system:dlq_retry";
+  | "system:dlq_retry"
+  // Day 14 — queue-driven push handler at /api/queue/push-task
+  // (cron-decoupling Phase 5 consumer per memory/plans/day-14-cron-decoupling.md
+  // §5.1). QStash POSTs to the route per `batchJSON` message; the route
+  // builds this system actor for `pushSingleTask` invocation, which
+  // requires assertSystemActor.
+  | "queue:push_task"
+  // Day 16 / Block 4-C — auto-resume scheduler at /api/cron/auto-resume
+  // (merged plan PR #155 §10.3 Option A locked spec). Polls
+  // subscription_exceptions for type='pause_window' rows whose end_date
+  // has elapsed and no resume audit event exists for the same
+  // correlation_id. Per row, calls resumeSubscription with
+  // is_auto_resume=true so the service-layer assertSystemActor branch
+  // skips the user-permission check.
+  | "cron:auto_resume"
+  // Day-33 PR-D — synthetic system actor used by the
+  // scripts/resolve-failed-pushes.mjs CLI tool. The CLI is operator-
+  // run (not cron / not webhook), but bulkResolveFailedPushes runs
+  // through the service layer that requires an actor identity for
+  // the audit emit. Operator attribution on the CLI path lives in
+  // the failed_push.bulk_resolved event's actor_id ("cli:resolve_failed_pushes")
+  // and in the resolution_notes the operator supplied via the JSON
+  // input file (per PR-D's `source: "cli"` discriminator).
+  | "cli:resolve_failed_pushes";
 
 /** Two-kind actor: human user (JWT) or system (cron / webhook / queue). */
 export type Actor =
@@ -49,12 +72,18 @@ export type Actor =
       tenantId: Uuid;
       permissions: ReadonlySet<Permission>;
       // Day 11 / P4 — operator UI surfaces email + displayName on the
-      // landing-page header. Additive widening: existing call sites that
-      // construct a user-actor without these fields still typecheck via
-      // optional-property semantics. Real auth populates both from the
-      // public.users mirror; the demo path leaves them undefined.
+      // landing-page header. Day 17 / T2 #1 — operator UI's user-menu
+      // surface adds tenantName + tenantSlug for the identity block
+      // (the tenant the operator is logged into). All four are
+      // additive widenings: existing call sites that construct a
+      // user-actor without these fields still typecheck via
+      // optional-property semantics. Real auth populates them from
+      // the public.users + tenants JOIN; the demo path leaves them
+      // undefined.
       email?: string;
       displayName?: string | null;
+      tenantName?: string;
+      tenantSlug?: string;
       ipAddress?: string;
       userAgent?: string;
     }

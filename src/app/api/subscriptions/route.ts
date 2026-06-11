@@ -5,9 +5,7 @@
 //
 // Auth (Day 10): buildRequestContext resolves the Supabase Auth session
 // to a per-tenant RequestContext; UnauthorizedError surfaces as 401 via
-// errorResponse. Posture A graceful migration keeps the demo-context
-// fallthrough behind ALLOW_DEMO_AUTH=true (Preview-only) until the
-// post-soak Posture B follow-up retires it.
+// errorResponse.
 //
 // Validation: Zod schemas at the boundary catch shape errors before
 // the service layer. The service layer still validates business rules

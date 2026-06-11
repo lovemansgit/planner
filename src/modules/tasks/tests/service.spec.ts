@@ -23,13 +23,33 @@ vi.mock("../../../shared/db", () => ({
 
 vi.mock("../../audit", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
+  listAuditEventsForResource: vi.fn().mockResolvedValue([]),
+  listAuditEventsForSubscription: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../repository", () => ({
   insertTaskWithPackages: vi.fn(),
   findTaskById: vi.fn(),
   listTasksByTenant: vi.fn(),
+  listTasksBySubscription: vi.fn(),
+  listAllTaskIdsByTenant: vi.fn(),
   updateTask: vi.fn(),
+  listVisibleTaskIds: vi.fn(),
+  listVisibleTaskExternalIds: vi.fn(),
+}));
+
+vi.mock("../../task-outbound-queue", () => ({
+  enqueueCancelTask: vi.fn().mockResolvedValue(undefined),
+  enqueueUpdateTask: vi.fn().mockResolvedValue(undefined),
+  enqueueBulkCancelTasks: vi.fn().mockResolvedValue({ enqueuedCount: 0, failedChunks: 0, totalCount: 0 }),
+  enqueueBulkUpdateTasks: vi.fn().mockResolvedValue({ enqueuedCount: 0, failedChunks: 0, totalCount: 0 }),
+}));
+
+// R4 option B — the wrapper builds the ConsigneeSnapshot server-side via
+// this helper inside a withTenant read; mocked so the unit layer controls
+// the snapshot without a DB.
+vi.mock("../../subscription-addresses", () => ({
+  buildConsigneeSnapshotForAddress: vi.fn(),
 }));
 
 vi.mock("../../../shared/logger", () => {
@@ -55,37 +75,79 @@ vi.mock("../../../shared/sentry-capture", () => ({
 }));
 
 import { withServiceRole, withTenant } from "../../../shared/db";
-import { ForbiddenError, NotFoundError, ValidationError } from "../../../shared/errors";
+import {
+  ForbiddenError,
+  NoLabelablePushedTasksError,
+  NotFoundError,
+  ValidationError,
+} from "../../../shared/errors";
 import type { Actor, RequestContext } from "../../../shared/tenant-context";
 import type { Permission } from "../../../shared/types";
 
 import { logger } from "../../../shared/logger";
 
-import { emit } from "../../audit";
+import {
+  emit,
+  listAuditEventsForResource,
+  listAuditEventsForSubscription,
+  type AuditEventRecord,
+} from "../../audit";
 
 import {
   findTaskById,
   insertTaskWithPackages,
+  listAllTaskIdsByTenant,
+  listTasksBySubscription,
   listTasksByTenant,
+  listVisibleTaskExternalIds,
   updateTask as updateTaskRow,
 } from "../repository";
 import {
+  addNoteToDriver,
   BulkValidationError,
+  bulkCancelTasks,
   bulkCreateTasks,
+  bulkUpdateTasks,
+  cancelTask,
   createTask,
   getTask,
+  getTaskHistory,
+  getTasksForSubscription,
+  getTaskTimeline,
+  listAllTaskIds,
   listTasks,
+  printLabelsForTasks,
+  subscriptionEventAffectsTask,
+  buildPauseWindows,
+  TASK_HISTORY_BATCH_SIZE,
+  TASK_HISTORY_EXCLUDED_EVENT_TYPES,
   updateTask,
+  updateTaskAndPushOutbound,
+  DriverNotePushPendingError,
 } from "../service";
+
+import {
+  enqueueBulkCancelTasks,
+  enqueueBulkUpdateTasks,
+  enqueueCancelTask,
+  enqueueUpdateTask,
+} from "../../task-outbound-queue";
+import { buildConsigneeSnapshotForAddress } from "../../subscription-addresses";
 import type { CreateTaskInput, Task } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
 const mockWithServiceRole = vi.mocked(withServiceRole);
 const mockEmit = vi.mocked(emit);
+const mockListAuditForResource = vi.mocked(listAuditEventsForResource);
+const mockListAuditForSubscription = vi.mocked(listAuditEventsForSubscription);
 const mockInsert = vi.mocked(insertTaskWithPackages);
 const mockFindById = vi.mocked(findTaskById);
 const mockListByTenant = vi.mocked(listTasksByTenant);
+const mockListBySubscription = vi.mocked(listTasksBySubscription);
+const mockListAllTaskIdsByTenant = vi.mocked(listAllTaskIdsByTenant);
 const mockUpdate = vi.mocked(updateTaskRow);
+const mockListVisibleTaskExternalIds = vi.mocked(listVisibleTaskExternalIds);
+const mockBuildSnapshot = vi.mocked(buildConsigneeSnapshotForAddress);
 const mockLoggerError = vi.mocked(logger.error);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
@@ -142,7 +204,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     internalStatus: "CREATED",
     externalId: null,
     externalTrackingNumber: null,
-    deliveryDate: "2026-05-01",
+    deliveryDate: "2099-05-01",
     deliveryStartTime: "14:00:00",
     deliveryEndTime: "16:00:00",
     deliveryType: "STANDARD",
@@ -156,6 +218,10 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
     smsNotifications: false,
     deliverToCustomerOnly: false,
     pushedToExternalAt: null,
+    addressId: null,
+    podPhotos: null,
+    addressLabel: null,
+    outboundSyncState: "synced",
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     packages: [],
@@ -166,7 +232,7 @@ function taskFixture(overrides: Partial<Task> = {}): Task {
 const baseInput: CreateTaskInput = {
   consigneeId: CONSIGNEE_ID,
   customerOrderNumber: "ORDER-001",
-  deliveryDate: "2026-05-01",
+  deliveryDate: "2099-05-01",
   deliveryStartTime: "14:00",
   deliveryEndTime: "16:00",
   packages: [{ position: 0 }],
@@ -180,6 +246,7 @@ beforeEach(() => {
   mockInsert.mockReset();
   mockFindById.mockReset();
   mockListByTenant.mockReset();
+  mockListAllTaskIdsByTenant.mockReset();
   mockUpdate.mockReset();
   mockLoggerError.mockReset();
 
@@ -234,6 +301,69 @@ describe("createTask", () => {
     expect(emitArg.tenantId).toBe(TENANT_ID);
     expect(emitArg.resourceId).toBe(TASK_ID);
     expect(result.id).toBe(TASK_ID);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Day-22 PM §3.22 — createdVia preservation + composite invariant
+  // ---------------------------------------------------------------------------
+  //
+  // Before fixup: validateCreateTaskInput dropped `createdVia` from its
+  // normalised output, so the repository fell back to SQL default
+  // 'subscription'. The composite CHECK `tasks_creation_source_invariant`
+  // then fired at INSERT time when `subscriptionId` was undefined
+  // (single-task / manual_admin paths). Operator saw "Unexpected error
+  // mid-batch". These tests anchor:
+  //   1. createdVia=manual_admin reaches the repository (no SQL-default
+  //      regression)
+  //   2. validator catches `subscription` + no subscriptionId pre-DB so
+  //      Postgres never sees the CHECK violation
+
+  it("preserves createdVia='manual_admin' through validation (was previously stripped)", async () => {
+    const ctx = systemCtx();
+    mockInsert.mockResolvedValue(taskFixture({ createdVia: "manual_admin" }));
+
+    await createTask(ctx, { ...baseInput, createdVia: "manual_admin" });
+
+    expect(mockInsert).toHaveBeenCalledOnce();
+    // Inspect the (tx, tenantId, input) call — input is arg[2].
+    const repoInput = mockInsert.mock.calls[0][2] as CreateTaskInput;
+    expect(repoInput.createdVia).toBe("manual_admin");
+  });
+
+  it("rejects createdVia='subscription' with no subscriptionId via ValidationError (pre-DB CHECK guard)", async () => {
+    const ctx = systemCtx();
+    await expect(
+      createTask(ctx, { ...baseInput, createdVia: "subscription" }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects createdVia='manual_admin' WITH a subscriptionId via ValidationError (composite invariant inverse)", async () => {
+    const ctx = systemCtx();
+    await expect(
+      createTask(ctx, {
+        ...baseInput,
+        createdVia: "manual_admin",
+        subscriptionId: "33333333-3333-3333-3333-333333333333" as never,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("preserves createdVia='subscription' WHEN subscriptionId is provided (happy path through validator)", async () => {
+    const ctx = systemCtx();
+    mockInsert.mockResolvedValue(taskFixture({ createdVia: "subscription" }));
+
+    await createTask(ctx, {
+      ...baseInput,
+      createdVia: "subscription",
+      subscriptionId: "33333333-3333-3333-3333-333333333333" as never,
+    });
+
+    expect(mockInsert).toHaveBeenCalledOnce();
+    const repoInput = mockInsert.mock.calls[0][2] as CreateTaskInput;
+    expect(repoInput.createdVia).toBe("subscription");
+    expect(repoInput.subscriptionId).toBe("33333333-3333-3333-3333-333333333333");
   });
 });
 
@@ -451,6 +581,37 @@ describe("listTasks", () => {
 });
 
 // -----------------------------------------------------------------------------
+// listAllTaskIds — Day 17 / Session B select-all-across-pages
+// -----------------------------------------------------------------------------
+
+describe("listAllTaskIds", () => {
+  it("rejects an actor without task:read with ForbiddenError", async () => {
+    await expect(listAllTaskIds(userCtx([]))).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("returns the IDs inside withTenant; not audited", async () => {
+    mockListAllTaskIdsByTenant.mockResolvedValue([
+      "11111111-1111-1111-1111-111111111111",
+      "22222222-2222-2222-2222-222222222222",
+    ] as never);
+    const result = await listAllTaskIds(userCtx(["task:read"]));
+    expect(result).toHaveLength(2);
+    expect(mockWithTenant).toHaveBeenCalledOnce();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("forwards the optional status filter to the repository", async () => {
+    mockListAllTaskIdsByTenant.mockResolvedValue([] as never);
+    await listAllTaskIds(userCtx(["task:read"]), { status: "DELIVERED" });
+    expect(mockListAllTaskIdsByTenant).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      { status: "DELIVERED" },
+    );
+  });
+});
+
+// -----------------------------------------------------------------------------
 // updateTask — user-flow, requires task:update
 // -----------------------------------------------------------------------------
 
@@ -541,5 +702,1312 @@ describe("updateTask", () => {
     await expect(
       updateTask(userCtx(["task:update"]), TASK_ID, { customerOrderNumber: "  " })
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+// =============================================================================
+// printLabelsForTasks — Day 17 Planner-UUID → SF-external-id translation
+// =============================================================================
+describe("printLabelsForTasks — Day-17 external_id translation", () => {
+  const TASK_ID_1 = "11111111-1111-1111-1111-111111111111";
+  const TASK_ID_2 = "22222222-2222-2222-2222-222222222222";
+  const TASK_ID_3 = "33333333-3333-3333-3333-333333333333";
+
+  beforeEach(() => {
+    mockWithTenant.mockImplementation(async (_tenantId, fn) => fn({} as never));
+  });
+
+  function makeAdapter(printSpy: ReturnType<typeof vi.fn>): {
+    authenticate: ReturnType<typeof vi.fn>;
+    printLabels: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      authenticate: vi.fn().mockResolvedValue({ token: "tok", tenantId: TENANT_ID }),
+      printLabels: printSpy,
+    };
+  }
+
+  it("passes SF external_ids (NOT Planner UUIDs) to the adapter", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: "2026-05-05T07:55:19.321Z" },
+      { id: TASK_ID_2, externalId: "60548", pushedToExternalAt: "2026-05-05T07:56:19.321Z" },
+    ]);
+    const printSpy = vi.fn().mockResolvedValue(Buffer.from("PDF"));
+    const adapter = makeAdapter(printSpy);
+
+    const result = await printLabelsForTasks(
+      userCtx(["task:print_labels"]),
+      [TASK_ID_1 as never, TASK_ID_2 as never],
+      adapter as never,
+    );
+
+    expect(printSpy).toHaveBeenCalledTimes(1);
+    const passedToAdapter = printSpy.mock.calls[0][1];
+    expect(passedToAdapter).toEqual(["60547", "60548"]);
+    // The Planner UUIDs MUST NOT have been passed — regression pin
+    // for the Day-17 502 root-cause.
+    expect(passedToAdapter).not.toContain(TASK_ID_1);
+    expect(passedToAdapter).not.toContain(TASK_ID_2);
+
+    expect(result.printedCount).toBe(2);
+    expect(result.printedTaskIds).toEqual([TASK_ID_1, TASK_ID_2]);
+    expect(result.skippedCount).toBe(0);
+    expect(result.skippedTaskIds).toEqual([]);
+  });
+
+  it("filters out tasks with external_id IS NULL (pre-push) and surfaces them as skippedCount", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: "2026-05-05T07:55:19.321Z" },
+      { id: TASK_ID_2, externalId: null, pushedToExternalAt: null }, // pre-push
+      { id: TASK_ID_3, externalId: "60549", pushedToExternalAt: "2026-05-05T07:57:19.321Z" },
+    ]);
+    const printSpy = vi.fn().mockResolvedValue(Buffer.from("PDF"));
+
+    const result = await printLabelsForTasks(
+      userCtx(["task:print_labels"]),
+      [TASK_ID_1 as never, TASK_ID_2 as never, TASK_ID_3 as never],
+      makeAdapter(printSpy) as never,
+    );
+
+    expect(printSpy.mock.calls[0][1]).toEqual(["60547", "60549"]);
+    expect(result.printedCount).toBe(2);
+    expect(result.skippedCount).toBe(1);
+    expect(result.skippedTaskIds).toEqual([TASK_ID_2]);
+  });
+
+  it("filters out tasks with pushed_to_external_at IS NULL even if external_id is set (defence in depth)", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: null }, // partial-write edge
+    ]);
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [TASK_ID_1 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(NoLabelablePushedTasksError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws NoLabelablePushedTasksError when ALL visible tasks are pre-push", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: null, pushedToExternalAt: null },
+      { id: TASK_ID_2, externalId: null, pushedToExternalAt: null },
+    ]);
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [TASK_ID_1 as never, TASK_ID_2 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(NoLabelablePushedTasksError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when no submitted IDs are visible in the tenant (existing behavior preserved)", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([]);
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [TASK_ID_1 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty taskIds with ValidationError (existing behavior preserved)", async () => {
+    const printSpy = vi.fn();
+
+    await expect(
+      printLabelsForTasks(
+        userCtx(["task:print_labels"]),
+        [],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    expect(printSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects actor without task:print_labels permission with ForbiddenError", async () => {
+    const printSpy = vi.fn();
+    await expect(
+      printLabelsForTasks(
+        userCtx([]), // no permissions
+        [TASK_ID_1 as never],
+        makeAdapter(printSpy) as never,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("emits task.labels_printed audit with skipped_count + skipped_task_ids in metadata", async () => {
+    mockListVisibleTaskExternalIds.mockResolvedValueOnce([
+      { id: TASK_ID_1, externalId: "60547", pushedToExternalAt: "2026-05-05T07:55:19.321Z" },
+      { id: TASK_ID_2, externalId: null, pushedToExternalAt: null },
+    ]);
+    const printSpy = vi.fn().mockResolvedValue(Buffer.from("PDF"));
+
+    await printLabelsForTasks(
+      userCtx(["task:print_labels"]),
+      [TASK_ID_1 as never, TASK_ID_2 as never],
+      makeAdapter(printSpy) as never,
+    );
+
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("task.labels_printed");
+    expect(emitArg.metadata?.requested_count).toBe(2);
+    expect(emitArg.metadata?.printed_count).toBe(1);
+    expect(emitArg.metadata?.skipped_count).toBe(1);
+    expect(emitArg.metadata?.skipped_task_ids).toEqual([TASK_ID_2]);
+  });
+});
+
+// =============================================================================
+// Day 22 / Phase 1 — cancelTask / bulkCancelTasks / bulkUpdateTasks /
+// updateTaskAndPushOutbound
+// =============================================================================
+//
+// Covers the new SF-outbound-coupled service-layer fns. Mocks
+// task-outbound-queue publishers + repository updateTaskRow + audit emit.
+// All four fns share the post-commit-enqueue posture: local DB tx commits
+// FIRST, audit + QStash enqueue happen AFTER. Tests verify that posture
+// + the per-task cutoff guard + the idempotent fast-paths.
+
+const mockEnqueueCancelTask = vi.mocked(enqueueCancelTask);
+const mockEnqueueUpdateTask = vi.mocked(enqueueUpdateTask);
+const mockEnqueueBulkCancelTasks = vi.mocked(enqueueBulkCancelTasks);
+const mockEnqueueBulkUpdateTasks = vi.mocked(enqueueBulkUpdateTasks);
+
+const FAR_FUTURE_DATE = "2099-05-01"; // never elapsed past Dubai cutoff in test runs
+const STALE_PAST_DATE = "2020-01-01"; // always past cutoff
+
+describe("cancelTask — single-task cancel + outbound enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({} as never),
+    );
+  });
+
+  it("rejects user without task:cancel with ForbiddenError", async () => {
+    await expect(cancelTask(userCtx([]), TASK_ID as never)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+
+  it("happy path: UPDATE, audit task.updated, enqueue cancel-task message", async () => {
+    const before = taskFixture({
+      internalStatus: "CREATED",
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-72915243",
+    });
+    const after = { ...before, internalStatus: "CANCELED" as const };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    const result = await cancelTask(userCtx(["task:cancel"]), TASK_ID as never);
+
+    expect(result.internalStatus).toBe("CANCELED");
+    expect(mockUpdate).toHaveBeenCalledWith(expect.anything(), TENANT_ID, TASK_ID, {
+      internalStatus: "CANCELED",
+    });
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("task.updated");
+    expect(emitArg.metadata?.changed_fields).toEqual(["internalStatus"]);
+    expect(emitArg.metadata?.to_internal_status).toBe("CANCELED");
+    expect(mockEnqueueCancelTask).toHaveBeenCalledTimes(1);
+    const enqueuePayload = mockEnqueueCancelTask.mock.calls[0][0];
+    expect(enqueuePayload.tenant_id).toBe(TENANT_ID);
+    expect(enqueuePayload.task_id).toBe(TASK_ID);
+    expect(enqueuePayload.awb).toBe("MPL-72915243");
+    expect(enqueuePayload.correlation_id).toBeTypeOf("string");
+  });
+
+  it("idempotent fast-path on already-CANCELED: no UPDATE, no audit, no enqueue", async () => {
+    const already = taskFixture({
+      internalStatus: "CANCELED",
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-X",
+    });
+    mockFindById.mockResolvedValueOnce(already);
+
+    const result = await cancelTask(userCtx(["task:cancel"]), TASK_ID as never);
+
+    expect(result).toBe(already);
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEnqueueCancelTask).not.toHaveBeenCalled();
+  });
+
+  it("rejects DELIVERED tasks with ValidationError", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ internalStatus: "DELIVERED", deliveryDate: FAR_FUTURE_DATE }),
+    );
+    await expect(
+      cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects past-cutoff delivery_date with ValidationError", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ internalStatus: "CREATED", deliveryDate: STALE_PAST_DATE }),
+    );
+    await expect(
+      cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("skips QStash enqueue when task has no external_tracking_number (pre-push cancel)", async () => {
+    const before = taskFixture({
+      internalStatus: "CREATED",
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: null,
+    });
+    const after = { ...before, internalStatus: "CANCELED" as const };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await cancelTask(userCtx(["task:cancel"]), TASK_ID as never);
+
+    expect(mockUpdate).toHaveBeenCalled();
+    expect(mockEmit).toHaveBeenCalled();
+    expect(mockEnqueueCancelTask).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// addNoteToDriver — Day-22 / PR-B (popover action 7)
+// -----------------------------------------------------------------------------
+
+describe("addNoteToDriver — Day-22 / PR-B", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) => fn({} as never));
+  });
+
+  it("rejects user without task:add_note with ForbiddenError", async () => {
+    await expect(
+      addNoteToDriver(userCtx([]), TASK_ID as never, "Gate code 4521"),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("rejects empty note (after trim) with ValidationError", async () => {
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "   "),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it("rejects over-length note (>1000 chars) with ValidationError", async () => {
+    const longNote = "x".repeat(1001);
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, longNote),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello"),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects past-cutoff delivery_date with ValidationError", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ deliveryDate: "2020-01-01" }),
+    );
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello"),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("happy path: UPDATE notes + audit task.note_added with previous/new lengths", async () => {
+    const before = taskFixture({
+      deliveryDate: "2099-05-01",
+      notes: "old text",
+    });
+    const after = { ...before, notes: "Gate code 4521" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    const result = await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "  Gate code 4521  ",
+    );
+
+    expect(result.notes).toBe("Gate code 4521");
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      TASK_ID,
+      { notes: "Gate code 4521" },
+    );
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0];
+    expect(emitArg.eventType).toBe("task.note_added");
+    expect(emitArg.metadata?.previous_notes_length).toBe("old text".length);
+    expect(emitArg.metadata?.new_notes_length).toBe("Gate code 4521".length);
+    // Note text MUST NOT appear in metadata (PII discipline).
+    expect(JSON.stringify(emitArg.metadata)).not.toContain("Gate code");
+  });
+
+  it("previous_notes_length is 0 when notes column was null", async () => {
+    const before = taskFixture({ deliveryDate: "2099-05-01", notes: null });
+    const after = { ...before, notes: "first note" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "first note",
+    );
+
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit.mock.calls[0][0].metadata?.previous_notes_length).toBe(0);
+  });
+
+  // --- R3 (plan-PR #337 §2.R3): driver-note SF outbound push ---------------
+
+  it("pushed task (AWB present): enqueues notes-only update + emits task.note_pushed_to_external", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-NOTE",
+      notes: null,
+    });
+    const after = { ...before, notes: "Gate code 4521" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "Gate code 4521");
+
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(1);
+    const payload = mockEnqueueUpdateTask.mock.calls[0][0];
+    expect(payload.tenant_id).toBe(TENANT_ID);
+    expect(payload.task_id).toBe(TASK_ID);
+    expect(payload.awb).toBe("MPL-NOTE");
+    expect(payload.patch).toEqual({ notes: "Gate code 4521" });
+    expect(Object.keys(payload.patch)).toEqual(["notes"]); // no window/consignee bleed
+
+    // task.note_added (local leg) + task.note_pushed_to_external (outbound leg)
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    const pushEmit = mockEmit.mock.calls.find(
+      (c) => c[0].eventType === "task.note_pushed_to_external",
+    )?.[0];
+    expect(pushEmit).toBeDefined();
+    expect(pushEmit?.metadata?.task_id).toBe(TASK_ID);
+    expect(pushEmit?.metadata?.awb).toBe("MPL-NOTE");
+    expect(pushEmit?.metadata?.correlation_id).toBe(payload.correlation_id);
+    // Note text MUST NOT appear in the outbound event metadata (PII).
+    expect(JSON.stringify(pushEmit?.metadata)).not.toContain("Gate code");
+  });
+
+  it("unpushed task (no AWB): commits note + task.note_added only, NO enqueue, NO push event", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: null,
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "later" });
+
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "later");
+
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit.mock.calls[0][0].eventType).toBe("task.note_added");
+  });
+
+  it("enqueue failure: throws DriverNotePushPendingError; note committed; NO push event emitted", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-FAIL",
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "n" });
+    mockEnqueueUpdateTask.mockRejectedValueOnce(new Error("QStash down"));
+
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "n"),
+    ).rejects.toBeInstanceOf(DriverNotePushPendingError);
+
+    // local note write happened + task.note_added emitted; push event did NOT.
+    expect(mockUpdate).toHaveBeenCalled();
+    const pushEmitted = mockEmit.mock.calls.some(
+      (c) => c[0].eventType === "task.note_pushed_to_external",
+    );
+    expect(pushEmitted).toBe(false);
+  });
+
+  it("DriverNotePushPendingError carries the underlying enqueue error as cause", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-FAIL",
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "n" });
+    const underlying = new Error("QStash 503");
+    mockEnqueueUpdateTask.mockRejectedValueOnce(underlying);
+
+    const caught = await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "n",
+    ).catch((e) => e);
+    expect(caught).toBeInstanceOf(DriverNotePushPendingError);
+    expect((caught as DriverNotePushPendingError).cause).toBe(underlying);
+  });
+
+  it("uses a fresh correlation_id per call (distinct dedup identity)", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-CID",
+    });
+    mockFindById.mockResolvedValue(before);
+    mockUpdate.mockResolvedValue({ ...before, notes: "n" });
+
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "n");
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "n");
+
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(2);
+    const cid1 = mockEnqueueUpdateTask.mock.calls[0][0].correlation_id;
+    const cid2 = mockEnqueueUpdateTask.mock.calls[1][0].correlation_id;
+    expect(cid1).not.toBe(cid2);
+  });
+
+  it("past-cutoff pushed task: ValidationError, NO commit, NO enqueue, NO events", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ deliveryDate: STALE_PAST_DATE, externalTrackingNumber: "MPL-LATE" }),
+    );
+    await expect(
+      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "too late"),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getTaskTimeline — Day-22 / PR-B (popover action 8)
+// -----------------------------------------------------------------------------
+
+describe("getTaskTimeline — Day-22 / PR-B", () => {
+  let mockExecute: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecute = vi.fn();
+    // tx needs an execute method for the inline webhook_events SELECT.
+    // findTaskById remains a repo mock; only the webhook query goes
+    // through tx.execute directly.
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: mockExecute } as never),
+    );
+  });
+
+  it("rejects user without task:view_timeline with ForbiddenError", async () => {
+    await expect(
+      getTaskTimeline(userCtx([]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getTaskTimeline(userCtx(["task:view_timeline"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("returns only the TASK_CREATED entry when task has no externalTrackingNumber", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ externalTrackingNumber: null, createdAt: FIXED_NOW }),
+    );
+
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.taskId).toBe(TASK_ID);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].action).toBe("TASK_CREATED");
+    expect(result.entries[0].source).toBe("task_created");
+    expect(result.entries[0].timestamp).toBe(FIXED_NOW);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("merges TASK_CREATED + webhook_events entries in chronological order", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({
+        externalTrackingNumber: "MPL-72915243",
+        createdAt: "2026-05-01T08:00:00.000Z",
+      }),
+    );
+    mockExecute.mockResolvedValueOnce([
+      {
+        action: "TASK_STATUS_UPDATED_TO_ASSIGNED",
+        event_timestamp: "2026-05-01T09:00:00.000Z",
+      },
+      {
+        action: "TASK_STATUS_UPDATED_TO_DELIVERED",
+        event_timestamp: "2026-05-01T12:00:00.000Z",
+      },
+    ]);
+
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries).toHaveLength(3);
+    expect(result.entries[0].action).toBe("TASK_CREATED");
+    expect(result.entries[0].source).toBe("task_created");
+    expect(result.entries[1].action).toBe("TASK_STATUS_UPDATED_TO_ASSIGNED");
+    expect(result.entries[1].source).toBe("webhook");
+    expect(result.entries[2].action).toBe("TASK_STATUS_UPDATED_TO_DELIVERED");
+    expect(result.entries[2].source).toBe("webhook");
+  });
+
+  it("emits no audit event (R-4 read-not-audited convention)", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ externalTrackingNumber: null }),
+    );
+    await getTaskTimeline(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulkCancelTasks — transactional cancel + fan-out enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({} as never),
+    );
+  });
+
+  it("rejects user without task:bulk_cancel with ForbiddenError", async () => {
+    await expect(
+      bulkCancelTasks(userCtx([]), [TASK_ID as never]),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("returns empty result on empty input without DB / audit / enqueue", async () => {
+    const result = await bulkCancelTasks(userCtx(["task:bulk_cancel"]), []);
+    expect(result).toEqual({ canceled: [], alreadyCanceled: [], failures: [] });
+    expect(mockWithTenant).not.toHaveBeenCalled();
+  });
+
+  it("happy path: cancels N tasks, emits N audits, enqueues bulk", async () => {
+    const t1 = taskFixture({ id: "t1" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-1" });
+    const t2 = taskFixture({ id: "t2" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-2" });
+    mockFindById.mockResolvedValueOnce(t1).mockResolvedValueOnce(t2);
+    mockUpdate
+      .mockResolvedValueOnce({ ...t1, internalStatus: "CANCELED" })
+      .mockResolvedValueOnce({ ...t2, internalStatus: "CANCELED" });
+
+    const result = await bulkCancelTasks(
+      userCtx(["task:bulk_cancel"]),
+      ["t1" as never, "t2" as never],
+    );
+
+    expect(result.canceled).toHaveLength(2);
+    expect(result.alreadyCanceled).toHaveLength(0);
+    expect(result.failures).toHaveLength(0);
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    expect(mockEnqueueBulkCancelTasks).toHaveBeenCalledTimes(1);
+    const payloads = mockEnqueueBulkCancelTasks.mock.calls[0][0];
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0].awb).toBe("MPL-1");
+    expect(payloads[1].awb).toBe("MPL-2");
+  });
+
+  it("partial: per-task cutoff failure collected; valid tasks still cancel + enqueue", async () => {
+    const ok = taskFixture({ id: "ok" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-OK" });
+    const stale = taskFixture({ id: "stale" as never, deliveryDate: STALE_PAST_DATE });
+    mockFindById.mockResolvedValueOnce(ok).mockResolvedValueOnce(stale);
+    mockUpdate.mockResolvedValueOnce({ ...ok, internalStatus: "CANCELED" });
+
+    const result = await bulkCancelTasks(
+      userCtx(["task:bulk_cancel"]),
+      ["ok" as never, "stale" as never],
+    );
+
+    expect(result.canceled).toHaveLength(1);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].taskId).toBe("stale");
+    expect(result.failures[0].reason).toMatch(/Dubai cut-off/);
+    expect(mockEnqueueBulkCancelTasks).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueBulkCancelTasks.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it("classifies already-CANCELED into alreadyCanceled (no audit, no enqueue for it)", async () => {
+    const already = taskFixture({ id: "x" as never, internalStatus: "CANCELED", deliveryDate: FAR_FUTURE_DATE });
+    mockFindById.mockResolvedValueOnce(already);
+
+    const result = await bulkCancelTasks(userCtx(["task:bulk_cancel"]), ["x" as never]);
+
+    expect(result.alreadyCanceled).toHaveLength(1);
+    expect(result.canceled).toHaveLength(0);
+    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
+  });
+
+  it("does not enqueue when canceled tasks lack external_tracking_number (pre-push)", async () => {
+    const t = taskFixture({ id: "t" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: null });
+    mockFindById.mockResolvedValueOnce(t);
+    mockUpdate.mockResolvedValueOnce({ ...t, internalStatus: "CANCELED" });
+
+    const result = await bulkCancelTasks(userCtx(["task:bulk_cancel"]), ["t" as never]);
+
+    expect(result.canceled).toHaveLength(1);
+    expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulkUpdateTasks — transactional patch + fan-out enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: vi.fn().mockResolvedValue([{ exists: true }]) } as never),
+    );
+  });
+
+  it("rejects user without task:bulk_update with ForbiddenError", async () => {
+    await expect(
+      bulkUpdateTasks(userCtx([]), [TASK_ID as never], { deliveryDate: FAR_FUTURE_DATE }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("happy path: updates N tasks, emits N audits, enqueues bulk", async () => {
+    const t1 = taskFixture({ id: "t1" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-1" });
+    const t2 = taskFixture({ id: "t2" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-2" });
+    const newDate = "2099-06-01";
+    mockFindById.mockResolvedValueOnce(t1).mockResolvedValueOnce(t2);
+    mockUpdate
+      .mockResolvedValueOnce({ ...t1, deliveryDate: newDate })
+      .mockResolvedValueOnce({ ...t2, deliveryDate: newDate });
+
+    const result = await bulkUpdateTasks(
+      userCtx(["task:bulk_update"]),
+      ["t1" as never, "t2" as never],
+      { deliveryDate: newDate },
+    );
+
+    expect(result.updated).toHaveLength(2);
+    expect(result.unchanged).toHaveLength(0);
+    expect(result.failures).toHaveLength(0);
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    expect(mockEnqueueBulkUpdateTasks).toHaveBeenCalledTimes(1);
+    const payloads = mockEnqueueBulkUpdateTasks.mock.calls[0][0];
+    expect(payloads[0].patch.window?.date).toBe(newDate);
+  });
+
+  it("rejects past-cutoff target deliveryDate per-row", async () => {
+    const t = taskFixture({ id: "t" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-T" });
+    mockFindById.mockResolvedValueOnce(t);
+
+    const result = await bulkUpdateTasks(
+      userCtx(["task:bulk_update"]),
+      ["t" as never],
+      { deliveryDate: STALE_PAST_DATE },
+    );
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].reason).toMatch(/target delivery date/);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("classifies no-op patches into unchanged (no audit, no enqueue)", async () => {
+    const t = taskFixture({ id: "t" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-T", notes: "same" });
+    mockFindById.mockResolvedValueOnce(t);
+    mockUpdate.mockResolvedValueOnce(t);
+
+    const result = await bulkUpdateTasks(userCtx(["task:bulk_update"]), ["t" as never], {
+      notes: "same", // identical → no change
+    });
+
+    expect(result.updated).toHaveLength(0);
+    expect(result.unchanged).toHaveLength(1);
+    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEnqueueBulkUpdateTasks).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateTaskAndPushOutbound — wrapper around updateTask + enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: vi.fn().mockResolvedValue([{ exists: true }]) } as never),
+    );
+  });
+
+  it("delegates to updateTask + enqueues update-task message when task has AWB + window patch", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-WRAP",
+    });
+    const after = { ...before, deliveryDate: "2099-06-01" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    const result = await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { deliveryDate: "2099-06-01" },
+    );
+
+    expect(result).toBe(after);
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(1);
+    const payload = mockEnqueueUpdateTask.mock.calls[0][0];
+    expect(payload.awb).toBe("MPL-WRAP");
+    expect(payload.patch.window?.date).toBe("2099-06-01");
+  });
+
+  it("skips enqueue when task has no external_tracking_number", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: null,
+    });
+    const after = { ...before, deliveryDate: "2099-06-01" };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+
+    await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { deliveryDate: "2099-06-01" },
+    );
+
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+  });
+
+  it("addressId patch builds the ConsigneeSnapshot server-side and enqueues it as the consignee patch (R4 option B)", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-T",
+      addressId: null,
+    });
+    const after = {
+      ...before,
+      addressId: "00000000-0000-0000-0000-000000000bbb" as never,
+    };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+    const snapshot = {
+      name: "Snapshot Consignee",
+      contactPhone: "+971500000001",
+      address: {
+        addressLine1: "12 Override Street",
+        city: "Dubai",
+        district: "Downtown",
+        countryCode: "AE",
+      },
+    };
+    mockBuildSnapshot.mockResolvedValueOnce(snapshot);
+
+    await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { addressId: "00000000-0000-0000-0000-000000000bbb" as never },
+    );
+
+    expect(mockBuildSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(1);
+    const payload = mockEnqueueUpdateTask.mock.calls[0][0];
+    expect(payload.awb).toBe("MPL-T");
+    expect(payload.patch.consignee).toEqual(snapshot);
+  });
+
+  it("addressId patch with unavailable snapshot (null) degrades to empty patch → no enqueue", async () => {
+    const before = taskFixture({
+      deliveryDate: FAR_FUTURE_DATE,
+      externalTrackingNumber: "MPL-T",
+      addressId: null,
+    });
+    const after = {
+      ...before,
+      addressId: "00000000-0000-0000-0000-000000000bbb" as never,
+    };
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce(after);
+    mockBuildSnapshot.mockResolvedValueOnce(null);
+
+    await updateTaskAndPushOutbound(
+      userCtx(["task:update"]),
+      TASK_ID as never,
+      { addressId: "00000000-0000-0000-0000-000000000bbb" as never },
+    );
+
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+  });
+
+  it("propagates underlying updateTask errors (e.g. cutoff guard)", async () => {
+    const stale = taskFixture({ deliveryDate: STALE_PAST_DATE, externalTrackingNumber: "MPL-X" });
+    mockFindById.mockResolvedValueOnce(stale);
+
+    await expect(
+      updateTaskAndPushOutbound(userCtx(["task:update"]), TASK_ID as never, {
+        notes: "x",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-22 §3.22 Fix 2 — getTasksForSubscription
+// ---------------------------------------------------------------------------
+
+describe("getTasksForSubscription", () => {
+  const SUBSCRIPTION_ID = "33333333-3333-3333-3333-333333333333";
+
+  beforeEach(() => {
+    mockListBySubscription.mockReset();
+    mockWithTenant.mockReset();
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      (fn as (tx: unknown) => Promise<unknown>)({}),
+    );
+  });
+
+  it("throws ForbiddenError when actor lacks task:read", async () => {
+    await expect(
+      getTasksForSubscription(userCtx([]), SUBSCRIPTION_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockListBySubscription).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when ctx has no tenantId", async () => {
+    await expect(
+      getTasksForSubscription(userCtx(["task:read"], null), SUBSCRIPTION_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockListBySubscription).not.toHaveBeenCalled();
+  });
+
+  it("forwards subscriptionId + default limit 30 to the repository", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+
+    expect(mockListBySubscription).toHaveBeenCalledTimes(1);
+    const args = mockListBySubscription.mock.calls[0];
+    // (tx, tenantId, subscriptionId, limit)
+    expect(args[1]).toBe(TENANT_ID);
+    expect(args[2]).toBe(SUBSCRIPTION_ID);
+    expect(args[3]).toBe(30);
+  });
+
+  it("forwards a custom limit through to the repository", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never, 50);
+    expect(mockListBySubscription.mock.calls[0][3]).toBe(50);
+  });
+
+  it("runs inside withTenant scoped to ctx.tenantId", async () => {
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+
+    expect(mockWithTenant).toHaveBeenCalledTimes(1);
+    expect(mockWithTenant.mock.calls[0][0]).toBe(TENANT_ID);
+  });
+
+  it("returns rows from the repository unchanged (no further filtering)", async () => {
+    const rows = [
+      taskFixture({ id: "row-1" as never, deliveryDate: "2026-05-12" }),
+      taskFixture({ id: "row-2" as never, deliveryDate: "2026-05-13" }),
+    ];
+    mockListBySubscription.mockResolvedValueOnce(rows as never);
+    const result = await getTasksForSubscription(
+      userCtx(["task:read"]),
+      SUBSCRIPTION_ID as never,
+    );
+    expect(result).toBe(rows);
+  });
+
+  it("does NOT emit an audit event (read path is not audited per R-4)", async () => {
+    mockEmit.mockClear();
+    mockListBySubscription.mockResolvedValueOnce([] as never);
+    await getTasksForSubscription(userCtx(["task:read"]), SUBSCRIPTION_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getTaskHistory — Day-52 / R8 (drawer History section)
+// -----------------------------------------------------------------------------
+
+const HISTORY_SUBSCRIPTION_ID = "55555555-5555-5555-5555-555555555555";
+
+function auditEvent(
+  overrides: Partial<AuditEventRecord> & { eventType: string },
+): AuditEventRecord {
+  return {
+    id: "44444444-4444-4444-4444-444444444444",
+    occurredAt: "2026-06-01T10:00:00.000000Z",
+    actorKind: "user",
+    actorId: ACTOR_USER_ID,
+    resourceType: "task",
+    resourceId: TASK_ID,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+describe("getTaskHistory — Day-52 / R8", () => {
+  let mockExecute: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecute = vi.fn().mockResolvedValue([]);
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: mockExecute } as never),
+    );
+    mockListAuditForResource.mockResolvedValue([]);
+    mockListAuditForSubscription.mockResolvedValue([]);
+  });
+
+  it("rejects user without task:view_timeline with ForbiddenError (ruling 5: drawer gate, nothing stricter)", async () => {
+    await expect(
+      getTaskHistory(userCtx([]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws NotFoundError when task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("queries task events with the ruling-1 exclusion list and BATCH+1 limit", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+
+    expect(mockListAuditForResource).toHaveBeenCalledOnce();
+    const params = mockListAuditForResource.mock.calls[0][1];
+    expect(params.resourceType).toBe("task");
+    expect(params.resourceId).toBe(TASK_ID);
+    expect(params.excludeEventTypes).toEqual(TASK_HISTORY_EXCLUDED_EVENT_TYPES);
+    expect(params.limit).toBe(TASK_HISTORY_BATCH_SIZE + 1);
+    expect(TASK_HISTORY_EXCLUDED_EVENT_TYPES).toContain("task.push_failed");
+    expect(TASK_HISTORY_EXCLUDED_EVENT_TYPES).toContain("failed_push.retried");
+  });
+
+  it("does not fetch subscription events for a subscription-less task", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture({ subscriptionId: null }));
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockListAuditForSubscription).not.toHaveBeenCalled();
+  });
+
+  it("merges relevant subscription events into the task stream, newest first, and drops irrelevant ones", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({
+        subscriptionId: HISTORY_SUBSCRIPTION_ID as never,
+        deliveryDate: "2099-05-01",
+      }),
+    );
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "task.updated",
+        occurredAt: "2026-06-03T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000001",
+      }),
+    ]);
+    mockListAuditForSubscription.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "subscription.paused",
+        occurredAt: "2026-06-02T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000002",
+        resourceType: "subscription",
+        resourceId: HISTORY_SUBSCRIPTION_ID,
+        metadata: { pause_start: "2099-04-30", pause_end: "2099-05-02" },
+      }),
+      auditEvent({
+        eventType: "subscription.exception.created",
+        occurredAt: "2026-06-01T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000003",
+        resourceType: "subscription_exception",
+        metadata: { start_date: "2099-06-15", compensating_date: null },
+      }),
+    ]);
+
+    const result = await getTaskHistory(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries.map((e) => e.eventType)).toEqual([
+      "task.updated",
+      "subscription.paused",
+    ]);
+    expect(result.nextCursor).toBeNull();
+  });
+
+  it("returns a full batch + nextCursor when more task events exist", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    const events = Array.from({ length: TASK_HISTORY_BATCH_SIZE + 1 }, (_, i) =>
+      auditEvent({
+        eventType: "task.updated",
+        occurredAt: `2026-06-01T10:00:${String(59 - i).padStart(2, "0")}.000000Z`,
+        id: `44444444-4444-4444-4444-0000000000${String(10 + i)}`,
+      }),
+    );
+    mockListAuditForResource.mockResolvedValueOnce(events);
+
+    const result = await getTaskHistory(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries).toHaveLength(TASK_HISTORY_BATCH_SIZE);
+    const last = result.entries[result.entries.length - 1];
+    expect(result.nextCursor).toEqual({ occurredAt: last.occurredAt, id: last.id });
+  });
+
+  it("threads the before-cursor into the task-event query", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    const before = {
+      occurredAt: "2026-06-01T10:00:00.000000Z",
+      id: "44444444-4444-4444-4444-444444444444",
+    };
+
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never, {
+      before,
+    });
+
+    expect(mockListAuditForResource.mock.calls[0][1].before).toEqual(before);
+  });
+
+  it("resolves user actors to display names and labels system actors 'System'", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "task.note_added",
+        occurredAt: "2026-06-03T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000001",
+        actorKind: "user",
+        actorId: ACTOR_USER_ID,
+      }),
+      auditEvent({
+        eventType: "task.created",
+        occurredAt: "2026-06-02T10:00:00.000000Z",
+        id: "44444444-4444-4444-4444-000000000002",
+        actorKind: "system",
+        actorId: "cron:generate_tasks",
+      }),
+    ]);
+    mockExecute.mockResolvedValueOnce([
+      { id: ACTOR_USER_ID, display_name: "Jane Operator", email: "jane@example.com" },
+    ]);
+
+    const result = await getTaskHistory(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+
+    expect(result.entries[0].actorLabel).toBe("Jane Operator");
+    expect(result.entries[1].actorLabel).toBe("System");
+    expect(result.entries[1].actorId).toBe("cron:generate_tasks");
+  });
+
+  it("does NOT emit an audit event (read path is not audited per R-4)", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture());
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// subscriptionEventAffectsTask + buildPauseWindows — Day-52 / R8 relevance
+// predicates (pure; derived from the actual emit-site metadata shapes)
+// -----------------------------------------------------------------------------
+
+describe("subscriptionEventAffectsTask — Day-52 / R8", () => {
+  const task = { taskId: TASK_ID, deliveryDate: "2099-05-01", isPushed: false };
+  const pushedTask = { ...task, isPushed: true };
+  const noWindows = new Map<string, { start: string; end: string }>();
+
+  function subEvent(eventType: string, metadata: Record<string, unknown>): AuditEventRecord {
+    return auditEvent({ eventType, metadata, resourceType: "subscription" });
+  }
+
+  it("subscription.paused: in-window matches, out-of-window does not", () => {
+    const inWindow = subEvent("subscription.paused", {
+      pause_start: "2099-04-30",
+      pause_end: "2099-05-02",
+    });
+    const outOfWindow = subEvent("subscription.paused", {
+      pause_start: "2099-06-01",
+      pause_end: "2099-06-10",
+    });
+    expect(subscriptionEventAffectsTask(inWindow, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(outOfWindow, task, noWindows)).toBe(false);
+  });
+
+  it("subscription.pause_cancels_pushed: requires the task to carry an AWB", () => {
+    const event = subEvent("subscription.pause_cancels_pushed", {
+      pause_start: "2099-04-30",
+      pause_end: "2099-05-02",
+    });
+    expect(subscriptionEventAffectsTask(event, pushedTask, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(event, task, noWindows)).toBe(false);
+  });
+
+  it("subscription.resumed: matches via the paired pause window and actual_resume_date", () => {
+    const paused = subEvent("subscription.paused", {
+      pause_start: "2099-04-30",
+      pause_end: "2099-05-02",
+      correlation_id: "corr-1",
+    });
+    const windows = buildPauseWindows([paused]);
+    const restoredTail = subEvent("subscription.resumed", {
+      correlation_id: "corr-1",
+      actual_resume_date: "2099-05-01",
+    });
+    const resumedAfterTask = subEvent("subscription.resumed", {
+      correlation_id: "corr-1",
+      actual_resume_date: "2099-05-02",
+    });
+    const unknownCorrelation = subEvent("subscription.resumed", {
+      correlation_id: "corr-other",
+      actual_resume_date: "2099-05-01",
+    });
+    expect(subscriptionEventAffectsTask(restoredTail, task, windows)).toBe(true);
+    expect(subscriptionEventAffectsTask(resumedAfterTask, task, windows)).toBe(false);
+    expect(subscriptionEventAffectsTask(unknownCorrelation, task, windows)).toBe(false);
+  });
+
+  it("subscription.auto_paused: matches only the tripping task", () => {
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.auto_paused", { task_id: TASK_ID }),
+        task,
+        noWindows,
+      ),
+    ).toBe(true);
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.auto_paused", { task_id: "other-task" }),
+        task,
+        noWindows,
+      ),
+    ).toBe(false);
+  });
+
+  it("subscription.exception.created: matches on start_date, move-to-date, compensating_date, or outbound cancel task_id", () => {
+    const byStartDate = subEvent("subscription.exception.created", {
+      start_date: "2099-05-01",
+    });
+    const byMoveTo = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      target_date_override: "2099-05-01",
+    });
+    const byCompensating = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      compensating_date: "2099-05-01",
+    });
+    const byOutbound = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      outbound_emission: { kind: "cancel", task_id: TASK_ID },
+    });
+    const unrelated = subEvent("subscription.exception.created", {
+      start_date: "2099-04-20",
+      compensating_date: null,
+      outbound_emission: { kind: "none" },
+    });
+    expect(subscriptionEventAffectsTask(byStartDate, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(byMoveTo, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(byCompensating, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(byOutbound, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(unrelated, task, noWindows)).toBe(false);
+  });
+
+  it("subscription.end_date.extended: matches only the task materialized at the new end date", () => {
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.end_date.extended", { new_end_date: "2099-05-01" }),
+        task,
+        noWindows,
+      ),
+    ).toBe(true);
+    expect(
+      subscriptionEventAffectsTask(
+        subEvent("subscription.end_date.extended", { new_end_date: "2099-05-02" }),
+        task,
+        noWindows,
+      ),
+    ).toBe(false);
+  });
+
+  it("subscription.address_override.applied: one_off exact-date, forward from effective_from onward", () => {
+    const oneOffHit = subEvent("subscription.address_override.applied", {
+      scope: "one_off",
+      effective_from: "2099-05-01",
+    });
+    const oneOffMiss = subEvent("subscription.address_override.applied", {
+      scope: "one_off",
+      effective_from: "2099-04-30",
+    });
+    const forwardHit = subEvent("subscription.address_override.applied", {
+      scope: "forward",
+      effective_from: "2099-04-30",
+    });
+    const forwardMiss = subEvent("subscription.address_override.applied", {
+      scope: "forward",
+      effective_from: "2099-05-02",
+    });
+    expect(subscriptionEventAffectsTask(oneOffHit, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(oneOffMiss, task, noWindows)).toBe(false);
+    expect(subscriptionEventAffectsTask(forwardHit, task, noWindows)).toBe(true);
+    expect(subscriptionEventAffectsTask(forwardMiss, task, noWindows)).toBe(false);
+  });
+
+  it("events without a deterministic per-task effect never match (created / updated / ended)", () => {
+    for (const eventType of [
+      "subscription.created",
+      "subscription.updated",
+      "subscription.ended",
+    ]) {
+      expect(subscriptionEventAffectsTask(subEvent(eventType, {}), task, noWindows)).toBe(false);
+    }
+  });
+
+  it("buildPauseWindows: harvests only complete subscription.paused windows", () => {
+    const windows = buildPauseWindows([
+      subEvent("subscription.paused", {
+        correlation_id: "corr-1",
+        pause_start: "2099-04-30",
+        pause_end: "2099-05-02",
+      }),
+      subEvent("subscription.paused", { correlation_id: "corr-2", pause_start: "2099-06-01" }),
+      subEvent("subscription.resumed", { correlation_id: "corr-3" }),
+    ]);
+    expect(windows.get("corr-1")).toEqual({ start: "2099-04-30", end: "2099-05-02" });
+    expect(windows.has("corr-2")).toBe(false);
+    expect(windows.has("corr-3")).toBe(false);
   });
 });

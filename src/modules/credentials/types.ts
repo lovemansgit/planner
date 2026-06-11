@@ -1,4 +1,4 @@
-// Credentials-module types — plan §3.3 / §8.4 per-tenant credentials.
+// Credentials-module types — Day 26 / per-merchant SF credentials lane.
 //
 // The credentials module is the canonical owner of the resolved-secret
 // shapes for each external-service integration. Other modules (notably
@@ -8,27 +8,52 @@
 //
 // Why a SuiteFleet-specific type lives in this module rather than in
 // integration/providers/suitefleet/: the credentials module owns the
-// "where do these values come from" concern (env in Day 4, AWS Secrets
-// Manager in Day 5+). Owning the type alongside the resolver keeps the
-// path of change unambiguous when the storage substrate swaps.
+// "where do these values come from" concern. Day-4 read from env vars;
+// Day-26 reads from per-tenant Supabase Vault rows joined to a
+// region-scoped `client_id` and a region-scoped `auth_method`
+// discriminator. Owning the type alongside the resolver keeps the path
+// of change unambiguous when the storage substrate evolves (Phase 2
+// will swap Vault UUIDs for AWS Secrets Manager ARNs — same shape,
+// different resolver implementation).
 
 /**
- * Resolved per-tenant SuiteFleet secret. All four fields are required;
- * `customerId` is the SuiteFleet-side numeric identifier scoping every
- * task to the tenant's merchant record (brief §5: present in the JWT's
- * `managedEntitiesIds` AND required in the task body).
+ * Resolved per-merchant SuiteFleet credentials. Discriminated union
+ * over `auth_method` — region-level per v1.15 amendment §4.1:
  *
- * The auth client (S-2) uses `username` / `password` / `clientId` only;
- * `customerId` is consumed downstream by `createTask` (S-8). They live
- * in the same shape because SuiteFleet's per-tenant secret in production
- * stores all four together at the same Secrets Manager path.
+ *   - 'oauth'   — sandbox region (`transcorpsb`). Existing flow:
+ *                 POST /api/auth/authenticate with username/password in
+ *                 query string + `Clientid` header. Preserved as-is.
+ *   - 'api_key' — production regions (`transcorp` / `transcorpuae` /
+ *                 `transcorpqatar`). Per SF OpsPortal — exact request-
+ *                 header shape pending Aqib's reply; the api_key code
+ *                 path lights up in a follow-on T2 PR (Sub-PR 2's
+ *                 auth-client stubs `loginApiKey` with
+ *                 ConfigurationError).
+ *
+ * `clientId` and `customerId` are common to both branches — every
+ * SuiteFleet request needs the region's `Clientid` header value and
+ * the merchant's numeric `customerId`. The discriminator narrows the
+ * credential pair (username/password vs apiKey/secretKey).
+ *
+ * Resolver returns this shape per `region.auth_method`. The auth
+ * client's `login()` switches on the discriminator with an exhaustive
+ * switch; tsc rejects any non-exhaustive switch over the union.
  */
-export interface SuiteFleetCredentials {
-  readonly username: string;
-  readonly password: string;
-  readonly clientId: string;
-  readonly customerId: number;
-}
+export type SuiteFleetCredentials =
+  | {
+      readonly auth_method: "oauth";
+      readonly clientId: string;
+      readonly customerId: number;
+      readonly username: string;
+      readonly password: string;
+    }
+  | {
+      readonly auth_method: "api_key";
+      readonly clientId: string;
+      readonly customerId: number;
+      readonly apiKey: string;
+      readonly secretKey: string;
+    };
 
 /**
  * Resolved per-tenant SuiteFleet webhook secret. Values are configured

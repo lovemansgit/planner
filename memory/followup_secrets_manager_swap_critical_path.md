@@ -1,42 +1,49 @@
 ---
-name: AWS Secrets Manager swap — production-cutover blocker, Day-15+ scope
-description: SuiteFleet API credential resolution today reads from environment variables and ignores tenantId. The Day-5 swap to AWS Secrets Manager has slipped through Days 5/6/7/8/9/10 (visible in handoff memos days 6/7/8). Acceptable for Day-14 MVP demo (3 test merchants intentionally share sandbox SF account per decision_mvp_shared_suitefleet_credentials.md) but BLOCKS production cutover. This memo documents current state, slip history, scope of the swap PR, and target schedule (Day 15+).
+name: AWS Secrets Manager swap — REGIONAL credential expansion (UAE/Qatar onboarding); not per-tenant isolation [Day-18 amendment]
+description: SuiteFleet credential resolution swap from environment variables to AWS Secrets Manager. Day-18 amendment reframed scope: this swap is for REGIONAL credentials (region `client_id` env vars — `transcorpsb` sandbox, future `transcorpuae` UAE, `transcorpqatar` Qatar), NOT per-tenant credential isolation. Per-merchant `customerId` is already DB-backed post-A1 (Day 18 / 8 May 2026); the swap remaining is moving the region credentials from env to Secrets Manager when regional expansion happens. Day-10 original framing of "per-tenant credential isolation" was a misread of the SF data model and is superseded.
 type: project
 ---
 
-# AWS Secrets Manager swap — production-cutover blocker
+# AWS Secrets Manager swap — regional credential expansion
 
-**Captured:** 3 May 2026 (Day 10 P3 onboarding prep, Path B accepted)
-**Status:** outstanding; deferred from Day-5 trigger; **Day-15+ scope (post-MVP-demo)**
-**Production cutover impact:** **BLOCKING** — current env-backed resolver cannot serve distinct merchants with distinct SuiteFleet accounts
-**MVP-demo impact:** **NOT blocking** — see [decision_mvp_shared_suitefleet_credentials.md](decision_mvp_shared_suitefleet_credentials.md)
+**Captured:** 3 May 2026 (Day 10) — **scope reframed Day 18 (8 May 2026) post-A1 architectural correction**
+**Status:** scope narrowed; **Phase 2 — triggers when UAE or Qatar regions onboard**
+**Production-cutover impact for sandbox-only deployment:** **NOT blocking** — A1 (Day 18) made per-merchant `customerId` DB-backed, region credentials env-backed and shared across merchants in region is the canonical architecture (per `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`)
+**Phase 2 trigger:** UAE or Qatar regional onboarding — adds `SUITEFLEET_UAE_USERNAME` / `_PASSWORD` / `_CLIENT_ID` (or Secrets Manager entries) and per-region resolver dispatch
 
 ---
 
-## §1 Current state (3 May 2026)
+## §0 Day-18 scope-correction header (read first)
 
-[src/modules/credentials/suitefleet-resolver.ts:39-40](src/modules/credentials/suitefleet-resolver.ts#L39-L40) accepts `tenantId` but ignores it — every tenant resolves the same env-backed credentials:
+> The §1-§5 text below was filed Day 10 (3 May 2026) and framed this swap as "per-tenant credential isolation, the first post-pilot hardening item." **That framing was based on a misread of the SuiteFleet data model and is superseded by the Day-18 architectural correction.**
+>
+> **Three identifier layers (correct architecture, locked Day 18 by Love):**
+>
+> | Layer | Identifier | Storage | Scope |
+> |---|---|---|---|
+> | Region | `client_id` | env-backed (`SUITEFLEET_SANDBOX_CLIENT_ID` = `transcorpsb`; future `_UAE_CLIENT_ID`, `_QATAR_CLIENT_ID`) | Per region; shared across merchants in that region |
+> | Merchant | `customerId` (numeric) | DB column `tenants.suitefleet_customer_code` | Per merchant within a region (588/586/578 in sandbox) |
+> | AWB prefix | `customer.code` (alphanumeric) | Not stored in Planner DB | Per merchant; cosmetic — appears on AWB labels; no routing role |
+>
+> **What A1 (Day 18) shipped:** `src/modules/credentials/suitefleet-resolver.ts` now reads per-merchant `customerId` from DB via `withServiceRole` + `sqlTag`. Region creds (`username`, `password`, `clientId`) stay env-backed (region scope is correct env-shape).
+>
+> **What this swap is now actually for:** moving REGION credentials (`username` / `password` / `clientId`) from env to AWS Secrets Manager when regional expansion happens (UAE / Qatar onboarding). NOT per-tenant credential isolation — that was never the SF architecture.
+>
+> **Where to read the current architecture:** `memory/PLANNER_PRODUCT_BRIEF.md` §3.6 (v1.7), `memory/decision_brief_v1_7_amendment_sf_identifier_model.md`, `memory/followup_per_tenant_merchant_id_routing.md`, `memory/decision_mvp_shared_suitefleet_credentials.md` (§0 amendment header).
 
-```ts
-// suitefleet-resolver.ts line 8-9 (file header)
-// `tenantId` is accepted on the Day-4 implementation but ignored: the
-// same sandbox secret serves every tenant during pilot dev.
+---
 
-// line 39-40
-// tenantId is intentionally unused in the Day-4 path — see file-header docblock.
-// TODO(Day-5): replace env reads with AWS Secrets Manager lookup at /transcorp/secrets/{tenantId}/suitefleet/credentials.
-```
+## §1 Current state (post-A1 — Day 18, 8 May 2026)
 
-Four env vars consulted by every tenant's resolution:
+`src/modules/credentials/suitefleet-resolver.ts` (post-A1 rewrite):
 
-- `SUITEFLEET_SANDBOX_USERNAME`
-- `SUITEFLEET_SANDBOX_PASSWORD`
-- `SUITEFLEET_SANDBOX_CLIENT_ID`
-- `SUITEFLEET_SANDBOX_CUSTOMER_ID` (the integer SF merchant ID — 588 for the canonical sandbox)
+- Region credentials (`username` / `password` / `clientId`) read from env vars (`SUITEFLEET_SANDBOX_USERNAME` / `_PASSWORD` / `_CLIENT_ID`). All merchants in the sandbox region share `transcorpsb`.
+- Per-merchant `customerId` reads from `tenants.suitefleet_customer_code` via `withServiceRole` + `sqlTag`. Each tenant returns its own numeric customerId (588 MPL / 586 DNR / 578 FBU in sandbox).
+- Throws `CredentialError` on tenant-not-found, NULL/empty `customer_code`, non-positive-integer values (Option A).
 
-Token cache (`token-cache.ts`) is keyed by tenantId, so each Planner tenant gets a distinct session JWT, but those JWTs are all minted from the same shared username/password — they all authenticate as SF merchant 588.
+Token cache (`token-cache.ts`) is keyed by tenantId. Each Planner tenant gets a distinct session JWT, but JWTs are minted from the SHARED region credentials — every tenant in sandbox authenticates as `transcorpsb`. The per-merchant scope happens at the wire-body layer via the per-tenant `customerId` field, not at the auth layer.
 
-**Effective behavior:** every Planner tenant's tasks land in SF merchant 588 in sandbox SF. The wire body NEVER carries customer.code (verified Day 10 — see [followup_migration_0013_customer_code_comment_amendment.md](followup_migration_0013_customer_code_comment_amendment.md)); only `customerId=588` reaches SF, in URL query and body. Per-tenant routing is invisible at the SF API call layer.
+**Effective behavior post-A1:** every Planner tenant's tasks land in their assigned SF merchant (588/586/578). Wire body carries the per-tenant `customerId`; auth uses region credentials. Per-tenant routing IS visible at the SF API call layer through the `customerId` field — Day-10's "per-tenant routing invisible to SF" framing was wrong (the field was always there, just env-backed at one fixed value because the resolver ignored `tenantId`).
 
 ## §2 Slip history (Day 5 trigger → still pending Day 10)
 
@@ -89,17 +96,19 @@ The resolver doc + module doc agree on `transcorp/secrets/{tenantId}/...`. The e
 3. Provision creds for the 3 P3 merchants (or whatever production tenants exist by then)
 4. Drop the `ALLOW_ENV_CREDS` fallback in a follow-up T1 once production has soaked
 
-## §5 Production-cutover gating
+## §5 Phase 2 trigger — regional credential expansion
 
-Before any pilot merchant goes live in production:
+**Day-18 reframe:** the original "production-cutover gating" framing assumed per-tenant credentials were the post-pilot hardening item. That assumption was wrong (see §0 amendment header). Per-tenant `customerId` is already DB-backed post-A1; production-cutover for the sandbox region works as-is.
 
-- ✅ All required tenants must have entries in AWS Secrets Manager
-- ✅ The resolver swap must be merged + soaked in Preview against multi-tenant cred resolution
-- ✅ IAM policy must grant `secretsmanager:GetSecretValue` scoped to `transcorp/secrets/*/suitefleet/*`
-- ✅ Old env vars (`SUITEFLEET_SANDBOX_*`) removed from Production scope (Preview retains for fallback during cutover)
-- ✅ Cron empirical test: trigger generation for two tenants with different SF accounts and confirm tasks land in the right SF merchants
+The actual Phase 2 trigger for this swap is **regional expansion** — specifically when UAE or Qatar regions onboard. At that point:
 
-Until those gates land, **production has effectively one merchant** (whoever the env creds authenticate as).
+- ✅ Add `SUITEFLEET_UAE_USERNAME` / `_PASSWORD` / `_CLIENT_ID` env vars (or Secrets Manager entries) keyed to `transcorpuae`
+- ✅ Add `SUITEFLEET_QATAR_USERNAME` / `_PASSWORD` / `_CLIENT_ID` analogously for `transcorpqatar`
+- ✅ Resolver gains per-region dispatch: read tenant's region (likely a new `tenants.region` column or derived from `tenants.slug` prefix), select corresponding region env namespace
+- ✅ For Secrets Manager (rather than continued env-backed): IAM policy grants `secretsmanager:GetSecretValue` scoped to `transcorp/secrets/regions/*/suitefleet/*`. Provisioning script `scripts/load-suitefleet-region-creds.mjs` (or similar) takes `--region` instead of `--tenant-id`
+- ✅ Cron empirical test: seed a UAE tenant + a sandbox tenant; trigger generation for both; confirm UAE tenant's tasks land under `transcorpuae` merchant and sandbox tenant's tasks land under `transcorpsb` merchant
+
+Until UAE / Qatar onboarding triggers regional expansion, **production for the sandbox region works correctly with env-backed region credentials + DB-backed per-merchant customerId.** The three demo tenants (MPL/DNR/FBU) all authenticate as `transcorpsb` AND each routes to its own SF merchant via `customerId` per A1.
 
 ## §6 Cross-references
 

@@ -44,6 +44,10 @@
 //   values), we also skip the emit — same convention as
 //   consignees/service.ts and tasks/service.ts.
 
+import { randomUUID } from "node:crypto";
+
+import { sql as sqlTag } from "drizzle-orm";
+
 import { emit } from "../audit";
 import { withServiceRole, withTenant } from "../../shared/db";
 import {
@@ -56,23 +60,80 @@ import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
+import type { TenantStatus } from "../merchants/types";
+import { computeTargetDateInDubai } from "../task-materialization/dubai-date";
+import { enqueueTaskPushBatch } from "../task-materialization/queue";
+import { materializeSubscriptionForDateRange } from "../task-materialization/service";
 
 import {
   endSubscription as endSubscriptionRow,
   findSubscriptionById,
   insertSubscription,
+  type ListAllSubscriptionsFilters,
+  listAllSubscriptionsRows,
+  listSubscriptionsByConsignee as listSubscriptionsByConsigneeRow,
   listSubscriptionsByTenant,
+  listSubscriptionsWithConsigneeByTenant,
+  type SubscriptionWithConsignee,
   listSweepCandidates,
   pauseSubscription as pauseSubscriptionRow,
-  resumeSubscription as resumeSubscriptionRow,
   updateSubscription as updateSubscriptionRow,
 } from "./repository";
+
+export type { SubscriptionWithConsignee } from "./repository";
+
+export type { ListAllSubscriptionsFilters } from "./repository";
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant admin row shape returned by
+ * listAllSubscriptions. Wraps the tenant-scoped Subscription plus the
+ * merchant surface columns from the repo's JOIN tenants. Per merged
+ * plan §4.4 OQ-4 ruling.
+ */
+export interface AdminSubscriptionRow {
+  readonly subscription: Subscription;
+  readonly merchant: {
+    readonly tenantId: Uuid;
+    readonly slug: string;
+    readonly name: string;
+    readonly status: TenantStatus;
+  };
+}
 import type {
   CreateSubscriptionInput,
+  PauseSubscriptionInput,
+  PauseSubscriptionResult,
+  ResumeSubscriptionInput,
+  ResumeSubscriptionResult,
   Subscription,
   SubscriptionUpdate,
   UpdateSubscriptionPatch,
 } from "./types";
+
+// Day-16 / Block 4-C — Service B (bounded pause + resume) imports.
+import {
+  computePauseExtensionDate,
+  countEligibleDeliveryDays,
+  walkBackwardEligibleDays,
+  type IsoWeekday,
+  type SubscriptionForSkip,
+} from "../subscription-exceptions";
+import {
+  findByIdempotencyKey,
+  insertException,
+} from "../subscription-exceptions/repository";
+import {
+  markTasksCanceledInWindow,
+  markTasksRestoredInWindow,
+} from "../tasks";
+import {
+  enqueueBulkCancelTasks,
+  type CancelTaskPayload,
+} from "../task-outbound-queue";
+import {
+  computeTodayInDubai,
+  isCutOffElapsedForDate,
+} from "../task-materialization/dubai-date";
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -204,9 +265,64 @@ export async function createSubscription(
   };
 
   const tenantId = ctx.tenantId;
-  const created = await withTenant(tenantId, async (tx) => {
-    return insertSubscription(tx, tenantId, normalised);
+  const txResult = await withTenant(tenantId, async (tx) => {
+    const subscription = await insertSubscription(tx, tenantId, normalised);
+
+    // Day-22 PM §3.22 — synchronous materialization for the 14-day
+    // rolling horizon. Operators see tasks immediately on submit
+    // rather than waiting until the next 12:00 UTC cron tick (and
+    // the cron doesn't fire on Vercel preview deployments at all).
+    // Same withTenant tx as the INSERT so a materialization throw
+    // rolls back the subscription — no orphan state. The daily cron
+    // remains the horizon-extender that materialises newly-eligible
+    // dates as the rolling window advances.
+    const horizonEnd = computeTargetDateInDubai(new Date());
+    const rangeEnd =
+      subscription.endDate !== null && subscription.endDate < horizonEnd
+        ? subscription.endDate
+        : horizonEnd;
+    const materializeResult = await materializeSubscriptionForDateRange(tx, {
+      subscriptionId: subscription.id,
+      startDate: subscription.startDate,
+      endDate: rangeEnd,
+      requestId: ctx.requestId,
+    });
+
+    return { subscription, newInsertedTaskIds: materializeResult.newInsertedTaskIds };
   });
+  const created = txResult.subscription;
+
+  // Day-22 PM §3.22 B5 — Phase-5 outbound SF push enqueue, post-commit.
+  // Mirrors the cron handler's Phase-5 posture: enqueue runs OUTSIDE
+  // the withTenant tx because already-committed task rows are
+  // durable, and a failed enqueue must NOT roll back the materialised
+  // tasks. Next-tick cron reconciliation re-discovers via Phase-1
+  // reconciliation tuples (generate-tasks/route.ts).
+  console.info("[createSubscription] enqueueing SF push attempt", {
+    tenantId,
+    subscriptionId: created.id,
+    taskCount: txResult.newInsertedTaskIds.length,
+    requestId: ctx.requestId,
+  });
+  try {
+    await enqueueTaskPushBatch({
+      tenantId,
+      taskIds: txResult.newInsertedTaskIds,
+      requestId: ctx.requestId,
+    });
+    console.info("[createSubscription] enqueueTaskPushBatch succeeded", {
+      tenantId,
+      subscriptionId: created.id,
+      taskCount: txResult.newInsertedTaskIds.length,
+      requestId: ctx.requestId,
+    });
+  } catch (err) {
+    console.error(
+      "[createSubscription] post-commit SF push enqueue failed:",
+      err,
+    );
+    // Intentionally swallow per Phase-5 self-healing posture.
+  }
 
   await emit({
     eventType: "subscription.created",
@@ -257,6 +373,72 @@ export async function listSubscriptions(
   assertTenantScoped(ctx, "subscription:read");
   return withTenant(ctx.tenantId, async (tx) => {
     return listSubscriptionsByTenant(tx, ctx.tenantId!);
+  });
+}
+
+/**
+ * Day-23 §3.3.2 — List every subscription for one consignee within the
+ * actor's tenant, newest first. Drives the consignee-detail Subscription
+ * tab. Same `subscription:read` gate as `listSubscriptions`; no audit
+ * emit per R-4.
+ */
+export async function listSubscriptionsByConsignee(
+  ctx: RequestContext,
+  consigneeId: Uuid,
+): Promise<readonly Subscription[]> {
+  requirePermission(ctx, "subscription:read");
+  assertTenantScoped(ctx, "subscription:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listSubscriptionsByConsigneeRow(tx, ctx.tenantId!, consigneeId);
+  });
+}
+
+/**
+ * Day-22 §3.22 Fix 1 — List subscriptions JOINed with their
+ * consignee's display name. Used by the operator /subscriptions
+ * list page so rows render the consignee name instead of a UUID
+ * shorthand. Same permission gate as listSubscriptions.
+ */
+export async function listSubscriptionsWithConsignee(
+  ctx: RequestContext,
+  opts: { readonly searchTerm?: string } = {},
+): Promise<readonly SubscriptionWithConsignee[]> {
+  requirePermission(ctx, "subscription:read");
+  assertTenantScoped(ctx, "subscription:read");
+  return withTenant(ctx.tenantId, async (tx) => {
+    return listSubscriptionsWithConsigneeByTenant(tx, ctx.tenantId!, opts);
+  });
+}
+
+/**
+ * Day 19 / Phase 1.5 — cross-tenant SELECT of subscriptions across all
+ * merchants. Read-only; no audit emit per R-4. Joined with tenants
+ * for merchant-side surface columns. Optional merchantSlug filter;
+ * unknown slug throws ValidationError per merged plan §3.6 OQ-3 ruling.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `subscription:read_all`.
+ *   - ValidationError   merchantSlug filter does not resolve to an
+ *                       existing tenant.
+ */
+export async function listAllSubscriptions(
+  ctx: RequestContext,
+  filters: ListAllSubscriptionsFilters = {},
+): Promise<readonly AdminSubscriptionRow[]> {
+  requirePermission(ctx, "subscription:read_all");
+
+  return withServiceRole("transcorp_staff:list_all_subscriptions", async (tx) => {
+    if (filters.merchantSlug !== undefined) {
+      const rows = await tx.execute(
+        sqlTag`SELECT 1 FROM tenants WHERE slug = ${filters.merchantSlug} LIMIT 1`,
+      );
+      if (rows.length === 0) {
+        throw new ValidationError(
+          `merchantSlug filter does not resolve to an existing tenant: ${filters.merchantSlug}`,
+        );
+      }
+    }
+    return listAllSubscriptionsRows(tx, filters);
   });
 }
 
@@ -392,105 +574,622 @@ function arraysEqual(a: readonly number[], b: readonly number[]): boolean {
 }
 
 // -----------------------------------------------------------------------------
-// pauseSubscription (lifecycle: active → paused)
+// Day-16 Block 4-C — Service B internal helpers (assertSystemActor + IsoWeekday cast)
 // -----------------------------------------------------------------------------
 
 /**
- * Transition a subscription from 'active' to 'paused'. Emits
- * `subscription.paused` post-commit with previous_status / new_status /
- * paused_at.
+ * Per-module 4-line copy of the assertSystemActor pattern (matches
+ * `src/modules/tasks/service.ts:173-177`). Used by `resumeSubscription`
+ * when the cron handler at `/api/cron/auto-resume` invokes it via
+ * `is_auto_resume: true` — the system-actor branch skips the
+ * user-permission check.
+ */
+function assertSystemActor(ctx: RequestContext, forOperation: string): void {
+  if (ctx.actor.kind !== "system") {
+    throw new ForbiddenError(`${forOperation} requires a system actor`);
+  }
+}
+
+/**
+ * Narrow `readonly number[]` (Subscription.daysOfWeek) to the pure
+ * helper's `readonly IsoWeekday[]`. Same A6 cast as Service A; the
+ * 0009_subscription.sql CHECK constraint guarantees 1-7 at runtime.
+ */
+function asIsoWeekdays(days: readonly number[]): readonly IsoWeekday[] {
+  return days as readonly IsoWeekday[];
+}
+
+const ISO_DATE_REGEX_LIFECYCLE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Read a subscription by id with FOR UPDATE inside the service's
+ * transaction. Returns the minimal shape the lifecycle services need.
+ */
+type LifecycleSubscriptionRow = {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly status: string;
+  readonly start_date: string;
+  readonly end_date: string | null;
+  readonly days_of_week: number[];
+  readonly paused_at: string | null;
+} & Record<string, unknown>;
+
+interface LifecycleSubscription {
+  readonly id: Uuid;
+  readonly tenantId: Uuid;
+  readonly status: "active" | "paused" | "ended";
+  readonly endDate: string | null;
+  readonly daysOfWeek: readonly number[];
+  readonly pausedAt: string | null;
+}
+
+async function readSubscriptionForLifecycle(
+  tx: Parameters<Parameters<typeof withTenant>[1]>[0],
+  subscriptionId: Uuid,
+): Promise<LifecycleSubscription | null> {
+  const rows = await tx.execute<LifecycleSubscriptionRow>(sqlTag`
+    SELECT id, tenant_id, status, start_date, end_date, days_of_week, paused_at
+    FROM subscriptions
+    WHERE id = ${subscriptionId}
+    FOR UPDATE
+  `);
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  if (row.status !== "active" && row.status !== "paused" && row.status !== "ended") {
+    throw new Error(`readSubscriptionForLifecycle: unexpected status '${row.status}'`);
+  }
+  return {
+    id: row.id as Uuid,
+    tenantId: row.tenant_id as Uuid,
+    status: row.status,
+    endDate: row.end_date,
+    daysOfWeek: row.days_of_week,
+    pausedAt: row.paused_at,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Day-16 Block 4-C — pauseSubscription (rewritten — bounded pause per brief §3.1.7)
+// -----------------------------------------------------------------------------
+
+/**
+ * Pause a subscription for a bounded window per brief §3.1.7. Single
+ * transaction: permission → cut-off → state → idempotency → compute
+ * extension → INSERT pause_window exception → UPDATE tasks in window
+ * → CANCELED → UPDATE subscription end_date + status='paused' →
+ * audit emission with shared correlation_id.
+ *
+ * The pre-Day-16 placeholder signature `(ctx, id) → Subscription`
+ * was rewritten in place per Block 4-C routing (β); merged plan
+ * §4.1 path drift captured in
+ * `memory/followup_plan_path_drift_subscription_exceptions.md` §3.
  *
  * Throws:
  *   - ForbiddenError    actor lacks `subscription:pause`.
- *   - ValidationError   no tenant context.
+ *   - ValidationError   tenant context missing, malformed dates,
+ *                       pause_end <= pause_start, cut-off elapsed.
  *   - NotFoundError     no subscription with that id in the tenant.
- *   - ConflictError     row exists but is not in 'active' state
- *                       (propagated from repo).
+ *   - ConflictError     subscription not in 'active' state, or
+ *                       extension walk hit the safety stop.
  */
 export async function pauseSubscription(
   ctx: RequestContext,
-  id: Uuid
-): Promise<Subscription> {
+  id: Uuid,
+  input: PauseSubscriptionInput,
+  options?: { readonly now?: Date },
+): Promise<PauseSubscriptionResult> {
   requirePermission(ctx, "subscription:pause");
   assertTenantScoped(ctx, "subscription:pause");
 
   const tenantId = ctx.tenantId;
-  const result = await withTenant(tenantId, async (tx) => {
-    return pauseSubscriptionRow(tx, tenantId, id);
-  });
 
-  if (result === null) {
-    throw new NotFoundError(`subscription not found: ${id}`);
+  // Step 1 — input shape validation.
+  if (!ISO_DATE_REGEX_LIFECYCLE.test(input.pause_start)) {
+    throw new ValidationError(`pause_start must be YYYY-MM-DD; got '${input.pause_start}'`);
+  }
+  if (!ISO_DATE_REGEX_LIFECYCLE.test(input.pause_end)) {
+    throw new ValidationError(`pause_end must be YYYY-MM-DD; got '${input.pause_end}'`);
+  }
+  if (input.pause_end <= input.pause_start) {
+    throw new ValidationError(
+      `pause_end (${input.pause_end}) must be strictly after pause_start (${input.pause_start})`,
+    );
   }
 
-  await emit({
-    eventType: "subscription.paused",
+  // Step 2 — cut-off enforcement on pause_start (brief §3.1.8 + plan §7.3).
+  const now = options?.now ?? new Date();
+  if (isCutOffElapsedForDate(now, input.pause_start)) {
+    throw new ValidationError(
+      "pause_start is past the 18:00 Dubai cut-off the day before; cannot apply pause",
+    );
+  }
+
+  // Step 3-7 — single tenant-scoped transaction.
+  const txResult = await withTenant(tenantId, async (tx) => {
+    const subscription = await readSubscriptionForLifecycle(tx, id);
+    if (subscription === null) {
+      throw new NotFoundError(`subscription not found: ${id}`);
+    }
+    if (subscription.tenantId !== tenantId) {
+      throw new NotFoundError(`subscription not found: ${id}`);
+    }
+    if (subscription.status !== "active") {
+      throw new ConflictError(
+        `subscription must be active to pause; current status is '${subscription.status}'`,
+      );
+    }
+
+    // Idempotency check — replay returns existing exception fields.
+    const replay = await findByIdempotencyKey(tx, id, input.idempotency_key as Uuid);
+    if (replay !== null) {
+      return { replay } as const;
+    }
+
+    // Compute extension days (eligible-delivery-days in pause window).
+    const subForHelpers: SubscriptionForSkip = {
+      endDate: subscription.endDate ?? input.pause_end, // null end_date treated as far-future for the count
+      daysOfWeek: asIsoWeekdays(subscription.daysOfWeek),
+      status: subscription.status,
+    };
+    const extensionDays = countEligibleDeliveryDays(
+      subForHelpers,
+      input.pause_start,
+      input.pause_end,
+    );
+
+    // Compute new end_date — only if subscription has a finite end_date.
+    // Open-ended subscriptions (end_date IS NULL) skip the extension
+    // (an unbounded subscription has no tail to extend; the pause
+    // simply cancels the in-window tasks).
+    let newEndDate: string | null = subscription.endDate;
+    if (subscription.endDate !== null && extensionDays > 0) {
+      const result = computePauseExtensionDate({
+        subscription: subForHelpers,
+        currentEndDate: subscription.endDate,
+        extensionDays,
+        pauseWindows: [], // existing pause windows for this sub are excluded; the new one is not yet inserted
+      });
+      if (result.kind === "rejected") {
+        throw new ConflictError(
+          "pause extension hit the 365-day safety stop; pause window is too long for the subscription's day-of-week schedule",
+        );
+      }
+      newEndDate = result.newEndDate;
+    }
+
+    const correlationId = randomUUID() as Uuid;
+
+    const exception = await insertException(tx, tenantId, {
+      subscriptionId: id,
+      type: "pause_window",
+      startDate: input.pause_start,
+      endDate: input.pause_end,
+      targetDateOverride: null,
+      skipWithoutAppend: false,
+      reason: input.reason ?? null,
+      addressOverrideId: null,
+      compensatingDate: null,
+      correlationId,
+      idempotencyKey: input.idempotency_key as Uuid,
+      createdBy: actorIdFor(ctx.actor) as Uuid,
+    });
+
+    // Bulk-cancel tasks in window. Returns the canceled rows (id +
+    // external_tracking_number) so the post-commit R2 fan-out can drive
+    // SF cancels for the pushed subset; the count derives from the rows.
+    const canceledTasks = await markTasksCanceledInWindow(
+      tx,
+      tenantId,
+      id,
+      input.pause_start,
+      input.pause_end,
+    );
+
+    // Flip subscription status + end_date.
+    if (newEndDate !== null && newEndDate !== subscription.endDate) {
+      await tx.execute(sqlTag`
+        UPDATE subscriptions
+        SET status = 'paused',
+            paused_at = now(),
+            end_date = ${newEndDate},
+            updated_at = now()
+        WHERE id = ${id} AND tenant_id = ${tenantId}
+      `);
+    } else {
+      await tx.execute(sqlTag`
+        UPDATE subscriptions
+        SET status = 'paused',
+            paused_at = now(),
+            updated_at = now()
+        WHERE id = ${id} AND tenant_id = ${tenantId}
+      `);
+    }
+
+    return {
+      replay: null,
+      exception,
+      newEndDate,
+      previousEndDate: subscription.endDate,
+      canceledTasks,
+    } as const;
+  });
+
+  // Idempotent-replay path — return existing fields as 409. NO audit
+  // events emit on replay.
+  if (txResult.replay !== null) {
+    return {
+      exception_id: txResult.replay.id,
+      correlation_id: txResult.replay.correlationId,
+      new_end_date: txResult.replay.endDate ?? "",
+      canceled_task_count: 0, // not tracked on replay; forensic field only
+      status: "idempotent_replay",
+      http_status: 409,
+    };
+  }
+
+  const { exception, newEndDate, previousEndDate, canceledTasks } = txResult;
+  const canceledTaskCount = canceledTasks.length;
+
+  // Post-commit audit emission with shared correlation_id.
+  const baseEmit = {
     actorKind: ctx.actor.kind,
     actorId: actorIdFor(ctx.actor),
     tenantId,
+    requestId: ctx.requestId,
+  } as const;
+
+  await emit({
+    ...baseEmit,
+    eventType: "subscription.paused",
     resourceType: "subscription",
     resourceId: id,
     metadata: {
       subscription_id: id,
-      previous_status: result.before.status,
-      new_status: result.after.status,
-      paused_at: result.after.pausedAt,
+      exception_id: exception.id,
+      pause_start: input.pause_start,
+      pause_end: input.pause_end,
+      reason: input.reason ?? null,
+      canceled_task_count: canceledTaskCount,
+      correlation_id: exception.correlationId,
     },
-    requestId: ctx.requestId,
   });
 
-  return result.after;
+  if (newEndDate !== null && newEndDate !== previousEndDate) {
+    await emit({
+      ...baseEmit,
+      eventType: "subscription.end_date.extended",
+      resourceType: "subscription",
+      resourceId: id,
+      metadata: {
+        subscription_id: id,
+        previous_end_date: previousEndDate,
+        new_end_date: newEndDate,
+        triggered_by: "pause_resume",
+        correlation_id: exception.correlationId,
+      },
+    });
+  }
+
+  // R2 (plan-PR #337 §2.R2): fan out SF cancels for the PUSHED tasks in
+  // the pause window. Only rows with a live SF AWB (external_tracking_
+  // number) need an outbound cancel; unpushed rows were canceled
+  // locally only. Post-commit, mirroring the Day-29 single-skip cancel
+  // posture: the local DB is already committed, so a publisher failure
+  // does NOT roll back. Per the Q5 ruling we emit-then-re-throw on
+  // partial failure (failedChunks > 0) so the caller surfaces "saved
+  // locally; SF cancels pending"; the pushed rows stay in
+  // outbound_sync_state='pending_cancel' (queryable via the partial
+  // index) until a webhook ack or ops triage resolves them. DLQ-on-
+  // chunk-failure is a deferred follow-on (plan ⑤.2).
+  const pushedCancelPayloads: CancelTaskPayload[] = canceledTasks
+    .filter((t) => t.external_tracking_number !== null)
+    .map((t) => ({
+      tenant_id: tenantId,
+      task_id: t.id,
+      awb: t.external_tracking_number as string,
+      correlation_id: exception.correlationId,
+    }));
+
+  if (pushedCancelPayloads.length > 0) {
+    const bulkResult = await enqueueBulkCancelTasks(pushedCancelPayloads);
+
+    await emit({
+      ...baseEmit,
+      eventType: "subscription.pause_cancels_pushed",
+      resourceType: "subscription",
+      resourceId: id,
+      metadata: {
+        subscription_id: id,
+        correlation_id: exception.correlationId,
+        pushed_task_count: pushedCancelPayloads.length,
+        enqueued_count: bulkResult.enqueuedCount,
+        failed_chunks: bulkResult.failedChunks,
+        pause_start: input.pause_start,
+        pause_end: input.pause_end,
+      },
+    });
+
+    if (bulkResult.failedChunks > 0) {
+      throw new Error(
+        `pauseSubscription: SF cancel fan-out partially failed — ${bulkResult.failedChunks} chunk(s) of ${pushedCancelPayloads.length} cancel payload(s) did not enqueue. Tasks are canceled locally and marked pending_cancel; SF cancels are pending ops follow-up.`,
+      );
+    }
+  }
+
+  return {
+    exception_id: exception.id,
+    correlation_id: exception.correlationId,
+    new_end_date: newEndDate ?? "",
+    canceled_task_count: canceledTaskCount,
+    status: "inserted",
+    http_status: 201,
+  };
 }
 
 // -----------------------------------------------------------------------------
-// resumeSubscription (lifecycle: paused → active)
+// Day-16 Block 4-C — resumeSubscription (rewritten — bounded resume per brief §3.1.7)
 // -----------------------------------------------------------------------------
 
 /**
- * Transition a subscription from 'paused' back to 'active'. Emits
- * `subscription.resumed` post-commit. The audit metadata captures the
- * `paused_at_was` timestamp (the now-cleared pause-since marker) so
- * forensics can reconstruct the pause duration.
+ * Active pause-window exception lookup. Returns the most-recent pause
+ * window for which no resume audit event has fired (by
+ * correlation_id). At most one row matches in a paused subscription
+ * by construction (the pause-creation flow inserts exactly one
+ * pause_window exception when transitioning the subscription to
+ * 'paused', and the audit-event NOT EXISTS guard becomes false
+ * after this service emits the resume event).
+ */
+type ActivePauseWindowRow = {
+  readonly id: string;
+  readonly start_date: string;
+  readonly end_date: string;
+  readonly correlation_id: string;
+} & Record<string, unknown>;
+
+async function findActivePauseWindow(
+  tx: Parameters<Parameters<typeof withTenant>[1]>[0],
+  subscriptionId: Uuid,
+): Promise<ActivePauseWindowRow | null> {
+  const rows = await tx.execute<ActivePauseWindowRow>(sqlTag`
+    SELECT id, start_date, end_date, correlation_id
+    FROM subscription_exceptions
+    WHERE subscription_id = ${subscriptionId}
+      AND type = 'pause_window'
+      AND NOT EXISTS (
+        SELECT 1 FROM audit_events
+        WHERE event_type = 'subscription.resumed'
+          AND (metadata->>'correlation_id')::uuid = subscription_exceptions.correlation_id
+      )
+    ORDER BY start_date DESC
+    LIMIT 1
+  `);
+  return rows[0] ?? null;
+}
+
+/**
+ * Resume a paused subscription per brief §3.1.7. Manual operator
+ * resume (default) and auto-resume cron path (via
+ * `options.is_auto_resume = true`) share this entry point — the
+ * cron handler at `/api/cron/auto-resume` builds a system actor
+ * + sets the flag.
+ *
+ * Behavior diverges by source:
+ *   - Manual + before pause_end: end_date shrinks; tasks in
+ *     [today, pause_end] restored to 'CREATED'.
+ *   - Manual + at/after pause_end: end_date unchanged; no task
+ *     restoration (full duration honored).
+ *   - Auto: actual_resume_date = pause_end; no recompute, no
+ *     restoration (the originally-scheduled end fired naturally).
+ *
+ * Idempotent across overlapping cron ticks: if `subscription.status
+ * === 'active'` already OR the audit-event NOT EXISTS guard returns
+ * no row (already resumed), returns `status: 'already_active'` with
+ * HTTP 200, no audit emit.
  *
  * Throws:
- *   - ForbiddenError    actor lacks `subscription:resume`.
- *   - ValidationError   no tenant context.
- *   - NotFoundError     no subscription with that id in the tenant.
- *   - ConflictError     row exists but is not in 'paused' state.
+ *   - ForbiddenError    user actor lacks `subscription:resume` (manual)
+ *                       OR system actor required (auto path mismatch).
+ *   - ValidationError   no tenant context (manual).
+ *   - NotFoundError     no subscription with that id.
  */
 export async function resumeSubscription(
   ctx: RequestContext,
-  id: Uuid
-): Promise<Subscription> {
-  requirePermission(ctx, "subscription:resume");
-  assertTenantScoped(ctx, "subscription:resume");
+  id: Uuid,
+  input: ResumeSubscriptionInput,
+  options?: { readonly now?: Date; readonly is_auto_resume?: boolean },
+): Promise<ResumeSubscriptionResult> {
+  const isAutoResume = options?.is_auto_resume === true;
 
-  const tenantId = ctx.tenantId;
-  const result = await withTenant(tenantId, async (tx) => {
-    return resumeSubscriptionRow(tx, tenantId, id);
-  });
-
-  if (result === null) {
-    throw new NotFoundError(`subscription not found: ${id}`);
+  if (isAutoResume) {
+    assertSystemActor(ctx, "subscription:resume:auto");
+  } else {
+    requirePermission(ctx, "subscription:resume");
+    assertTenantScoped(ctx, "subscription:resume");
   }
 
-  await emit({
-    eventType: "subscription.resumed",
+  // ctx.tenantId may be null on system actors with cross-tenant scope,
+  // but the cron handler builds per-tenant ctxs — null is treated as
+  // a programming error here.
+  if (!ctx.tenantId) {
+    throw new ValidationError("subscription:resume requires a tenant context");
+  }
+  const tenantId = ctx.tenantId;
+
+  const now = options?.now ?? new Date();
+  const today = computeTodayInDubai(now);
+
+  const txResult = await withTenant(tenantId, async (tx) => {
+    const subscription = await readSubscriptionForLifecycle(tx, id);
+    if (subscription === null) {
+      throw new NotFoundError(`subscription not found: ${id}`);
+    }
+    if (subscription.tenantId !== tenantId) {
+      throw new NotFoundError(`subscription not found: ${id}`);
+    }
+
+    // Already-active idempotent path.
+    if (subscription.status !== "paused") {
+      return { kind: "already_active" } as const;
+    }
+
+    const pauseWindow = await findActivePauseWindow(tx, id);
+    if (pauseWindow === null) {
+      // No active pause window — subscription is paused but no
+      // exception row found OR all pause windows have resume audits.
+      // Treat as already-active idempotent (defence-in-depth).
+      return { kind: "already_active" } as const;
+    }
+
+    const actualResumeDate = isAutoResume ? pauseWindow.end_date : today;
+    const earlyManual = !isAutoResume && actualResumeDate < pauseWindow.end_date;
+
+    // Compute new end_date for early-manual-resume path.
+    let newEndDate: string | null = subscription.endDate;
+    let endDateChanged = false;
+    let restoredTaskCount = 0;
+
+    if (earlyManual && subscription.endDate !== null) {
+      const subForHelpers: SubscriptionForSkip = {
+        endDate: subscription.endDate,
+        daysOfWeek: asIsoWeekdays(subscription.daysOfWeek),
+        status: "paused", // status at the time of compute; algorithm doesn't gate on this
+      };
+      const originalExtension = countEligibleDeliveryDays(
+        subForHelpers,
+        pauseWindow.start_date,
+        pauseWindow.end_date,
+      );
+      // Effective extension is days in [pause_start, actual_resume_date - 1] —
+      // the actual_resume_date itself stays canceled IF target_date matches
+      // a delivery day; the operator can re-enable today's task only if cut-off not yet elapsed.
+      // For simplicity in MVP, count [pause_start, actual_resume_date - 1].
+      const dayBeforeResume = (() => {
+        const d = new Date(`${actualResumeDate}T00:00:00.000Z`);
+        d.setUTCDate(d.getUTCDate() - 1);
+        return d.toISOString().slice(0, 10);
+      })();
+      const effectiveExtension = countEligibleDeliveryDays(
+        subForHelpers,
+        pauseWindow.start_date,
+        dayBeforeResume,
+      );
+      const shrinkBy = originalExtension - effectiveExtension;
+
+      if (shrinkBy > 0) {
+        const result = walkBackwardEligibleDays({
+          fromDate: subscription.endDate,
+          daysToWalk: shrinkBy,
+          daysOfWeek: asIsoWeekdays(subscription.daysOfWeek),
+          pauseWindows: [],
+        });
+        if (result.kind === "ok") {
+          newEndDate = result.newEndDate;
+          endDateChanged = true;
+        }
+      }
+
+      // Restore tasks where target_date >= actual_resume_date AND <= pause_end.
+      restoredTaskCount = await markTasksRestoredInWindow(
+        tx,
+        tenantId,
+        id,
+        actualResumeDate,
+        pauseWindow.end_date,
+      );
+    }
+
+    // Flip subscription status + end_date.
+    if (endDateChanged && newEndDate !== null) {
+      await tx.execute(sqlTag`
+        UPDATE subscriptions
+        SET status = 'active',
+            paused_at = NULL,
+            end_date = ${newEndDate},
+            updated_at = now()
+        WHERE id = ${id} AND tenant_id = ${tenantId}
+      `);
+    } else {
+      await tx.execute(sqlTag`
+        UPDATE subscriptions
+        SET status = 'active',
+            paused_at = NULL,
+            updated_at = now()
+        WHERE id = ${id} AND tenant_id = ${tenantId}
+      `);
+    }
+
+    return {
+      kind: "resumed" as const,
+      pauseWindow,
+      actualResumeDate,
+      newEndDate,
+      previousEndDate: subscription.endDate,
+      endDateChanged,
+      restoredTaskCount,
+    };
+  });
+
+  if (txResult.kind === "already_active") {
+    return {
+      correlation_id: null,
+      actual_resume_date: null,
+      new_end_date: null,
+      restored_task_count: 0,
+      status: "already_active",
+      http_status: 200,
+    };
+  }
+
+  const { pauseWindow, actualResumeDate, newEndDate, previousEndDate, endDateChanged, restoredTaskCount } = txResult;
+
+  const baseEmit = {
     actorKind: ctx.actor.kind,
     actorId: actorIdFor(ctx.actor),
     tenantId,
+    requestId: ctx.requestId,
+  } as const;
+
+  await emit({
+    ...baseEmit,
+    eventType: "subscription.resumed",
     resourceType: "subscription",
     resourceId: id,
     metadata: {
       subscription_id: id,
-      previous_status: result.before.status,
-      new_status: result.after.status,
-      paused_at_was: result.before.pausedAt,
+      actual_resume_date: actualResumeDate,
+      new_end_date: newEndDate,
+      restored_task_count: restoredTaskCount,
+      is_auto_resume: isAutoResume,
+      idempotency_key: input.idempotency_key,
+      correlation_id: pauseWindow.correlation_id,
     },
-    requestId: ctx.requestId,
   });
 
-  return result.after;
+  if (endDateChanged) {
+    await emit({
+      ...baseEmit,
+      eventType: "subscription.end_date.extended",
+      resourceType: "subscription",
+      resourceId: id,
+      metadata: {
+        subscription_id: id,
+        previous_end_date: previousEndDate,
+        new_end_date: newEndDate,
+        triggered_by: "pause_resume",
+        correlation_id: pauseWindow.correlation_id,
+      },
+    });
+  }
+
+  return {
+    correlation_id: pauseWindow.correlation_id,
+    actual_resume_date: actualResumeDate,
+    new_end_date: newEndDate,
+    restored_task_count: restoredTaskCount,
+    status: "resumed",
+    http_status: 200,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -669,6 +1368,11 @@ export async function autoPauseSubscriptionForRepeatedFailure(
           return { kind: "no_op" as const, current };
         }
 
+        // Auto-pause uses the legacy single-table status-flip helper
+        // at repository.ts:pauseSubscription (kept scope-limited to
+        // this caller per Day-16 Block 4-C — see that helper's
+        // JSDoc). Bounded-pause semantics don't apply to the
+        // system-actor emergency-halt flow.
         const transition = await pauseSubscriptionRow(tx, tenantId, input.subscriptionId);
         if (transition === null) {
           // Race: row vanished between the pre-check and the pause.

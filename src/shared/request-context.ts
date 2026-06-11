@@ -1,17 +1,7 @@
-// Day 10. Replacement for src/shared/demo-context.ts as the canonical
-// RequestContext builder for server-side code (pages, route handlers,
-// server actions).
-//
-// Posture A graceful migration (per memory/plans/auth_implementation_plan.md
-// §2): real auth via Supabase SSR is the primary path. If no session is
-// present AND `ALLOW_DEMO_AUTH=true` is explicitly set in the environment
-// (Preview-scope only by convention), we fall through to the legacy demo
-// context — Preview keeps working through the cutover. If no session AND
-// no demo opt-in, we throw `UnauthorizedError`; route handlers map that
-// to 401 via errorResponse, pages catch it and redirect to /login.
-//
-// Posture B (hard cutover) is a T1 follow-up after ~48h soak. It drops
-// the ALLOW_DEMO_AUTH fallback and removes the `buildDemoContext` import.
+// Day 10 / Day 15. Canonical RequestContext builder for server-side code
+// (pages, route handlers, server actions). Real auth via Supabase SSR is
+// the only path; no session means UnauthorizedError, route handlers map
+// that to 401 via errorResponse, pages catch it and redirect to /login.
 //
 // Cookie-handling contract across the three Next.js 16 contexts:
 //   - Server Component (RSC): `cookies()` is read-only. The Supabase
@@ -48,7 +38,6 @@ import {
   ROLES,
 } from "@/modules/identity";
 
-import { buildDemoContext } from "./demo-context";
 import { withServiceRole } from "./db";
 import { UnauthorizedError } from "./errors";
 import type { RequestContext } from "./tenant-context";
@@ -99,6 +88,8 @@ export async function getServerSupabase() {
 
 export interface ResolvedUserContext {
   readonly tenantId: string;
+  readonly tenantName: string;
+  readonly tenantSlug: string;
   readonly permissions: ReadonlySet<PermissionId>;
   readonly email: string;
   readonly displayName: string | null;
@@ -107,13 +98,18 @@ export interface ResolvedUserContext {
 /**
  * Resolve a Supabase auth user's id to the tenant + permission set carried
  * on `RequestContext.actor`. Single withServiceRole transaction joining
- * users + role_assignments + roles; permission set is unioned across the
- * user's role memberships using the frozen ROLES catalogue.
+ * users + role_assignments + roles + tenants; permission set is unioned
+ * across the user's role memberships using the frozen ROLES catalogue.
  *
  * Returns null when:
  *   - no public.users mirror row exists for the auth.users id, OR
  *   - the user has no role_assignments, OR
- *   - the user's disabled_at is set.
+ *   - the user's disabled_at is set, OR
+ *   - the user's tenant has status != 'active' (Day-16 §10.5: blocks
+ *     login for users on provisioning / suspended / inactive tenants;
+ *     `deactivateMerchant` flipping a tenant to 'inactive' is the
+ *     load-bearing case — that operator's session is invalidated on
+ *     the next request without a separate session-revocation surface).
  *
  * Built-in roles are matched by slug against ROLES; unknown slugs (custom
  * roles, post-pilot per plan §13.1) are skipped — their permission set
@@ -126,22 +122,29 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
   return await withServiceRole("auth: resolve user context", async (tx) => {
     type Row = {
       tenant_id: string;
+      tenant_name: string;
+      tenant_slug: string;
       role_slug: string;
       email: string;
       display_name: string | null;
     };
     const rows = await tx.execute<Row>(sqlTag`
-      SELECT u.tenant_id, r.slug AS role_slug, u.email, u.display_name
+      SELECT u.tenant_id, t.name AS tenant_name, t.slug AS tenant_slug,
+             r.slug AS role_slug, u.email, u.display_name
       FROM users u
       JOIN role_assignments ra ON ra.user_id = u.id AND ra.tenant_id = u.tenant_id
       JOIN roles r ON r.id = ra.role_id
+      JOIN tenants t ON t.id = u.tenant_id
       WHERE u.id = ${userId}
         AND u.disabled_at IS NULL
+        AND t.status = 'active'
     `);
 
     if (rows.length === 0) return null;
 
     const tenantId = rows[0].tenant_id;
+    const tenantName = rows[0].tenant_name;
+    const tenantSlug = rows[0].tenant_slug;
     const email = rows[0].email;
     const displayName = rows[0].display_name;
     const permissions = new Set<PermissionId>();
@@ -152,7 +155,7 @@ export async function resolveUserContext(userId: string): Promise<ResolvedUserCo
         permissions.add(p);
       }
     }
-    return { tenantId, permissions, email, displayName };
+    return { tenantId, tenantName, tenantSlug, permissions, email, displayName };
   });
 }
 
@@ -226,14 +229,11 @@ export function __resetSessionCacheForTests(): void {
 }
 
 /**
- * Build a RequestContext for the current server-side request. Replacement
- * for buildDemoContext from Day 3. Posture A graceful migration: real
- * auth via Supabase SSR primary, demo fallback opt-in via
- * `ALLOW_DEMO_AUTH=true` (Preview-only by convention).
+ * Build a RequestContext for the current server-side request.
  *
- * Throws UnauthorizedError when no Supabase session is present AND demo
- * fallback is not opted in. Route handlers map the throw to 401 via
- * errorResponse; pages catch it and call redirect("/login?...").
+ * Throws UnauthorizedError when no Supabase session is present. Route
+ * handlers map the throw to 401 via errorResponse; pages catch it and
+ * call redirect("/login?...").
  */
 export async function buildRequestContext(
   path: string,
@@ -250,19 +250,13 @@ export async function buildRequestContext(
         permissions: session.resolved.permissions,
         email: session.resolved.email,
         displayName: session.resolved.displayName,
+        tenantName: session.resolved.tenantName,
+        tenantSlug: session.resolved.tenantSlug,
       },
       tenantId: session.resolved.tenantId,
       requestId,
       path,
     };
-  }
-
-  // Posture A fallthrough — Preview opt-in only. Demo path is unmemoized
-  // because it runs only on Preview (no real session) and its own
-  // first-tenant lookup is cheap; doubling it under (app)/ layout +
-  // page on Preview is acceptable.
-  if (process.env.ALLOW_DEMO_AUTH === "true") {
-    return await buildDemoContext(path, requestId);
   }
 
   throw new UnauthorizedError("login required");

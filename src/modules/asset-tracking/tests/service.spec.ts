@@ -140,6 +140,9 @@ function makeAdapter(records: readonly AssetTrackingPackage[]): LastMileAdapter 
     async refreshSession(s) {
       return s;
     },
+    invalidateSession() {
+      // no-op stub; this spec exercises asset-tracking only.
+    },
     async createTask() {
       throw new Error("not used");
     },
@@ -147,6 +150,15 @@ function makeAdapter(records: readonly AssetTrackingPackage[]): LastMileAdapter 
       throw new Error("not used");
     },
     async printLabels() {
+      throw new Error("not used");
+    },
+    async updateTask() {
+      throw new Error("not used");
+    },
+    async cancelTask() {
+      throw new Error("not used");
+    },
+    async bulkCancelTasks() {
       throw new Error("not used");
     },
     async fetchAssetTrackingByAwb() {
