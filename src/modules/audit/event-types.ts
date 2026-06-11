@@ -403,6 +403,22 @@ const EVENT_TYPES_DRAFT = {
       "subscription_id (uuid), correlation_id (uuid — shared with the paired subscription.paused), pushed_task_count (int — tasks with a live SF AWB enqueued for cancel), enqueued_count (int — BulkEnqueueResult.enqueuedCount), failed_chunks (int — chunks that failed to enqueue; >0 triggers the Q5 re-throw), pause_start (YYYY-MM-DD), pause_end (YYYY-MM-DD).",
     systemOnly: false,
   },
+  // Day-53 / R16 — resume re-sync (plan memory/plans/day-53-r16-resume-
+  // sf-reactivation.md §2.3). The reverse sibling of R2's
+  // pause_cancels_pushed: on early manual resume, restored tasks that
+  // were SF-cancelled re-enter the push pipeline for a FRESH SF create
+  // (SF cancel is terminal — un-cancel probe → 403; new AWB lands via
+  // markTaskPushed when the push consumer succeeds).
+  "subscription.resume_reactivations_pushed": {
+    id: "subscription.resume_reactivations_pushed",
+    resource: "subscription",
+    action: "resume_reactivations_pushed",
+    description:
+      "Day-53 / R16. After a `subscription.resumed` transition (early manual resume), the restored tasks that had been cancelled on SuiteFleet during the pause were re-entered into the outbound push pipeline via `enqueueTaskPushBatch` — each gets a FRESH SF create (new AWB) because SF cancel is terminal. Paired with `subscription.resumed` by the pause window's shared `correlation_id`. Emitted only when ≥1 restored task carried an SF AWB; a resume restoring only never-pushed tasks does not emit it. `failed_chunks > 0` means partial fan-out failure — the service re-throws after this emit so the caller surfaces \"restored locally; SF re-activation pending\"; the rows sit in outbound_sync_state='pending' where the materializer reconciliation sweep re-discovers them.",
+    metadataNotes:
+      "subscription_id (uuid), correlation_id (uuid — the pause window's, shared with the paired subscription.resumed), actual_resume_date (YYYY-MM-DD), reactivated_task_count (int — restored tasks re-entering the push pipeline), enqueued_count (int), failed_chunks (int — >0 triggers the re-throw), previous_awbs (array of {task_id (uuid), awb (string)} — the SF AWBs the restore cleared off the rows; the forensic bridge for ops triage of any escaped SF cancel, bounded by the pause-window size).",
+    systemOnly: false,
+  },
   // R5 (plan-PR #335 §2.R5) — outbound leg of the forward address
   // override. Mirrors subscription.pause_cancels_pushed (R2): a typed
   // enqueue-time bulk event paired with the local-write events

@@ -25,6 +25,7 @@ vi.mock("server-only", () => ({}));
 const mockExecute = vi.fn();
 const mockEmit = vi.fn();
 const mockEnqueueBulkCancelTasks = vi.fn();
+const mockEnqueueTaskPushBatch = vi.fn();
 
 vi.mock("@/shared/db", () => ({
   withTenant: vi.fn(async (_tenantId: string, fn: (tx: unknown) => Promise<unknown>) => {
@@ -44,6 +45,11 @@ vi.mock("@/modules/audit", () => ({
 
 vi.mock("@/modules/task-outbound-queue", () => ({
   enqueueBulkCancelTasks: (payloads: unknown) => mockEnqueueBulkCancelTasks(payloads),
+}));
+
+// R16 — resumeSubscription's re-push fan-out publisher.
+vi.mock("@/modules/task-materialization/queue", () => ({
+  enqueueTaskPushBatch: (input: unknown) => mockEnqueueTaskPushBatch(input),
 }));
 
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/shared/errors";
@@ -540,7 +546,13 @@ describe("resumeSubscription — auto + manual happy paths", () => {
 
     mockExecute.mockResolvedValueOnce([subscriptionRow({ status: "paused" })]);
     mockExecute.mockResolvedValueOnce([activePauseWindowRow()]);
-    mockExecute.mockResolvedValueOnce({ count: 3 } as unknown); // markTasksRestoredInWindow
+    // markTasksRestoredInWindow — R16 row shape; never-pushed rows here
+    // (null previous AWB) so this test stays about the end-date recompute.
+    mockExecute.mockResolvedValueOnce([
+      { id: "t1", previous_external_tracking_number: null },
+      { id: "t2", previous_external_tracking_number: null },
+      { id: "t3", previous_external_tracking_number: null },
+    ] as unknown);
     mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // UPDATE subscriptions
 
     const result = await resumeSubscription(
@@ -712,14 +724,20 @@ describe("pauseSubscription — R2 SF cancel fan-out", () => {
     expect(eventTypes).toEqual(["subscription.paused", "subscription.end_date.extended"]);
   });
 
-  it("⑤.5 resume regression: early manual resume restores tasks + reconciles pending_cancel→synced", async () => {
+  it("⑤.5 resume regression (R16): early manual resume restores tasks, clears ids on SF-cancelled rows, fans out the re-push", async () => {
     // 4 execute calls: SELECT sub, SELECT pause window, UPDATE tasks
-    // (restore), UPDATE subscriptions. Mirrors the early-manual resume
-    // flow; guards that the R2 repository change did not break resume.
+    // (restore), UPDATE subscriptions. R16 supersedes the R2 safe-state
+    // half: pushed rows clear external ids + flip to 'pending' and
+    // re-enter the push pipeline via enqueueTaskPushBatch.
     mockExecute.mockResolvedValueOnce([subscriptionRow({ status: "paused" })]);
     mockExecute.mockResolvedValueOnce([activePauseWindowRow()]);
-    mockExecute.mockResolvedValueOnce({ count: 3 } as unknown); // markTasksRestoredInWindow
+    mockExecute.mockResolvedValueOnce([
+      { id: "t1", previous_external_tracking_number: "AWB-1" },
+      { id: "t2", previous_external_tracking_number: "AWB-2" },
+      { id: "t3", previous_external_tracking_number: null },
+    ] as unknown); // markTasksRestoredInWindow
     mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // UPDATE subscriptions
+    mockEnqueueTaskPushBatch.mockResolvedValueOnce({ enqueuedCount: 2, failedChunks: 0 });
 
     const result = await resumeSubscription(
       userCtx(["subscription:resume"]),
@@ -730,13 +748,23 @@ describe("pauseSubscription — R2 SF cancel fan-out", () => {
 
     expect(result.status).toBe("resumed");
     expect(result.restored_task_count).toBe(3);
+    expect(result.reactivated_task_count).toBe(2);
     expect(mockEnqueueBulkCancelTasks).not.toHaveBeenCalled();
 
-    // The restore UPDATE (3rd execute call) carries the R2 resume-side
-    // reconcile: pending_cancel → synced.
+    // The restore UPDATE (3rd execute call) carries the R16 id-clear +
+    // honest 'pending' flip (no more pending_cancel→synced reconcile).
     const restoreSql = mockExecute.mock.calls[2][0];
-    expect(sqlIncludes(restoreSql, "pending_cancel")).toBe(true);
-    expect(sqlIncludes(restoreSql, "synced")).toBe(true);
+    expect(sqlIncludes(restoreSql, "pending")).toBe(true);
+    expect(sqlIncludes(restoreSql, "external_tracking_number")).toBe(true);
+
+    // Fan-out saw exactly the AWB-carrying rows.
+    expect(mockEnqueueTaskPushBatch).toHaveBeenCalledTimes(1);
+    const input = mockEnqueueTaskPushBatch.mock.calls[0][0] as { taskIds: readonly string[] };
+    expect([...input.taskIds].sort()).toEqual(["t1", "t2"]);
+
+    // Third emit = the R16 outbound-leg event with previous_awbs.
+    const eventTypes = mockEmit.mock.calls.map((c) => (c[0] as { eventType: string }).eventType);
+    expect(eventTypes).toContain("subscription.resume_reactivations_pushed");
   });
 
   it("⑤.6 mixed pushed + unpushed: only pushed rows fan out; count covers all", async () => {

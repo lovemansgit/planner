@@ -1569,38 +1569,67 @@ export async function markTasksCanceledInWindow(
  * In demo flow this is safe because only the active pause causes
  * cancellations during a paused subscription's lifetime.
  *
- * Returns rows affected.
+ * Returns the restored rows (id + the AWB each row held BEFORE the
+ * restore) so `resumeSubscription` can drive the R16 re-push fan-out.
  */
+export type RestoredInWindowTaskRow = {
+  readonly id: string;
+  /** The SF AWB the row carried before the restore cleared it; null = never pushed. */
+  readonly previous_external_tracking_number: string | null;
+} & Record<string, unknown>;
+
 export async function markTasksRestoredInWindow(
   tx: DbTx,
   tenantId: Uuid,
   subscriptionId: Uuid,
   restoreFromDate: string,
   restoreToDate: string,
-): Promise<number> {
-  // R2 resume-side reconcile (plan-PR #337 §2.R2, ruling ②): once
-  // pause flips pushed rows to 'pending_cancel', an early manual resume
-  // must clear that flag back to the safe 'synced' state — otherwise a
-  // restored (now-active) task would linger in 'pending_cancel'. This
-  // is the *safe-state half only*; actively re-activating the SF row
-  // (re-push) on early resume is the separate R16 follow-on, NOT built
-  // here. The CASE leaves non-pending_cancel states ('failed' etc.)
-  // untouched.
-  const result = await tx.execute(sqlTag`
-    UPDATE tasks
+): Promise<readonly RestoredInWindowTaskRow[]> {
+  // R16 (plan memory/plans/day-53-r16-resume-sf-reactivation.md §2.1) —
+  // supersedes the R2 safe-state half (pending_cancel → 'synced'):
+  // SF cancel is terminal (un-cancel probe → 403), so a restored row
+  // that was SF-cancelled needs a FRESH SF create. Pushed rows
+  // (external_tracking_number NOT NULL — covers 'pending_cancel',
+  // webhook-converged 'synced', and 'failed') get their external ids
+  // cleared and flip to 'pending', the unpushed-row state the push
+  // pipeline + materializer reconciliation already own. Never-pushed
+  // rows restore status-only, untouched otherwise.
+  //
+  // The CTE captures the pre-UPDATE AWB: RETURNING alone would yield
+  // the NEW (nulled) value; referencing the FROM alias returns the old
+  // one. The old AWB feeds the resume audit event's previous_awbs
+  // forensics — after this UPDATE it no longer exists on the row.
+  const rows = await tx.execute<RestoredInWindowTaskRow>(sqlTag`
+    WITH restorable AS (
+      SELECT id, external_tracking_number
+      FROM tasks
+      WHERE tenant_id = ${tenantId}
+        AND subscription_id = ${subscriptionId}
+        AND delivery_date BETWEEN ${restoreFromDate} AND ${restoreToDate}
+        AND internal_status = 'CANCELED'
+      FOR UPDATE
+    )
+    UPDATE tasks t
     SET internal_status = 'CREATED',
+        external_id = CASE
+          WHEN r.external_tracking_number IS NOT NULL THEN NULL
+          ELSE t.external_id
+        END,
+        external_tracking_number = CASE
+          WHEN r.external_tracking_number IS NOT NULL THEN NULL
+          ELSE t.external_tracking_number
+        END,
+        pushed_to_external_at = CASE
+          WHEN r.external_tracking_number IS NOT NULL THEN NULL
+          ELSE t.pushed_to_external_at
+        END,
         outbound_sync_state = CASE
-          WHEN outbound_sync_state = 'pending_cancel' THEN 'synced'
-          ELSE outbound_sync_state
+          WHEN r.external_tracking_number IS NOT NULL THEN 'pending'
+          ELSE t.outbound_sync_state
         END
-    WHERE tenant_id = ${tenantId}
-      AND subscription_id = ${subscriptionId}
-      AND delivery_date BETWEEN ${restoreFromDate} AND ${restoreToDate}
-      AND internal_status = 'CANCELED'
+    FROM restorable r
+    WHERE t.id = r.id AND t.tenant_id = ${tenantId}
+    RETURNING t.id, r.external_tracking_number AS previous_external_tracking_number
   `);
-  return typeof (result as { count?: number }).count === "number"
-    ? (result as { count: number }).count
-    : Array.isArray(result)
-      ? result.length
-      : 0;
+  return rows;
 }
