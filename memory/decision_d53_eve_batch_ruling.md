@@ -12,7 +12,7 @@
 |---|---|
 | #405 (add-address code, T3) | v1.21 brief bump confirmed as Love's, dispatch-assigned; partial v1.11 retirement confirmed. Reviewer APPROVE r3 obtained with the ruling on the PR record. Cleared for the admin-route clearance-merge. |
 | #409 (R12 plan) | Path B confirmed as Love's ruling. **MERGED** via the docs-lane Action at `7aa0734` (memory/**-only, path-gate eligible, APPROVE r1). |
-| #412 (R12 code, T3) | Cleared. Renumber fixup applied per the ruled merge order: the §9 row moves v1.21 → **v1.22** (#405 keeps v1.21); fixup at `136cdcd`, CI green. Cleared for the admin-route clearance-merge AFTER #405. |
+| #412 (R12 code, T3) | Cleared by Love's ruling above. Renumber fixup applied per the ruled merge order: the §9 row moves v1.21 → **v1.22** (#405 keeps v1.21); fixup at `136cdcd`, CI green. Reviewer state at filing: r2 APPROVE (pre-fixup, at `4a111af`); **r3 REQUEST_CHANGES** at `136cdcd` — the r3 blocker was precisely that this merge-order ruling was not yet findable in the repo record. This memo is that record; **a round-4 ORCH-VERDICT APPROVE at the pinned head is still required** before the clearance-merge executes, AFTER #405. |
 
 ## Execution note — merge step blocked by the harness permission classifier
 
