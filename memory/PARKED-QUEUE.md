@@ -24,18 +24,3 @@ ORCH-PARK
 
 **This is the LAST item of calendar-management Phase 1** — merging it closes R1-R5.
 
-## PR #370 — fix(d53): path-gate fails CLOSED on gh api error or empty file list
-
-- Label: `parked-t2`
-- Head SHA: `98d01faab8acf2d822c476e5507e74029089aa0b`
-
-ORCH-PARK
-
-**What this PR does (plain English):** Hardens the Layer-1 path gate so it can never again classify a code PR as docs-only because of a network hiccup. Last night a GitHub API connection error made the gate print AUTO_MERGE_ELIGIBLE for the inbound-TZ code PR (#365) — the error left the file list empty and the script treated "empty" as "nothing off the allowlist." Now the gate captures the file list first and PARKS on any API error or an empty list. You already approved this fix shape in the Day-53 morning clearances; it still parks because orchestration scripts are off the docs allowlist.
-
-**What it touches:** one file, `scripts/orchestration/path-gate.sh`, +19/−1. **No migration.** Verified live on five cases including both pre-fix fail-open shapes (HTTP 404 and a simulated network failure → both now PARK).
-
-**Reviewer's verdict (one line):** APPROVE round 1 (opus).
-
-**SQL TO APPLY: no.**
-
