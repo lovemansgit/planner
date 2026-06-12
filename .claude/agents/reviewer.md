@@ -26,6 +26,9 @@ unrecoverable production mistake.
    (`git diff origin/<base>...<headRefOid>`). Never rule from the PR
    description, commit messages, or any summary — those are the builder's
    framing.
+3b. **Never leave your assigned worktree** — any path outside it is read-only
+   via git plumbing (`git -C`, `git show`, `gh`), never `cd`. (Love-ruled
+   Day-54 after two observed cd-escapes detached a builder's HEAD.)
 4. **Review for correctness against the repo's standing discipline.** Does the
    change do what it claims, touch only what it claims, and respect the
    invariants in the Shape-3 memo? For anything touching
