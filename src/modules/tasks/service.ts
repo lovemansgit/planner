@@ -109,6 +109,39 @@ import type {
 import { sql as sqlTag } from "drizzle-orm";
 
 import { isCutOffElapsedForDate } from "../task-materialization/dubai-date";
+
+// -----------------------------------------------------------------------------
+// R-A — assignment gate (plan memory/plans/day-54-session-c-ra-assignment-gate.md §2.1)
+// -----------------------------------------------------------------------------
+// Love's Day-54 ruling: the 18:00 cutoff is the order-CREATION deadline
+// only; editability is gated by assignment alone. A task is editable
+// iff it is not driver-bound (ASSIGNED/IN_TRANSIT — "once ASSIGNED, no
+// edits or cancellations", and pickup does not unlock it) and not
+// terminal. Exactly CREATED / ON_HOLD / SKIPPED are editable.
+
+const DRIVER_BOUND_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
+  "ASSIGNED",
+  "IN_TRANSIT",
+]);
+const TERMINAL_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
+  "DELIVERED",
+  "CANCELED",
+  "FAILED",
+]);
+
+export function isTaskDriverBound(internalStatus: TaskInternalStatus): boolean {
+  return DRIVER_BOUND_STATUSES.has(internalStatus);
+}
+
+export function isTaskEditable(internalStatus: TaskInternalStatus): boolean {
+  return !DRIVER_BOUND_STATUSES.has(internalStatus) && !TERMINAL_STATUSES.has(internalStatus);
+}
+
+function editabilityRejection(internalStatus: TaskInternalStatus): string {
+  return DRIVER_BOUND_STATUSES.has(internalStatus)
+    ? `task is assigned to a driver and locked (status '${internalStatus}'); no edits or cancellations once assigned`
+    : `task status '${internalStatus}' is terminal; no edits or cancellations`;
+}
 import { filterTaskHistoryMetadata } from "./history-metadata";
 import type { TenantStatus } from "../merchants/types";
 
@@ -1062,26 +1095,12 @@ export async function updateTask(
       throw new NotFoundError(`task not found: ${id}`);
     }
 
-    // Day-19 / Phase 1 / OQ-5 cutoff guard. Refuse edits to a task whose
-    // delivery_date has elapsed past 18:00 Dubai cut-off the day before
-    // (existing precedent at subscriptions/service.ts:601 pauseSubscription).
-    // Mirrors the operational invariant that once SF has been notified of
-    // a task's delivery date, the operator can no longer edit it. Two
-    // checks: the current delivery_date AND, if the patch is moving the
-    // delivery_date, the new target date must also be pre-cutoff.
-    if (isCutOffElapsedForDate(now, before.deliveryDate)) {
-      throw new ValidationError(
-        `task delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before; cannot edit`,
-      );
-    }
-    if (
-      normalised.deliveryDate !== undefined &&
-      normalised.deliveryDate !== before.deliveryDate &&
-      isCutOffElapsedForDate(now, normalised.deliveryDate)
-    ) {
-      throw new ValidationError(
-        `target delivery date '${normalised.deliveryDate}' is past the 18:00 Dubai cut-off the day before; cannot edit`,
-      );
+    // R-A assignment gate (replaces the Day-19 OQ-5 cutoff guard, which
+    // was the v1.16 time-based editability rule): the 18:00 cutoff is
+    // the order-creation deadline only. An unassigned task is editable
+    // at any hour; a driver-bound or terminal task is not.
+    if (!isTaskEditable(before.internalStatus)) {
+      throw new ValidationError(editabilityRejection(before.internalStatus));
     }
 
     // Day-19 / Phase 1 / §E.4 address-FK consistency check. addressId
@@ -1304,13 +1323,12 @@ export async function cancelTask(ctx: RequestContext, taskId: Uuid): Promise<Tas
       );
     }
 
-    // Cutoff guard mirrors updateTask's posture (cancel after 18:00 Dubai
-    // the day before delivery is too late — SF dispatch may have already
-    // routed the task to a driver).
-    if (isCutOffElapsedForDate(now, before.deliveryDate)) {
-      throw new ValidationError(
-        `task delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before; cannot cancel`,
-      );
+    // R-A assignment gate (replaces the time-based cutoff guard): an
+    // unassigned task cancels at any hour; driver-bound (and FAILED —
+    // terminal per the ruling formula) reject. DELIVERED/CANCELED were
+    // already handled above with their specific semantics.
+    if (!isTaskEditable(before.internalStatus)) {
+      throw new ValidationError(editabilityRejection(before.internalStatus));
     }
 
     const updated = await updateTaskRow(tx, tenantId, taskId, {
@@ -1461,9 +1479,13 @@ export async function addNoteToDriver(
       throw new NotFoundError(`task not found: ${taskId}`);
     }
 
-    if (isCutOffElapsedForDate(now, before.deliveryDate)) {
+    // R-A site-4 ruling (plan §1, reviewer-ruled r1): a driver note is
+    // COMMUNICATION, not an edit — no time gate, no assignment gate
+    // (the note matters most precisely when a driver holds the task).
+    // Terminal tasks only are rejected.
+    if (TERMINAL_STATUSES.has(before.internalStatus)) {
       throw new ValidationError(
-        `task delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before; cannot add driver note`,
+        `task status '${before.internalStatus}' is terminal; driver notes are no longer deliverable`,
       );
     }
 
@@ -2267,11 +2289,9 @@ export async function bulkCancelTasks(
         failures.push({ taskId, reason: `already DELIVERED; cancel not meaningful` });
         continue;
       }
-      if (isCutOffElapsedForDate(now, before.deliveryDate)) {
-        failures.push({
-          taskId,
-          reason: `delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before`,
-        });
+      // R-A assignment gate (replaces the per-task cutoff).
+      if (!isTaskEditable(before.internalStatus)) {
+        failures.push({ taskId, reason: editabilityRejection(before.internalStatus) });
         continue;
       }
 
@@ -2393,24 +2413,11 @@ export async function bulkUpdateTasks(
         continue;
       }
 
-      // Cutoff: refuse if either current or target delivery_date is past
-      // the 18:00 Dubai cut-off the day before. Mirrors updateTask's check.
-      if (isCutOffElapsedForDate(now, before.deliveryDate)) {
-        failures.push({
-          taskId,
-          reason: `delivery date '${before.deliveryDate}' is past the 18:00 Dubai cut-off the day before`,
-        });
-        continue;
-      }
-      if (
-        patch.deliveryDate !== undefined &&
-        patch.deliveryDate !== before.deliveryDate &&
-        isCutOffElapsedForDate(now, patch.deliveryDate)
-      ) {
-        failures.push({
-          taskId,
-          reason: `target delivery date '${patch.deliveryDate}' is past the 18:00 Dubai cut-off the day before`,
-        });
+      // R-A assignment gate (replaces both per-task cutoff checks —
+      // the target-date check was an edit-time rule, gone with the
+      // time gate; mirrors updateTask).
+      if (!isTaskEditable(before.internalStatus)) {
+        failures.push({ taskId, reason: editabilityRejection(before.internalStatus) });
         continue;
       }
 

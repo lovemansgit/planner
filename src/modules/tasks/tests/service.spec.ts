@@ -125,6 +125,7 @@ import {
   updateTask,
   updateTaskAndPushOutbound,
   DriverNotePushPendingError,
+  isTaskEditable,
 } from "../service";
 
 import {
@@ -667,6 +668,24 @@ describe("updateTask", () => {
     expect(result.notes).toBe("delivered to neighbour");
   });
 
+  it("R-A: ASSIGNED task is driver-locked — edit rejected", async () => {
+    mockFindById.mockResolvedValue(
+      taskFixture({ internalStatus: "ASSIGNED", deliveryDate: "2099-05-01" }),
+    );
+    await expect(
+      updateTask(userCtx(["task:update"]), TASK_ID, { notes: "x" }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("R-A: CREATED past-cutoff is now editable (time gate removed)", async () => {
+    const before = taskFixture({ internalStatus: "CREATED", deliveryDate: "2020-01-01", notes: null });
+    mockFindById.mockResolvedValue(before);
+    mockUpdate.mockResolvedValue({ ...before, notes: "late edit lands" });
+    const result = await updateTask(userCtx(["task:update"]), TASK_ID, { notes: "late edit lands" });
+    expect(result.notes).toBe("late edit lands");
+  });
+
   it("no-op patch (every field unchanged) skips update + audit", async () => {
     const current = taskFixture({ notes: "existing" });
     mockFindById.mockResolvedValue(current);
@@ -977,9 +996,32 @@ describe("cancelTask — single-task cancel + outbound enqueue", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it("rejects past-cutoff delivery_date with ValidationError", async () => {
+  it("R-A: CREATED past-cutoff is now cancellable (time gate removed)", async () => {
+    const before = taskFixture({
+      internalStatus: "CREATED",
+      deliveryDate: STALE_PAST_DATE,
+      externalTrackingNumber: null,
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, internalStatus: "CANCELED" });
+
+    const result = await cancelTask(userCtx(["task:cancel"]), TASK_ID as never);
+    expect(result.internalStatus).toBe("CANCELED");
+  });
+
+  it("R-A: ASSIGNED task is driver-locked — cancel rejected", async () => {
     mockFindById.mockResolvedValueOnce(
-      taskFixture({ internalStatus: "CREATED", deliveryDate: STALE_PAST_DATE }),
+      taskFixture({ internalStatus: "ASSIGNED", deliveryDate: FAR_FUTURE_DATE }),
+    );
+    await expect(
+      cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("R-A: IN_TRANSIT task is driver-locked — cancel rejected", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ internalStatus: "IN_TRANSIT", deliveryDate: FAR_FUTURE_DATE }),
     );
     await expect(
       cancelTask(userCtx(["task:cancel"]), TASK_ID as never),
@@ -1051,9 +1093,33 @@ describe("addNoteToDriver — Day-22 / PR-B", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it("rejects past-cutoff delivery_date with ValidationError", async () => {
+  it("R-A: past-cutoff note is allowed (a note is communication, not an edit)", async () => {
+    const before = taskFixture({ deliveryDate: "2020-01-01", notes: null });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "hello" });
+    const result = await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello");
+    expect(result.notes).toBe("hello");
+  });
+
+  it("R-A: ASSIGNED task still accepts driver notes", async () => {
+    const before = taskFixture({
+      internalStatus: "ASSIGNED",
+      deliveryDate: FAR_FUTURE_DATE,
+      notes: null,
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "gate code 4521" });
+    const result = await addNoteToDriver(
+      userCtx(["task:add_note"]),
+      TASK_ID as never,
+      "gate code 4521",
+    );
+    expect(result.notes).toBe("gate code 4521");
+  });
+
+  it("R-A: terminal task rejects driver notes", async () => {
     mockFindById.mockResolvedValueOnce(
-      taskFixture({ deliveryDate: "2020-01-01" }),
+      taskFixture({ internalStatus: "DELIVERED", deliveryDate: FAR_FUTURE_DATE }),
     );
     await expect(
       addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "hello"),
@@ -1215,16 +1281,18 @@ describe("addNoteToDriver — Day-22 / PR-B", () => {
     expect(cid1).not.toBe(cid2);
   });
 
-  it("past-cutoff pushed task: ValidationError, NO commit, NO enqueue, NO events", async () => {
-    mockFindById.mockResolvedValueOnce(
-      taskFixture({ deliveryDate: STALE_PAST_DATE, externalTrackingNumber: "MPL-LATE" }),
-    );
-    await expect(
-      addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "too late"),
-    ).rejects.toBeInstanceOf(ValidationError);
-    expect(mockUpdate).not.toHaveBeenCalled();
-    expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
-    expect(mockEmit).not.toHaveBeenCalled();
+  it("R-A: past-cutoff pushed task accepts the note; SF update enqueue fires", async () => {
+    const before = taskFixture({
+      deliveryDate: STALE_PAST_DATE,
+      externalTrackingNumber: "MPL-LATE",
+      notes: null,
+    });
+    mockFindById.mockResolvedValueOnce(before);
+    mockUpdate.mockResolvedValueOnce({ ...before, notes: "no longer too late" });
+    await addNoteToDriver(userCtx(["task:add_note"]), TASK_ID as never, "no longer too late");
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueUpdateTask).toHaveBeenCalledTimes(1);
+    expect(mockEmit).toHaveBeenCalled();
   });
 });
 
@@ -1362,21 +1430,21 @@ describe("bulkCancelTasks — transactional cancel + fan-out enqueue", () => {
     expect(payloads[1].awb).toBe("MPL-2");
   });
 
-  it("partial: per-task cutoff failure collected; valid tasks still cancel + enqueue", async () => {
-    const ok = taskFixture({ id: "ok" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-OK" });
-    const stale = taskFixture({ id: "stale" as never, deliveryDate: STALE_PAST_DATE });
-    mockFindById.mockResolvedValueOnce(ok).mockResolvedValueOnce(stale);
+  it("R-A partial: driver-locked task collected as failure; valid tasks still cancel + enqueue (stale dates now fine)", async () => {
+    const ok = taskFixture({ id: "ok" as never, deliveryDate: STALE_PAST_DATE, externalTrackingNumber: "MPL-OK" });
+    const locked = taskFixture({ id: "locked" as never, internalStatus: "ASSIGNED", deliveryDate: FAR_FUTURE_DATE });
+    mockFindById.mockResolvedValueOnce(ok).mockResolvedValueOnce(locked);
     mockUpdate.mockResolvedValueOnce({ ...ok, internalStatus: "CANCELED" });
 
     const result = await bulkCancelTasks(
       userCtx(["task:bulk_cancel"]),
-      ["ok" as never, "stale" as never],
+      ["ok" as never, "locked" as never],
     );
 
     expect(result.canceled).toHaveLength(1);
     expect(result.failures).toHaveLength(1);
-    expect(result.failures[0].taskId).toBe("stale");
-    expect(result.failures[0].reason).toMatch(/Dubai cut-off/);
+    expect(result.failures[0].taskId).toBe("locked");
+    expect(result.failures[0].reason).toMatch(/driver|locked/i);
     expect(mockEnqueueBulkCancelTasks).toHaveBeenCalledTimes(1);
     expect(mockEnqueueBulkCancelTasks.mock.calls[0][0]).toHaveLength(1);
   });
@@ -1443,9 +1511,10 @@ describe("bulkUpdateTasks — transactional patch + fan-out enqueue", () => {
     expect(payloads[0].patch.window?.date).toBe(newDate);
   });
 
-  it("rejects past-cutoff target deliveryDate per-row", async () => {
+  it("R-A: past-cutoff target deliveryDate is now accepted per-row (time gate removed)", async () => {
     const t = taskFixture({ id: "t" as never, deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-T" });
     mockFindById.mockResolvedValueOnce(t);
+    mockUpdate.mockResolvedValueOnce({ ...t, deliveryDate: STALE_PAST_DATE });
 
     const result = await bulkUpdateTasks(
       userCtx(["task:bulk_update"]),
@@ -1453,8 +1522,22 @@ describe("bulkUpdateTasks — transactional patch + fan-out enqueue", () => {
       { deliveryDate: STALE_PAST_DATE },
     );
 
+    expect(result.failures).toHaveLength(0);
+    expect(result.updated).toHaveLength(1);
+  });
+
+  it("R-A: driver-locked task collected as per-row failure", async () => {
+    const t = taskFixture({ id: "t" as never, internalStatus: "IN_TRANSIT", deliveryDate: FAR_FUTURE_DATE });
+    mockFindById.mockResolvedValueOnce(t);
+
+    const result = await bulkUpdateTasks(
+      userCtx(["task:bulk_update"]),
+      ["t" as never],
+      { notes: "x" },
+    );
+
     expect(result.failures).toHaveLength(1);
-    expect(result.failures[0].reason).toMatch(/target delivery date/);
+    expect(result.failures[0].reason).toMatch(/driver|locked/i);
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
@@ -1582,9 +1665,9 @@ describe("updateTaskAndPushOutbound — wrapper around updateTask + enqueue", ()
     expect(mockEnqueueUpdateTask).not.toHaveBeenCalled();
   });
 
-  it("propagates underlying updateTask errors (e.g. cutoff guard)", async () => {
-    const stale = taskFixture({ deliveryDate: STALE_PAST_DATE, externalTrackingNumber: "MPL-X" });
-    mockFindById.mockResolvedValueOnce(stale);
+  it("propagates underlying updateTask errors (e.g. the R-A driver lock)", async () => {
+    const locked = taskFixture({ internalStatus: "ASSIGNED", deliveryDate: FAR_FUTURE_DATE, externalTrackingNumber: "MPL-X" });
+    mockFindById.mockResolvedValueOnce(locked);
 
     await expect(
       updateTaskAndPushOutbound(userCtx(["task:update"]), TASK_ID as never, {
@@ -2103,5 +2186,22 @@ describe("subscriptionEventAffectsTask — Day-52 / R8", () => {
     expect(windows.get("corr-1")).toEqual({ start: "2099-04-30", end: "2099-05-02" });
     expect(windows.has("corr-2")).toBe(false);
     expect(windows.has("corr-3")).toBe(false);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// R-A — isTaskEditable truth table (plan §2.1)
+// -----------------------------------------------------------------------------
+
+describe("isTaskEditable — R-A assignment gate truth table", () => {
+  it("editable: CREATED, ON_HOLD, SKIPPED; locked: ASSIGNED, IN_TRANSIT; terminal: DELIVERED, CANCELED, FAILED", () => {
+    expect(isTaskEditable("CREATED")).toBe(true);
+    expect(isTaskEditable("ON_HOLD")).toBe(true);
+    expect(isTaskEditable("SKIPPED")).toBe(true);
+    expect(isTaskEditable("ASSIGNED")).toBe(false);
+    expect(isTaskEditable("IN_TRANSIT")).toBe(false);
+    expect(isTaskEditable("DELIVERED")).toBe(false);
+    expect(isTaskEditable("CANCELED")).toBe(false);
+    expect(isTaskEditable("FAILED")).toBe(false);
   });
 });

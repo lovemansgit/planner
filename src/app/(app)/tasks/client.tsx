@@ -398,9 +398,11 @@ function Row({
         {/* R6: failed-push state folded onto the Status column (was its
             own "Issues" column). */}
         {failed ? (
-          <span className="mt-1 inline-flex items-center px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.1em] bg-red/15 text-red">
-            Failed push
-          </span>
+          // Component-lib rollout (finding 3) — this badge carried an
+          // off-recipe text-[10px]; normalising to the shared <Badge>
+          // (text-xs) is a deliberate, visible tidy-up, not a zero-change
+          // swap. Margin + red palette preserved via className.
+          <Badge className="mt-1 bg-red/15 text-red">Failed push</Badge>
         ) : null}
       </Td>
       {/* R6.4: Consignee · Address · District · Emirate · Telephone form
