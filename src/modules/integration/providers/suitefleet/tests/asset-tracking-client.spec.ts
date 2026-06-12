@@ -325,3 +325,69 @@ describe("SuiteFleetAssetTrackingClient — pagination warning", () => {
     expect(result).toHaveLength(2);
   });
 });
+
+// -----------------------------------------------------------------------------
+// Day-54 P1 — SORTED state (vendor-confirmed 5-state enum) + batch fetchByAwbs
+// -----------------------------------------------------------------------------
+
+describe("parseAssetTrackingRecord — SORTED state (vendor-confirmed)", () => {
+  it("accepts SORTED — Aqib confirmed the 5-state enum (Collected/Received/Sorted/EnRoute/Returned)", () => {
+    const body = {
+      ...DOC_POPULATED_WRAPPER,
+      content: [{ ...DOC_POPULATED_WRAPPER.content[0], state: "SORTED" }],
+    };
+    const records = parseAssetTrackingPage(body, "MPS-98410409");
+    expect(records).toHaveLength(1);
+    expect(records[0].state).toBe("SORTED");
+  });
+
+  it("still rejects states outside the confirmed five", () => {
+    const body = {
+      ...DOC_POPULATED_WRAPPER,
+      content: [{ ...DOC_POPULATED_WRAPPER.content[0], state: "TELEPORTED" }],
+    };
+    expect(() => parseAssetTrackingPage(body, "MPS-98410409")).toThrow(/unknown state/i);
+  });
+});
+
+describe("SuiteFleetAssetTrackingClient — batch fetchByAwbs", () => {
+  it("joins AWBs comma-separated into one `awbs=` query param (probe-verified accepted)", async () => {
+    let requestedUrl = "";
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      requestedUrl = String(input);
+      void init;
+      return jsonResponse(DOC_POPULATED_WRAPPER);
+    };
+    const client = createSuiteFleetAssetTrackingClient({
+      fetch,
+      clientId: CLIENT_ID,
+      baseUrl: BASE_URL,
+    });
+
+    const records = await client.fetchByAwbs({
+      session: SESSION,
+      awbs: ["MPS-98410409", "MPL-11111111", "MPL-22222222"],
+    });
+
+    expect(requestedUrl).toBe(
+      `${BASE_URL}/api/task-asset-tracking?awbs=${encodeURIComponent(
+        "MPS-98410409,MPL-11111111,MPL-22222222",
+      )}`,
+    );
+    expect(records).toHaveLength(2);
+    // Per-record AWB derives from each trackingId (no single-AWB hint
+    // is meaningful in batch mode).
+    expect(records[0].awb).toBe("MPS-98410409");
+  });
+
+  it("rejects an empty AWB list", async () => {
+    const client = createSuiteFleetAssetTrackingClient({
+      fetch: makeFetch(jsonResponse(EMPIRICAL_EMPTY_WRAPPER)),
+      clientId: CLIENT_ID,
+      baseUrl: BASE_URL,
+    });
+    await expect(client.fetchByAwbs({ session: SESSION, awbs: [] })).rejects.toThrow(
+      ValidationError,
+    );
+  });
+});

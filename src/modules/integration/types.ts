@@ -296,14 +296,23 @@ export interface WebhookEvent {
 export type AssetType = "BAGS";
 
 /**
- * Four-state asset lifecycle.
+ * Five-state asset lifecycle — vendor-CONFIRMED complete (Aqib,
+ * 2026-06-12, on the record via Love; supersedes the doc-derived
+ * four-state list):
  *
  *   COLLECTED — courier has the asset
- *   EN_ROUTE  — asset moving from origin to destination
  *   RECEIVED  — handed off at destination
+ *   SORTED    — sorted at the hub (present on SF's own report screens;
+ *               absent from the original doc §6.2 sample)
+ *   EN_ROUTE  — asset moving from origin to destination
  *   RETURNED  — asset came back (returned-to-sender or recovery)
  */
-export type AssetTrackingState = "COLLECTED" | "EN_ROUTE" | "RECEIVED" | "RETURNED";
+export type AssetTrackingState =
+  | "COLLECTED"
+  | "EN_ROUTE"
+  | "RECEIVED"
+  | "RETURNED"
+  | "SORTED";
 
 /**
  * One package's tracking record, returned by the adapter's
