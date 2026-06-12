@@ -18,18 +18,10 @@ ORCH-PARK (Session B, bag-tracking plan lane)
 
 **Clears on:** your answers to the 10 numbered questions in the plan (each has one recommendation — 'all recommendations' is a valid one-line answer) + your one-line clear to start the build.
 
-## PR #500 — chore(d54): reviewer standing order — never leave the assigned worktree (T2)
+## PR #503 — docs(d54): PM-2 EOD — promote LIVE, spot-checks PASS, queue = #500
 
-- Label: `parked-t2`
-- Head SHA: `b71b5a47dc707ed476acf885d0f1e0c50754abbc`
+- Label: `parked-t3`
+- Head SHA: `5f4272960bf61452ff01cdeedccb97ec42b60b87`
 
-ORCH-PARK (Session A, Day-54 PM firing step 4)
-
-**Plain English:** one new standing-order line for the reviewer agent: never leave your assigned worktree — anything outside it is read-only via git plumbing, never cd. This pins your Day-54 ruling after two observed cd-escapes where a reviewer wandered into the shared repo mid-review and knocked the builder's checkout loose.
-
-**Touches:** .claude/agents/reviewer.md only (agent definition, not product code). **SQL TO APPLY: no.**
-
-**Reviewer:** ORCH-VERDICT APPROVE r1 at pinned head `b71b5a4`.
-
-**Clears on:** your one-line clear — "#500 cleared."
+ORCH-PARK — parked by orch-automerge: a server-side gate check failed (see the Action run for which step). This PR does not auto-merge.
 
