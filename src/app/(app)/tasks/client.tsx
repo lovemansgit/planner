@@ -365,7 +365,11 @@ function Row({
         />
       </Td>
       <Td className="whitespace-nowrap tabular-nums">{task.deliveryDate}</Td>
-      <Td className="font-mono text-xs tabular-nums">
+      {/* Day-54 micro-polish — the AWB value never wraps (nowrap suppresses
+          the hyphen break too); the column's min-content width grows to the
+          full AWB + status line and the address column absorbs via its
+          existing truncation. */}
+      <Td className="whitespace-nowrap font-mono text-xs tabular-nums">
         {/* R6-part-2: the AWB cell opens the task-timeline drawer. Both
             populated and not-yet-pushed (—) tasks open it; the drawer
             shows the R6.3 banner for the null-AWB case. */}
