@@ -37,6 +37,31 @@ ORCH-PARK (Session B, bag-tracking plan lane)
 
 **Clears on:** your answers to the 10 numbered questions in the plan (each has one recommendation — 'all recommendations' is a valid one-line answer) + your one-line clear to start the build.
 
+## PR #512 — docs(d54): parked-queue regen — scope-literal ruling filing parked (#511)
+
+- Label: `parked-t3`
+- Head SHA: `815a8b3d737580c254b6ea443a7c1105abc9a502`
+
+ORCH-PARK — parked by orch-automerge: a server-side gate check failed (see the Action run for which step). This PR does not auto-merge.
+
+## PR #513 — fix(d54): bag-tracking P4 — walk findings F1 (all-merchants Inventory) + F2 (admin nav overflow)
+
+- Label: `parked-t2`
+- Head SHA: `cd8f2fdbdef40a87ccf5c97bfd5dd7874f595e1c`
+
+ORCH-PARK
+
+PR: #513 (bag-tracking P4 — walk findings F1 + F2)
+SHA: cd8f2fdbdef40a87ccf5c97bfd5dd7874f595e1c
+PATH-GATE: PARK (feature code outside the auto-merge allowlist)
+REVIEWER: APPROVE round 1 at the pinned head (no Love-triggers; cost fan-out deliberately avoided)
+PROOFS (builder-local): tsc 0 · eslint 0 · unit 2162/2162 · integration 16/16 (scratch DB, all 34 migrations)
+PREVIEW: READY — dpl_Bm6pVtHmeteWUDqt25LURohnmyHU @ cd8f2fd (branch alias planner-git-feat-d54-bagtrack-p4-w-fa71b5)
+
+Stack: #507 ← #508 ← #509 ← this PR. The earlier verdicts at their pinned heads stay valid (follow-up PR, no amend).
+
+Clears on: Love's preview sign-off sentence after the re-walk (the whole stack merges together; production applies of 0032–0034 already stand by the Day-54 retroactive acceptance).
+
 ## PR #508 — feat(d54): bag-tracking P2 — Asset Tracking + Inventory reports, dark-switch nav, AWB drill-downs (parks)
 
 - Label: `parked-t2`
