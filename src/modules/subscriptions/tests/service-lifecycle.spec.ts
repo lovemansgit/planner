@@ -110,7 +110,7 @@ function systemCtx(): RequestContext {
 }
 
 function subscriptionRow(
-  overrides: Partial<{ status: string; endDate: string | null }> = {},
+  overrides: Partial<{ status: string; endDate: string | null; pausedAt: string | null }> = {},
 ) {
   const endDate =
     "endDate" in overrides ? (overrides.endDate as string | null) : ORIGINAL_END;
@@ -121,7 +121,7 @@ function subscriptionRow(
     start_date: "2026-04-01",
     end_date: endDate,
     days_of_week: [1, 2, 3, 4, 5],
-    paused_at: null,
+    paused_at: overrides.pausedAt ?? null,
   };
 }
 
@@ -449,19 +449,70 @@ describe("resumeSubscription — permission + idempotency", () => {
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
-  it("returns already_active when no active pause window exists (idempotent, no audit)", async () => {
-    mockExecute.mockResolvedValueOnce([subscriptionRow({ status: "paused" })]);
+  it("auto-resume with no active pause window stays already_active (emergency-halt guard, no flip, no audit)", async () => {
+    // R-B windowless-recovery is MANUAL-ONLY: the cron must never
+    // silently re-activate an auto-paused subscription (the halt
+    // exists because pushes are failing). Plan §2, Option B guard.
+    mockExecute.mockResolvedValueOnce([
+      subscriptionRow({ status: "paused", pausedAt: "2026-05-01T10:00:00.000Z" }),
+    ]);
     mockExecute.mockResolvedValueOnce([]); // active pause window query → none
+
+    const result = await resumeSubscription(systemCtx(), SUBSCRIPTION_ID, validInput, {
+      now: NOW,
+      is_auto_resume: true,
+    });
+
+    expect(result.status).toBe("already_active");
+    expect(mockExecute).toHaveBeenCalledTimes(2); // no UPDATE issued
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("manual resume with no active pause window: windowless recovery — flips status + emits resumed (R-B)", async () => {
+    // The auto-pause flow (autoPauseSubscriptionForRepeatedFailure)
+    // pauses WITHOUT a pause_window exception. Before R-B this branch
+    // returned already_active without flipping status — the stranding
+    // in memory/triage_five_races_findings.md §R-B. Now: recover.
+    const PAUSED_AT_WAS = "2026-05-01T10:00:00.000Z";
+    mockExecute.mockResolvedValueOnce([
+      subscriptionRow({ status: "paused", pausedAt: PAUSED_AT_WAS }),
+    ]);
+    mockExecute.mockResolvedValueOnce([]); // active pause window query → none
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // UPDATE subscriptions → active
 
     const result = await resumeSubscription(
       userCtx(["subscription:resume"]),
       SUBSCRIPTION_ID,
       validInput,
-      { now: NOW },
+      { now: NOW }, // 2026-05-04 13:00 Dubai → today 2026-05-04
     );
 
-    expect(result.status).toBe("already_active");
-    expect(mockEmit).not.toHaveBeenCalled();
+    expect(result.status).toBe("resumed");
+    expect(result.actual_resume_date).toBe("2026-05-04");
+    expect(result.new_end_date).toBe(ORIGINAL_END); // untouched — no extension was ever granted
+    expect(result.restored_task_count).toBe(0); // auto-pause canceled nothing
+    expect(result.reactivated_task_count).toBe(0);
+    expect(result.correlation_id).toBeNull(); // no window → no correlation
+
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    const emitArg = mockEmit.mock.calls[0][0] as {
+      eventType: string;
+      metadata: {
+        windowless_recovery: boolean;
+        correlation_id: string | null;
+        is_auto_resume: boolean;
+        actual_resume_date: string;
+        restored_task_count: number;
+        paused_at_was: string | null;
+      };
+    };
+    expect(emitArg.eventType).toBe("subscription.resumed");
+    expect(emitArg.metadata.windowless_recovery).toBe(true);
+    expect(emitArg.metadata.correlation_id).toBeNull();
+    expect(emitArg.metadata.is_auto_resume).toBe(false);
+    expect(emitArg.metadata.actual_resume_date).toBe("2026-05-04");
+    expect(emitArg.metadata.restored_task_count).toBe(0);
+    expect(emitArg.metadata.paused_at_was).toBe(PAUSED_AT_WAS);
   });
 });
 

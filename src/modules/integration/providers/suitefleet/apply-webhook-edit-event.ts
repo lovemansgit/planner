@@ -147,11 +147,14 @@ export async function applyWebhookEditEvent(
   const rawPayload = event.raw;
   const rawPayloadJson = JSON.stringify(rawPayload);
 
-  let txBundle: { outcome: ApplyWebhookEditEventResult; meta: AuditMeta | null };
-
+  // Tx-1 — receipt only (R-C receipt-then-apply split, plan
+  // memory/plans/day-53-session-c-rc-receipt-tx-split.md §2): commit
+  // the forensic webhook_events receipt ALONE so a Tx-2 apply failure
+  // can no longer erase it. The 23505 dedup catch moves with the
+  // INSERT (UNIQUE catches retries); nothing else can throw in Tx-1.
+  let webhookEventsId: string;
   try {
-    txBundle = await withTenant(tenantId, async (tx) => {
-      // INSERT webhook_events (forensic preservation; UNIQUE catches retries).
+    webhookEventsId = await withTenant(tenantId, async (tx) => {
       const insertResult = await tx.execute(sqlTag`
         INSERT INTO webhook_events (tenant_id, suitefleet_task_id, action, event_timestamp, raw_payload)
         VALUES (
@@ -163,14 +166,26 @@ export async function applyWebhookEditEvent(
         )
         RETURNING id
       `);
-      const webhookEventsId = (insertResult[0] as { id: string }).id;
+      return (insertResult[0] as { id: string }).id;
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { applied: false, reason: "duplicate" };
+    }
+    throw err;
+  }
 
+  // Tx-2 — the apply; may roll back alone (the Tx-1 receipt survives
+  // as the forensic artifact; a throw propagates to the route's
+  // per-event catch exactly as before the split).
+  const txBundle: { outcome: ApplyWebhookEditEventResult; meta: AuditMeta | null } =
+    await withTenant(tenantId, async (tx) => {
       // Validate payload shape at the boundary (plan PR #294 §5.2 + §5.3).
       // Failure is structured-return (NOT throw) per locked §5.3 Option A —
-      // tx commits so the webhook_events row above is preserved as a forensic
-      // record of the malformed payload. Duplicate replays of the same
-      // malformed payload subsequently return 'duplicate' via the UNIQUE
-      // violation catch at line ~210.
+      // the Tx-1 webhook_events row is already committed, preserved as a
+      // forensic record of the malformed payload. Duplicate replays of the
+      // same malformed payload subsequently return 'duplicate' via the
+      // UNIQUE violation catch in Tx-1.
       const parseResult = webhookEditPayloadSchema.safeParse(rawPayload);
       if (!parseResult.success) {
         log.warn({
@@ -278,12 +293,6 @@ export async function applyWebhookEditEvent(
         meta,
       };
     });
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      return { applied: false, reason: "duplicate" };
-    }
-    throw err;
-  }
 
   if (txBundle.outcome.applied && txBundle.meta !== null) {
     await emitEditAppliedAudit(tenantId, txBundle.meta);

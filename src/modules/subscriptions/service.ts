@@ -1035,10 +1035,35 @@ export async function resumeSubscription(
 
     const pauseWindow = await findActivePauseWindow(tx, id);
     if (pauseWindow === null) {
-      // No active pause window — subscription is paused but no
-      // exception row found OR all pause windows have resume audits.
-      // Treat as already-active idempotent (defence-in-depth).
-      return { kind: "already_active" } as const;
+      // Subscription is 'paused' with no active pause_window exception.
+      // The auto-pause flow (autoPauseSubscriptionForRepeatedFailure)
+      // writes only the status flip, never a window — before R-B this
+      // branch returned already_active without flipping status, so the
+      // Resume button silently no-oped and the subscription stayed
+      // stranded (memory/triage_five_races_findings.md §R-B). Manual
+      // resume now RECOVERS: flip to active, no task restore
+      // (auto-pause canceled nothing), end_date untouched (no
+      // extension was ever granted).
+      //
+      // The auto-resume path keeps the no-op guard: an emergency-
+      // halted subscription recovers only on a human's explicit
+      // Resume, never silently by the cron (whose selection is
+      // pause_window-driven and cannot reach here anyway).
+      if (isAutoResume) {
+        return { kind: "already_active" } as const;
+      }
+      await tx.execute(sqlTag`
+        UPDATE subscriptions
+        SET status = 'active',
+            paused_at = NULL,
+            updated_at = now()
+        WHERE id = ${id} AND tenant_id = ${tenantId}
+      `);
+      return {
+        kind: "windowless_recovery" as const,
+        pausedAtWas: subscription.pausedAt,
+        currentEndDate: subscription.endDate,
+      };
     }
 
     const actualResumeDate = isAutoResume ? pauseWindow.end_date : today;
@@ -1151,6 +1176,43 @@ export async function resumeSubscription(
       restored_task_count: 0,
       reactivated_task_count: 0,
       status: "already_active",
+      http_status: 200,
+    };
+  }
+
+  // R-B windowless recovery — post-commit emit. Reuses
+  // subscription.resumed (a recovery IS a resume); discrimination
+  // lives in metadata: windowless_recovery=true + correlation_id=null,
+  // which by construction matches neither findActivePauseWindow's nor
+  // the auto-resume cron's correlation-keyed NOT EXISTS guards.
+  if (txResult.kind === "windowless_recovery") {
+    await emit({
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId,
+      requestId: ctx.requestId,
+      eventType: "subscription.resumed",
+      resourceType: "subscription",
+      resourceId: id,
+      metadata: {
+        subscription_id: id,
+        actual_resume_date: today,
+        new_end_date: null,
+        restored_task_count: 0,
+        is_auto_resume: false,
+        idempotency_key: input.idempotency_key,
+        correlation_id: null,
+        windowless_recovery: true,
+        paused_at_was: txResult.pausedAtWas,
+      },
+    });
+    return {
+      correlation_id: null,
+      actual_resume_date: today,
+      new_end_date: txResult.currentEndDate,
+      restored_task_count: 0,
+      reactivated_task_count: 0,
+      status: "resumed",
       http_status: 200,
     };
   }

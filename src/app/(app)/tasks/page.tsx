@@ -33,6 +33,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { DateRangeFilter } from "@/components/DateRangeFilter";
+import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
 import { listUnresolvedFailedPushes } from "@/modules/failed-pushes";
 import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
@@ -133,33 +134,35 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           </p>
         </header>
 
-        <StatusFilterBar activeStatus={status} />
-
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">{totalCount}</p>
-          <div className="flex items-center gap-6">
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              {buildCountLabel(status, query)}
-            </p>
-            <PageSizeDropdown
-              value={perPage}
-              options={ALLOWED_PAGE_SIZES}
-              status={status}
-            />
-          </div>
-        </section>
-
-        <DateRangeFilter
-          today={today}
-          initialFrom={dateFrom}
-          initialTo={dateTo}
-          basePath="/tasks"
+        <HeroCount
+          count={totalCount}
+          label={buildCountLabel(status, query)}
+          trailing={
+            <PageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} status={status} />
+          }
         />
 
-        <SearchBar
-          label="Search tasks by AWB, consignee name or order number"
-          placeholder="Search by AWB, consignee name or order #"
-        />
+        {/* #431 click-reduction — the three filter controls (search, status
+            pills, date range) collapse onto ONE compact wrapping row so the
+            table sits higher instead of being pushed below three stacked
+            full-width blocks. `[&>*]:mb-0` neutralises each control's own
+            bottom margin (the shared SearchBar/DateRangeFilter components are
+            untouched — they're used on 8 pages). No filter removed; same URL
+            state. The hero-count band above keeps its treatment per the
+            <HeroCount> deferral (#437). */}
+        <div className="mb-8 flex flex-wrap items-center gap-x-6 gap-y-3 [&>*]:mb-0">
+          <SearchBar
+            label="Search tasks by AWB, consignee name or order number"
+            placeholder="Search by AWB, consignee name or order #"
+          />
+          <StatusFilterBar activeStatus={status} />
+          <DateRangeFilter
+            today={today}
+            initialFrom={dateFrom}
+            initialTo={dateTo}
+            basePath="/tasks"
+          />
+        </div>
 
         {tasks.length === 0 ? (
           <EmptyState filtered={status !== undefined || query.length > 0} query={query} />
