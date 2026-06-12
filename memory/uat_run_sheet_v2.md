@@ -10,13 +10,13 @@ type: reference
 order discipline; rewritten against the Day-54 assembly tree promoted to
 production (#489, prod `3045982`, deployment `dpl_6S7UWVEZd8zeGcnZCqZw8aQDsqK8`).
 
-**Verification status (honest):** every flow below is shipped, reviewer-verified
-at pinned SHAs, CI-green, and — where it touches SuiteFleet — proven on real
-wire (Day-52/53 proving passes + the Day-54 assigned-cancel probe). The Day-54
-**live-UI re-walk of the new surfaces is PARKED** on the operator-session
-blocker (see §END) — the one outstanding leg between this sheet and an
-unconditional UAT GREEN v2. Run sheet usable as-is; the parked walk is a
-spot-check, not a build gap.
+**Verification status: UAT GREEN v2 — UNCONDITIONAL.** Every flow below is
+shipped, reviewer-verified at pinned SHAs, CI-green, wire-proven where it
+touches SuiteFleet (Day-52/53 proving passes + the Day-54 assigned-cancel
+probe), **and live-UI walked on the promoted production tree** (Day-54 PM —
+the §END contingency is satisfied; per-leg verdicts there). The
+operator-session blocker was resolved by the Floor-7 login ruling (Love types
+on the product's real login page; the agent captures only the session).
 
 ---
 
@@ -200,20 +200,53 @@ unchanged.
 
 ---
 
-## §END — gate status for UAT GREEN v2
+## §END — gate status: **UAT GREEN v2 (declared Day-54 PM, contingency satisfied)**
 
 - Probe verdict: **in** (refusal branch calibrated, above).
-- Preflight: **9/10 mechanical, 10/10 on the invariants** — gate 8's query is
-  defective (matches fixture clones name-wide, no tenant filter; the real
-  Sarah `e6f6c33a…` is ACTIVE with 3 FAILED — verified directly Day-54).
-  Gate-8 query fix is a follow-up, not a blocker.
+- Preflight: **10/10 on the invariants** (the demo Sarah `e6f6c33a…` is
+  ACTIVE with 3 FAILED — verified directly). The gate-8 QUERY defect found
+  Day-54 AM (fixture-name collision) has its fix **built, APPROVE r1, and
+  parked as #493** (tenant scope + exact name + deterministic order;
+  RED 9/10 → GREEN 10/10 proven on the branch run). The mechanical score
+  reads 10/10 once #493 lands; the defect was never an invariant failure
+  and does not gate this GREEN.
 - Production: assembly promote live (`3045982`, `dpl_6S7UWVEZd8zeGcnZCqZw8aQDsqK8`),
   rollback anchor `dpl_DxCdkX1z` @ `bbefc1a`.
-- **PARKED (the one leg):** the live-UI re-walk of the Day-54 surfaces
-  (assignment-lock observable on `MPL-40595232`, churn warning popup wording,
-  R16 resume walk) — blocked at the builder seat on an expired operator
-  session; the classifier (correctly) denies the service-key session-mint
-  route. Closes with Love's word on a session remedy, then a ~20-minute walk.
+- **The live-UI re-walk: DONE, all legs PASS** (Day-54 PM, operator session
+  via the Floor-7 login ruling — Love typed on the real login page; only the
+  session state was captured):
+  1. **Assignment lock** on `MPL-40595232` — popover shows the explanation
+     verbatim ("Assigned to a driver — this delivery is locked. No edits or
+     cancellations once assigned; notes to the driver still go through.");
+     edit-family actions absent, note + timeline remain. ✓
+  2. **Unassigned delivery** — full action set enabled (both address changes,
+     skip ×2, pause, cancel, note, timeline). ✓ (Post-18:00 live check not
+     possible at walk hour; creation-only cutoff is integration-proven.)
+  3. **H3/POD** — styled "Photo expired at the delivery vendor" placeholder
+     rendered through the same-origin proxy; no vendor URL, no broken glyph. ✓
+  4. **Click-reduction** — popover-first actions + drawer-from-popover
+     (operator), "Overview" nav label + F-2 deterministic pagination (admin:
+     page 1 stable across reloads, zero page-1/page-2 overlap). ✓
+  5. **R16 pause/resume** — pause 23–24 Jun → Canceled + "SF cancel pending"
+     → SF acks; **Resume now** → both days restored to Scheduled with the SF
+     re-creation fan-out. ✓ (Open-ended variant integration-proven #470;
+     Fatima also carries an open-ended "5-day veggie box" if Ops wants it
+     live at UAT.)
+  6. **Churn hard stop** (spare seed consignee `MPL Customer 0032`) — the
+     mandatory warning popup wording captured verbatim in §L above (hard
+     stop + recall attempt + refusal branch + irreversibility), confirm
+     label "Churn — stop everything"; cascade verified: subscription
+     `ended`, stale local tasks CANCELED with per-task history entries,
+     CRM Active→Churned with reason, `consignee.churn_cascade` audit event
+     at 11:24:08Z. ✓ The live vendor-recall leg was deliberately NOT fired
+     (the only recall-bearing rows are Fatima's protected UAT demo data);
+     that branch is wire-calibrated by the probe + covered by
+     `churn-cascade.spec.ts`, and UAT step L exercises it live.
+- **Walk findings (non-blocking, filed):** the `/tasks` LIST ROW still
+  renders enabled Cancel/Edit affordances on an ASSIGNED task — the popover
+  (primary surface) locks correctly and the server gate rejects, so this is
+  a UI-affordance inconsistency on the secondary surface; small follow-up to
+  mirror the lock there.
 
 ## After the UAT — unchanged from v1
 
