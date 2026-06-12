@@ -1668,3 +1668,49 @@ export async function markTasksRestoredInWindow(
   `);
   return rows;
 }
+
+// -----------------------------------------------------------------------------
+// R-E — churn hard-stop cascade (plan day-54-session-c-re-churn-cascade §1)
+// -----------------------------------------------------------------------------
+
+export interface ChurnCascadeTaskResult {
+  /** Never-pushed rows flipped CANCELED locally (no vendor to confirm). */
+  readonly canceledLocalCount: number;
+  /**
+   * Pushed, non-terminal rows (INCLUDING driver-bound — churn is the
+   * single sanctioned bypass of the R-A assignment freeze) flipped to
+   * outbound_sync_state='pending_cancel' WITHOUT touching
+   * internal_status: the honesty rule — local status flips only when
+   * the vendor confirms (webhook) ; a refused recall keeps the true
+   * status and lands the existing cancel-DLQ 'failed' signal.
+   */
+  readonly recalls: readonly { id: string; external_tracking_number: string }[];
+}
+
+export async function cancelConsigneeTasksForChurn(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+): Promise<ChurnCascadeTaskResult> {
+  const canceledLocal = (await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'CANCELED', updated_at = now()
+    WHERE tenant_id = ${tenantId}
+      AND consignee_id = ${consigneeId}
+      AND external_tracking_number IS NULL
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+    RETURNING id
+  `)) as readonly { id: string }[];
+
+  const recalls = (await tx.execute(sqlTag`
+    UPDATE tasks
+    SET outbound_sync_state = 'pending_cancel', updated_at = now()
+    WHERE tenant_id = ${tenantId}
+      AND consignee_id = ${consigneeId}
+      AND external_tracking_number IS NOT NULL
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+    RETURNING id, external_tracking_number
+  `)) as readonly { id: string; external_tracking_number: string }[];
+
+  return { canceledLocalCount: canceledLocal.length, recalls };
+}

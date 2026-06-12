@@ -103,6 +103,12 @@ interface DayActionPopoverProps {
    * operator lacks the read permission — the badge omits silently.
    */
   readonly failedPush: boolean;
+  /**
+   * Day-54 / R-E — consignee is CHURNED. Combined with a driver-bound
+   * status + the sync state, drives the recall badges (plan §2): the
+   * honesty rule's visible flag.
+   */
+  readonly consigneeChurned: boolean;
 }
 
 type PopoverMode = "menu" | ActionMode;
@@ -628,6 +634,7 @@ export function DayActionPopover({
   addressLabel,
   outboundSyncState,
   failedPush,
+  consigneeChurned,
 }: DayActionPopoverProps) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<PopoverMode>("menu");
@@ -705,7 +712,20 @@ export function DayActionPopover({
 
   // Day-29 §D(2) Phase-1 — outbound sync state badge derivation. null
   // when 'synced'; explicit copy + classes for pending / failed.
-  const syncBadge = outboundSyncStateBadge(outboundSyncState);
+  // R-E (plan §2): on a CHURNED consignee, a driver-bound row's sync
+  // state IS the recall state — surface it in plain words. 'failed'
+  // here means the vendor refused the recall: the delivery completes
+  // as the final one (the honesty rule's visible flag).
+  const isDriverBound = internalStatus === "ASSIGNED" || internalStatus === "IN_TRANSIT";
+  const churnRecallBadge =
+    consigneeChurned && isDriverBound
+      ? outboundSyncState === "pending_cancel"
+        ? { label: "Recall requested — awaiting vendor", classes: "bg-ivory text-[color:var(--color-stone-600)]" }
+        : outboundSyncState === "failed"
+          ? { label: "Vendor refused recall — final delivery", classes: "bg-amber-100 text-amber-deep" }
+          : null
+      : null;
+  const syncBadge = churnRecallBadge ?? outboundSyncStateBadge(outboundSyncState);
 
   return (
     <>
