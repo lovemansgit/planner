@@ -380,10 +380,11 @@ function Row({
           className="text-left transition-opacity duration-[120ms] ease-out hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-inset"
         >
           {task.externalTrackingNumber !== null ? (
-            <span className="flex flex-col gap-0.5">
-              <span>{task.externalTrackingNumber}</span>
-              <span className="font-sans text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
-                <span className="text-navy">✓</span> Pushed to SuiteFleet
+            <span className="flex flex-col gap-1 leading-tight">
+              <span className="leading-none">{task.externalTrackingNumber}</span>
+              <span className="inline-flex items-center gap-1 font-sans text-[10px] uppercase leading-none tracking-[0.14em] text-[color:var(--color-text-secondary)]">
+                <span className="text-navy">✓</span>
+                Pushed to SuiteFleet
               </span>
             </span>
           ) : (
@@ -414,7 +415,9 @@ function Row({
       <ConsigneeCell href={cgn.href} primary ariaLabel={`View consignee ${cgn.name}`}>
         {cgn.name}
       </ConsigneeCell>
-      <ConsigneeCell href={cgn.href}>{cgn.addressLine}</ConsigneeCell>
+      <ConsigneeCell href={cgn.href} truncateTitle={cgn.addressLine}>
+        {cgn.addressLine}
+      </ConsigneeCell>
       <ConsigneeCell href={cgn.href}>{cgn.district}</ConsigneeCell>
       <ConsigneeCell href={cgn.href}>{cgn.emirate}</ConsigneeCell>
       <ConsigneeCell href={cgn.href} mono>
@@ -433,20 +436,24 @@ function Row({
 
 // R6.4 — one consignee column cell. Each cell links to the same
 // /consignees/[id] href so the Name·Address·District·Emirate·Telephone
-// block reads as a single click target. Padding matches `Td` (py-4) so
-// the link fills the cell and the hover tint signals the target.
+// block reads as a single click target. Padding matches `Td` (px-3 py-3)
+// so the link fills the cell and the hover tint signals the target.
+// `truncateTitle` clips long values (the address) to keep the row rhythm;
+// the full value stays available on hover via the title attribute.
 function ConsigneeCell({
   href,
   children,
   primary = false,
   ariaLabel,
   mono = false,
+  truncateTitle,
 }: {
   readonly href: string;
   readonly children: React.ReactNode;
   readonly primary?: boolean;
   readonly ariaLabel?: string;
   readonly mono?: boolean;
+  readonly truncateTitle?: string;
 }) {
   return (
     <td className="align-middle">
@@ -454,9 +461,10 @@ function ConsigneeCell({
         href={href}
         aria-label={primary ? ariaLabel : undefined}
         tabIndex={primary ? undefined : -1}
-        className={`block whitespace-nowrap py-4 text-navy transition-colors duration-[120ms] ease-out hover:bg-[color:var(--color-tint-navy-subtle)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-inset ${
+        title={truncateTitle}
+        className={`block whitespace-nowrap px-3 py-3 text-navy transition-colors duration-[120ms] ease-out hover:bg-[color:var(--color-tint-navy-subtle)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-inset ${
           mono ? "font-mono text-xs tabular-nums" : ""
-        }`}
+        } ${truncateTitle !== undefined ? "max-w-[16rem] truncate" : ""}`}
       >
         {children}
       </Link>
@@ -932,14 +940,20 @@ function PodCell({
   );
 }
 
+// Day-54 polish — shared cell rhythm: px-3 column gutters (flush at the
+// table's outer edges via first/last), py-3 rows, align-middle everywhere.
+// Header weight/tracking aligned to the established label idiom
+// (font-semibold, tracking-[0.14em]).
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
+    <th className="whitespace-nowrap px-3 py-3 text-left align-middle text-xs font-semibold uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)] first:pl-0 last:pr-0">
       {children}
     </th>
   );
 }
 
 function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-middle ${className}`}>{children}</td>;
+  return (
+    <td className={`px-3 py-3 align-middle first:pl-0 last:pr-0 ${className}`}>{children}</td>
+  );
 }
