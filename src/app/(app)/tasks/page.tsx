@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { parseAwbsParam } from "@/components/asset-reports/report-helpers";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
 import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
@@ -79,6 +80,7 @@ interface TasksPageProps {
     readonly q?: string;
     readonly from?: string;
     readonly to?: string;
+    readonly awbs?: string;
   }>;
 }
 
@@ -92,9 +94,16 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   const query = (params.q ?? "").trim();
   const searchTerm = query.length > 0 ? query : undefined;
   const today = computeTodayInDubai(new Date());
+  // Day-54 P2 — report drill-down: an AWB-set filter spans whatever
+  // dates the report row covered, so it suspends the default-today
+  // date window unless the URL pins one explicitly.
+  const awbs = parseAwbsParam(params.awbs);
+  const hasAwbsFilter = awbs.length > 0;
   const rawFrom = parseDateParam(params.from, today);
   const rawTo = parseDateParam(params.to, today);
-  const { from: dateFrom, to: dateTo } = normaliseDateRange(rawFrom, rawTo);
+  const { from: parsedFrom, to: parsedTo } = normaliseDateRange(rawFrom, rawTo);
+  const dateFrom = hasAwbsFilter && params.from === undefined ? undefined : parsedFrom;
+  const dateTo = hasAwbsFilter && params.to === undefined ? undefined : parsedTo;
 
   let tasks: readonly TaskListRow[];
   let totalCount: number;
@@ -102,8 +111,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   try {
     const ctx = await buildRequestContext("/tasks", requestId);
     [tasks, totalCount, failedPushTaskIds] = await Promise.all([
-      listTasks(ctx, { limit: perPage, offset, status, searchTerm, dateFrom, dateTo }),
-      countTasks(ctx, { status, searchTerm, dateFrom, dateTo }),
+      listTasks(ctx, { limit: perPage, offset, status, searchTerm, dateFrom, dateTo, awbs: hasAwbsFilter ? awbs : undefined }),
+      countTasks(ctx, { status, searchTerm, dateFrom, dateTo, awbs: hasAwbsFilter ? awbs : undefined }),
       listUnresolvedFailedPushes(ctx).then(
         (rows) => new Set(rows.map((r) => r.taskId)),
       ),
@@ -158,11 +167,23 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           <StatusFilterBar activeStatus={status} />
           <DateRangeFilter
             today={today}
-            initialFrom={dateFrom}
-            initialTo={dateTo}
+            initialFrom={parsedFrom}
+            initialTo={parsedTo}
             basePath="/tasks"
           />
         </div>
+
+        {hasAwbsFilter ? (
+          <div className="mb-6 flex items-center gap-3 border border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-4 py-3 text-sm">
+            <span>
+              Showing {awbs.length} AWB{awbs.length === 1 ? "" : "s"} from a report
+              drill-down{dateFrom === undefined ? " (all dates)" : ""}.
+            </span>
+            <Link href="/tasks" className="underline underline-offset-4 hover:text-[color:var(--color-accent)]">
+              Clear filter
+            </Link>
+          </div>
+        ) : null}
 
         {tasks.length === 0 ? (
           <EmptyState filtered={status !== undefined || query.length > 0} query={query} />
@@ -182,8 +203,8 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           status={status}
           perPage={perPage}
           query={query}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
+          dateFrom={parsedFrom}
+          dateTo={parsedTo}
         />
       </div>
     </main>

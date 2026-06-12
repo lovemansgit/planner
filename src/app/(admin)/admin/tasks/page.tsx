@@ -38,6 +38,7 @@ import {
   parsePerPageParam,
   parseStatusParam,
 } from "@/app/(app)/tasks/status";
+import { parseAwbsParam } from "@/components/asset-reports/report-helpers";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
 import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
@@ -93,6 +94,7 @@ interface AdminTasksPageProps {
     readonly q?: string;
     readonly from?: string;
     readonly to?: string;
+    readonly awbs?: string;
   }>;
 }
 
@@ -106,9 +108,15 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
   const offset = (page - 1) * perPage;
   const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
   const today = computeTodayInDubai(new Date());
+  // Day-54 P2 — report drill-down AWB set suspends the default-today
+  // date window unless the URL pins one explicitly (see /tasks).
+  const awbs = parseAwbsParam(params.awbs);
+  const hasAwbsFilter = awbs.length > 0;
   const rawFrom = parseDateParam(params.from, today);
   const rawTo = parseDateParam(params.to, today);
-  const { from: dateFrom, to: dateTo } = normaliseDateRange(rawFrom, rawTo);
+  const { from: parsedFrom, to: parsedTo } = normaliseDateRange(rawFrom, rawTo);
+  const dateFrom = hasAwbsFilter && params.from === undefined ? undefined : parsedFrom;
+  const dateTo = hasAwbsFilter && params.to === undefined ? undefined : parsedTo;
 
   let rows: readonly AdminTaskRow[];
   let merchants: readonly Merchant[];
@@ -116,9 +124,9 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
   try {
     const ctx = await buildRequestContext("/admin/tasks", requestId);
     [rows, merchants, totalCount] = await Promise.all([
-      listAllTasks(ctx, { merchantSlug, status, limit: perPage, offset, searchTerm: q, dateFrom, dateTo }),
+      listAllTasks(ctx, { merchantSlug, status, limit: perPage, offset, searchTerm: q, dateFrom, dateTo, awbs: hasAwbsFilter ? awbs : undefined }),
       listMerchants(ctx),
-      countAllTasks(ctx, { merchantSlug, status, searchTerm: q, dateFrom, dateTo }),
+      countAllTasks(ctx, { merchantSlug, status, searchTerm: q, dateFrom, dateTo, awbs: hasAwbsFilter ? awbs : undefined }),
     ]);
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -164,10 +172,22 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
 
         <DateRangeFilter
           today={today}
-          initialFrom={dateFrom}
-          initialTo={dateTo}
+          initialFrom={parsedFrom}
+          initialTo={parsedTo}
           basePath="/admin/tasks"
         />
+
+        {hasAwbsFilter ? (
+          <div className="mb-6 flex items-center gap-3 border border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-4 py-3 text-sm">
+            <span>
+              Showing {awbs.length} AWB{awbs.length === 1 ? "" : "s"} from a report
+              drill-down{dateFrom === undefined ? " (all dates)" : ""}.
+            </span>
+            <Link href="/admin/tasks" className="underline underline-offset-4 hover:text-[color:var(--color-accent)]">
+              Clear filter
+            </Link>
+          </div>
+        ) : null}
 
         <SearchBar
           placeholder="Search by AWB, consignee, or merchant"
@@ -187,8 +207,8 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           merchantSlug={merchantSlug}
           perPage={perPage}
           q={q}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
+          dateFrom={parsedFrom}
+          dateTo={parsedTo}
         />
 
         {rows.length === 0 ? <EmptyState filtered={status !== undefined || merchantSlug !== undefined || q !== undefined} /> : <AdminTasksTable rows={rows} />}
@@ -200,8 +220,8 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           status={status}
           perPage={perPage}
           q={q}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
+          dateFrom={parsedFrom}
+          dateTo={parsedTo}
         />
       </div>
     </main>

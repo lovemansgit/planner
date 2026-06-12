@@ -948,6 +948,8 @@ export async function countTasks(
     readonly searchTerm?: string;
     readonly dateFrom?: string;
     readonly dateTo?: string;
+    /** Day-54 P2 — exact AWB-set filter; see ListTasksOpts.awbs. */
+    readonly awbs?: readonly string[];
   } = {},
 ): Promise<number> {
   requirePermission(ctx, "task:read");
