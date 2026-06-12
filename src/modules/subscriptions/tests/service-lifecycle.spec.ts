@@ -249,18 +249,31 @@ describe("pauseSubscription — input + state validation", () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it("rejects ValidationError when cut-off elapsed for pause_start", async () => {
-    // pause_start = today (2026-05-04) — cut-off for that was
-    // 2026-05-03 18:00 Dubai. NOW = 2026-05-04 09:00 UTC = 13:00 Dubai;
-    // cut-off has elapsed.
-    await expect(
-      pauseSubscription(
-        userCtx(["subscription:pause"]),
-        SUBSCRIPTION_ID,
-        { ...validInput, pause_start: "2026-05-04" },
-        { now: NOW },
-      ),
-    ).rejects.toThrow(/cut-off/);
+  it("R-A: pause with a post-cutoff pause_start is now ACCEPTED (cutoff is creation-only); driver-bound tasks are excluded and counted", async () => {
+    // pause_start = today (2026-05-04) — its cut-off elapsed at NOW.
+    // Before R-A this rejected; the pause time gate is gone.
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]); // replay none
+    mockExecute.mockResolvedValueOnce([insertedPauseExceptionRow({ startDate: "2026-05-04" })]);
+    mockExecute.mockResolvedValueOnce(unpushedCanceledRows(2)); // window cancel (driver-bound rows excluded by WHERE)
+    mockExecute.mockResolvedValueOnce([{ n: 1 }]); // R-A: driver-bound-in-window count
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // UPDATE subscriptions
+
+    const result = await pauseSubscription(
+      userCtx(["subscription:pause"]),
+      SUBSCRIPTION_ID,
+      { ...validInput, pause_start: "2026-05-04" },
+      { now: NOW },
+    );
+    expect(result.status).toBe("inserted");
+    expect(result.canceled_task_count).toBe(2);
+
+    const pausedEmit = mockEmit.mock.calls[0][0] as {
+      eventType: string;
+      metadata: { assigned_tasks_excluded: number };
+    };
+    expect(pausedEmit.eventType).toBe("subscription.paused");
+    expect(pausedEmit.metadata.assigned_tasks_excluded).toBe(1);
   });
 
   it("rejects NotFoundError when subscription not found", async () => {
