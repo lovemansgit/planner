@@ -3,6 +3,9 @@
     "deny": [
       "Bash(gh pr merge)",
       "Bash(gh pr merge:*)"
+    ],
+    "allow": [
+      "Bash(gh pr edit*--add-label*love-cleared*)"
     ]
   }
 }
