@@ -192,6 +192,13 @@ async function gate8SarahActivePreDemoFailedDeliveries(sql) {
   // of the storyline (operator marks her HIGH_RISK on stage), NOT a
   // pre-seed invariant. If seed-demo-personas.mjs sets her to HIGH_RISK
   // before the demo, the theater fails because there's nothing to flip.
+  // Day-54 fix: the old `ILIKE '%sarah%khouri%'` with no tenant scope
+  // matched dozens of integration-fixture clones ("Sarah Khouri <hex>"
+  // across throwaway tenants), and the unordered rows[0] grab made the
+  // gate report whichever clone the planner returned first (observed:
+  // FAIL with failed=0 while the real demo Sarah held the invariant).
+  // Scope to the demo tenant, match the exact seeded identity, and
+  // order deterministically so a residual tie can't flip the verdict.
   const rows = await sql`
     SELECT
       c.id AS consignee_id,
@@ -199,12 +206,15 @@ async function gate8SarahActivePreDemoFailedDeliveries(sql) {
       c.crm_state,
       count(t.id) FILTER (WHERE t.internal_status = 'FAILED') AS failed_count
     FROM consignees c
+    JOIN tenants ten ON ten.id = c.tenant_id
     LEFT JOIN tasks t ON t.consignee_id = c.id
-    WHERE c.name ILIKE '%sarah%khouri%'
+    WHERE ten.slug = 'meal-plan-scheduler'
+      AND c.name = 'Sarah Khouri'
     GROUP BY c.id, c.name, c.crm_state
+    ORDER BY failed_count DESC, c.id ASC
   `;
   if (rows.length === 0) {
-    return { passed: false, detail: "Sarah Khouri not found in consignees" };
+    return { passed: false, detail: "Sarah Khouri not found in consignees (tenant meal-plan-scheduler, exact name)" };
   }
   const r = rows[0];
   if (r.crm_state !== "ACTIVE") {
