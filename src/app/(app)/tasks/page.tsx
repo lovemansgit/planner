@@ -33,6 +33,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { DateRangeFilter } from "@/components/DateRangeFilter";
+import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
 import { listUnresolvedFailedPushes } from "@/modules/failed-pushes";
 import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
@@ -133,19 +134,13 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           </p>
         </header>
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">{totalCount}</p>
-          <div className="flex items-center gap-6">
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              {buildCountLabel(status, query)}
-            </p>
-            <PageSizeDropdown
-              value={perPage}
-              options={ALLOWED_PAGE_SIZES}
-              status={status}
-            />
-          </div>
-        </section>
+        <HeroCount
+          count={totalCount}
+          label={buildCountLabel(status, query)}
+          trailing={
+            <PageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} status={status} />
+          }
+        />
 
         {/* #431 click-reduction — the three filter controls (search, status
             pills, date range) collapse onto ONE compact wrapping row so the

@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
 import {
   countConsigneesByTenant,
@@ -94,14 +95,10 @@ export default async function ConsigneesPage({ searchParams }: ConsigneesPagePro
           ) : null}
         </header>
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">
-            {totalCount}
-          </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {query.length > 0 ? `Matching "${query}"` : "Total consignees"}
-          </p>
-        </section>
+        <HeroCount
+          count={totalCount}
+          label={query.length > 0 ? `Matching "${query}"` : "Total consignees"}
+        />
 
         <SearchBar
           label="Search consignees by name or phone"
