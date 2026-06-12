@@ -98,7 +98,7 @@ export default async function SubscriptionsPage({ searchParams }: SubscriptionsP
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             {query.length > 0 ? `Matching "${query}"` : "Total subscriptions"}
           </p>
-          <p className="mt-4 font-serif text-7xl font-light tabular-nums leading-none">
+          <p className="mt-4 font-serif text-5xl font-light tabular-nums leading-none">
             {subscriptions.length}
           </p>
         </section>
