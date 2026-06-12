@@ -51,10 +51,21 @@ export interface ActionDescriptor {
  * Note: view-timeline is read-only — runs in ANY state, including
  * terminal ones. Gating happens at the button level.
  */
+// R-A (plan memory/plans/day-54-session-c-ra-assignment-gate.md §4.1):
+// ASSIGNED is no longer mutation-eligible — once a driver holds the
+// task, edits and cancellations are locked (Love's Day-54 ruling,
+// restoring the Day-3 lock-at-assignment). Driver NOTES are exempt
+// (site-4 ruling: a note is communication, not an edit) — see the
+// dedicated noteEligible gate in buildActions.
 export const MUTATION_ELIGIBLE_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
   "CREATED",
-  "ASSIGNED",
   "ON_HOLD",
+]);
+
+const NOTE_TERMINAL_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
+  "DELIVERED",
+  "CANCELED",
+  "FAILED",
 ]);
 
 export function buildActions(
@@ -64,6 +75,10 @@ export function buildActions(
 ): readonly ActionDescriptor[] {
   const mutationEligible =
     subscriptionId !== null && MUTATION_ELIGIBLE_STATUSES.has(internalStatus);
+  // R-A site-4: notes stay deliverable while a driver holds the task —
+  // only terminal states close the channel.
+  const noteEligible =
+    subscriptionId !== null && !NOTE_TERMINAL_STATUSES.has(internalStatus);
   // Action 6 (cancel-no-append) reuses subscription:override_skip_rules per D1.
   const canCancelNoAppend = permissions.canSkipOverride;
   return [
@@ -113,7 +128,7 @@ export function buildActions(
       mode: "add-note",
       label: "Add note to driver",
       description: "Append a driver-facing instruction to this delivery.",
-      visible: permissions.canAddNote && mutationEligible,
+      visible: permissions.canAddNote && noteEligible,
       group: "edit",
     },
   ];
