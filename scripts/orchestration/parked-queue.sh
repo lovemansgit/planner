@@ -29,7 +29,7 @@ seen=" "
       echo "- Head SHA: \`$sha\`"
       if gh api "repos/$repo/pulls/$num/files" --paginate --jq '.[].filename' \
         | grep -q '^supabase/migrations/'; then
-        echo "- **SQL TO APPLY: yes — supabase/migrations changed. Love applies manually via the Supabase SQL editor.**"
+        echo "- **SQL TO APPLY: yes — supabase/migrations changed. Parks for Love's NAMED authorization; the builder executes and states the route (2026-06-12 ruling).**"
       fi
       park_note=$(gh api "repos/$repo/issues/$num/comments" --paginate \
         --jq '[.[].body | select(startswith("ORCH-PARK"))] | last // empty')
