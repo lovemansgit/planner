@@ -33,6 +33,8 @@ import { podProxyPhotoPaths } from "@/modules/tasks/pod-proxy";
 import type { Task, TaskListRow } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
+import { Badge } from "@/components/Badge";
+import { OutlineButton } from "@/components/OutlineButton";
 import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
 
 import { consigneeCellModel } from "./_components/consignee-cell";
@@ -389,12 +391,10 @@ function Row({
         </button>
       </Td>
       <Td>
-        <span
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
-        >
+        <Badge className={filter?.pillClass ?? ""}>
           <StatusIcon status={task.internalStatus} />
           {filter?.label ?? task.internalStatus}
-        </span>
+        </Badge>
         {/* R6: failed-push state folded onto the Status column (was its
             own "Issues" column). */}
         {failed ? (
@@ -491,26 +491,21 @@ function ActionsCell({ task }: { readonly task: Task }) {
   return (
     <>
       <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => setOpenModal("cancel")}
+        <OutlineButton
+          tone="red"
           disabled={!canCancel}
           title={
             canCancel
               ? "Cancel this delivery (notifies SuiteFleet)"
               : "Cancel via SuiteFleet directly — this task has no Planner subscription"
           }
-          className="px-3 py-1.5 text-[10px] uppercase tracking-[0.14em] border border-red text-red transition-opacity duration-[120ms] ease-out hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary disabled:cursor-not-allowed disabled:border-[color:var(--color-border-default)] disabled:text-[color:var(--color-text-tertiary)]"
+          onClick={() => setOpenModal("cancel")}
         >
           Cancel
-        </button>
-        <button
-          type="button"
-          onClick={() => setOpenModal("edit")}
-          className="px-3 py-1.5 text-[10px] uppercase tracking-[0.14em] border border-navy text-navy transition-opacity duration-[120ms] ease-out hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
-        >
+        </OutlineButton>
+        <OutlineButton tone="navy" onClick={() => setOpenModal("edit")}>
           Edit
-        </button>
+        </OutlineButton>
       </div>
       {openModal === "cancel" ? (
         <CancelModal task={task} onClose={() => setOpenModal(null)} />
