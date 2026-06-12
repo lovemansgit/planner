@@ -290,6 +290,16 @@ describe("D8-5 pushSingleTask — guards", () => {
     expect(outcome.kind).toBe("task_not_found");
   });
 
+  it("R-E r1: terminal/skipped task is NOT pushable — guard fires before any SF call (churn-cancelled rows stay dead)", async () => {
+    stubWithServiceRoleHappy();
+    mockFindTask.mockResolvedValue(taskFixture({ internalStatus: "CANCELED" }));
+    const adapter = stubAdapter({});
+    const outcome = await pushSingleTask(systemCtx(), TASK_ID, adapter);
+    expect(outcome.kind).toBe("not_pushable_status");
+    expect((adapter as unknown as { createTask: ReturnType<typeof vi.fn> }).createTask).not.toHaveBeenCalled();
+    expect(mockMarkPushed).not.toHaveBeenCalled();
+  });
+
   it("returns task_already_pushed when pushedToExternalAt + externalId are set", async () => {
     stubWithServiceRoleHappy();
     mockFindTask.mockResolvedValue(

@@ -1142,6 +1142,12 @@ export async function listReconciliationCandidatesByTenant(
       AND pushed_to_external_at IS NULL
       AND address_id IS NOT NULL
       AND delivery_date >= CURRENT_DATE
+      -- R-E r1 (PR #480 review): never re-push a dead row. A churn-
+      -- cancelled (or pause-cancelled / skipped) unpushed task would
+      -- otherwise be re-CREATED at the vendor on the next nightly tick,
+      -- defeating the hard stop. pushSingleTask carries the belt-and-
+      -- braces partner guard (not_pushable_status).
+      AND internal_status NOT IN ('CANCELED', 'SKIPPED', 'DELIVERED', 'FAILED')
     ORDER BY created_at ASC
   `);
   return rows.map((row) => row.id);
@@ -1674,6 +1680,52 @@ export async function markTasksRestoredInWindow(
     RETURNING t.id, r.external_tracking_number AS previous_external_tracking_number
   `);
   return rows;
+}
+
+// -----------------------------------------------------------------------------
+// R-E — churn hard-stop cascade (plan day-54-session-c-re-churn-cascade §1)
+// -----------------------------------------------------------------------------
+
+export interface ChurnCascadeTaskResult {
+  /** Never-pushed rows flipped CANCELED locally (no vendor to confirm). */
+  readonly canceledLocalCount: number;
+  /**
+   * Pushed, non-terminal rows (INCLUDING driver-bound — churn is the
+   * single sanctioned bypass of the R-A assignment freeze) flipped to
+   * outbound_sync_state='pending_cancel' WITHOUT touching
+   * internal_status: the honesty rule — local status flips only when
+   * the vendor confirms (webhook) ; a refused recall keeps the true
+   * status and lands the existing cancel-DLQ 'failed' signal.
+   */
+  readonly recalls: readonly { id: string; external_tracking_number: string }[];
+}
+
+export async function cancelConsigneeTasksForChurn(
+  tx: DbTx,
+  tenantId: Uuid,
+  consigneeId: Uuid,
+): Promise<ChurnCascadeTaskResult> {
+  const canceledLocal = (await tx.execute(sqlTag`
+    UPDATE tasks
+    SET internal_status = 'CANCELED', updated_at = now()
+    WHERE tenant_id = ${tenantId}
+      AND consignee_id = ${consigneeId}
+      AND external_tracking_number IS NULL
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+    RETURNING id
+  `)) as readonly { id: string }[];
+
+  const recalls = (await tx.execute(sqlTag`
+    UPDATE tasks
+    SET outbound_sync_state = 'pending_cancel', updated_at = now()
+    WHERE tenant_id = ${tenantId}
+      AND consignee_id = ${consigneeId}
+      AND external_tracking_number IS NOT NULL
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+    RETURNING id, external_tracking_number
+  `)) as readonly { id: string; external_tracking_number: string }[];
+
+  return { canceledLocalCount: canceledLocal.length, recalls };
 }
 
 // -----------------------------------------------------------------------------

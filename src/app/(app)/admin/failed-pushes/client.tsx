@@ -380,6 +380,10 @@ function humanizeOutcome(outcome: SinglePushOutcome): string {
       return `Task not found`;
     case "past_dated_no_push":
       return `Skipped — past-dated (${outcome.deliveryDate})`;
+    case "not_pushable_status":
+      // R-E r1 — the dead-row guard: a CANCELED/SKIPPED/terminal task
+      // is correctly NOT re-pushed (churn hard-stop containment).
+      return `Not pushable — task is ${outcome.internalStatus}; dead rows stay dead`;
   }
 }
 

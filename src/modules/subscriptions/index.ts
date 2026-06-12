@@ -49,3 +49,8 @@ export type { AutoPauseInput, SubscriptionWithConsignee, SweepResult } from "./s
 //   3. Emit subscription.created post-commit.
 // Mis-use will leave the audit trail incomplete.
 export { insertSubscription } from "./repository";
+
+// R-E — churn hard-stop cascade primitive (plan day-54-session-c-re-churn-cascade §1):
+// the consignees service ends every subscription of a churned consignee
+// inside its own tx; exported via the index per the module-boundary zones.
+export { endAllSubscriptionsForConsignee } from "./repository";

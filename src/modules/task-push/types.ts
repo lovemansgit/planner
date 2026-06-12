@@ -93,4 +93,14 @@ export type SinglePushOutcome =
   | {
       readonly kind: "past_dated_no_push";
       readonly deliveryDate: string;
+    }
+  | {
+      /**
+       * R-E r1: the task's internal_status is terminal or SKIPPED —
+       * pushing would resurrect a dead delivery at the vendor (the
+       * churn hard-stop leak). No DLQ row: the non-push is the
+       * CORRECT outcome of an intentional cancel, not a failure.
+       */
+      readonly kind: "not_pushable_status";
+      readonly internalStatus: string;
     };

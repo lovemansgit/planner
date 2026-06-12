@@ -70,6 +70,12 @@ export interface CalendarMonthViewProps {
    * `failed_pushes:read`.
    */
   readonly failedPushTaskIds: ReadonlySet<string>;
+  /**
+   * Day-54 / R-E — whether this consignee is CHURNED. Drives the
+   * recall badges on driver-bound rows ("Recall requested — awaiting
+   * vendor" / "Vendor refused recall — final delivery").
+   */
+  readonly consigneeChurned: boolean;
 }
 
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -78,6 +84,7 @@ export function CalendarMonthView({
   consigneeId,
   monthStart,
   tasks,
+  consigneeChurned,
   exceptions,
   permissions,
   availableAddresses,
@@ -205,6 +212,7 @@ export function CalendarMonthView({
                           addressLabel={null}
                           outboundSyncState={task.outboundSyncState}
                           failedPush={failedPushTaskIds.has(task.id)}
+                          consigneeChurned={consigneeChurned}
                         />
                       </li>
                     );
