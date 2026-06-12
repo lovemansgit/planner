@@ -359,7 +359,7 @@ const EVENT_TYPES_DRAFT = {
     action: "resumed",
     description: "A subscription was transitioned from 'paused' back to 'active'.",
     metadataNotes:
-      "subscription_id (uuid), previous_status ('paused'), new_status ('active'), paused_at_was (iso timestamp — when the now-cleared pause began).",
+      "subscription_id (uuid), previous_status ('paused'), new_status ('active'), paused_at_was (iso timestamp — when the now-cleared pause began). R-B windowless recovery (manual resume of an auto-paused subscription that has no pause_window exception) additionally sets windowless_recovery=true and correlation_id=null.",
     systemOnly: false,
   },
   "subscription.ended": {

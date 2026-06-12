@@ -326,13 +326,15 @@ describe("findSubscriptionById", () => {
 // ---------------------------------------------------------------------------
 
 describe("listSubscriptionsByTenant", () => {
-  it("returns mapped rows ordered by created_at DESC, scoped to tenantId in WHERE", async () => {
+  it("returns mapped rows ordered by created_at DESC with id tiebreaker, scoped to tenantId in WHERE", async () => {
     const tx = makeStubTx([[subRowFixture({ id: "row-1" }), subRowFixture({ id: "row-2" })]]);
     const result = await listSubscriptionsByTenant(tx, TENANT_ID);
 
     const { sql, params } = compile(tx.execute.mock.calls[0][0]);
     expect(sql).toMatch(/WHERE tenant_id =/);
-    expect(sql).toMatch(/ORDER BY created_at DESC/);
+    // F-2: created_at alone is not a total order — batch-seeded rows
+    // share tx-stable now(); id breaks the tie deterministically.
+    expect(sql).toMatch(/ORDER BY created_at DESC, id DESC/);
     expect(params).toContain(TENANT_ID);
 
     expect(result.length).toBe(2);
@@ -364,7 +366,7 @@ describe("listSubscriptionsByConsignee", () => {
     const { sql, params } = compile(tx.execute.mock.calls[0][0]);
     expect(sql).toMatch(/WHERE tenant_id =/);
     expect(sql).toMatch(/AND consignee_id =/);
-    expect(sql).toMatch(/ORDER BY created_at DESC/);
+    expect(sql).toMatch(/ORDER BY created_at DESC, id DESC/);
     expect(params).toContain(TENANT_ID);
     expect(params).toContain(CONSIGNEE_ID);
 
@@ -413,7 +415,7 @@ describe("listSubscriptionsWithConsigneeByTenant", () => {
     expect(sql).toMatch(/JOIN consignees c/);
     expect(sql).toMatch(/c\.tenant_id = s\.tenant_id/);
     expect(sql).toMatch(/WHERE s\.tenant_id =/);
-    expect(sql).toMatch(/ORDER BY s\.created_at DESC/);
+    expect(sql).toMatch(/ORDER BY s\.created_at DESC, s\.id DESC/);
     expect(params).toContain(TENANT_ID);
 
     expect(result.length).toBe(2);
@@ -637,5 +639,19 @@ describe("listAllSubscriptionsRows — archive filter", () => {
     await listAllSubscriptionsRows(tx, {});
     const { sql } = compile(tx.execute.mock.calls[0][0]);
     expect(sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+  });
+
+  // F-2 (memory/triage_five_races_findings.md §F-2): this is THE
+  // paginated query — created_at alone is not a total order (batch-
+  // seeded rows share tx-stable now()), so LIMIT/OFFSET pages issued
+  // as separate queries could legally overlap. The id tiebreaker makes
+  // pagination deterministic; the admin-subscriptions-cross-tenant
+  // integration pagination assert depends on it.
+  it("orders by created_at DESC with id tiebreaker so LIMIT/OFFSET pages cannot overlap", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllSubscriptionsRows(tx, { limit: 1, offset: 1 });
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/ORDER BY s\.created_at DESC, s\.id DESC/);
+    expect(sql).toMatch(/LIMIT .* OFFSET /);
   });
 });

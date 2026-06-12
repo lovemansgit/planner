@@ -49,6 +49,6 @@ shared drawer's partial-state path. No migration. No new SF wire.
 - R6-part-1 (this dispatch): data layer + table, parks for Love.
 - Session C lane: `src/app/(app)/consignees/[id]/**` (the drawer + action).
 
-## UNBLOCKED — relocation shipped (Day-53 EVE, Session C)
+## UNBLOCKED — relocation shipped (Day-53 EVE, Session C) and MERGED (Day-54 overnight)
 
-PR **#421** relocates the drawer + both server actions to `src/components/task-timeline/` (`TaskTimelineDrawer.tsx` + `actions.ts` — `getTaskTimelineAction`, `getTaskHistoryAction`, result types; verbatim move, zero behavior change, reviewer APPROVE r1, parked awaiting Love's clear). Once #421 merges, R6-part-2 imports from `@/components/task-timeline/*` and builds entirely in Session B's lane.
+PR **#421** relocates the drawer + both server actions to `src/components/task-timeline/` (`TaskTimelineDrawer.tsx` + `actions.ts` — `getTaskTimelineAction`, `getTaskHistoryAction`, result types; verbatim move, zero behavior change, reviewer APPROVE r1). **MERGED `2f1d712` on Love's recorded clearance (Day-54 overnight dispatch).** R6-part-2 is now buildable: import from `@/components/task-timeline/*`, entirely in Session B's lane — no remaining blocker.

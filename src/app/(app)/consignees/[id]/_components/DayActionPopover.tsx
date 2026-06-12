@@ -51,21 +51,22 @@ import {
 } from "../_calendar-actions";
 
 import { AddressIndicator } from "./AddressIndicator";
+import {
+  buildActions,
+  MUTATION_ELIGIBLE_STATUSES,
+  type ActionMode,
+  type CalendarActionPermissions,
+} from "./day-actions";
 import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
 
 // -----------------------------------------------------------------------------
 // Props + types
 // -----------------------------------------------------------------------------
 
-export interface CalendarActionPermissions {
-  readonly canSkip: boolean;
-  readonly canSkipOverride: boolean;
-  readonly canPause: boolean;
-  readonly canChangeAddressOneOff: boolean;
-  readonly canChangeAddressForward: boolean;
-  readonly canAddNote: boolean;
-  readonly canViewTimeline: boolean;
-}
+// The action model (incl. the #430 grouping) lives in ./day-actions so it
+// is node-unit-testable; re-exported here for existing importers
+// (CalendarMonthView imports CalendarActionPermissions from this module).
+export type { CalendarActionPermissions };
 
 interface DayActionPopoverProps {
   readonly consigneeId: string;
@@ -103,92 +104,7 @@ interface DayActionPopoverProps {
   readonly failedPush: boolean;
 }
 
-type PopoverMode =
-  | "menu"
-  | "skip"
-  | "skip-override"
-  | "pause"
-  | "addr-one-off"
-  | "addr-forward"
-  | "cancel-no-append"
-  | "add-note";
-
-/**
- * Status states where mutation actions (skip / pause / address /
- * cancel / note) are operationally meaningful. SKIPPED + CANCELED +
- * DELIVERED + FAILED are terminal-ish; IN_TRANSIT is past cut-off.
- * CREATED + ASSIGNED + ON_HOLD are the eligible states.
- *
- * Note: view-timeline (action 8) is read-only — runs in ANY state,
- * including terminal ones. Gating happens at the button level.
- */
-const MUTATION_ELIGIBLE_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
-  "CREATED",
-  "ASSIGNED",
-  "ON_HOLD",
-]);
-
-interface ActionDescriptor {
-  readonly mode: Exclude<PopoverMode, "menu">;
-  readonly label: string;
-  readonly description: string;
-  readonly visible: boolean;
-}
-
-function buildActions(
-  permissions: CalendarActionPermissions,
-  subscriptionId: string | null,
-  internalStatus: TaskInternalStatus,
-): readonly ActionDescriptor[] {
-  const mutationEligible =
-    subscriptionId !== null && MUTATION_ELIGIBLE_STATUSES.has(internalStatus);
-  // Action 6 (cancel-no-append) reuses subscription:override_skip_rules per D1.
-  const canCancelNoAppend = permissions.canSkipOverride;
-  return [
-    {
-      mode: "skip",
-      label: "Skip this delivery",
-      description: "Apply default skip rules with tail-end reinsertion.",
-      visible: permissions.canSkip && mutationEligible,
-    },
-    {
-      mode: "skip-override",
-      label: "Skip with override",
-      description: "Move the skip to a specific date or skip without tail-end append.",
-      visible: permissions.canSkipOverride && mutationEligible,
-    },
-    {
-      mode: "pause",
-      label: "Pause from this date",
-      description: "Cancel deliveries in a window; subscription end date extends.",
-      visible: permissions.canPause && mutationEligible,
-    },
-    {
-      mode: "addr-one-off",
-      label: "Change address (this delivery only)",
-      description: "Override the address for just this delivery.",
-      visible: permissions.canChangeAddressOneOff && mutationEligible,
-    },
-    {
-      mode: "addr-forward",
-      label: "Change address (from this delivery onwards)",
-      description: "Override the address from this date forward.",
-      visible: permissions.canChangeAddressForward && mutationEligible,
-    },
-    {
-      mode: "cancel-no-append",
-      label: "Cancel delivery (no append)",
-      description: "Cancel this delivery; subscription count reduces by one.",
-      visible: canCancelNoAppend && mutationEligible,
-    },
-    {
-      mode: "add-note",
-      label: "Add note to driver",
-      description: "Append a driver-facing instruction to this delivery.",
-      visible: permissions.canAddNote && mutationEligible,
-    },
-  ];
-}
+type PopoverMode = "menu" | ActionMode;
 
 // -----------------------------------------------------------------------------
 // Inline result banner shared across action forms
@@ -761,6 +677,10 @@ export function DayActionPopover({
   );
   const visibleActions = actions.filter((a) => a.visible);
   const showTimelineButton = permissions.canViewTimeline;
+  // #430 — split the visible mutation actions into the two always-visible
+  // sections (the "View" section is the timeline button, handled below).
+  const editActions = visibleActions.filter((a) => a.group === "edit");
+  const rescheduleActions = visibleActions.filter((a) => a.group === "reschedule");
 
   // Day-22 / PR-B fix-up — empty-state diagnostic discrimination. Mirrors
   // the same boolean derived inside buildActions; duplicated here to keep
@@ -889,7 +809,11 @@ export function DayActionPopover({
             </dl>
 
             {mode === "menu" ? (
-              <div className="mt-5 space-y-2">
+              // #430 — actions grouped under always-visible section headers
+              // (Edit delivery / Reschedule / View). No collapsing, no added
+              // click: each action is still one click via setMode. Empty
+              // groups render nothing (no bare header).
+              <div className="mt-5 space-y-5">
                 {visibleActions.length === 0 ? (
                   <p className="text-xs text-[color:var(--color-text-secondary)]">
                     {!mutationEligible
@@ -901,30 +825,38 @@ export function DayActionPopover({
                         : null}
                   </p>
                 ) : null}
-                {visibleActions.map((action) => (
-                  <button
-                    key={action.mode}
-                    type="button"
-                    onClick={() => setMode(action.mode)}
-                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy focus-visible:outline-none focus-visible:border-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
-                  >
-                    <span className="block text-xs font-medium text-navy">{action.label}</span>
-                    <span className="mt-0.5 block text-[10px] text-[color:var(--color-text-secondary)]">
-                      {action.description}
-                    </span>
-                  </button>
-                ))}
+                {editActions.length > 0 ? (
+                  <ActionSection title="Edit delivery">
+                    {editActions.map((action) => (
+                      <ActionCard
+                        key={action.mode}
+                        label={action.label}
+                        description={action.description}
+                        onClick={() => setMode(action.mode)}
+                      />
+                    ))}
+                  </ActionSection>
+                ) : null}
+                {rescheduleActions.length > 0 ? (
+                  <ActionSection title="Reschedule">
+                    {rescheduleActions.map((action) => (
+                      <ActionCard
+                        key={action.mode}
+                        label={action.label}
+                        description={action.description}
+                        onClick={() => setMode(action.mode)}
+                      />
+                    ))}
+                  </ActionSection>
+                ) : null}
                 {showTimelineButton ? (
-                  <button
-                    type="button"
-                    onClick={() => setTimelineOpen(true)}
-                    className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy focus-visible:outline-none focus-visible:border-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
-                  >
-                    <span className="block text-xs font-medium text-navy">View task timeline</span>
-                    <span className="mt-0.5 block text-[10px] text-[color:var(--color-text-secondary)]">
-                      Full state-transition history sourced from cached webhooks.
-                    </span>
-                  </button>
+                  <ActionSection title="View">
+                    <ActionCard
+                      label="View task timeline"
+                      description="Full state-transition history sourced from cached webhooks."
+                      onClick={() => setTimelineOpen(true)}
+                    />
+                  </ActionSection>
                 ) : null}
               </div>
             ) : (
@@ -1021,5 +953,51 @@ export function DayActionPopover({
         />
       ) : null}
     </>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// #430 — grouped action menu primitives
+// -----------------------------------------------------------------------------
+
+/** An always-visible section header + its action cards. */
+function ActionSection({
+  title,
+  children,
+}: {
+  readonly title: string;
+  readonly children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-2">
+      <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+        {title}
+      </p>
+      {children}
+    </section>
+  );
+}
+
+/** One action card (label + description) — the menu's clickable row. */
+function ActionCard({
+  label,
+  description,
+  onClick,
+}: {
+  readonly label: string;
+  readonly description: string;
+  readonly onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="block w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-left transition-colors duration-[120ms] ease-out hover:border-navy focus-visible:outline-none focus-visible:border-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
+    >
+      <span className="block text-xs font-medium text-navy">{label}</span>
+      <span className="mt-0.5 block text-[10px] text-[color:var(--color-text-secondary)]">
+        {description}
+      </span>
+    </button>
   );
 }
