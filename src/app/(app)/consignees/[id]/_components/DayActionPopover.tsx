@@ -58,6 +58,7 @@ import {
   type CalendarActionPermissions,
 } from "./day-actions";
 import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
+import { Badge } from "@/components/Badge";
 
 // -----------------------------------------------------------------------------
 // Props + types
@@ -102,6 +103,12 @@ interface DayActionPopoverProps {
    * operator lacks the read permission — the badge omits silently.
    */
   readonly failedPush: boolean;
+  /**
+   * Day-54 / R-E — consignee is CHURNED. Combined with a driver-bound
+   * status + the sync state, drives the recall badges (plan §2): the
+   * honesty rule's visible flag.
+   */
+  readonly consigneeChurned: boolean;
 }
 
 type PopoverMode = "menu" | ActionMode;
@@ -627,6 +634,7 @@ export function DayActionPopover({
   addressLabel,
   outboundSyncState,
   failedPush,
+  consigneeChurned,
 }: DayActionPopoverProps) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<PopoverMode>("menu");
@@ -690,6 +698,9 @@ export function DayActionPopover({
   // D1-reused action 6 cancel-no-append).
   const mutationEligible =
     subscriptionId !== null && MUTATION_ELIGIBLE_STATUSES.has(internalStatus);
+  // R-A (plan §4.1): driver-bound days get a plain explanation instead
+  // of silently missing buttons — the lock is a rule, not a bug.
+  const driverBound = internalStatus === "ASSIGNED" || internalStatus === "IN_TRANSIT";
   const hasAnyMutationPerm =
     permissions.canSkip ||
     permissions.canSkipOverride ||
@@ -704,7 +715,19 @@ export function DayActionPopover({
 
   // Day-29 §D(2) Phase-1 — outbound sync state badge derivation. null
   // when 'synced'; explicit copy + classes for pending / failed.
-  const syncBadge = outboundSyncStateBadge(outboundSyncState);
+  // R-E (plan §2): on a CHURNED consignee, a driver-bound row's sync
+  // state IS the recall state — surface it in plain words. 'failed'
+  // here means the vendor refused the recall: the delivery completes
+  // as the final one (the honesty rule's visible flag).
+  const churnRecallBadge =
+    consigneeChurned && driverBound
+      ? outboundSyncState === "pending_cancel"
+        ? { label: "Recall requested — awaiting vendor", classes: "bg-ivory text-[color:var(--color-stone-600)]" }
+        : outboundSyncState === "failed"
+          ? { label: "Vendor refused recall — final delivery", classes: "bg-amber-100 text-amber-deep" }
+          : null
+      : null;
+  const syncBadge = churnRecallBadge ?? outboundSyncStateBadge(outboundSyncState);
 
   return (
     <>
@@ -761,11 +784,9 @@ export function DayActionPopover({
               <div className="flex items-center justify-between">
                 <dt className="text-[color:var(--color-text-secondary)]">Status</dt>
                 <dd>
-                  <span
-                    className={`inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${statusClasses}`}
-                  >
+                  <Badge size="sm" className={statusClasses}>
                     {statusLabel}
-                  </span>
+                  </Badge>
                 </dd>
               </div>
               <div className="flex items-center justify-between">
@@ -776,11 +797,9 @@ export function DayActionPopover({
                 <div className="flex items-center justify-between">
                   <dt className="text-[color:var(--color-text-secondary)]">SuiteFleet sync</dt>
                   <dd>
-                    <span
-                      className={`inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${syncBadge.classes}`}
-                    >
+                    <Badge size="sm" className={syncBadge.classes}>
                       {syncBadge.label}
-                    </span>
+                    </Badge>
                   </dd>
                 </div>
               ) : null}
@@ -794,9 +813,9 @@ export function DayActionPopover({
                 <div className="flex items-center justify-between">
                   <dt className="text-[color:var(--color-text-secondary)]">SuiteFleet push</dt>
                   <dd>
-                    <span className="inline-flex items-center rounded-sm bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-amber-deep">
+                    <Badge size="sm" className="bg-amber-100 text-amber-deep">
                       Failed — see ops
-                    </span>
+                    </Badge>
                   </dd>
                 </div>
               ) : null}
@@ -814,7 +833,14 @@ export function DayActionPopover({
               // click: each action is still one click via setMode. Empty
               // groups render nothing (no bare header).
               <div className="mt-5 space-y-5">
-                {visibleActions.length === 0 ? (
+                {driverBound ? (
+                  <p className="text-xs text-[color:var(--color-text-secondary)]">
+                    Assigned to a driver — this delivery is locked. No edits or
+                    cancellations once assigned; notes to the driver still go
+                    through.
+                  </p>
+                ) : null}
+                {visibleActions.length === 0 && !driverBound ? (
                   <p className="text-xs text-[color:var(--color-text-secondary)]">
                     {!mutationEligible
                       ? showTimelineButton

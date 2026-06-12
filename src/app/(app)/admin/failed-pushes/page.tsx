@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
 import {
   listUnresolvedFailedPushes,
@@ -86,14 +87,14 @@ export default async function FailedPushesAdminPage({
           </p>
         </header>
 
-        <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {q !== undefined ? "Matching unresolved rows" : "Unresolved rows"}
-          </p>
-          <p className="mt-4 font-serif text-5xl font-light tabular-nums leading-none">
-            {rows.length}
-          </p>
-        </section>
+        {/* Component-lib rollout (audit H1) — structural unification: the
+            bespoke vertical hero adopts the canonical <HeroCount> strip used
+            across the operator surface. Presentational only; no DLQ/resolve
+            logic touched. */}
+        <HeroCount
+          count={rows.length}
+          label={q !== undefined ? "Matching unresolved rows" : "Unresolved rows"}
+        />
 
         <SearchBar
           placeholder="Search by AWB or task ID"

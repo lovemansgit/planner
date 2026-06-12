@@ -24,6 +24,8 @@
 //     a paste-from-Excel re-edit that lands on the same canonical
 //     phone does NOT count as a change.
 
+import { randomUUID } from "node:crypto";
+
 import { sql as sqlTag } from "drizzle-orm";
 
 import { emit } from "../audit";
@@ -36,6 +38,14 @@ import { requirePermission } from "../identity";
 import type { TenantStatus } from "../merchants/types";
 
 import { insertAddress, type AddressLabel } from "../addresses";
+// R-E churn cascade (plan day-54-session-c-re-churn-cascade §1) — index
+// imports per the module-boundary zones.
+import { cancelConsigneeTasksForChurn } from "../tasks";
+import { endAllSubscriptionsForConsignee } from "../subscriptions";
+import {
+  enqueueBulkCancelTasks,
+  type CancelTaskPayload,
+} from "../task-outbound-queue";
 
 import { normaliseToE164 } from "./phone";
 import {
@@ -671,10 +681,37 @@ export async function changeConsigneeCrmState(
       actor: actorIdFor(ctx.actor) as Uuid,
     });
 
+    // R-E (Love's Day-54 ruling, brief v1.26): churn is a HARD STOP on
+    // everything. In the same tx: end every subscription (active AND
+    // paused) and split the consignee's non-terminal tasks by vendor
+    // involvement — never-pushed rows cancel locally (no vendor to
+    // confirm), pushed rows (INCLUDING driver-bound: churn is the
+    // single sanctioned bypass of the R-A assignment freeze) flip to
+    // pending_cancel WITHOUT touching internal_status. The honesty
+    // rule: a pushed task reads CANCELED only after the vendor
+    // confirms (webhook applier); a refused recall keeps its true
+    // status and lands the existing cancel-DLQ 'failed' signal.
+    // Non-churn transitions cascade NOTHING.
+    let cascade: {
+      subscriptionsEnded: number;
+      tasksCanceledLocal: number;
+      recalls: readonly { id: string; external_tracking_number: string }[];
+    } | null = null;
+    if (toState === "CHURNED") {
+      const subscriptionsEnded = await endAllSubscriptionsForConsignee(tx, tenantId, id);
+      const churnTasks = await cancelConsigneeTasksForChurn(tx, tenantId, id);
+      cascade = {
+        subscriptionsEnded,
+        tasksCanceledLocal: churnTasks.canceledLocalCount,
+        recalls: churnTasks.recalls,
+      };
+    }
+
     return {
       kind: "updated" as const,
       fromState: before.crmState,
       eventId: event.id,
+      cascade,
     };
   });
 
@@ -702,6 +739,48 @@ export async function changeConsigneeCrmState(
     },
     requestId: ctx.requestId,
   });
+
+  // R-E post-commit leg: audit the cascade, then fan out the vendor
+  // recalls through the existing R2 cancel pipeline (emit-then-re-throw
+  // posture verbatim on partial enqueue failure — the local hard stop
+  // is committed; pending_cancel rows are queryable until SF converges).
+  if (result.cascade !== null) {
+    const correlationId = randomUUID();
+
+    await emit({
+      eventType: "consignee.churn_cascade",
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId,
+      resourceType: "consignee",
+      resourceId: id,
+      metadata: {
+        consignee_id: id,
+        subscriptions_ended: result.cascade.subscriptionsEnded,
+        tasks_canceled_local: result.cascade.tasksCanceledLocal,
+        recalls_attempted: result.cascade.recalls.length,
+        recall_awbs: result.cascade.recalls.map((r) => r.external_tracking_number),
+        correlation_id: correlationId,
+        reason,
+      },
+      requestId: ctx.requestId,
+    });
+
+    if (result.cascade.recalls.length > 0) {
+      const payloads: CancelTaskPayload[] = result.cascade.recalls.map((r) => ({
+        tenant_id: tenantId,
+        task_id: r.id as Uuid,
+        awb: r.external_tracking_number,
+        correlation_id: correlationId as Uuid,
+      }));
+      const bulkResult = await enqueueBulkCancelTasks(payloads);
+      if (bulkResult.failedChunks > 0) {
+        throw new Error(
+          `changeConsigneeCrmState: churn recall fan-out partially failed — ${bulkResult.failedChunks} chunk(s) of ${payloads.length} recall payload(s) did not enqueue. The hard stop is committed locally; un-enqueued rows sit in outbound_sync_state='pending_cancel' for ops follow-up.`,
+        );
+      }
+    }
+  }
 
   return {
     status: "updated",

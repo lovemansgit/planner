@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { HeroCount } from "@/components/HeroCount";
 import {
   listResolvedFailedPushes,
   type ResolvedFailedPush,
@@ -67,14 +68,9 @@ export default async function ResolvedFailedPushesPage() {
           </p>
         </header>
 
-        <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Resolved rows
-          </p>
-          <p className="mt-4 font-serif text-5xl font-light tabular-nums leading-none">
-            {rows.length}
-          </p>
-        </section>
+        {/* Component-lib rollout (audit H1) — adopts the canonical
+            <HeroCount> strip. Presentational only. */}
+        <HeroCount count={rows.length} label="Resolved rows" />
 
         {rows.length === 0 ? <EmptyState /> : <ResolvedTable rows={rows} />}
       </div>

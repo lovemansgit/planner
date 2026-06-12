@@ -12,8 +12,10 @@
 //            no DB writes; no enqueue.
 //   B2-I3  — subscription-linked cancel past cutoff: ValidationError surfaces
 //            as { kind: 'validation' }; no DB writes; no enqueue.
-//   B2-I8  — ASSIGNED-state task cancel succeeds (pre-existing behaviour;
-//            confirms B2 does not regress to a new ASSIGNED-state guard).
+//   B2-I8  — ASSIGNED-state task cancel REJECTS (R-A, brief v1.25: once
+//            a driver holds the task, no edits or cancellations — the
+//            v1.16 "ASSIGNED is mutation-eligible" pin this test
+//            previously carried is superseded).
 //
 // Self-contained — own tenant/user/subscription/task seed; mirrors the
 // skip-outbound.spec.ts pattern at tests/integration/subscription-exceptions/.
@@ -293,22 +295,25 @@ describe("Day-30 B2 — /tasks cancelTaskAction (real Postgres)", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // B2-I8 — ASSIGNED-state cancel succeeds (pre-existing behaviour; pin contract)
+  // B2-I8 — ASSIGNED-state cancel REJECTS (R-A assignment gate, brief v1.25)
   // ---------------------------------------------------------------------------
 
-  it("B2-I8 — ASSIGNED-state task cancel succeeds; B2 does not regress to a new ASSIGNED guard", async () => {
+  it("B2-I8 — ASSIGNED-state task cancel rejects with the driver-locked message; no write, no enqueue", async () => {
     enqueueCancelTaskSpy.mockClear();
 
     const result = await cancelTaskAction(TASK_ASSIGNED, { kind: "idle" }, new FormData());
 
-    expect(result.kind).toBe("success");
-    expect(enqueueCancelTaskSpy).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("validation");
+    if (result.kind === "validation") {
+      expect(result.message).toMatch(/assigned to a driver/i);
+    }
+    expect(enqueueCancelTaskSpy).not.toHaveBeenCalled();
 
     const [task] = await withServiceRole("B2-I8 verify", async (tx) =>
       tx.execute(sqlTag`
         SELECT internal_status FROM tasks WHERE id = ${TASK_ASSIGNED} LIMIT 1
       `),
     );
-    expect((task as { internal_status: string }).internal_status).toBe("SKIPPED");
+    expect((task as { internal_status: string }).internal_status).toBe("ASSIGNED");
   });
 });
