@@ -29,6 +29,7 @@ import { useActionState, useEffect, useMemo, useRef, useState, useTransition } f
 
 import Link from "next/link";
 
+import { isTaskDriverBound, isTaskEditable } from "@/modules/tasks/editability";
 import { podProxyPhotoPaths } from "@/modules/tasks/pod-proxy";
 import type { Task, TaskListRow } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
@@ -487,9 +488,16 @@ function ConsigneeCell({
 //   payload includes it.
 // =============================================================================
 
-function ActionsCell({ task }: { readonly task: Task }) {
+export function ActionsCell({ task }: { readonly task: Task }) {
   const [openModal, setOpenModal] = useState<"cancel" | "edit" | null>(null);
-  const canCancel = task.subscriptionId !== null;
+  // Day-54 walk finding — the row must not offer actions the server
+  // refuses (R-A assignment gate, brief v1.25). Same predicates the
+  // service enforces; same plain explanation the calendar popover shows.
+  const locked = !isTaskEditable(task.internalStatus);
+  const lockExplanation = isTaskDriverBound(task.internalStatus)
+    ? "Assigned to a driver — this delivery is locked. No edits or cancellations once assigned; notes to the driver still go through."
+    : "This delivery is in a final state — no edits or cancellations.";
+  const canCancel = !locked && task.subscriptionId !== null;
   return (
     <>
       <div className="flex gap-2">
@@ -497,15 +505,22 @@ function ActionsCell({ task }: { readonly task: Task }) {
           tone="red"
           disabled={!canCancel}
           title={
-            canCancel
-              ? "Cancel this delivery (notifies SuiteFleet)"
-              : "Cancel via SuiteFleet directly — this task has no Planner subscription"
+            locked
+              ? lockExplanation
+              : canCancel
+                ? "Cancel this delivery (notifies SuiteFleet)"
+                : "Cancel via SuiteFleet directly — this task has no Planner subscription"
           }
           onClick={() => setOpenModal("cancel")}
         >
           Cancel
         </OutlineButton>
-        <OutlineButton tone="navy" onClick={() => setOpenModal("edit")}>
+        <OutlineButton
+          tone="navy"
+          disabled={locked}
+          title={locked ? lockExplanation : undefined}
+          onClick={() => setOpenModal("edit")}
+        >
           Edit
         </OutlineButton>
       </div>

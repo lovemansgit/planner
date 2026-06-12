@@ -113,29 +113,18 @@ import { isCutOffElapsedForDate } from "../task-materialization/dubai-date";
 // -----------------------------------------------------------------------------
 // R-A — assignment gate (plan memory/plans/day-54-session-c-ra-assignment-gate.md §2.1)
 // -----------------------------------------------------------------------------
-// Love's Day-54 ruling: the 18:00 cutoff is the order-CREATION deadline
-// only; editability is gated by assignment alone. A task is editable
-// iff it is not driver-bound (ASSIGNED/IN_TRANSIT — "once ASSIGNED, no
-// edits or cancellations", and pickup does not unlock it) and not
-// terminal. Exactly CREATED / ON_HOLD / SKIPPED are editable.
+// Predicates extracted to ./editability (Day-54) so "use client"
+// surfaces can share them without pulling this server module; this
+// re-export keeps every existing service-layer call site unchanged.
 
-const DRIVER_BOUND_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
-  "ASSIGNED",
-  "IN_TRANSIT",
-]);
-const TERMINAL_STATUSES: ReadonlySet<TaskInternalStatus> = new Set([
-  "DELIVERED",
-  "CANCELED",
-  "FAILED",
-]);
+import {
+  DRIVER_BOUND_STATUSES,
+  TERMINAL_STATUSES,
+  isTaskDriverBound,
+  isTaskEditable,
+} from "./editability";
 
-export function isTaskDriverBound(internalStatus: TaskInternalStatus): boolean {
-  return DRIVER_BOUND_STATUSES.has(internalStatus);
-}
-
-export function isTaskEditable(internalStatus: TaskInternalStatus): boolean {
-  return !DRIVER_BOUND_STATUSES.has(internalStatus) && !TERMINAL_STATUSES.has(internalStatus);
-}
+export { isTaskDriverBound, isTaskEditable };
 
 function editabilityRejection(internalStatus: TaskInternalStatus): string {
   return DRIVER_BOUND_STATUSES.has(internalStatus)
