@@ -81,3 +81,28 @@ label-protection / second-identity options above. Ruling of record:
   temporary bridge this hardens away).
 - `.github/workflows/orch-automerge.yml` — the Action this extends.
 - `.claude/settings.json` — the `gh pr merge` deny restored once this lands.
+
+---
+
+## SUPERSEDED IN PART — Love's ruling, 2026-06-12 (append-only annotation)
+
+The hardening SHIPPED (#440, merged `63fa74e`; wait-not-park conformance #452
+cleared by Love the same day). The open attribution question is now RULED,
+twice, superseding the label-protection direction:
+
+1. First ruling (AM dispatch): "attribution by label-protection — no second
+   identity." Settings deny lines were drafted and Love applied them in the
+   main checkout.
+2. Final ruling (same day, supersedes 1 — verbatim): **"I dont want such
+   blockers... I approve and code executes."** The settings edit was reverted
+   on this authorization and the label-protection denies are RETIRED. The
+   builder is the sanctioned applier of `love-cleared` when, and only when,
+   Love's clearance sentence is quoted verbatim on the PR; the permission
+   classifier is the standing backstop against unquoted self-application.
+   Standing semantics live in `scripts/orchestration/RUNBOOK.md` ("Clearance
+   execution").
+
+The "remove the builder-side allow-rule" target state in §"The hardening"
+above is superseded accordingly: no allow-rule existed to remove (the bridge
+was classifier behavior), and the deny-restoration is deferred to
+MVP-FINALIZED per Love's same-day scope ruling on the settings paste.
