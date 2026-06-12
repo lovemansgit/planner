@@ -218,7 +218,7 @@ export async function listSubscriptionsByTenant(
   const rows = await tx.execute<SubscriptionRow>(sqlTag`
     SELECT * FROM subscriptions
     WHERE tenant_id = ${tenantId}
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
   `);
   return rows.map(mapSubscription);
 }
@@ -239,7 +239,7 @@ export async function listSubscriptionsByConsignee(
     SELECT * FROM subscriptions
     WHERE tenant_id = ${tenantId}
       AND consignee_id = ${consigneeId}
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
   `);
   return rows.map(mapSubscription);
 }
@@ -280,7 +280,7 @@ export async function listSubscriptionsWithConsigneeByTenant(
     JOIN consignees c ON c.id = s.consignee_id AND c.tenant_id = s.tenant_id
     WHERE s.tenant_id = ${tenantId}
       ${searchFilter}
-    ORDER BY s.created_at DESC
+    ORDER BY s.created_at DESC, s.id DESC
   `);
   return rows.map((row) => ({
     subscription: mapSubscription(row),
@@ -323,7 +323,9 @@ type AdminSubscriptionJoinRow = SubscriptionRow & {
  * merchants. Caller is in withServiceRole; no RLS predicate. JOIN
  * tenants for merchant surface columns per merged plan §5.3.
  *
- * ORDER BY created_at DESC per merged plan scope item 9.
+ * ORDER BY created_at DESC per merged plan scope item 9; id DESC
+ * tiebreaker per F-2 (created_at ties on batch-seeded rows let
+ * LIMIT/OFFSET pages overlap — triage memo §F-2).
  */
 export async function listAllSubscriptionsRows(
   tx: DbTx,
@@ -358,7 +360,7 @@ export async function listAllSubscriptionsRows(
     WHERE 1 = 1
       AND ten.status != 'archived'
       ${merchantFilter}
-    ORDER BY s.created_at DESC
+    ORDER BY s.created_at DESC, s.id DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
 
