@@ -225,7 +225,9 @@ describe("MP-13 — consignee deactivation cancels pushed tasks (PARTIALLY IMPLE
       mockEnqueueBulk.mockResolvedValue({ enqueuedCount: 2, failedChunks: 0, totalCount: 2 } as never);
 
       const result = await changeConsigneeCrmState(
-        ctx(["consignee:change_crm_state"] as never),
+        // Day-54 v1.27 role gate: CHURNED additionally requires
+        // consignee:churn (merchant-level only).
+        ctx(["consignee:change_crm_state", "consignee:churn"] as never),
         CONSIGNEE_ID as never,
         { toState: "CHURNED", reason: "customer churned — stop everything" },
       );
