@@ -284,3 +284,52 @@ No code, no migrations created or applied, no spend, no credentials
 requested or handled, no vendor email sent. The probe was read-only
 GETs with credentials already held in `.env.local`. Session A's lanes
 (#496/#497 churn gate + row lock, promote branch) untouched.
+
+## 11. Ruling addendum — build-clearance firing (2026-06-12, §10 addendum per dispatch)
+
+Love's rulings, riding the firing that cleared this plan:
+
+1. **All ten §9 recommendations accepted as written.** Verbatim:
+   > "#502 cleared — ALL TEN recommendations accepted as written
+   > (Reports nav group both sides; 30/90-day date picker; drill-down
+   > via tasks pages with an AWB-set filter; admin rows = merchant ×
+   > date with rollup; CS agents get read access; no backfill —
+   > 'history since' note; SUM + footnote; count-of-records). Build
+   > is CLEARED on this plan."
+2. **Vendor answers (Aqib, on the record via Love):**
+   - State enum CONFIRMED complete: Collected / Received / Sorted /
+     EnRoute / Returned — nothing else. 0033's CHECK freezes to
+     exactly these five (wire form `COLLECTED`, `RECEIVED`, `SORTED`,
+     `EN_ROUTE`, `RETURNED`); its open question dissolves to the
+     normal SQL-TO-APPLY gate.
+   - Scan timestamps are NOT in the API yet — vendor roadmap item.
+     `asset_scan_log` carries BOTH nullable `vendor_scanned_at` AND
+     our `received_at` (see followup
+     `followup_vendor_scanned_at_activation.md`).
+   - Semantics CONFIRMED: **Supp. Quantity = number of ice packs;
+     Allocated Asset = number of bags allocated to the AWB.** Used
+     verbatim in column footnotes/tooltips.
+3. **Ingest cadence RULED — supersedes Q2's manual-refresh-only
+   shape:** poll the SF GET on a **30-minute schedule**. Timestamp
+   logic verbatim: "if no timestamp then put actual timestamp of
+   receiving the data" — store `vendor_scanned_at` when the vendor
+   provides it, else `received_at`; display `vendor_scanned_at` when
+   present, else `received_at`, honestly labeled ("recorded in
+   Planner" until SF ships scan times). The manual Refresh button
+   stays as the operator's "now" override; the "as of" stamp shows
+   the last successful poll. The schedule must be tier-proof (no
+   Vercel Pro dependency — Hobby kills sub-daily Vercel crons);
+   QStash or equivalent $0 route, choice stated in P1; if every
+   tier-proof route implies new spend, park instead.
+4. **Staged verification posture:** nothing from this lane merges to
+   main until Love walks the reports on a PREVIEW deployment and
+   gives an explicit preview sign-off sentence. The 0034 tenant flag
+   gates ALL surfaces — default off, pinned by test; post-merge the
+   feature stays dark per tenant until Love flips it by sentence.
+   End-to-end ingest proof waits on Aqib's staged sandbox scans
+   (bags + ice packs through the five statuses); unit/integration
+   coverage proceeds on recorded/synthetic shapes, labeled as such.
+5. **Migrations 0032/0033/0034:** named, each parks SQL-TO-APPLY for
+   Love's explicit authorization at its build moment — never
+   fire-cleared. Dev-database applies for build/test are fine under
+   the firing; PRODUCTION applies park individually.
