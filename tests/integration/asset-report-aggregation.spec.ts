@@ -24,6 +24,7 @@ import { sql as sqlTag } from "drizzle-orm";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 
 import {
+  getAdminAllMerchantsInventoryReport,
   getAdminAssetTrackingReport,
   getAssetScanLog,
   getInventoryReport,
@@ -43,8 +44,12 @@ import type { Permission, Uuid } from "../../src/shared/types";
 const RUN_ID = randomUUID().slice(0, 8);
 const TENANT_ON = randomUUID() as Uuid;
 const TENANT_OFF = randomUUID() as Uuid;
+// Lit but EMPTY — pins the F1 all-merchants rule that a lit merchant
+// with no asset data still gets a section (rollup null, zeros render).
+const TENANT_EMPTY = randomUUID() as Uuid;
 const SLUG_ON = `p2-agg-${RUN_ID}-on`;
 const SLUG_OFF = `p2-agg-${RUN_ID}-off`;
+const SLUG_EMPTY = `p2-agg-${RUN_ID}-empty`;
 
 const DATE_1 = "2026-06-10";
 const DATE_2 = "2026-06-11";
@@ -84,7 +89,8 @@ describe("Day-54 P2 — asset report aggregation (real Postgres)", () => {
       await tx.execute(sqlTag`
         INSERT INTO tenants (id, slug, name, task_asset_tracking_enabled) VALUES
           (${TENANT_ON}, ${SLUG_ON}, 'P2 Agg ON', true),
-          (${TENANT_OFF}, ${SLUG_OFF}, 'P2 Agg OFF', true)
+          (${TENANT_OFF}, ${SLUG_OFF}, 'P2 Agg OFF', true),
+          (${TENANT_EMPTY}, ${SLUG_EMPTY}, 'P2 Agg Empty', true)
       `);
       // The OFF tenant's flag flips off AFTER insert to prove the
       // admin query reads the column, not the insert default.
@@ -167,13 +173,13 @@ describe("Day-54 P2 — asset report aggregation (real Postgres)", () => {
     try {
       await withServiceRole("P2 aggregation teardown", async (tx) => {
         await tx.execute(sqlTag`SET LOCAL app.allow_scan_log_delete = 'on'`);
-        await tx.execute(sqlTag`DELETE FROM asset_scan_log WHERE tenant_id IN (${TENANT_ON}, ${TENANT_OFF})`);
+        await tx.execute(sqlTag`DELETE FROM asset_scan_log WHERE tenant_id IN (${TENANT_ON}, ${TENANT_OFF}, ${TENANT_EMPTY})`);
         // Explicit child deletes — the tenants cascade is known-blocked
         // by the 0002 audit no-delete RULE when audit rows exist, and a
         // failed cascade would strand globally-unique tracking_ids.
         await tx.execute(sqlTag`DELETE FROM asset_tracking_cache WHERE tenant_id IN (${TENANT_ON}, ${TENANT_OFF})`);
         await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id IN (${TENANT_ON}, ${TENANT_OFF})`);
-        await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (${TENANT_ON}, ${TENANT_OFF})`);
+        await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (${TENANT_ON}, ${TENANT_OFF}, ${TENANT_EMPTY})`);
       });
     } catch {
       // Cleanup failure is not test failure.
@@ -230,6 +236,46 @@ describe("Day-54 P2 — asset report aggregation (real Postgres)", () => {
       collected: 1,
       sorted: 1,
     });
+  });
+
+  it("all-merchants inventory: one section per lit merchant, dark merchant absent, empty lit merchant present (Day-54 walk F1)", async () => {
+    const report = await getAdminAllMerchantsInventoryReport(makeCtx(SYSADMIN_PERMS), {
+      dateFrom: DATE_1,
+      dateTo: DATE_2,
+    });
+
+    expect(report.sections.some((s) => s.tenantId === TENANT_OFF)).toBe(false);
+
+    const on = report.sections.find((s) => s.tenantId === TENANT_ON);
+    expect(on).toBeDefined();
+    expect(on?.merchantSlug).toBe(SLUG_ON);
+    expect(on?.rollup).toMatchObject({
+      allocatedAssets: 3,
+      suppQuantity: 3,
+      collected: 1,
+      sorted: 1,
+      returned: 1,
+    });
+    expect([...(on?.rollup?.awbs ?? [])].sort()).toEqual([AWB_1, AWB_2]);
+    expect(on?.rollup?.awbsByState.returned).toEqual([AWB_2]);
+    // The by-consignee breakdown carries both consignees' rows.
+    expect(new Set(on?.consignees.map((r) => r.consigneeId))).toEqual(
+      new Set([consignee1, consignee2]),
+    );
+
+    // Lit but empty: section present, rollup null, no consignee rows.
+    const empty = report.sections.find((s) => s.tenantId === TENANT_EMPTY);
+    expect(empty).toBeDefined();
+    expect(empty?.rollup).toBeNull();
+    expect(empty?.consignees).toHaveLength(0);
+
+    // Gate: read_all required.
+    await expect(
+      getAdminAllMerchantsInventoryReport(
+        makeCtx(new Set<Permission>(["asset_tracking:read"])),
+        { dateFrom: DATE_1, dateTo: DATE_2 },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("tasks drill-down: the awbs filter returns exactly the set's rows", async () => {

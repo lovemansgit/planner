@@ -23,13 +23,17 @@ import { requirePermission } from "../identity";
 import type { AssetTrackingPollSummary } from "./types";
 import {
   aggregateAdminAssetTracking,
+  aggregateAdminInventoryByConsignee,
+  aggregateAdminInventoryRollup,
   aggregateInventoryByConsignee,
   aggregateInventoryByDate,
+  findAssetTrackingEnabledMerchants,
   findGlobalReportMeta,
   findTenantReportMeta,
 } from "./report-repository";
 import type {
   AdminAssetTrackingRow,
+  AdminInventoryRollupRow,
   AssetReportMeta,
   InventoryByConsigneeRow,
   InventoryByDateRow,
@@ -160,6 +164,53 @@ export async function getAdminInventoryReport(
       findTenantReportMeta(tx, tenantId),
     ]);
     return { byDate, byConsignee, meta, tenantId, enabled: tenants[0].enabled };
+  });
+}
+
+/**
+ * One merchant section of the all-merchants Inventory view (Day-54
+ * walk F1 — Love's ruling: no merchant selected renders one section
+ * per lit merchant with its rollup row, expandable to the
+ * by-consignee breakdown; the dropdown stays a filter, not a
+ * prerequisite). A lit merchant with no data in range still gets a
+ * section (rollup = null → the page renders zeros), so the admin can
+ * see which merchants are lit.
+ */
+export interface AdminInventoryMerchantSection {
+  readonly tenantId: Uuid;
+  readonly merchantSlug: string;
+  readonly merchantName: string;
+  readonly rollup: AdminInventoryRollupRow | null;
+  readonly consignees: readonly InventoryByConsigneeRow[];
+}
+
+export interface AdminAllMerchantsInventoryReport {
+  readonly sections: readonly AdminInventoryMerchantSection[];
+  readonly meta: AssetReportMeta;
+}
+
+export async function getAdminAllMerchantsInventoryReport(
+  ctx: RequestContext,
+  opts: { readonly dateFrom: string; readonly dateTo: string },
+): Promise<AdminAllMerchantsInventoryReport> {
+  requirePermission(ctx, "asset_tracking:read_all");
+  assertDateRange(opts.dateFrom, opts.dateTo);
+
+  return withServiceRole("admin_inventory_all_merchants", async (tx) => {
+    const [merchants, rollups, consignees, meta] = await Promise.all([
+      findAssetTrackingEnabledMerchants(tx),
+      aggregateAdminInventoryRollup(tx, opts),
+      aggregateAdminInventoryByConsignee(tx, opts),
+      findGlobalReportMeta(tx),
+    ]);
+    const sections = merchants.map((merchant) => ({
+      tenantId: merchant.tenantId,
+      merchantSlug: merchant.merchantSlug,
+      merchantName: merchant.merchantName,
+      rollup: rollups.find((row) => row.tenantId === merchant.tenantId) ?? null,
+      consignees: consignees.filter((row) => row.tenantId === merchant.tenantId),
+    }));
+    return { sections, meta };
   });
 }
 

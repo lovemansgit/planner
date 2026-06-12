@@ -1,14 +1,21 @@
 // Day-54 P2 — Transcorp Inventory report (bag-tracking plan PR #502
-// §6.B, admin variant). Same two sections as the merchant page,
-// scoped to ONE merchant chosen via the shared dropdown. No merchant
-// selected → picker prompt (a fleet-wide consignee blend would be
-// noise, not a report).
+// §6.B, admin variant). Same two sections as the merchant page when
+// scoped to ONE merchant via the shared dropdown.
+//
+// No merchant selected → the all-merchants view (Day-54 walk F1,
+// Love's ruling): one row per lit merchant with its rollup totals,
+// expandable to the by-consignee breakdown, same drill-down
+// behaviour as the rest. The dropdown is a filter, not a
+// prerequisite. Refresh stays on the single-merchant view only — an
+// all-merchants refresh would fan one click out to every lit
+// merchant's SF sweep (the #509 cost trigger, deliberately avoided).
 
 import { randomUUID } from "node:crypto";
 
 import { redirect } from "next/navigation";
 
 import { InventoryView } from "@/components/asset-reports/InventoryView";
+import { MerchantRows } from "@/components/asset-reports/MerchantRows";
 import { RefreshButton } from "@/components/asset-reports/RefreshButton";
 import {
   formatAsOf,
@@ -16,7 +23,10 @@ import {
   parseReportRange,
 } from "@/components/asset-reports/report-helpers";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
-import { getAdminInventoryReport } from "@/modules/asset-tracking/report-service";
+import {
+  getAdminAllMerchantsInventoryReport,
+  getAdminInventoryReport,
+} from "@/modules/asset-tracking/report-service";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
@@ -50,11 +60,14 @@ export default async function AdminInventoryPage({ searchParams }: AdminInventor
 
   let merchants: readonly Merchant[];
   let report: Awaited<ReturnType<typeof getAdminInventoryReport>> = null;
+  let allMerchants: Awaited<ReturnType<typeof getAdminAllMerchantsInventoryReport>> | null = null;
   try {
     const ctx = await buildRequestContext("/admin/inventory", requestId);
     merchants = await listMerchants(ctx);
     if (merchantSlug !== undefined) {
       report = await getAdminInventoryReport(ctx, { merchantSlug, dateFrom: from, dateTo: to });
+    } else {
+      allMerchants = await getAdminAllMerchantsInventoryReport(ctx, { dateFrom: from, dateTo: to });
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -70,6 +83,7 @@ export default async function AdminInventoryPage({ searchParams }: AdminInventor
   }
 
   const dropdownMerchants = merchants.map((m) => ({ slug: m.slug, name: m.name, status: m.status }));
+  const meta = report?.meta ?? allMerchants?.meta ?? null;
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
@@ -79,9 +93,9 @@ export default async function AdminInventoryPage({ searchParams }: AdminInventor
             Transcorp · Reports
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">Inventory</h1>
-          {report ? (
+          {meta ? (
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              {formatAsOf(report.meta.asOf)} · {formatHistorySince(report.meta.historySince)}
+              {formatAsOf(meta.asOf)} · {formatHistorySince(meta.historySince)}
             </p>
           ) : null}
         </header>
@@ -102,11 +116,15 @@ export default async function AdminInventoryPage({ searchParams }: AdminInventor
         </div>
 
         {merchantSlug === undefined ? (
-          <section className="border border-[color:var(--color-border-strong)] px-6 py-12 text-center">
-            <p className="text-sm text-[color:var(--color-text-secondary)]">
-              Choose a merchant to view their inventory report.
-            </p>
-          </section>
+          allMerchants === null || allMerchants.sections.length === 0 ? (
+            <section className="border border-[color:var(--color-border-strong)] px-6 py-12 text-center">
+              <p className="text-sm text-[color:var(--color-text-secondary)]">
+                No merchants have asset tracking enabled.
+              </p>
+            </section>
+          ) : (
+            <MerchantRows sections={allMerchants.sections} tasksBasePath="/admin/tasks" />
+          )
         ) : report === null ? (
           <section className="border border-[color:var(--color-border-strong)] px-6 py-12 text-center">
             <p className="text-sm text-[color:var(--color-text-secondary)]">

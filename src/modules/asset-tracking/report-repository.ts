@@ -81,6 +81,33 @@ export interface InventoryByConsigneeRow extends AssetStateCounts {
   readonly awbsByState: AssetStateAwbSets;
 }
 
+/**
+ * One all-merchants Inventory rollup row: a merchant's totals across
+ * the whole date range (Day-54 walk F1 — the admin page's
+ * no-merchant-selected view renders one of these per lit merchant).
+ */
+export interface AdminInventoryRollupRow extends AssetStateCounts {
+  readonly tenantId: Uuid;
+  readonly merchantSlug: string;
+  readonly merchantName: string;
+  readonly allocatedAssets: number;
+  readonly suppQuantity: number;
+  readonly awbs: readonly string[];
+  readonly awbsByState: AssetStateAwbSets;
+}
+
+/** Tenant-tagged consignee × date row for the all-merchants view. */
+export interface AdminInventoryConsigneeRow extends InventoryByConsigneeRow {
+  readonly tenantId: Uuid;
+}
+
+/** A merchant whose asset-tracking dark switch is ON. */
+export interface AssetTrackingEnabledMerchant {
+  readonly tenantId: Uuid;
+  readonly merchantSlug: string;
+  readonly merchantName: string;
+}
+
 /** Freshness + history metadata for the report headers. */
 export interface AssetReportMeta {
   /** Most recent cache sync in scope — the "as of" stamp. Null = no data. */
@@ -196,6 +223,112 @@ export async function aggregateAdminAssetTracking(
     tenantId: row.tenant_id as Uuid,
     merchantSlug: row.merchant_slug,
     merchantName: row.merchant_name,
+    deliveryDate: toDateString(row.delivery_date),
+    ...counts(row),
+  }));
+}
+
+// -----------------------------------------------------------------------------
+// Admin: all-merchants Inventory (Day-54 walk F1; withServiceRole caller)
+// -----------------------------------------------------------------------------
+
+/**
+ * Lit merchants for the all-merchants Inventory sections — every
+ * merchant with the dark switch ON appears, including those with no
+ * asset data in range (the admin sees which merchants are lit; an
+ * empty merchant renders zeros).
+ */
+export async function findAssetTrackingEnabledMerchants(
+  tx: DbTx,
+): Promise<readonly AssetTrackingEnabledMerchant[]> {
+  type Row = {
+    tenant_id: string;
+    merchant_slug: string;
+    merchant_name: string;
+  } & Record<string, unknown>;
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT id AS tenant_id, slug AS merchant_slug, name AS merchant_name
+    FROM tenants
+    WHERE task_asset_tracking_enabled = true AND status != 'archived'
+    ORDER BY name ASC
+  `);
+  return rows.map((row) => ({
+    tenantId: row.tenant_id as Uuid,
+    merchantSlug: row.merchant_slug,
+    merchantName: row.merchant_name,
+  }));
+}
+
+/** Per-merchant totals across the date range (lit merchants only). */
+export async function aggregateAdminInventoryRollup(
+  tx: DbTx,
+  opts: { readonly dateFrom: string; readonly dateTo: string },
+): Promise<readonly AdminInventoryRollupRow[]> {
+  type Row = CountsDbRow & {
+    tenant_id: string;
+    merchant_slug: string;
+    merchant_name: string;
+  };
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT
+      ten.id   AS tenant_id,
+      ten.slug AS merchant_slug,
+      ten.name AS merchant_name,
+      ${AGG_COLUMNS}
+    FROM asset_tracking_cache c
+    JOIN tasks tk    ON tk.id = c.task_id
+    JOIN tenants ten ON ten.id = c.tenant_id
+    WHERE ten.task_asset_tracking_enabled = true
+      AND ten.status != 'archived'
+      AND tk.delivery_date BETWEEN ${opts.dateFrom}::date AND ${opts.dateTo}::date
+    GROUP BY ten.id, ten.slug, ten.name
+    ORDER BY ten.name ASC
+  `);
+  return rows.map((row) => ({
+    tenantId: row.tenant_id as Uuid,
+    merchantSlug: row.merchant_slug,
+    merchantName: row.merchant_name,
+    ...counts(row),
+  }));
+}
+
+/**
+ * Consignee × date rows across ALL lit merchants, tenant-tagged so
+ * the service can split them per merchant section. Same aggregation
+ * as the tenant-scoped variant; the lit-tenant predicate replaces the
+ * single-tenant one.
+ */
+export async function aggregateAdminInventoryByConsignee(
+  tx: DbTx,
+  opts: { readonly dateFrom: string; readonly dateTo: string },
+): Promise<readonly AdminInventoryConsigneeRow[]> {
+  type Row = CountsDbRow & {
+    tenant_id: string;
+    consignee_id: string;
+    consignee_name: string;
+    delivery_date: Date | string;
+  };
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT
+      ten.id    AS tenant_id,
+      cons.id   AS consignee_id,
+      cons.name AS consignee_name,
+      tk.delivery_date,
+      ${AGG_COLUMNS}
+    FROM asset_tracking_cache c
+    JOIN tasks tk        ON tk.id = c.task_id AND tk.tenant_id = c.tenant_id
+    JOIN consignees cons ON cons.id = tk.consignee_id AND cons.tenant_id = c.tenant_id
+    JOIN tenants ten     ON ten.id = c.tenant_id
+    WHERE ten.task_asset_tracking_enabled = true
+      AND ten.status != 'archived'
+      AND tk.delivery_date BETWEEN ${opts.dateFrom}::date AND ${opts.dateTo}::date
+    GROUP BY ten.id, cons.id, cons.name, tk.delivery_date
+    ORDER BY cons.name ASC, tk.delivery_date DESC
+  `);
+  return rows.map((row) => ({
+    tenantId: row.tenant_id as Uuid,
+    consigneeId: row.consignee_id as Uuid,
+    consigneeName: row.consignee_name,
     deliveryDate: toDateString(row.delivery_date),
     ...counts(row),
   }));
