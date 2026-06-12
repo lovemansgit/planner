@@ -18,12 +18,20 @@
 # stalls unmerged (#429 class). All gates re-verify regardless of trigger.
 # Any check failing parks the PR loudly. There is no code path from
 # disagreement to merge.
+#
+# Day-54 hardening (post-arm push gap): a push to an already-armed PR
+# DISARMS auto-merge (disarm-on-synchronize job below). Without it, an
+# armed auto-merge survives later pushes and merges at a head no verdict
+# ever reviewed (observed live on #470/#481, where the post-arm commits
+# happened to be benign refreshes of main). After the disarm the label is
+# KEPT (wait-not-park): the fresh ORCH-VERDICT at the new head re-triggers
+# arming through the normal gates.
 
 name: orch-automerge
 
 on:
   pull_request_target:
-    types: [labeled]
+    types: [labeled, synchronize]
   issue_comment:
     types: [created]
 
@@ -32,6 +40,38 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Day-54 hardening: close the post-arm push gap. Arming verifies the
+  # verdict at the head THAT EXISTED AT ARM TIME; GitHub's auto-merge then
+  # survives any later push and merges at the new head unreviewed. This job
+  # disarms on every push to an orch-labeled PR. The label is deliberately
+  # KEPT — wait-not-park semantics: the fresh ORCH-VERDICT at the new head
+  # re-triggers gate-and-merge, which re-verifies everything and re-arms.
+  disarm-on-synchronize:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: "Disarm auto-merge if armed on an orch-labeled PR"
+        run: |
+          labels=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          case ",$labels," in
+            *,automerge-t1,*|*,love-cleared,*) ;;
+            *) echo "no orch label — nothing to disarm"; exit 0 ;;
+          esac
+          armed=$(gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null')
+          if [ "$armed" != "true" ]; then
+            echo "not armed — nothing to disarm"
+            exit 0
+          fi
+          gh pr merge "$PR" --repo "$REPO" --disable-auto
+          head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          gh pr comment "$PR" --repo "$REPO" --body "orch-automerge: auto-merge DISARMED on push — new head \`$head\` has no reviewed verdict. Label kept (wait-not-park); a fresh ORCH-VERDICT at this head re-triggers arming through all server-side gates."
+
   gate-and-merge:
     if: >-
       (github.event_name == 'pull_request_target' &&
