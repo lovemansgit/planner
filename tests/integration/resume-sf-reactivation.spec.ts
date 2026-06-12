@@ -79,6 +79,7 @@ const SUB_HAPPY = randomUUID() as Uuid;
 const SUB_PARTIAL = randomUUID() as Uuid;
 const SUB_UNPUSHED = randomUUID() as Uuid;
 const SUB_AUTO = randomUUID() as Uuid;
+const SUB_OPEN_ENDED = randomUUID() as Uuid;
 
 // Wednesday-anchored dates, far future (cut-off safe).
 function nextWedAfter(daysOffset: number): string {
@@ -134,13 +135,16 @@ function systemCtx(): RequestContext {
   };
 }
 
-async function seedSubscription(subId: Uuid): Promise<void> {
+async function seedSubscription(
+  subId: Uuid,
+  endDate: string | null = SUB_END,
+): Promise<void> {
   await withServiceRole(`r16 seed sub ${subId}`, async (tx) => {
     await tx.execute(sqlTag`
       INSERT INTO subscriptions (id, tenant_id, consignee_id, status, start_date, end_date,
         days_of_week, delivery_window_start, delivery_window_end)
       VALUES (${subId}, ${TENANT}, ${CONSIGNEE}, 'active',
-        ${WED_1}, ${SUB_END}, ARRAY[3]::int[], '09:00:00', '18:00:00')
+        ${WED_1}, ${endDate}, ARRAY[3]::int[], '09:00:00', '18:00:00')
     `);
   });
 }
@@ -443,5 +447,58 @@ describe("Day-53 R16 — resume SF re-activation (real Postgres)", () => {
     const row = await readTask(task);
     expect(row.internal_status).toBe("CANCELED");
     expect(row.external_tracking_number).toBe(`AWB-R16-${RUN_ID}-AUTO`);
+  });
+
+  it("case 7 — OPEN-ENDED subscription: early manual resume restores and re-activates exactly like the end-dated path", async () => {
+    // Day-54 smoke find (memory/followup_r16_open_ended_resume_gap.md):
+    // with end_date NULL the whole restore block was skipped — tasks
+    // stranded CANCELED on both sides, no event. This case pins the
+    // full case-1 contract on a NULL-end-date subscription.
+    const task = randomUUID() as Uuid;
+    const awb = `AWB-R16-${RUN_ID}-OPEN`;
+    await seedSubscription(SUB_OPEN_ENDED, null);
+    await seedTasks(SUB_OPEN_ENDED, [{ id: task, date: WED_1, awb }]);
+
+    const pause = await pauseSubscription(ctxFor(), SUB_OPEN_ENDED, {
+      pause_start: PAUSE_START,
+      pause_end: PAUSE_END,
+      idempotency_key: randomUUID(),
+    });
+    expect(pause.status).toBe("inserted");
+
+    const result = await resumeSubscription(ctxFor(), SUB_OPEN_ENDED, {
+      idempotency_key: randomUUID(),
+    });
+    expect(result.status).toBe("resumed");
+    expect(result.restored_task_count).toBe(1);
+    expect(result.reactivated_task_count).toBe(1);
+    // No extension was granted at pause time (extension is end-date-gated),
+    // so there is nothing to shrink — new_end_date stays null.
+    expect(result.new_end_date).toBeNull();
+
+    const row = await readTask(task);
+    expect(row.internal_status).toBe("CREATED");
+    expect(row.external_id).toBeNull();
+    expect(row.external_tracking_number).toBeNull();
+    expect(row.pushed_to_external_at).toBeNull();
+    expect(row.outbound_sync_state).toBe("pending");
+
+    expect(enqueueTaskPushBatchSpy).toHaveBeenCalledTimes(1);
+    const call = enqueueTaskPushBatchSpy.mock.calls[0][0] as {
+      taskIds: readonly string[];
+    };
+    expect([...call.taskIds]).toEqual([task]);
+
+    const events = await withServiceRole("r16 open-ended audit read", async (tx) =>
+      tx.execute(sqlTag`
+        SELECT metadata FROM audit_events
+        WHERE event_type = 'subscription.resume_reactivations_pushed'
+          AND resource_id = ${SUB_OPEN_ENDED}
+      `),
+    );
+    expect(events).toHaveLength(1);
+    const meta = (events[0] as { metadata: Record<string, unknown> }).metadata;
+    expect(meta.reactivated_task_count).toBe(1);
+    expect(meta.previous_awbs).toEqual([{ task_id: task, awb }]);
   });
 });
