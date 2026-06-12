@@ -84,6 +84,25 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
   retired 2026-06-11 builder clearance-merge bridge live on as the Action's
   server-side gates; the bridge clause itself and every "Love pastes / Love
   clicks / Love commits" step in this runbook are RETIRED by this ruling.
+- **`love-cleared` is agent-appliable + standing reconciliation audit (Love's
+  ruling, 2026-06-12 — Day-54):** the `gh pr edit … --add-label love-cleared`
+  permission is now ALLOWED to the builder/subagents in `.claude/settings.json`
+  (Love authored the settings commit himself — the harness auto-mode classifier
+  blocks EVERY agent route to self-grant a permission widening, "user
+  instruction cannot clear"; landed on `main` at `14709c0`, independently
+  reviewer-verified at the pinned SHA: deny-pair intact + exactly the one allow
+  line). Applying `love-cleared` triggers the orch-automerge Action's clearance
+  mode (path-gate relaxed for that PR only; `ORCH-CLEARANCE` comment + reviewer
+  APPROVE at the head SHA still required server-side). Authorization is **Love's
+  recorded clearance sentence**, NEVER the label's GitHub identity —
+  attribution-by-identity is explicitly NOT a goal (builder and Love share one
+  identity). **Standing audit (compensating control):** at EVERY claude.ai
+  check-in, every `love-cleared` merge since the last check-in is reconciled
+  against Love's recorded clearance sentences; any merge with no matching
+  recorded sentence is surfaced to Love immediately. Ruling of record:
+  `memory/decision_d54_love_cleared_allow_rule.md`. The un-spoofable-signal open
+  question in `memory/followup_clearance_merge_into_action.md` is resolved by
+  ruling, with a post-UAT revisit.
 
 ## Three-pair scaling rules (Day-53, Love-ruled)
 
