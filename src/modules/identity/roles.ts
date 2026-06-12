@@ -184,6 +184,14 @@ const ROLES_DRAFT = {
       // unhelpful "Created" state). Read-only — retry stays
       // Tenant-Admin-only via the unchanged failed_pushes:retry gate.
       "failed_pushes:read",
+      // Day-54 — churn role gate. CS Agent already holds
+      // consignee:change_crm_state (the §3.1.3 CRM workflow grant
+      // above); the CHURNED transition now ALSO requires this
+      // merchant-level-only permission. Explicit add because CS
+      // Agent's consignee perms are hand-rolled (no permsFor
+      // auto-pickup). Tenant Admin (TENANT_SCOPED) and Ops Manager
+      // (permsFor("consignee")) pick it up automatically.
+      "consignee:churn",
     ]),
   },
 
@@ -227,9 +235,13 @@ const ROLES_DRAFT = {
     slug: "transcorp-sysadmin",
     name: "Transcorp Sysadmin",
     description:
-      "Transcorp engineering staff. Full cross-tenant access including migration import. Highest-privilege role. Use is logged in the audit trail under actor_kind='user' with the staff member's user id.",
+      "Transcorp engineering staff. Full cross-tenant access including migration import. Highest-privilege role. Use is logged in the audit trail under actor_kind='user' with the staff member's user id. Day-54 carve-out: does NOT hold consignee:churn — the CHURNED hard-stop cascade is merchant-level only per Love's ruling.",
     systemOnly: true,
-    permissions: new Set<PermissionId>(ALL),
+    // Day-54 — the ONE exclusion from the every-permission posture:
+    // Love's ruling, "churn should only happen from merchant level, not
+    // transcorp admin." The CHURNED transition's service gate requires
+    // consignee:churn, which no Transcorp staff role holds.
+    permissions: new Set<PermissionId>(ALL.filter((id) => id !== "consignee:churn")),
   },
 } as const satisfies Record<string, RoleDef>;
 

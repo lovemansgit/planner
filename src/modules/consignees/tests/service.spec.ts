@@ -32,6 +32,14 @@ vi.mock("../repository", () => ({
   listAllConsigneesRows: vi.fn(),
 }));
 
+vi.mock("../../tasks", () => ({
+  cancelConsigneeTasksForChurn: vi.fn(),
+}));
+
+vi.mock("../../subscriptions", () => ({
+  endAllSubscriptionsForConsignee: vi.fn(),
+}));
+
 vi.mock("../../addresses", () => ({
   insertAddress: vi.fn().mockResolvedValue({
     id: "addr-1",
@@ -50,6 +58,8 @@ vi.mock("../../addresses", () => ({
 }));
 
 import { withTenant } from "../../../shared/db";
+import { endAllSubscriptionsForConsignee } from "../../subscriptions";
+import { cancelConsigneeTasksForChurn } from "../../tasks";
 import {
   ConflictError,
   ForbiddenError,
@@ -94,6 +104,8 @@ const mockUpdate = vi.mocked(updateConsigneeRow);
 const mockUpdateCrmState = vi.mocked(updateConsigneeCrmState);
 const mockDelete = vi.mocked(deleteConsigneeRow);
 const mockSelectTimeline = vi.mocked(selectTimelineForConsignee);
+const mockCancelConsigneeTasksForChurn = vi.mocked(cancelConsigneeTasksForChurn);
+const mockEndAllSubscriptionsForConsignee = vi.mocked(endAllSubscriptionsForConsignee);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
@@ -520,6 +532,7 @@ describe("deleteConsignee", () => {
 
 describe("changeConsigneeCrmState", () => {
   const PERM = "consignee:change_crm_state" as const;
+  const CHURN_PERM = "consignee:churn" as const;
 
   it("throws ForbiddenError when actor lacks consignee:change_crm_state", async () => {
     await expect(
@@ -639,6 +652,60 @@ describe("changeConsigneeCrmState", () => {
     expect(mockUpdateCrmState).toHaveBeenCalledOnce();
     expect(mockInsertCrmEvent).toHaveBeenCalledOnce();
     expect(mockEmit).toHaveBeenCalledOnce();
+  });
+
+  // Day-54 churn role gate — Love's standing ruling: "churn should only
+  // happen from merchant level, not transcorp admin." The CHURNED
+  // transition requires `consignee:churn` IN ADDITION to
+  // `consignee:change_crm_state`; the new permission is granted to the
+  // merchant-level roles only and explicitly excluded from
+  // transcorp-sysadmin's otherwise-ALL set (roles.ts).
+  it("CHURNED requires consignee:churn — change_crm_state alone is ForbiddenError, before any DB work", async () => {
+    await expect(
+      changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+        toState: "CHURNED",
+        reason: "customer leaving",
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockWithTenant).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("CHURNED proceeds when the actor holds change_crm_state AND consignee:churn", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ACTIVE" }));
+    mockUpdateCrmState.mockResolvedValue(true);
+    mockInsertCrmEvent.mockResolvedValue(
+      crmEventFixture({ fromState: "ACTIVE", toState: "CHURNED", reason: "customer leaving" }),
+    );
+    mockEndAllSubscriptionsForConsignee.mockResolvedValue(2);
+    mockCancelConsigneeTasksForChurn.mockResolvedValue({
+      canceledLocalCount: 1,
+      recalls: [],
+    });
+
+    await expect(
+      changeConsigneeCrmState(ctx([PERM, CHURN_PERM]), CONSIGNEE_ID, {
+        toState: "CHURNED",
+        reason: "customer leaving",
+      }),
+    ).resolves.toMatchObject({ status: "updated", toState: "CHURNED" });
+    expect(mockEndAllSubscriptionsForConsignee).toHaveBeenCalledOnce();
+    expect(mockCancelConsigneeTasksForChurn).toHaveBeenCalledOnce();
+  });
+
+  it("non-CHURNED transitions do NOT require consignee:churn (ON_HOLD with change_crm_state alone)", async () => {
+    mockFindForCrmUpdate.mockResolvedValue(consigneeFixture({ crmState: "ACTIVE" }));
+    mockUpdateCrmState.mockResolvedValue(true);
+    mockInsertCrmEvent.mockResolvedValue(
+      crmEventFixture({ fromState: "ACTIVE", toState: "ON_HOLD", reason: "operator note" }),
+    );
+
+    await expect(
+      changeConsigneeCrmState(ctx([PERM]), CONSIGNEE_ID, {
+        toState: "ON_HOLD",
+        reason: "operator note",
+      }),
+    ).resolves.toMatchObject({ status: "updated", toState: "ON_HOLD" });
   });
 
   it("commits the transition + writes consignee_crm_events + emits the audit event", async () => {

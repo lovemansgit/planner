@@ -657,7 +657,16 @@ const PERMISSIONS_DRAFT = {
     resource: "consignee",
     action: "change_crm_state",
     description:
-      "Day 13 / T3. Transition a consignee's CRM state (ACTIVE / ON_HOLD / HIGH_RISK / INACTIVE / CHURNED / SUBSCRIPTION_ENDED per brief §3.1.1 line 153). Service-layer (part 2) enforces transition validity (e.g., CHURNED → ACTIVE requires explicit reactivation flow).",
+      "Day 13 / T3. Transition a consignee's CRM state (ACTIVE / ON_HOLD / HIGH_RISK / INACTIVE / CHURNED / SUBSCRIPTION_ENDED per brief §3.1.1 line 153). Service-layer (part 2) enforces transition validity (e.g., CHURNED → ACTIVE requires explicit reactivation flow). Day-54: the CHURNED transition additionally requires consignee:churn (merchant-level-only ruling).",
+    systemOnly: false,
+  },
+
+  "consignee:churn": {
+    id: "consignee:churn",
+    resource: "consignee",
+    action: "churn",
+    description:
+      "Day-54 / Love's ruling: 'churn should only happen from merchant level, not transcorp admin.' Required IN ADDITION to consignee:change_crm_state for the CHURNED transition (the R-E hard-stop cascade, brief v1.26). Granted to the merchant-level roles (Tenant Admin, Ops Manager, CS Agent); explicitly EXCLUDED from transcorp-sysadmin's otherwise-ALL set in roles.ts — the one carve-out from that role's every-permission posture.",
     systemOnly: false,
   },
 

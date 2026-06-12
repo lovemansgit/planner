@@ -156,6 +156,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
   let calendarFailedPushTaskIds: ReadonlySet<string> = new Set();
   let subscriptionGroups: readonly SubscriptionDetailGroup[] = [];
   let canChangeState = false;
+  let canChurn = false;
   let canEditConsignee = false;
   let canCreateSubscription = false;
   let canAddAdHocTask = false;
@@ -189,6 +190,9 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     if (ctx.actor.kind === "user") {
       const perms = ctx.actor.permissions as ReadonlySet<Permission>;
       canChangeState = perms.has("consignee:change_crm_state");
+      // Day-54 churn role gate — CHURNED renders only for merchant-level
+      // actors holding consignee:churn (the service re-checks regardless).
+      canChurn = perms.has("consignee:churn");
       // Day-22 forms-lane CTAs.
       // - Edit consignee gate: consignee:update only (the edit form
       //   covers non-address scalar fields per brief v1.11 §3.1).
@@ -365,7 +369,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
             <div className="flex flex-col items-start gap-3 sm:items-end">
               <CrmStateBadge state={consignee.crmState} size="lg" />
               {canChangeState ? (
-                <CrmStateModal consigneeId={consignee.id} currentState={consignee.crmState} />
+                <CrmStateModal consigneeId={consignee.id} currentState={consignee.crmState} canChurn={canChurn} />
               ) : null}
               {canEditConsignee || canCreateSubscription || canAddAdHocTask ? (
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">
