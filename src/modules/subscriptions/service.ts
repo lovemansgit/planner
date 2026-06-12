@@ -1077,6 +1077,12 @@ export async function resumeSubscription(
     // the restore cleared it) — the post-commit re-push fan-out input.
     let reactivationRows: readonly { taskId: Uuid; previousAwb: string }[] = [];
 
+    // Day-54 guard split (memory/followup_r16_open_ended_resume_gap.md):
+    // the end-date-shrink arithmetic is end-date-gated (cannot shrink an
+    // end date that does not exist), but the task RESTORE + R16
+    // re-activation must run for EVERY early manual resume — nesting the
+    // restore inside the endDate guard (the #160 shape) left open-ended
+    // subscriptions' window tasks stranded CANCELED on both sides.
     if (earlyManual && subscription.endDate !== null) {
       const subForHelpers: SubscriptionForSkip = {
         endDate: subscription.endDate,
@@ -1116,10 +1122,15 @@ export async function resumeSubscription(
           endDateChanged = true;
         }
       }
+    }
 
+    if (earlyManual) {
       // Restore tasks where target_date >= actual_resume_date AND <= pause_end.
       // R16: the restore clears external ids on SF-cancelled rows and
       // returns them (with the pre-clear AWB) for the re-push fan-out.
+      // Open-ended subscriptions take this path too: pause granted no
+      // extension (extension is end-date-gated), so there is nothing to
+      // shrink above — new_end_date stays null by construction.
       const restoredRows = await markTasksRestoredInWindow(
         tx,
         tenantId,
