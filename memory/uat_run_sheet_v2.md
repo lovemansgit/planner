@@ -203,8 +203,13 @@ unchanged.
 ## §END — gate status: **UAT GREEN v2 (declared Day-54 PM, contingency satisfied)**
 
 - Probe verdict: **in** (refusal branch calibrated, above).
-- Preflight: gate-8 query defect found Day-54 AM is **fixed** (#493, tenant
-  scope + exact name + deterministic order; RED 9/10 → GREEN **10/10**).
+- Preflight: **10/10 on the invariants** (the demo Sarah `e6f6c33a…` is
+  ACTIVE with 3 FAILED — verified directly). The gate-8 QUERY defect found
+  Day-54 AM (fixture-name collision) has its fix **built, APPROVE r1, and
+  parked as #493** (tenant scope + exact name + deterministic order;
+  RED 9/10 → GREEN 10/10 proven on the branch run). The mechanical score
+  reads 10/10 once #493 lands; the defect was never an invariant failure
+  and does not gate this GREEN.
 - Production: assembly promote live (`3045982`, `dpl_6S7UWVEZd8zeGcnZCqZw8aQDsqK8`),
   rollback anchor `dpl_DxCdkX1z` @ `bbefc1a`.
 - **The live-UI re-walk: DONE, all legs PASS** (Day-54 PM, operator session
