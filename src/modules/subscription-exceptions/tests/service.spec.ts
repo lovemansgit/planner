@@ -548,6 +548,59 @@ describe("addSubscriptionException — cut-off enforcement", () => {
     ).rejects.toThrow(/cut-off/);
   });
 
+  it("R-A: address_override_one_off past cut-off is ALLOWED (address edits follow the assignment gate, not the clock)", async () => {
+    const ctx = ctxWith(["subscription:change_address_one_off"]);
+    // DUBAI_TODAY's cut-off has elapsed at NOW — a skip would reject;
+    // the address override no longer consults the clock.
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]); // sub FOR UPDATE
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]); // 5b ownership
+    mockExecute.mockResolvedValueOnce([]); // idempotency → none
+    mockExecute.mockResolvedValueOnce([
+      insertedExceptionRow({ type: "address_override_one_off", addressOverrideId: ADDRESS_ID, startDate: DUBAI_TODAY }),
+    ]); // INSERT exception
+    mockExecute.mockResolvedValueOnce([]); // markTaskAddressOverridden → unmaterialized (null path)
+    mockExecute.mockResolvedValueOnce([]); // R-A probe → no driver-bound task
+    const result = await addSubscriptionException(
+      ctx,
+      SUBSCRIPTION_ID,
+      {
+        type: "address_override_one_off",
+        date: DUBAI_TODAY,
+        addressOverrideId: ADDRESS_ID as never,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      },
+      { now: NOW },
+    );
+    expect(result.status).toBe("inserted");
+  });
+
+  it("R-A: address_override_one_off on a driver-bound task is REJECTED (assignment gate)", async () => {
+    const ctx = ctxWith(["subscription:change_address_one_off"]);
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]); // sub FOR UPDATE
+    mockExecute.mockResolvedValueOnce([ownedAddressRow()]); // 5b ownership
+    mockExecute.mockResolvedValueOnce([]); // idempotency → none
+    mockExecute.mockResolvedValueOnce([
+      insertedExceptionRow({ type: "address_override_one_off", addressOverrideId: ADDRESS_ID, startDate: FUTURE_SKIP_DATE }),
+    ]); // INSERT exception
+    mockExecute.mockResolvedValueOnce([]); // markTaskAddressOverridden → null (frozen row excluded by WHERE)
+    mockExecute.mockResolvedValueOnce([{ internal_status: "ASSIGNED" }]); // R-A probe → driver-bound
+    await expect(
+      addSubscriptionException(
+        ctx,
+        SUBSCRIPTION_ID,
+        {
+          type: "address_override_one_off",
+          date: FUTURE_SKIP_DATE,
+          addressOverrideId: ADDRESS_ID as never,
+          idempotencyKey: IDEMPOTENCY_KEY,
+        },
+        { now: NOW },
+      ),
+    ).rejects.toThrow(/driver|locked/i);
+  });
+
   it("accepts when cut-off has NOT elapsed (skip date is far enough out)", async () => {
     setupHappyPath({ insertedException: insertedExceptionRow({ compensatingDate: "2026-07-01" }) });
     const ctx = ctxWith(["subscription:skip"]);

@@ -1402,7 +1402,9 @@ export async function markTaskSkipped(
     WHERE tenant_id = ${tenantId}
       AND subscription_id = ${subscriptionId}
       AND delivery_date = ${deliveryDate}
-      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+      -- R-A: driver-bound rows are frozen (no edits/cancellations once
+      -- assigned); the service probes + rejects on the null path.
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'ASSIGNED', 'IN_TRANSIT')
     RETURNING id, external_tracking_number
   `)) as readonly { id: string; external_tracking_number: string | null }[];
 
@@ -1516,7 +1518,9 @@ export async function markTasksAddressOverriddenForward(
     WHERE tenant_id = ${tenantId}
       AND subscription_id = ${subscriptionId}
       AND delivery_date >= ${startDate}
-      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'SKIPPED')
+      -- R-A: driver-bound rows keep their address (assignment freeze);
+      -- the forward override applies from the next unassigned task on.
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'SKIPPED', 'ASSIGNED', 'IN_TRANSIT')
     RETURNING id, external_tracking_number
   `)) as readonly { id: string; external_tracking_number: string | null }[];
 
@@ -1578,7 +1582,10 @@ export async function markTasksCanceledInWindow(
     WHERE tenant_id = ${tenantId}
       AND subscription_id = ${subscriptionId}
       AND delivery_date BETWEEN ${pauseStart} AND ${pauseEnd}
-      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED')
+      -- R-A: driver-bound rows survive the pause (assignment freeze;
+      -- only the R-E churn cascade may recall them). The service counts
+      -- them via countDriverBoundTasksInWindow for honest audit metadata.
+      AND internal_status NOT IN ('DELIVERED', 'FAILED', 'CANCELED', 'ASSIGNED', 'IN_TRANSIT')
     RETURNING id, external_tracking_number
   `);
   return rows;
@@ -1667,4 +1674,53 @@ export async function markTasksRestoredInWindow(
     RETURNING t.id, r.external_tracking_number AS previous_external_tracking_number
   `);
   return rows;
+}
+
+// -----------------------------------------------------------------------------
+// R-A — assignment-freeze helpers (plan day-54-session-c-ra-assignment-gate §2.3)
+// -----------------------------------------------------------------------------
+
+/**
+ * Status of the driver-bound task (ASSIGNED/IN_TRANSIT) at a given
+ * subscription+date, or null when none. Used by the skip and one-off
+ * address-override flows to convert the guarded UPDATE's null result
+ * into an honest rejection instead of a silent no-op.
+ */
+export async function findDriverBoundTaskForSubscriptionDate(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  deliveryDate: string,
+): Promise<TaskInternalStatus | null> {
+  const rows = (await tx.execute(sqlTag`
+    SELECT internal_status FROM tasks
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date = ${deliveryDate}
+      AND internal_status IN ('ASSIGNED', 'IN_TRANSIT')
+    LIMIT 1
+  `)) as readonly { internal_status: TaskInternalStatus }[] | undefined;
+  return rows?.[0]?.internal_status ?? null;
+}
+
+/**
+ * Count of driver-bound tasks inside a pause window — the rows
+ * markTasksCanceledInWindow now deliberately leaves untouched. Feeds
+ * pauseSubscription's assigned_tasks_excluded audit metadata.
+ */
+export async function countDriverBoundTasksInWindow(
+  tx: DbTx,
+  tenantId: Uuid,
+  subscriptionId: Uuid,
+  pauseStart: string,
+  pauseEnd: string,
+): Promise<number> {
+  const rows = (await tx.execute(sqlTag`
+    SELECT count(*)::int AS n FROM tasks
+    WHERE tenant_id = ${tenantId}
+      AND subscription_id = ${subscriptionId}
+      AND delivery_date BETWEEN ${pauseStart} AND ${pauseEnd}
+      AND internal_status IN ('ASSIGNED', 'IN_TRANSIT')
+  `)) as readonly { n: number }[] | undefined;
+  return rows?.[0]?.n ?? 0;
 }
