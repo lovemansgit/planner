@@ -12,17 +12,17 @@
 | 1 | `tasks/service.ts:1072` | `updateTask` (current date) | EDIT | time gate → **assignment gate** |
 | 2 | `tasks/service.ts:1080` | `updateTask` (new target date) | EDIT | **dropped** (the move-target check is an edit-time check; creation-side validity of the new date is not a cutoff question once creation-only is the rule) |
 | 3 | `tasks/service.ts:1310` | `cancelTask` | CANCEL | time gate → **assignment gate** (existing DELIVERED/CANCELED guards stay) |
-| 4 | `tasks/service.ts:1464` | `addNoteToDriver` | EDIT (flagged below) | time gate → **assignment gate** |
+| 4 | `tasks/service.ts:1464` | `addNoteToDriver` | **COMMUNICATION, not an edit (reviewer-ruled r1)** | time gate **dropped**, NO assignment gate; terminal-status guard only (no notes on DELIVERED/CANCELED/FAILED) |
 | 5 | `tasks/service.ts:2270` | `bulkCancelTasks` (per-task) | CANCEL | time gate → **assignment gate** per task |
 | 6 | `tasks/service.ts:2398` | `bulkUpdateTasks` (current date) | EDIT | time gate → **assignment gate** |
 | 7 | `tasks/service.ts:2408` | `bulkUpdateTasks` (new target date) | EDIT | **dropped** (same reasoning as #2) |
-| 8 | `subscription-exceptions/service.ts:417` | `addSubscriptionException` (skip) | **CREATION** (dispatch-named: "skip-creation paths") | **keeps 18:00** — unchanged; PLUS the skip's cancel-leg gains the assignment freeze (§2.3) |
+| 8 | `subscription-exceptions/service.ts:417` | `addSubscriptionException` — **split by exception type (r1)** | `skip` kinds = **CREATION** (dispatch-named: "skip-creation paths"); `address_override_one_off` / `address_override_forward` = **EDIT** (an address change is an edit of the delivery) | `skip` **keeps 18:00** + the skip's cancel-leg gains the assignment freeze (§2.3); address-override kinds **drop 18:00** and take the assignment gate on the affected task (one-off: that date's task; forward: any already-materialized driver-bound task in range is left untouched — the override applies from the next unassigned/materialized task onward, stated in the rejection-free path) |
 | 9 | `subscription-exceptions/service.ts:1102` | `appendWithoutSkip` | **CREATION** (creates a compensating delivery) | **keeps 18:00** — unchanged |
 | 10 | `subscriptions/service.ts:702` | `pauseSubscription` (pause_start) | CANCEL-class trigger (a pause is a bulk cancel of the window) | time gate **dropped**; the window-cancel leg gains the assignment freeze (§2.3) |
 
 The materializer (order creation proper, `task-materialization`) keeps its creation-side cutoff untouched — dispatch-named.
 
-**Flag for the reviewer (site 4):** the ruling's plain text ("once ASSIGNED, no edits") puts `addNoteToDriver` behind the assignment gate, which means notes to the driver become impossible exactly when a driver exists. This plan applies the ruling as written; if the reviewer reads driver-notes as outside "edits and cancellations," the alternative (drop the gate entirely on site 4) is a two-line change and is called out here so the round can rule it without a re-park.
+**Site 4, both readings recorded (r1-ruled; Love can override at park):** the ruling's plain text ("once ASSIGNED, no edits") could put `addNoteToDriver` behind the assignment gate — but that makes driver notes impossible exactly when a driver exists, inverting the feature's purpose. The reviewer ruled round 1: a driver note is a MESSAGE, not an edit or cancellation — no assignment gate, no time gate, terminal-status guard only. This plan builds that reading; the strict-text alternative (assignment-gate it) is a two-line change if Love overrides at park.
 
 ## §2 The gate
 
@@ -44,7 +44,7 @@ Editable statuses are therefore exactly `CREATED`, `ON_HOLD`, `SKIPPED`. **Flag 
 - `markTasksCanceledInWindow` (`tasks/repository.ts:1581`): exclusion list `NOT IN ('DELIVERED','FAILED','CANCELED')` extends with `'ASSIGNED','IN_TRANSIT'`. A pause over a window containing an assigned delivery now pauses the subscription and cancels the unassigned tasks; the assigned delivery proceeds (the R-E churn cascade is the ONLY path that may recall it, per its own ruling). `pauseSubscription`'s audit metadata gains an additive `assigned_tasks_excluded` count so the operator-facing result is honest about what kept going.
 - `markTaskSkipped` (single-skip cancel leg): same two-status extension — and because a skip whose target task is driver-bound would otherwise record a skip exception while the delivery still happens (dishonest state), `addSubscriptionException`'s skip path checks the target task first and **rejects** with the plain locked message. Skip therefore ends up double-gated: 18:00 for the date (creation-class, dispatch-named) AND not-driver-bound for the task.
 
-**2.4 — What gets MORE permissive** (the inverted half of the ruling, pinned by tests): an UNASSIGNED task is now editable and cancellable at any hour — after 18:00 the day before, on the delivery day itself. The pause start-date gate disappears entirely.
+**2.4 — What gets MORE permissive, precisely** (the inverted half of the ruling, pinned by tests). Hour-unlimited on an UNASSIGNED (and non-terminal) task: task edits (`updateTask`/`bulkUpdateTasks`), task cancels (`cancelTask`/`bulkCancelTasks`), subscription pause (start-date gate gone), address overrides (one-off + forward, per the §1 site-8 split), and driver notes (per site 4 — hour-unlimited even on assigned tasks). STILL 18:00-gated regardless of assignment: `skip` exceptions (with or without override/append), `appendWithoutSkip`, and order creation (materializer + manual paths) — the creation class.
 
 ## §3 Brief amendment (dispatch-ASSIGNED)
 
@@ -60,7 +60,7 @@ One append-only §9 row at the next-free version (**v1.25 expected** against cur
 
 ## §5 Tests (RED-first; unit + real Postgres)
 
-Unit (per service, existing harnesses): ASSIGNED → ValidationError for updateTask / cancelTask / addNoteToDriver / bulkUpdateTasks / bulkCancelTasks; IN_TRANSIT → same; **CREATED + post-cutoff timestamp → now ALLOWED** for update/cancel (proves the time gate is gone — the RED inversion of today's behavior); skip post-cutoff → still rejected (creation gate pinned); append post-cutoff → still rejected; pause with post-cutoff start → now allowed; `isTaskEditable` truth table.
+Unit (per service, existing harnesses): ASSIGNED → ValidationError for updateTask / cancelTask / bulkUpdateTasks / bulkCancelTasks; IN_TRANSIT → same; **addNoteToDriver: ASSIGNED → ALLOWED, post-cutoff → ALLOWED, DELIVERED/CANCELED/FAILED → rejected** (site-4 ruling pinned both ways); **CREATED + post-cutoff timestamp → now ALLOWED** for update/cancel (proves the time gate is gone — the RED inversion of today's behavior); address_override_one_off on an unassigned task post-cutoff → now ALLOWED, on a driver-bound task → rejected (site-8 split pinned both ways); skip post-cutoff → still rejected (creation gate pinned); append post-cutoff → still rejected; pause with post-cutoff start → now allowed; `isTaskEditable` truth table.
 Integration (new spec, real Postgres): pause over a mixed window (CREATED + ASSIGNED) → subscription paused, CREATED task canceled, ASSIGNED task untouched, audit metadata carries the excluded count; skip on a driver-bound date → rejected, no exception row.
 JSX-shape: day-actions buildActions with ASSIGNED → zero mutation actions + the explanation line.
 
