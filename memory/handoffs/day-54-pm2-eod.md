@@ -65,12 +65,20 @@ outside paths read-only via git plumbing, never cd. Parks per path gate
 (`.claude/**` outside allowlist): **PR #500, parked-t2, APPROVE r1 at
 `b71b5a4`** — one-liner: "#500 cleared."
 
-## 6. Queue + one-liners for Love
+## 6. Queue + rulings (updated by the closing amendment)
 
-- Queue = **#500** only (this EOD's regen reflects it).
-- Love's paste (settings, classifier blocks builder self-modification):
-  `"Bash(gh pr comment*ORCH-VERDICT*)"` — reviewer verdict-posting
-  allow-rule, third-recurrence threshold met.
+- "#500 cleared." rode the closing amendment — #500 merged via the Action
+  clearance route (`a54a794`).
+- Queue = **#502 only** — a plan-only T3 PR (bag tracking reports, Asset
+  Tracking + Inventory) from a parallel lane, labeled
+  `needs-directional-ruling`. Not this lane's to act on; it awaits Love's
+  directional ruling per the T3 plan-PR protocol.
+- The verdict-posting allow-rule was **REJECTED by ruling**: it cannot
+  distinguish reviewer from builder under shared session permissions, so it
+  would let the builder post promptless verdicts the Action acts on — the
+  seam outranks the convenience. Standing remedy stays
+  fresh-reviewer-redispatch; revisit post-UAT with an authorship-preserving
+  design (recorded in the followup memo).
 
 Lane idles for UAT proper. UAT prerequisites intact: MPL-40595232 ASSIGNED
 (lock demo), Fatima demo data untouched, run sheet v2 GREEN on main, and the

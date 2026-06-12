@@ -53,14 +53,19 @@ as insufficient authorization for an external write to a PR the reviewer
 agent did not create." Remedy used: fresh re-dispatch — the second reviewer
 re-reviewed independently and posted APPROVE r1 normally (same session,
 minutes later; the block is non-deterministic, not rule-based). Per the
-threshold above, the allow-rule is now FILED for Love's paste (builders
+threshold above, the allow-rule was FILED for Love's paste (builders
 cannot self-modify settings — classifier blocks it):
 
 ```
 "Bash(gh pr comment*ORCH-VERDICT*)"
 ```
 
-scoped to verdict posting only; everything else about the seam unchanged.
+**Ruling (Day-54 PM closing amendment): REJECTED by ruling.** Love's
+reasoning, verbatim: "it cannot distinguish reviewer from builder under
+shared session permissions, so it would let the builder post promptless
+verdicts that the Action acts on; the seam outranks the convenience."
+Standing remedy stays fresh-reviewer-redispatch. Revisit post-UAT with an
+authorship-preserving design.
 
 ## Cross-references
 
