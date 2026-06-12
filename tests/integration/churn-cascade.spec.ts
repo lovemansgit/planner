@@ -40,6 +40,7 @@ import type { Uuid } from "../../src/shared/types";
 
 import { ALL_PERMISSION_IDS } from "../../src/modules/identity/permissions";
 import { changeConsigneeCrmState } from "../../src/modules/consignees/service";
+import { listReconciliationCandidatesByTenant } from "../../src/modules/tasks/repository";
 
 const RUN_ID = randomUUID().slice(0, 8);
 const TENANT = randomUUID() as Uuid;
@@ -193,6 +194,14 @@ describe("Day-54 R-E — churn hard-stop cascade (real Postgres)", () => {
     const delivered = await readTask(TASK_DELIVERED);
     expect(delivered.internal_status).toBe("DELIVERED"); // terminal untouched
     expect(delivered.outbound_sync_state).toBe("synced");
+
+    // R-E r1 (the reviewer's leak): the churn-cancelled unpushed task
+    // must NOT be a reconciliation candidate — the nightly sweep would
+    // otherwise re-create it at the vendor, defeating the hard stop.
+    const candidates = await withServiceRole("churn reconcile candidates", async (tx) =>
+      listReconciliationCandidatesByTenant(tx, TENANT),
+    );
+    expect(candidates).not.toContain(TASK_UNPUSHED);
 
     // Fan-out: exactly the two recall AWBs.
     expect(enqueueBulkCancelTasksSpy).toHaveBeenCalledTimes(1);

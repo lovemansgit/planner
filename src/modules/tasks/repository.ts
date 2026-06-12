@@ -1142,6 +1142,12 @@ export async function listReconciliationCandidatesByTenant(
       AND pushed_to_external_at IS NULL
       AND address_id IS NOT NULL
       AND delivery_date >= CURRENT_DATE
+      -- R-E r1 (PR #480 review): never re-push a dead row. A churn-
+      -- cancelled (or pause-cancelled / skipped) unpushed task would
+      -- otherwise be re-CREATED at the vendor on the next nightly tick,
+      -- defeating the hard stop. pushSingleTask carries the belt-and-
+      -- braces partner guard (not_pushable_status).
+      AND internal_status NOT IN ('CANCELED', 'SKIPPED', 'DELIVERED', 'FAILED')
     ORDER BY created_at ASC
   `);
   return rows.map((row) => row.id);

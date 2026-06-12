@@ -82,7 +82,8 @@ type Outcome =
   | "tenant_skipped_no_credentials"
   | "task_already_pushed_in_push"
   | "task_not_found"
-  | "past_dated_no_push";
+  | "past_dated_no_push"
+  | "not_pushable_status";
 
 export const POST = verifySignatureAppRouter(async (request: Request) => {
   const sfStartMs = Date.now();
@@ -390,6 +391,24 @@ export const POST = verifySignatureAppRouter(async (request: Request) => {
       );
       return NextResponse.json(
         { outcome: "past_dated_no_push" },
+        { status: 200 },
+      );
+
+    case "not_pushable_status":
+      // R-E r1 — pushSingleTask's dead-row guard fired (CANCELED /
+      // SKIPPED / DELIVERED / FAILED). Ack with 200, no retry, no DLQ:
+      // the non-push is the correct outcome of an intentional cancel;
+      // the upstream reconciliation filter stops future re-enqueues.
+      requestLog.info(
+        {
+          outcome: "not_pushable_status" satisfies Outcome,
+          sf_latency_ms: sfLatencyMs,
+          internal_status: result.internalStatus,
+        },
+        "queue handler — not_pushable_status guard short-circuited push",
+      );
+      return NextResponse.json(
+        { outcome: "not_pushable_status" },
         { status: 200 },
       );
   }
