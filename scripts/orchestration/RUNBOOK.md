@@ -51,6 +51,18 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
   builder executes and states the route). §3.6 body-reads.
   Verify-against-running-product. Path-gate + merge-Action lock as built
   (docs-only auto-merge in v1).
+- **Authorization scope is LITERAL (Love's ruling, 2026-06-12 — Day-54,
+  after the bag-tracking dev-DB breach):** an authorization names a scope;
+  if the named scope does not exist or differs from reality, execution
+  STOPS and the discrepancy parks for Love — "the spirit was safe" is
+  never grounds to proceed. Verify the named scope (database, tenant,
+  branch, file, environment) BEFORE executing; on any mismatch, stop at
+  that point, park with what-was-named vs. what-reality-is plus one
+  recommendation, and wait for Love's corrected sentence. Honest
+  after-the-fact disclosure and additive/reversible/dark character may
+  inform Love's retroactive acceptance — they are never the builder's
+  license. Applies to all lanes, all phases. Ruling of record:
+  `memory/decision_d54_authorization_scope_literal.md`.
 - **Firing-as-clearance (Love's amendment, 2026-06-11):** firing a dispatch
   prompt constitutes Love's clearance of the items that prompt EXPLICITLY
   names as cleared-by-firing. Those named items merge/close on the firing; the
