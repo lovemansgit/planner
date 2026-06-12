@@ -34,6 +34,7 @@
 
 import { useState } from "react";
 
+import { Button } from "@/components/Button";
 import type { FailedPush } from "@/modules/failed-pushes";
 import type { SinglePushOutcome } from "@/modules/task-push";
 
@@ -210,25 +211,18 @@ export function FailedPushesAdmin({ initialRows }: { initialRows: readonly Faile
           {selected.size} of {rows.length} selected
         </p>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
+          <Button
             onClick={() => {
               setResolveBanner(null);
               setResolveModalOpen(true);
             }}
             disabled={!anySelected || bulkInFlight || resolveInFlight}
-            className="border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
           >
             Resolve selected
-          </button>
-          <button
-            type="button"
-            onClick={retrySelected}
-            disabled={!anySelected || bulkInFlight || resolveInFlight}
-            className="border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
-          >
+          </Button>
+          <Button onClick={retrySelected} disabled={!anySelected || bulkInFlight || resolveInFlight}>
             {bulkInFlight ? "Retrying…" : "Retry selected"}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -326,14 +320,9 @@ function RowView({
         {formatTimestamp(row.lastAttemptedAt)}
       </Td>
       <Td>
-        <button
-          type="button"
-          onClick={onRetry}
-          disabled={isRetrying || bulkInFlight}
-          className="border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] px-3 py-1.5 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
-        >
+        <Button size="sm" onClick={onRetry} disabled={isRetrying || bulkInFlight}>
           {isRetrying ? "Retrying…" : "Retry"}
-        </button>
+        </Button>
         <ResultBadge state={state} />
       </Td>
     </tr>
@@ -476,22 +465,12 @@ function BulkResolveModal({
           {trimmed.length}/{RESOLUTION_NOTES_MAX_LEN}
         </p>
         <div className="mt-6 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={inFlight}
-            className="border border-[color:var(--color-border-default)] bg-[color:var(--color-surface-primary)] px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-navy transition-colors hover:bg-[color:var(--color-surface-secondary)] disabled:opacity-40"
-          >
+          <Button tone="default" onClick={onCancel} disabled={inFlight}>
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfirm(trimmed)}
-            disabled={!canSubmit}
-            className="border border-[color:var(--color-border-strong)] bg-navy px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-paper transition-opacity hover:opacity-80 disabled:opacity-40"
-          >
+          </Button>
+          <Button variant="filled" onClick={() => onConfirm(trimmed)} disabled={!canSubmit}>
             {inFlight ? "Resolving…" : "Resolve"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

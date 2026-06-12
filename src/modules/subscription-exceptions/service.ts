@@ -98,6 +98,7 @@ import {
   listRecentExceptionsForSubscription,
 } from "./repository";
 import {
+  findDriverBoundTaskForSubscriptionDate,
   markTaskAddressOverridden,
   markTasksAddressOverriddenForward,
   markTaskSkipped,
@@ -407,14 +408,17 @@ export async function addSubscriptionException(
     assertIsoDate(input.targetDateOverride, "targetDateOverride");
   }
 
-  // Step 4 — cut-off check (brief §3.1.8). 18:00 Dubai the day before.
-  // For address_override_forward, the start_date may apply to
-  // not-yet-materialized future tasks — the cut-off still applies to
-  // the start date itself per plan §7.2 (the cut-off is a "cannot
-  // mutate today's delivery after 18:00" guard, not a skip-specific
-  // rule).
+  // Step 4 — cut-off check (brief §3.1.8, R-A redefinition): the 18:00
+  // cut-off is the order-CREATION deadline. It gates only the skip
+  // kinds (a skip creates/cancels orders by date — dispatch-named
+  // "skip-creation paths"). Address overrides are EDITS of a delivery
+  // and follow the assignment gate instead (plan
+  // day-54-session-c-ra-assignment-gate §1 site 8, reviewer-ruled r1):
+  // an unassigned delivery's address is fixable at any hour; the
+  // driver-bound rejection happens on the guarded-UPDATE null path in
+  // step 12b below.
   const now = options?.now ?? new Date();
-  if (isCutOffElapsedForDate(now, skipDate)) {
+  if (input.type === "skip" && isCutOffElapsedForDate(now, skipDate)) {
     throw new ValidationError(
       "delivery date is past the 18:00 Dubai cut-off the day before; cannot apply exception",
     );
@@ -572,6 +576,25 @@ export async function addSubscriptionException(
     let skippedTask: { taskId: Uuid; externalTrackingNumber: string | null } | null = null;
     if (input.type === "skip") {
       skippedTask = await markTaskSkipped(tx, tenantId, subscriptionId, skipDate);
+      if (skippedTask === null) {
+        // R-A assignment freeze: markTaskSkipped's WHERE now excludes
+        // driver-bound rows, so a null here is EITHER the legitimate
+        // unmaterialized sub-case 13a OR a frozen assigned delivery.
+        // Recording a skip exception while the driver still delivers
+        // would be dishonest state — probe and reject (rolls back the
+        // exception INSERT above).
+        const frozen = await findDriverBoundTaskForSubscriptionDate(
+          tx,
+          tenantId,
+          subscriptionId,
+          skipDate,
+        );
+        if (frozen !== null) {
+          throw new ValidationError(
+            `delivery on ${skipDate} is assigned to a driver and locked (status '${frozen}'); no edits or cancellations once assigned`,
+          );
+        }
+      }
     }
 
     // 12b. R4 (plan-PR #335 §2.R4, Love-ruled Day-52) — one-off address
@@ -597,6 +620,23 @@ export async function addSubscriptionException(
         skipDate,
         input.addressOverrideId as Uuid,
       );
+      if (overriddenTask === null) {
+        // R-A assignment freeze — same guard-after-null as the skip
+        // path: distinguish unmaterialized (fine; the exception row is
+        // the durable record) from a driver-bound frozen delivery
+        // (reject; the address can no longer change under the driver).
+        const frozen = await findDriverBoundTaskForSubscriptionDate(
+          tx,
+          tenantId,
+          subscriptionId,
+          skipDate,
+        );
+        if (frozen !== null) {
+          throw new ValidationError(
+            `delivery on ${skipDate} is assigned to a driver and locked (status '${frozen}'); the address can no longer be changed`,
+          );
+        }
+      }
       if (overriddenTask !== null && overriddenTask.externalTrackingNumber !== null) {
         overrideSnapshot = await buildConsigneeSnapshotForAddress(
           tx,

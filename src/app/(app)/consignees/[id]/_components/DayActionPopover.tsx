@@ -698,6 +698,9 @@ export function DayActionPopover({
   // D1-reused action 6 cancel-no-append).
   const mutationEligible =
     subscriptionId !== null && MUTATION_ELIGIBLE_STATUSES.has(internalStatus);
+  // R-A (plan §4.1): driver-bound days get a plain explanation instead
+  // of silently missing buttons — the lock is a rule, not a bug.
+  const driverBound = internalStatus === "ASSIGNED" || internalStatus === "IN_TRANSIT";
   const hasAnyMutationPerm =
     permissions.canSkip ||
     permissions.canSkipOverride ||
@@ -716,9 +719,8 @@ export function DayActionPopover({
   // state IS the recall state — surface it in plain words. 'failed'
   // here means the vendor refused the recall: the delivery completes
   // as the final one (the honesty rule's visible flag).
-  const isDriverBound = internalStatus === "ASSIGNED" || internalStatus === "IN_TRANSIT";
   const churnRecallBadge =
-    consigneeChurned && isDriverBound
+    consigneeChurned && driverBound
       ? outboundSyncState === "pending_cancel"
         ? { label: "Recall requested — awaiting vendor", classes: "bg-ivory text-[color:var(--color-stone-600)]" }
         : outboundSyncState === "failed"
@@ -831,7 +833,14 @@ export function DayActionPopover({
               // click: each action is still one click via setMode. Empty
               // groups render nothing (no bare header).
               <div className="mt-5 space-y-5">
-                {visibleActions.length === 0 ? (
+                {driverBound ? (
+                  <p className="text-xs text-[color:var(--color-text-secondary)]">
+                    Assigned to a driver — this delivery is locked. No edits or
+                    cancellations once assigned; notes to the driver still go
+                    through.
+                  </p>
+                ) : null}
+                {visibleActions.length === 0 && !driverBound ? (
                   <p className="text-xs text-[color:var(--color-text-secondary)]">
                     {!mutationEligible
                       ? showTimelineButton

@@ -500,6 +500,34 @@ describe("D8-5 pushSingleTask — failure paths", () => {
     expect(reconcileEmits).toHaveLength(0);
   });
 
+  it("R-D: reconcile recovers the SF id but the local mark fails — DLQ row lands with the recovered-id prefix; retry semantics unchanged", async () => {
+    stubWithServiceRoleHappy();
+    mockFindTask.mockResolvedValue(taskFixture());
+    mockMarkPushed.mockRejectedValueOnce(new Error("pooler hiccup"));
+
+    const adapter = stubAdapter({
+      createTask: vi.fn(async () => {
+        throw new SuiteFleetAwbExistsError(AWB, 400, `Awb with value ${AWB} exists already`);
+      }),
+    });
+    const outcome = await pushSingleTask(systemCtx(), TASK_ID, adapter);
+
+    // Outcome unchanged (the queue handler still throws-for-retry).
+    expect(outcome.kind).toBe("awb_exists");
+    if (outcome.kind === "awb_exists") {
+      expect(outcome.reconcileErrorMessage).toMatch(/mark_pushed_via_reconcile failed/);
+    }
+
+    // NEW: the DLQ row records the truth — SF side is FINE, the
+    // recovered SF id is inline, only the local write failed.
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const dlqInput = mockRecord.mock.calls[0][1];
+    expect(dlqInput.failureDetail).toMatch(/^reconcile_recovered_but_mark_pushed_failed:/);
+    expect(dlqInput.failureDetail).toContain(RECOVERED_SF_ID);
+    expect(dlqInput.failureDetail).toContain(AWB);
+    expect(dlqInput.failureReason).toBe("unknown");
+  });
+
   it("returns failed_to_dlq for non-AWB push errors with classified failureReason", async () => {
     stubWithServiceRoleHappy();
     mockFindTask.mockResolvedValue(taskFixture());
