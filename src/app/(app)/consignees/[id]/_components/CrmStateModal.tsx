@@ -210,15 +210,25 @@ export function CrmStateModalForm({
 interface CrmStateModalProps {
   readonly consigneeId: string;
   readonly currentState: ConsigneeCrmState;
+  /**
+   * Day-54 churn role gate — whether the signed-in actor holds
+   * `consignee:churn` (merchant-level only; transcorp staff never do).
+   * Computed server-side on the consignee page from ctx permissions.
+   * Visibility only — the service re-checks the permission regardless.
+   */
+  readonly canChurn: boolean;
 }
 
 /**
  * Resolve the to-states the modal renders as radio options. Pure
  * helper — exported for unit-test coverage without rendering the
  * component (no client-component test infrastructure yet).
+ * Day-54: CHURNED renders only for actors holding consignee:churn —
+ * the option disappears for everyone else (matching the server gate).
  */
 export function resolveAllowedToStates(
   fromState: ConsigneeCrmState,
+  canChurn: boolean,
 ): readonly ConsigneeCrmState[] {
   const set = ALLOWED_TRANSITIONS[fromState];
   // Convert ReadonlySet → readonly array; preserve enum ordering
@@ -231,7 +241,7 @@ export function resolveAllowedToStates(
     "CHURNED",
     "SUBSCRIPTION_ENDED",
   ];
-  return ORDERED.filter((s) => set.has(s));
+  return ORDERED.filter((s) => set.has(s) && (canChurn || s !== "CHURNED"));
 }
 
 /**
@@ -246,7 +256,7 @@ export function requiresReactivationKeyword(
   return fromState === "CHURNED" && toState === "ACTIVE";
 }
 
-export function CrmStateModal({ consigneeId, currentState }: CrmStateModalProps) {
+export function CrmStateModal({ consigneeId, currentState, canChurn }: CrmStateModalProps) {
   // `open` carries the user's intent (clicked the trigger). The
   // effective open state is derived from `open` AND whether the
   // action has succeeded — successful action implicitly closes the
@@ -259,7 +269,7 @@ export function CrmStateModal({ consigneeId, currentState }: CrmStateModalProps)
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const allowedToStates = resolveAllowedToStates(currentState);
+  const allowedToStates = resolveAllowedToStates(currentState, canChurn);
 
   function openModal() {
     setOpen(true);

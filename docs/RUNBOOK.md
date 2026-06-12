@@ -66,6 +66,26 @@ Cross-references:
 
 Folded in from `docs/BOOTSTRAP_NOTES.md` on Day 11 of the sprint. Until then, see that file directly.
 
+### Session bootstrap is repo-first (Love's ruling, Day-54 — 2026-06-12)
+
+A fresh agent session bootstraps **from the repo, not from the claude.ai
+cabinet mirror**: raw-fetch (or read from a checkout of) **`main`'s current**
+copies of
+
+1. the product brief — `memory/PLANNER_PRODUCT_BRIEF.md` (acknowledge per its §10),
+2. the memory index / queue — `memory/PARKED-QUEUE.md`,
+3. the latest EOD handoff — newest `memory/handoffs/*`,
+
+before any action. The **claude.ai cabinet mirror is demoted to a
+milestone-only fallback** — refreshed at milestones (UAT, MVP), consulted only
+when the repo is unreachable; it is no longer the bootstrap source of truth
+and may lag days behind main.
+
+**Dependency, recorded with the ruling:** this holds **while the repository is
+publicly readable** (raw fetches need no credential). If the repo goes
+private, the bootstrap path needs an authenticated fetch or the cabinet
+reverts to primary — surface that to Love before flipping visibility.
+
 ---
 
 ## Other sections (placeholders, fill on Day 11)
