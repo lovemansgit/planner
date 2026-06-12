@@ -67,18 +67,42 @@ v1 auto-merges DOCS ONLY; all code and all T2 parks.
   > Explicit conversational rulings remain required for: live DB changes and
   > production SQL (named authorization), new spend, and genuine open
   > decisions the reviewer surfaces as questions. Confirmed by Love."
-- **Builder clearance-merges (Love's authorization, 2026-06-11 — verbatim
-  "builder to merge"):** when Love EXPLICITLY clears a parked PR, the builder
-  may complete that PR's merge directly, ONLY under ALL of: (1) Love explicitly
-  named the PR cleared; (2) a reviewer APPROVE verdict exists OR a
-  Standing-Order-5 directional park whose directional question Love has
-  answered (clearance-is-verification); (3) CI green at the PINNED head SHA the
-  verdict was posted for; (4) the builder states the merge route + the
-  head/merge SHAs in the report, every time. No promote rides a
-  clearance-merge. TEMPORARY: a post-wave hardening
-  (`memory/followup_clearance_merge_into_action.md`) folds clearance-merge
-  execution into the orch-automerge Action, restoring the standing rule that
-  the Action is the only actor that merges.
+- **Clearance execution (Love's ruling, 2026-06-12 — verbatim "I dont want
+  such blockers... I approve and code executes."):** the production-SQL
+  pattern covers ALL pipeline actions, all phases — **Love authorizes by
+  sentence on the record; the builder executes and states the route.** No
+  Love-side file edits, commits, or label clicks anywhere in the pipeline.
+  Concretely, for a Love-cleared parked PR the builder routes through the
+  orch-automerge Action's clearance mode (`love-cleared` label, shipped
+  #440): the builder applies the label WHEN, AND ONLY WHEN, Love's clearance
+  sentence is quoted verbatim in an ORCH-CLEARANCE comment on that PR —
+  never without the quoted sentence. The Action re-verifies server-side
+  (clearance comment present + reviewer APPROVE at the current head + CI
+  enforced by auto-merge) and executes the merge; the builder reports route +
+  head/merge SHAs every time. The permission classifier remains the standing
+  backstop against UNQUOTED self-application. The four conditions of the
+  retired 2026-06-11 builder clearance-merge bridge live on as the Action's
+  server-side gates; the bridge clause itself and every "Love pastes / Love
+  clicks / Love commits" step in this runbook are RETIRED by this ruling.
+- **`love-cleared` is agent-appliable + standing reconciliation audit (Love's
+  ruling, 2026-06-12 — Day-54):** the `gh pr edit … --add-label love-cleared`
+  permission is now ALLOWED to the builder/subagents in `.claude/settings.json`
+  (Love authored the settings commit himself — the harness auto-mode classifier
+  blocks EVERY agent route to self-grant a permission widening, "user
+  instruction cannot clear"; landed on `main` at `14709c0`, independently
+  reviewer-verified at the pinned SHA: deny-pair intact + exactly the one allow
+  line). Applying `love-cleared` triggers the orch-automerge Action's clearance
+  mode (path-gate relaxed for that PR only; `ORCH-CLEARANCE` comment + reviewer
+  APPROVE at the head SHA still required server-side). Authorization is **Love's
+  recorded clearance sentence**, NEVER the label's GitHub identity —
+  attribution-by-identity is explicitly NOT a goal (builder and Love share one
+  identity). **Standing audit (compensating control):** at EVERY claude.ai
+  check-in, every `love-cleared` merge since the last check-in is reconciled
+  against Love's recorded clearance sentences; any merge with no matching
+  recorded sentence is surfaced to Love immediately. Ruling of record:
+  `memory/decision_d54_love_cleared_allow_rule.md`. The un-spoofable-signal open
+  question in `memory/followup_clearance_merge_into_action.md` is resolved by
+  ruling, with a post-UAT revisit.
 
 ## Three-pair scaling rules (Day-53, Love-ruled)
 

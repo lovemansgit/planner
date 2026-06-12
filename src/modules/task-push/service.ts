@@ -427,6 +427,27 @@ export async function pushSingleTask(
   }
 
   // ---------------------------------------------------------------------------
+  // Step 2.4: not-pushable-status guard (R-E r1, PR #480 review)
+  // ---------------------------------------------------------------------------
+  // Belt-and-braces partner of listReconciliationCandidatesByTenant's
+  // status exclusion: never resurrect a dead row at the vendor. A
+  // churn-cancelled (or pause-cancelled / skipped) unpushed task must
+  // stay dead — pushing it would create a brand-new delivery for a
+  // hard-stopped customer. No DLQ row: the non-push IS the correct
+  // outcome of an intentional cancel, not a failure.
+  if (
+    task.internalStatus === "CANCELED" ||
+    task.internalStatus === "SKIPPED" ||
+    task.internalStatus === "DELIVERED" ||
+    task.internalStatus === "FAILED"
+  ) {
+    taskLog.warn(
+      { reason: "not_pushable_status", internal_status: task.internalStatus },
+      "push_single_task status guard fired — dead row stays dead, no SF push",
+    );
+    return { kind: "not_pushable_status", internalStatus: task.internalStatus };
+  }
+
   // Step 2.5: past-dated guard (Day-32 PR-A / F-5)
   // ---------------------------------------------------------------------------
   // Plan-PR #317 §3.5 Surface 1 + §6 OQ-3 ruling (a) at SHA f0ef560:
@@ -620,6 +641,30 @@ export async function pushSingleTask(
           awb: err.awb,
           external_id: reconcileResult.externalId,
         });
+        // R-D (triage memo §R-D, build dispatched Day-54): belt-and-
+        // braces DLQ visibility. Without this row, QStash exhaustion
+        // lands a misleading `awb_exists_reconcile_failed:` DLQ entry
+        // and the recovered SF id lives only in Sentry — ops can't see
+        // that SF-side is FINE and only a local UPDATE is needed.
+        // Guarded write (DLQ failure must not mask the original error);
+        // retry semantics deliberately unchanged — the return below
+        // still throws-for-retry at the queue handler.
+        try {
+          await recordFailedPushAttempt(ctx, {
+            taskId: task.id,
+            taskPayload: request as unknown as Record<string, unknown>,
+            failureReason: "unknown",
+            failureDetail: `reconcile_recovered_but_mark_pushed_failed: SF task EXISTS (external_id=${reconcileResult.externalId}, awb=${err.awb}); only the local mark-pushed write failed: ${markErr instanceof Error ? markErr.message : String(markErr)}`,
+          });
+        } catch (dlqErr) {
+          captureException(dlqErr, {
+            component: "task_push_service",
+            operation: "single_dlq_write_reconcile_recovered",
+            tenant_id: tenantId,
+            task_id: task.id,
+            awb: err.awb,
+          });
+        }
         return {
           kind: "awb_exists",
           awb: err.awb,
