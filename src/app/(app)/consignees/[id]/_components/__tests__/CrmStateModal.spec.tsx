@@ -18,7 +18,7 @@ vi.mock("../../_actions", () => ({
   }),
 }));
 
-import { CrmStateModalForm } from "../CrmStateModal";
+import { CrmStateModalForm, resolveAllowedToStates } from "../CrmStateModal";
 
 const CONSIGNEE_ID = "11111111-1111-1111-1111-111111111111";
 
@@ -51,5 +51,18 @@ describe("CrmStateModal — R-E mandatory churn warning", () => {
     expect(html).not.toContain("hard stop");
     expect(html).not.toContain("Churn — stop everything");
     expect(html).toContain("Confirm");
+  });
+});
+
+describe("resolveAllowedToStates — Day-54 churn role gate (merchant-level only)", () => {
+  it("includes CHURNED when the actor can churn", () => {
+    expect(resolveAllowedToStates("ACTIVE", true)).toContain("CHURNED");
+  });
+
+  it("excludes CHURNED when the actor cannot churn, leaving other transitions intact", () => {
+    const states = resolveAllowedToStates("ACTIVE", false);
+    expect(states).not.toContain("CHURNED");
+    expect(states).toContain("ON_HOLD");
+    expect(states).toContain("INACTIVE");
   });
 });

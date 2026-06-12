@@ -628,6 +628,14 @@ export async function changeConsigneeCrmState(
   input: ChangeConsigneeCrmStateInput,
 ): Promise<ChangeConsigneeCrmStateResult> {
   requirePermission(ctx, "consignee:change_crm_state");
+  // Day-54 churn role gate — Love's ruling: "churn should only happen
+  // from merchant level, not transcorp admin." The CHURNED transition
+  // (the R-E hard-stop cascade) requires the merchant-level-only
+  // permission on top of the general CRM-state grant; transcorp staff
+  // roles do not hold it (roles.ts carve-out).
+  if (input.toState === "CHURNED") {
+    requirePermission(ctx, "consignee:churn");
+  }
   assertTenantScoped(ctx, "consignee:change_crm_state");
 
   const reason = requireNonEmpty(input.reason, "reason");

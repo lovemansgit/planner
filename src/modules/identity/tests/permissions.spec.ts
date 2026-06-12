@@ -584,10 +584,24 @@ describe("Transcorp Sysadmin (Day-2 brief §6)", () => {
     expect(ROLES["transcorp-sysadmin"].systemOnly).toBe(true);
   });
 
-  it("holds every permission in the catalogue", () => {
+  it("holds every permission in the catalogue EXCEPT consignee:churn (Day-54 ruling: churn is merchant-level only)", () => {
     const perms = ROLES["transcorp-sysadmin"].permissions;
     for (const id of ALL_PERMISSION_IDS) {
-      expect(perms.has(id)).toBe(true);
+      expect(perms.has(id)).toBe(id !== "consignee:churn");
+    }
+  });
+});
+
+describe("consignee:churn role gate (Day-54 — Love's ruling: merchant-level only)", () => {
+  it("is granted to the three merchant-level roles", () => {
+    for (const slug of ["tenant-admin", "ops-manager", "cs-agent"] as const) {
+      expect(ROLES[slug].permissions.has("consignee:churn")).toBe(true);
+    }
+  });
+
+  it("is held by NO transcorp staff role", () => {
+    for (const slug of ["transcorp-sysadmin", "transcorp-systems"] as const) {
+      expect(ROLES[slug].permissions.has("consignee:churn")).toBe(false);
     }
   });
 });
