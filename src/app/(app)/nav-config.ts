@@ -25,6 +25,14 @@ export interface NavItem {
    * invisible per tenant until Love flips it by sentence.
    */
   readonly requiresAssetTracking?: boolean;
+  /**
+   * Day-54 walk F2 — items sharing a `group` label render under one
+   * dropdown trigger instead of as flat tabs (plan #502 Q1's Reports
+   * group). Grouping is presentation-only: permission filtering still
+   * runs per item, and a group whose items all filter out never
+   * renders.
+   */
+  readonly group?: string;
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
@@ -184,9 +192,21 @@ export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
   // Day-54 P2 — Reports group (plan #502). Cross-tenant report
   // surfaces; gated on the systemOnly read_all perm. NOT dark-switch
   // gated at nav level — the report itself scopes to enabled tenants
-  // (an all-dark fleet renders the empty state).
-  { label: "Asset Tracking", path: "/admin/asset-tracking", permission: "asset_tracking:read_all" },
-  { label: "Inventory", path: "/admin/inventory", permission: "asset_tracking:read_all" },
+  // (an all-dark fleet renders the empty state). Grouped under one
+  // "Reports" dropdown (Day-54 walk F2 — two flat tabs overflowed the
+  // admin nav; Q1's Reports group is the ruled shape).
+  {
+    label: "Asset Tracking",
+    path: "/admin/asset-tracking",
+    permission: "asset_tracking:read_all",
+    group: "Reports",
+  },
+  {
+    label: "Inventory",
+    path: "/admin/inventory",
+    permission: "asset_tracking:read_all",
+    group: "Reports",
+  },
 ] as const;
 
 /**
@@ -198,4 +218,40 @@ export function visibleAdminNavItems(
   permissions: ReadonlySet<Permission>,
 ): readonly NavItem[] {
   return ADMIN_NAV_ITEMS.filter((item) => permissions.has(item.permission));
+}
+
+/**
+ * One rendered slot in a nav bar: either a flat item or a labelled
+ * dropdown of items (Day-54 walk F2). Pure presentation shape — the
+ * input is an already-permission-filtered item list, so an empty
+ * group simply never appears.
+ */
+export type NavEntry =
+  | { readonly kind: "item"; readonly item: NavItem }
+  | { readonly kind: "group"; readonly label: string; readonly items: readonly NavItem[] };
+
+/**
+ * Fold consecutive-or-not items sharing a `group` label into one
+ * dropdown entry, keeping each group at the position of its first
+ * member. Pure function so the dropdown shape stays testable without
+ * a DOM environment (same posture as visibleNavItems).
+ */
+export function groupNavItems(items: readonly NavItem[]): readonly NavEntry[] {
+  const entries: NavEntry[] = [];
+  const groupsByLabel = new Map<string, NavItem[]>();
+  for (const item of items) {
+    if (item.group === undefined) {
+      entries.push({ kind: "item", item });
+      continue;
+    }
+    const existing = groupsByLabel.get(item.group);
+    if (existing) {
+      existing.push(item);
+      continue;
+    }
+    const members: NavItem[] = [item];
+    groupsByLabel.set(item.group, members);
+    entries.push({ kind: "group", label: item.group, items: members });
+  }
+  return entries;
 }

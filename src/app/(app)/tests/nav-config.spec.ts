@@ -14,6 +14,7 @@ import {
   ADMIN_NAV_ITEMS,
   LANDING_CARDS,
   NAV_ITEMS,
+  groupNavItems,
   isActiveNavPath,
   visibleAdminNavItems,
   visibleLandingCards,
@@ -250,5 +251,44 @@ describe("Inventory nav item — dark-switch gating (Day-54 P2)", () => {
     for (const item of reportItems) {
       expect(item.permission).toBe("asset_tracking:read_all");
     }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Day-54 walk F2 — Reports dropdown grouping (overflow repair)
+// -----------------------------------------------------------------------------
+
+describe("groupNavItems", () => {
+  const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
+
+  it("folds the two admin report items into one Reports group at the first member's slot", () => {
+    const entries = groupNavItems(visibleAdminNavItems(TRANSCORP_SYSADMIN));
+    expect(
+      entries.map((e) => (e.kind === "item" ? e.item.label : `group:${e.label}`)),
+    ).toEqual([
+      "Overview",
+      "Merchants",
+      "Tasks",
+      "Consignees",
+      "Subscriptions",
+      "Users",
+      "group:Reports",
+    ]);
+    const reports = entries.find((e) => e.kind === "group");
+    expect(reports?.kind === "group" && reports.items.map((i) => i.label)).toEqual([
+      "Asset Tracking",
+      "Inventory",
+    ]);
+  });
+
+  it("grouping is presentation-only: permission filtering still drops group members", () => {
+    // An actor without asset_tracking:read_all gets no Reports group at all.
+    const entries = groupNavItems(visibleAdminNavItems(NONE));
+    expect(entries).toHaveLength(0);
+  });
+
+  it("ungrouped items pass through as flat entries", () => {
+    const entries = groupNavItems(visibleNavItems(TENANT_ADMIN));
+    expect(entries.every((e) => e.kind === "item")).toBe(true);
   });
 });
