@@ -48,12 +48,32 @@ Sketch (design to be ruled at build time):
 
 ## Open questions for the build
 
-- How is the Love-clearance signal made un-spoofable by the builder/subagents?
-  (Label-protection / CODEOWNERS / a signed comment?)
+- ~~How is the Love-clearance signal made un-spoofable by the builder/subagents?
+  (Label-protection / CODEOWNERS / a signed comment?)~~ **RESOLVED BY RULING
+  (Day-54, 2026-06-12) — see Resolution below.**
 - Does the existing reviewer-verdict gate already cover condition (2), or does
   clearance-is-verification (directional parks Love has answered) need its own
   server-side check?
 - Promote stays out of scope — clearance-merges never ride a promote.
+
+## Resolution — shared-identity signal (Day-54, 2026-06-12, Love-ruled)
+
+Open question 1 (un-spoofable Love-clearance signal) is **resolved by ruling**,
+not by a technical control. Love ruled that **attribution-by-GitHub-identity is
+not a goal**: the `love-cleared` label is now agent-appliable (allow-rule in
+`.claude/settings.json`, landed on `main` at `14709c0`), and authorization rests
+on **Love's recorded clearance sentence in the reviewer chat**, never on who
+applied the label. No Love-side act will ever back the label.
+
+**Compensating control (standing audit):** every `love-cleared` merge is
+reconciled against Love's recorded sentences at each claude.ai check-in; a merge
+with no matching recorded sentence is surfaced to Love immediately. Filed as a
+standing audit in `scripts/orchestration/RUNBOOK.md`.
+
+**Status: resolved by ruling — revisit post-UAT.** If UAT surfaces a need for
+un-spoofable attribution (e.g. multiple non-Love operators), reopen with the
+label-protection / second-identity options above. Ruling of record:
+`memory/decision_d54_love_cleared_allow_rule.md`.
 
 ## Cross-references
 
