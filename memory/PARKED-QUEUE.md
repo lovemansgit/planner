@@ -10,13 +10,6 @@ _the park labels on open PRs are the source of truth._
 
 (no ORCH-PARK summary comment found — the builder must post one when parking)
 
-## PR #457 — docs(d54): parked-queue regen — AM dispatch executed (#440 live, #452 parked)
-
-- Label: `parked-t3`
-- Head SHA: `c33aaba426764bdf5a21564cd78b4c17544432c5`
-
-ORCH-PARK — parked by orch-automerge: a server-side gate check failed (see the Action run for which step). This PR does not auto-merge.
-
 ## PR #452 — fix(d54): orch-automerge wait-not-park — missing verdict WAITS; only rejection at head parks
 
 - Label: `parked-t3`
