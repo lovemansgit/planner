@@ -58,6 +58,7 @@ import {
   type CalendarActionPermissions,
 } from "./day-actions";
 import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
+import { Badge } from "@/components/Badge";
 
 // -----------------------------------------------------------------------------
 // Props + types
@@ -761,11 +762,9 @@ export function DayActionPopover({
               <div className="flex items-center justify-between">
                 <dt className="text-[color:var(--color-text-secondary)]">Status</dt>
                 <dd>
-                  <span
-                    className={`inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${statusClasses}`}
-                  >
+                  <Badge size="sm" className={statusClasses}>
                     {statusLabel}
-                  </span>
+                  </Badge>
                 </dd>
               </div>
               <div className="flex items-center justify-between">
@@ -776,11 +775,9 @@ export function DayActionPopover({
                 <div className="flex items-center justify-between">
                   <dt className="text-[color:var(--color-text-secondary)]">SuiteFleet sync</dt>
                   <dd>
-                    <span
-                      className={`inline-flex items-center rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${syncBadge.classes}`}
-                    >
+                    <Badge size="sm" className={syncBadge.classes}>
                       {syncBadge.label}
-                    </span>
+                    </Badge>
                   </dd>
                 </div>
               ) : null}
@@ -794,9 +791,9 @@ export function DayActionPopover({
                 <div className="flex items-center justify-between">
                   <dt className="text-[color:var(--color-text-secondary)]">SuiteFleet push</dt>
                   <dd>
-                    <span className="inline-flex items-center rounded-sm bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-amber-deep">
+                    <Badge size="sm" className="bg-amber-100 text-amber-deep">
                       Failed — see ops
-                    </span>
+                    </Badge>
                   </dd>
                 </div>
               ) : null}
