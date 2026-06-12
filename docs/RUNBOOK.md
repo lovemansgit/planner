@@ -86,6 +86,15 @@ publicly readable** (raw fetches need no credential). If the repo goes
 private, the bootstrap path needs an authenticated fetch or the cabinet
 reverts to primary — surface that to Love before flipping visibility.
 
+### Merge watchers / poll loops get a deadline (Love's ruling, Day-54 — 2026-06-12)
+
+No passive watchers, no indefinite waits, ever. Any merge-watch or poll loop
+longer than **10 minutes converts to diagnose-or-park**: check the actual
+state (`gh pr view` — state + checks at head), apply at most **one nudge** per
+the hardened triggers (verdict re-post or label re-apply), re-check ONCE, and
+if still unmerged, park with the exact blocking condition verbatim plus the
+one-line remedy for Love. Report state within minutes, not on completion.
+
 ---
 
 ## Other sections (placeholders, fill on Day 11)

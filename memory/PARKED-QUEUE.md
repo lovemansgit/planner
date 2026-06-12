@@ -18,3 +18,10 @@ ORCH-PARK (Session B, bag-tracking plan lane)
 
 **Clears on:** your answers to the 10 numbered questions in the plan (each has one recommendation — 'all recommendations' is a valid one-line answer) + your one-line clear to start the build.
 
+## PR #503 — docs(d54): PM-2 EOD — promote LIVE, spot-checks PASS, queue = #500
+
+- Label: `parked-t3`
+- Head SHA: `5f4272960bf61452ff01cdeedccb97ec42b60b87`
+
+ORCH-PARK — parked by orch-automerge: a server-side gate check failed (see the Action run for which step). This PR does not auto-merge.
+
