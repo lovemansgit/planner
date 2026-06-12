@@ -123,6 +123,7 @@ import {
   insertException,
 } from "../subscription-exceptions/repository";
 import {
+  countDriverBoundTasksInWindow,
   markTasksCanceledInWindow,
   markTasksRestoredInWindow,
 } from "../tasks";
@@ -697,13 +698,12 @@ export async function pauseSubscription(
     );
   }
 
-  // Step 2 — cut-off enforcement on pause_start (brief §3.1.8 + plan §7.3).
-  const now = options?.now ?? new Date();
-  if (isCutOffElapsedForDate(now, input.pause_start)) {
-    throw new ValidationError(
-      "pause_start is past the 18:00 Dubai cut-off the day before; cannot apply pause",
-    );
-  }
+  // Step 2 — R-A (plan day-54-session-c-ra-assignment-gate §1 site 10):
+  // the pause_start cut-off is GONE. The 18:00 cut-off is the order-
+  // creation deadline only; a pause is a bulk cancel of the window and
+  // cancellation is gated by assignment, per task, inside the tx —
+  // markTasksCanceledInWindow excludes driver-bound rows and the
+  // excluded count is surfaced in the audit metadata below.
 
   // Step 3-7 — single tenant-scoped transaction.
   const txResult = await withTenant(tenantId, async (tx) => {
@@ -786,6 +786,17 @@ export async function pauseSubscription(
       input.pause_end,
     );
 
+    // R-A: driver-bound rows in the window survived the cancel above
+    // (assignment freeze). Count them so the audit record is honest
+    // about deliveries that keep going through the pause.
+    const assignedTasksExcluded = await countDriverBoundTasksInWindow(
+      tx,
+      tenantId,
+      id,
+      input.pause_start,
+      input.pause_end,
+    );
+
     // Flip subscription status + end_date.
     if (newEndDate !== null && newEndDate !== subscription.endDate) {
       await tx.execute(sqlTag`
@@ -812,6 +823,7 @@ export async function pauseSubscription(
       newEndDate,
       previousEndDate: subscription.endDate,
       canceledTasks,
+      assignedTasksExcluded,
     } as const;
   });
 
@@ -828,7 +840,7 @@ export async function pauseSubscription(
     };
   }
 
-  const { exception, newEndDate, previousEndDate, canceledTasks } = txResult;
+  const { exception, newEndDate, previousEndDate, canceledTasks, assignedTasksExcluded } = txResult;
   const canceledTaskCount = canceledTasks.length;
 
   // Post-commit audit emission with shared correlation_id.
@@ -851,6 +863,7 @@ export async function pauseSubscription(
       pause_end: input.pause_end,
       reason: input.reason ?? null,
       canceled_task_count: canceledTaskCount,
+      assigned_tasks_excluded: assignedTasksExcluded,
       correlation_id: exception.correlationId,
     },
   });
@@ -1077,6 +1090,12 @@ export async function resumeSubscription(
     // the restore cleared it) — the post-commit re-push fan-out input.
     let reactivationRows: readonly { taskId: Uuid; previousAwb: string }[] = [];
 
+    // Day-54 guard split (memory/followup_r16_open_ended_resume_gap.md):
+    // the end-date-shrink arithmetic is end-date-gated (cannot shrink an
+    // end date that does not exist), but the task RESTORE + R16
+    // re-activation must run for EVERY early manual resume — nesting the
+    // restore inside the endDate guard (the #160 shape) left open-ended
+    // subscriptions' window tasks stranded CANCELED on both sides.
     if (earlyManual && subscription.endDate !== null) {
       const subForHelpers: SubscriptionForSkip = {
         endDate: subscription.endDate,
@@ -1116,10 +1135,15 @@ export async function resumeSubscription(
           endDateChanged = true;
         }
       }
+    }
 
+    if (earlyManual) {
       // Restore tasks where target_date >= actual_resume_date AND <= pause_end.
       // R16: the restore clears external ids on SF-cancelled rows and
       // returns them (with the pre-clear AWB) for the re-push fan-out.
+      // Open-ended subscriptions take this path too: pause granted no
+      // extension (extension is end-date-gated), so there is nothing to
+      // shrink above — new_end_date stays null by construction.
       const restoredRows = await markTasksRestoredInWindow(
         tx,
         tenantId,

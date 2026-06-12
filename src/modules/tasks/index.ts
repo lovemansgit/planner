@@ -97,11 +97,17 @@ export type { DayBucketCount } from "./repository";
 //     for the lint zone (no boundary enforced today; revisit if
 //     subscription-exceptions joins MODULES).
 export {
+  cancelConsigneeTasksForChurn,
+  countDriverBoundTasksInWindow,
+  findDriverBoundTaskForSubscriptionDate,
   findTaskBySubscriptionAndDate,
   markTaskSkipped,
   markTasksCanceledInWindow,
   markTasksRestoredInWindow,
 } from "./repository";
+
+// R-A — assignment-gate predicates (plan day-54-session-c-ra-assignment-gate §2.1).
+export { isTaskDriverBound, isTaskEditable } from "./service";
 
 // Day-53 POD proxy — client-safe path helper (pure, no db import).
 export { podProxyPhotoPaths } from "./pod-proxy";

@@ -85,37 +85,57 @@ jobs:
           [ "$n" -ge 1 ] \
             || { echo "FAIL: no ORCH-CLEARANCE comment quoting Love's ruling"; exit 1; }
 
-      - name: "Require reviewer APPROVE verdict at the current head SHA"
+      # Verdict semantics (Day-54 wait-not-park conformance — the #429-class
+      # fix only works if a not-yet-verdicted PR KEEPS its label so the later
+      # ORCH-VERDICT comment can re-trigger; the old exit-1 here fired the
+      # park handler, stripped the label, and the comment run then resolved
+      # mode=none — the stall preserved. Live evidence: #441/#443).
+      #   approve  — APPROVE pinned at the current head: proceed to arm.
+      #   waiting  — no verdict yet, or the latest verdict pins an older head:
+      #              exit NEUTRAL, no park, no arm. The verdict-comment
+      #              trigger re-runs this job when the reviewer posts.
+      #   park     — the reviewer explicitly rejected at the current head
+      #              (REQUEST_CHANGES pinned to this SHA): true negative.
+      # Merge conditions are UNCHANGED: arming still requires APPROVE at head.
+      - name: "Verdict gate: APPROVE at head arms; absent waits; rejection parks"
+        id: verdict
         if: steps.mode.outputs.mode != 'none'
         run: |
           head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
           last_verdict=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
             --jq '[.[].body | select(startswith("ORCH-VERDICT"))] | last // ""')
-          echo "$last_verdict" | grep -q "SHA: $head" \
-            || { echo "FAIL: latest ORCH-VERDICT is not for head $head"; exit 1; }
-          echo "$last_verdict" | grep -q "VERDICT: APPROVE" \
-            || { echo "FAIL: latest ORCH-VERDICT is not APPROVE"; exit 1; }
+          if ! echo "$last_verdict" | grep -q "SHA: $head"; then
+            echo "WAITING: no ORCH-VERDICT pinned at head $head yet — leaving the label for the verdict-comment trigger"
+            echo "verdict=waiting" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! echo "$last_verdict" | grep -q "VERDICT: APPROVE"; then
+            echo "FAIL: ORCH-VERDICT at head $head is not APPROVE — reviewer rejection, parking"
+            echo "verdict=rejected" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "verdict=approve" >> "$GITHUB_OUTPUT"
 
       # Needed once Love sets required-approving-reviews=1 on main. Until the
       # repo setting "Allow GitHub Actions to create and approve pull requests"
       # is enabled this step fails; continue-on-error keeps the (still
       # protection-gated) merge step below as the single decider.
       - name: "Approve as the sanctioned review path"
-        if: steps.mode.outputs.mode != 'none'
+        if: steps.mode.outputs.mode != 'none' && steps.verdict.outputs.verdict == 'approve'
         continue-on-error: true
         run: |
           gh pr review "$PR" --repo "$REPO" --approve \
             --body "orch-automerge (${{ steps.mode.outputs.mode }}): gates re-verified server-side."
 
       - name: "Enable auto-merge (waits on required CI checks)"
-        if: steps.mode.outputs.mode != 'none'
+        if: steps.mode.outputs.mode != 'none' && steps.verdict.outputs.verdict == 'approve'
         run: gh pr merge "$PR" --repo "$REPO" --squash --auto
 
       # Day-54 hardening: an armed auto-merge on a CONFLICTING PR sits
       # silently forever (#416 class). Probe after arming; a dirty PR parks
       # loudly instead.
       - name: "Loud-park probe: armed auto-merge must not sit on a dirty PR"
-        if: steps.mode.outputs.mode != 'none'
+        if: steps.mode.outputs.mode != 'none' && steps.verdict.outputs.verdict == 'approve'
         run: |
           m=UNKNOWN
           for _ in 1 2 3 4 5 6; do
@@ -128,7 +148,7 @@ jobs:
           echo "mergeable=$m"
 
       - name: "Record route + SHAs on the PR (clearance)"
-        if: steps.mode.outputs.mode == 'clearance'
+        if: steps.mode.outputs.mode == 'clearance' && steps.verdict.outputs.verdict == 'approve'
         run: |
           head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
           gh pr comment "$PR" --repo "$REPO" --body "orch-automerge clearance-merge: route = GitHub Action squash auto-merge (run ${{ github.run_id }}); head SHA at arming = \`$head\`. Gates re-verified server-side: ORCH-CLEARANCE present, ORCH-VERDICT APPROVE at head, CI enforced by auto-merge."
