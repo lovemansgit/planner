@@ -890,16 +890,6 @@ const EVENT_TYPES_DRAFT = {
     systemOnly: false,
   },
 
-  "consignee.churn_cascade": {
-    id: "consignee.churn_cascade",
-    resource: "consignee",
-    action: "churn_cascade",
-    description:
-      "Day 54 / R-E (brief v1.26). The churn hard-stop cascade fired: every subscription of the churned consignee ended, never-pushed tasks canceled locally, pushed tasks (including driver-bound — the single sanctioned bypass of the R-A assignment freeze) entered vendor recall via the cancel fan-out. Pairs with consignee.crm_state.changed for the same transition; vendor-confirmed cancels arrive later via the webhook applier and refused recalls land the cancel-DLQ 'failed' signal.",
-    metadataNotes:
-      "consignee_id (uuid), subscriptions_ended (int), tasks_canceled_local (int), recalls_attempted (int), recall_awbs (string[]), correlation_id (uuid — shared with the recall fan-out payloads), reason (string).",
-    systemOnly: false,
-  },
   "consignee.crm_state.changed": {
     id: "consignee.crm_state.changed",
     resource: "consignee",

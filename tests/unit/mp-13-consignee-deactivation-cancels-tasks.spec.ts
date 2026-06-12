@@ -30,12 +30,10 @@
 //   • Path 1 — consignee with NO active tasks: hard-delete succeeds and
 //     emits `consignee.deleted`. This is the existing
 //     C-3/Day-3 deletion contract.
-//   • Path 2 — MP-13 RULED BEHAVIOR (Day-54 R-E, brief v1.26): the
-//     CHURNED transition is a hard stop — subscriptions end, never-
-//     pushed tasks cancel locally, pushed tasks (incl. driver-bound)
-//     get vendor recalls via the cancel fan-out; the churn_cascade
-//     audit event carries the counts. Non-churn transitions cascade
-//     nothing.
+//   • Path 2 — consignee WITH active tasks: hard-delete throws (the FK
+//     RESTRICT propagates as a raw DB error). The MP-13 rule is NOT
+//     yet enforced; no cascade-cancel; no audit trail of cancelled
+//     tasks. Documented honestly so CI shows the gap.
 //
 // Resolution path:
 //   See `memory/followup_mp_13_cascade_cancel.md` for the design
@@ -74,20 +72,6 @@ vi.mock("../../src/modules/consignees/repository", () => ({
   listConsigneesByTenant: vi.fn(),
   updateConsignee: vi.fn(),
   deleteConsignee: vi.fn(),
-  findConsigneeForCrmUpdate: vi.fn(),
-  updateConsigneeCrmState: vi.fn(),
-  insertConsigneeCrmEvent: vi.fn(),
-}));
-
-// R-E churn cascade dependencies (plan day-54-session-c-re-churn-cascade §1).
-vi.mock("../../src/modules/tasks", () => ({
-  cancelConsigneeTasksForChurn: vi.fn(),
-}));
-vi.mock("../../src/modules/subscriptions", () => ({
-  endAllSubscriptionsForConsignee: vi.fn(),
-}));
-vi.mock("../../src/modules/task-outbound-queue", () => ({
-  enqueueBulkCancelTasks: vi.fn(),
 }));
 
 vi.mock("../../src/shared/logger", () => {
@@ -110,14 +94,8 @@ import { emit } from "../../src/modules/audit";
 import {
   deleteConsignee as deleteConsigneeRow,
   findConsigneeById,
-  findConsigneeForCrmUpdate,
-  insertConsigneeCrmEvent,
-  updateConsigneeCrmState,
 } from "../../src/modules/consignees/repository";
-import { changeConsigneeCrmState, deleteConsignee } from "../../src/modules/consignees/service";
-import { cancelConsigneeTasksForChurn } from "../../src/modules/tasks";
-import { endAllSubscriptionsForConsignee } from "../../src/modules/subscriptions";
-import { enqueueBulkCancelTasks } from "../../src/modules/task-outbound-queue";
+import { deleteConsignee } from "../../src/modules/consignees/service";
 import type { Permission } from "../../src/shared/types";
 import type { Actor, RequestContext } from "../../src/shared/tenant-context";
 
@@ -125,12 +103,6 @@ const mockWithTenant = vi.mocked(withTenant);
 const mockEmit = vi.mocked(emit);
 const mockFindById = vi.mocked(findConsigneeById);
 const mockDeleteRow = vi.mocked(deleteConsigneeRow);
-const mockFindForCrm = vi.mocked(findConsigneeForCrmUpdate);
-const mockUpdateCrm = vi.mocked(updateConsigneeCrmState);
-const mockInsertCrmEvent = vi.mocked(insertConsigneeCrmEvent);
-const mockCancelChurn = vi.mocked(cancelConsigneeTasksForChurn);
-const mockEndAllSubs = vi.mocked(endAllSubscriptionsForConsignee);
-const mockEnqueueBulk = vi.mocked(enqueueBulkCancelTasks);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
@@ -199,72 +171,54 @@ describe("MP-13 — consignee deactivation cancels pushed tasks (PARTIALLY IMPLE
     });
   });
 
-  describe("Path 2 — MP-13 ruled behavior (v1.26): CHURNED is a hard stop", () => {
-    // Rewritten per Love's Day-54 R-E ruling (was: pins the FK-RESTRICT
-    // gap on hard-delete). Churn now cascades: every subscription ends,
-    // never-pushed tasks cancel locally, pushed tasks (INCLUDING
-    // driver-bound — the single sanctioned R-A-freeze bypass) get
-    // vendor recalls; local status flips only on vendor confirmation.
-    function stubCrmHappy() {
-      mockWithTenant.mockImplementation(async (_t, fn) => fn({} as never));
-      mockFindForCrm.mockResolvedValue(consigneeFixture() as never);
-      mockUpdateCrm.mockResolvedValue(consigneeFixture() as never);
-      mockInsertCrmEvent.mockResolvedValue({ id: "crm-evt-1" } as never);
-    }
+  describe("Path 2 — GAP: consignee has active tasks (FK RESTRICT fires)", () => {
+    // Documents the missing cascade-cancel behavior. This test asserts
+    // CURRENT BEHAVIOR — it will need to be updated when the cascade-
+    // cancel implementation lands per
+    // memory/followup_mp_13_cascade_cancel.md.
 
-    it("CHURNED transition cascades: subs ended, unpushed canceled locally, pushed recalled, churn_cascade emitted", async () => {
-      stubCrmHappy();
-      mockEndAllSubs.mockResolvedValue(2);
-      mockCancelChurn.mockResolvedValue({
-        canceledLocalCount: 1,
-        recalls: [
-          { id: "t-pushed-1", external_tracking_number: "AWB-CHURN-1" },
-          { id: "t-assigned-1", external_tracking_number: "AWB-CHURN-2" },
-        ],
-      } as never);
-      mockEnqueueBulk.mockResolvedValue({ enqueuedCount: 2, failedChunks: 0, totalCount: 2 } as never);
-
-      const result = await changeConsigneeCrmState(
-        ctx(["consignee:change_crm_state"] as never),
-        CONSIGNEE_ID as never,
-        { toState: "CHURNED", reason: "customer churned — stop everything" },
-      );
-
-      expect(result.status).toBe("updated");
-      expect(mockEndAllSubs).toHaveBeenCalledTimes(1);
-      expect(mockCancelChurn).toHaveBeenCalledTimes(1);
-
-      // Fan-out got exactly the recall AWBs.
-      expect(mockEnqueueBulk).toHaveBeenCalledTimes(1);
-      const payloads = mockEnqueueBulk.mock.calls[0][0] as readonly { awb: string }[];
-      expect(payloads.map((pl) => pl.awb)).toEqual(["AWB-CHURN-1", "AWB-CHURN-2"]);
-
-      // churn_cascade audit with honest counts.
-      const cascadeEmits = mockEmit.mock.calls.filter(
-        (c) => (c[0] as { eventType: string }).eventType === "consignee.churn_cascade",
-      );
-      expect(cascadeEmits).toHaveLength(1);
-      expect((cascadeEmits[0][0] as { metadata: Record<string, unknown> }).metadata).toMatchObject({
-        consignee_id: CONSIGNEE_ID,
-        subscriptions_ended: 2,
-        tasks_canceled_local: 1,
-        recalls_attempted: 2,
+    it("propagates the FK violation as a thrown error (rule NOT YET enforced)", async () => {
+      mockFindById.mockResolvedValue(consigneeFixture());
+      // Simulate the FK RESTRICT — the repository's tx.execute(DELETE …)
+      // would receive SQLSTATE 23503 from Postgres; the mocked
+      // repository raises a generic Error to stand in.
+      mockDeleteRow.mockImplementation(async () => {
+        const err = new Error(
+          'update or delete on table "consignees" violates foreign key constraint "tasks_consignee_id_fkey" on table "tasks"',
+        );
+        // Attach the SQLSTATE code postgres-js exposes as `code` on its
+        // error objects — service-layer code that ever wants to detect
+        // this case (a future cascade-cancel implementation) can branch
+        // on the code rather than parse the message.
+        (err as Error & { code?: string }).code = "23503";
+        throw err;
       });
+
+      await expect(
+        deleteConsignee(ctx(["consignee:delete"]), CONSIGNEE_ID),
+      ).rejects.toThrow(/foreign key constraint/);
+
+      // Audit must NOT fire on the failure path — `consignee.deleted`
+      // would be a ghost event for an action that didn't commit.
+      expect(mockEmit).not.toHaveBeenCalled();
     });
 
-    it("non-churn transitions cascade NOTHING (guard)", async () => {
-      stubCrmHappy();
+    it("does not yet attempt to cancel pending tasks before deletion (gap)", async () => {
+      // The MP-13 rule's full implementation would: pre-fetch pending
+      // tasks for this consignee, transition each to CANCELED via
+      // task.update, emit per-task task.updated events, then delete
+      // the consignee (which still requires schema work — see memo).
+      // None of that wiring exists today. This test asserts the
+      // observable absence: no per-task audit event, no task module
+      // imports referenced, no cancel-tasks helper called.
+      mockFindById.mockResolvedValue(consigneeFixture());
+      mockDeleteRow.mockResolvedValue(true);
 
-      const result = await changeConsigneeCrmState(
-        ctx(["consignee:change_crm_state"] as never),
-        CONSIGNEE_ID as never,
-        { toState: "ON_HOLD", reason: "short hold" },
-      );
+      await deleteConsignee(ctx(["consignee:delete"]), CONSIGNEE_ID);
 
-      expect(result.status).toBe("updated");
-      expect(mockEndAllSubs).not.toHaveBeenCalled();
-      expect(mockCancelChurn).not.toHaveBeenCalled();
-      expect(mockEnqueueBulk).not.toHaveBeenCalled();
+      // Only the consignee.deleted emit fires — no task.updated emits.
+      const eventTypes = mockEmit.mock.calls.map((call) => call[0].eventType);
+      expect(eventTypes).toEqual(["consignee.deleted"]);
     });
   });
 

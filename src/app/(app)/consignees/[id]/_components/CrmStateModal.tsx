@@ -67,7 +67,7 @@ interface FormChildProps {
  * parent closes the modal in response (no setState-in-effect at the
  * parent layer — the success signal flows down via callback).
  */
-export function CrmStateModalForm({
+function CrmStateModalForm({
   consigneeId,
   currentState,
   allowedToStates,
@@ -94,10 +94,6 @@ export function CrmStateModalForm({
   const reactivationGate =
     selectedToState !== null &&
     requiresReactivationKeyword(currentState, selectedToState);
-
-  // R-E (brief v1.26): churn is a hard stop — the warning is mandatory
-  // and renders the moment CHURNED is selected, before any confirm.
-  const churnGate = selectedToState === "CHURNED";
 
   return (
     <form action={formAction} className="mt-6">
@@ -137,17 +133,6 @@ export function CrmStateModalForm({
           </div>
         </fieldset>
       )}
-
-      {churnGate ? (
-        <p className="mb-3 rounded-sm border border-red/40 bg-red/10 px-2 py-1.5 text-xs text-red">
-          This is a hard stop. The customer receives nothing else from this
-          moment on. Every subscription ends now; every pending delivery is
-          cancelled at the vendor immediately — including recall attempts on
-          deliveries already assigned to a driver. If the vendor refuses a
-          recall, that delivery completes as the final one and is flagged.
-          This cannot be undone from this screen.
-        </p>
-      ) : null}
 
       <div className="mb-2">
         <label
@@ -200,7 +185,7 @@ export function CrmStateModalForm({
           disabled={isPending || allowedToStates.length === 0}
           className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isPending ? "Saving…" : churnGate ? "Churn — stop everything" : "Confirm"}
+          {isPending ? "Saving…" : "Confirm"}
         </button>
       </div>
     </form>

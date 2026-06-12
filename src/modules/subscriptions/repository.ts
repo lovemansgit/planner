@@ -612,29 +612,3 @@ export async function listSweepCandidates(
 // of this module can match without importing from @/shared/errors.
 // (Same convention as failed-pushes module.)
 export { ConflictError, NotFoundError };
-
-// -----------------------------------------------------------------------------
-// R-E — churn hard-stop cascade (plan day-54-session-c-re-churn-cascade §1)
-// -----------------------------------------------------------------------------
-
-/**
- * End every non-ended subscription of a consignee (active AND paused —
- * churn is a hard stop on everything). Returns the count ended. Same
- * column semantics as endSubscription's repo primitive: ended_at set,
- * paused_at cleared.
- */
-export async function endAllSubscriptionsForConsignee(
-  tx: DbTx,
-  tenantId: Uuid,
-  consigneeId: Uuid,
-): Promise<number> {
-  const rows = (await tx.execute(sqlTag`
-    UPDATE subscriptions
-    SET status = 'ended', ended_at = now(), paused_at = NULL, updated_at = now()
-    WHERE tenant_id = ${tenantId}
-      AND consignee_id = ${consigneeId}
-      AND status != 'ended'
-    RETURNING id
-  `)) as readonly { id: string }[];
-  return rows.length;
-}

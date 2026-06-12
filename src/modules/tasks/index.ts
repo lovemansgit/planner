@@ -97,7 +97,6 @@ export type { DayBucketCount } from "./repository";
 //     for the lint zone (no boundary enforced today; revisit if
 //     subscription-exceptions joins MODULES).
 export {
-  cancelConsigneeTasksForChurn,
   findTaskBySubscriptionAndDate,
   markTaskSkipped,
   markTasksCanceledInWindow,

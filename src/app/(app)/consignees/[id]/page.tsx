@@ -447,7 +447,6 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                   permissions={calendarPermissions}
                   availableAddresses={calendarAddresses}
                   failedPushTaskIds={calendarFailedPushTaskIds}
-                  consigneeChurned={consignee.crmState === "CHURNED"}
                 />
               ) : null}
               {activeView === "year" ? (
