@@ -25,7 +25,10 @@ import { beforeAll, afterAll, describe, expect, it } from "vitest";
 
 import {
   getAdminAssetTrackingReport,
+  getAssetScanLog,
   getInventoryReport,
+  refreshMerchantAssetTracking,
+  refreshTenantAssetTracking,
 } from "../../src/modules/asset-tracking/report-service";
 import { ROLES } from "../../src/modules/identity";
 import {
@@ -45,9 +48,13 @@ const SLUG_OFF = `p2-agg-${RUN_ID}-off`;
 
 const DATE_1 = "2026-06-10";
 const DATE_2 = "2026-06-11";
-const AWB_1 = "MPL-91000001"; // tenant ON, date 1, consignee 1 — 2 pkgs
-const AWB_2 = "MPL-91000002"; // tenant ON, date 2, consignee 2 — 1 pkg
-const AWB_OFF = "MPL-91000009"; // tenant OFF — must never surface
+// Per-run AWB digits: tracking_id is GLOBALLY unique (0011), so fixed
+// AWBs collide when a prior run's teardown was interrupted. Digits
+// derive from the run's uuid.
+const RUN_NUM = String(Number.parseInt(RUN_ID.replace(/[^0-9a-f]/g, "").slice(0, 6) || "1", 16) % 900000 + 100000);
+const AWB_1 = `MPL-9${RUN_NUM}1`; // tenant ON, date 1, consignee 1 — 2 pkgs
+const AWB_2 = `MPL-9${RUN_NUM}2`; // tenant ON, date 2, consignee 2 — 1 pkg
+const AWB_OFF = `MPL-9${RUN_NUM}9`; // tenant OFF — must never surface
 
 const SYSADMIN_PERMS = ROLES["transcorp-sysadmin"].permissions;
 
@@ -161,6 +168,11 @@ describe("Day-54 P2 — asset report aggregation (real Postgres)", () => {
       await withServiceRole("P2 aggregation teardown", async (tx) => {
         await tx.execute(sqlTag`SET LOCAL app.allow_scan_log_delete = 'on'`);
         await tx.execute(sqlTag`DELETE FROM asset_scan_log WHERE tenant_id IN (${TENANT_ON}, ${TENANT_OFF})`);
+        // Explicit child deletes — the tenants cascade is known-blocked
+        // by the 0002 audit no-delete RULE when audit rows exist, and a
+        // failed cascade would strand globally-unique tracking_ids.
+        await tx.execute(sqlTag`DELETE FROM asset_tracking_cache WHERE tenant_id IN (${TENANT_ON}, ${TENANT_OFF})`);
+        await tx.execute(sqlTag`DELETE FROM tasks WHERE tenant_id IN (${TENANT_ON}, ${TENANT_OFF})`);
         await tx.execute(sqlTag`DELETE FROM tenants WHERE id IN (${TENANT_ON}, ${TENANT_OFF})`);
       });
     } catch {
@@ -230,6 +242,58 @@ describe("Day-54 P2 — asset report aggregation (real Postgres)", () => {
       countTasksByTenant(tx, TENANT_ON, { awbs: [AWB_1] }),
     );
     expect(count).toBe(1);
+  });
+
+  it("asset log: returns seeded scan lines newest-first with the recorded-in-Planner fallback", async () => {
+    // Seed two scan-log lines for AWB_1 out of order.
+    await withServiceRole("P2 scan-log seed", async (tx) => {
+      const taskRows = await tx.execute<{ id: string } & Record<string, unknown>>(sqlTag`
+        SELECT id FROM tasks WHERE external_tracking_number = ${AWB_1} AND tenant_id = ${TENANT_ON}
+      `);
+      const taskId = taskRows[0].id;
+      await tx.execute(sqlTag`
+        INSERT INTO asset_scan_log (tenant_id, task_id, tracking_id, awb, state, received_at, scanned_by, source)
+        VALUES
+          (${TENANT_ON}, ${taskId}, ${`${AWB_1}-1`}, ${AWB_1}, 'COLLECTED', '2026-06-10T08:00:00Z', ${sqlTag`'{"name":"Courier A"}'::jsonb`}, 'poll'),
+          (${TENANT_ON}, ${taskId}, ${`${AWB_1}-1`}, ${AWB_1}, 'SORTED', '2026-06-10T12:00:00Z', NULL, 'poll')
+      `);
+    });
+
+    const lines = await getAssetScanLog(makeCtx(SYSADMIN_PERMS), { awbs: [AWB_1] });
+    expect(lines).toHaveLength(2);
+    expect(lines[0].state).toBe("SORTED");
+    expect(lines[1].state).toBe("COLLECTED");
+    expect(lines[1].scannedByName).toBe("Courier A");
+    // vendor_scanned_at is NULL (SF doesn't ship scan times yet) →
+    // the display fallback is receivedAt.
+    expect(lines[0].vendorScannedAt).toBeNull();
+    expect(lines[0].receivedAt).toBe("2026-06-10T12:00:00.000Z");
+  });
+
+  it("asset log: rejects malformed AWBs and non-read_all actors", async () => {
+    await expect(
+      getAssetScanLog(makeCtx(SYSADMIN_PERMS), { awbs: ["MPL-123','x" as string] }),
+    ).rejects.toThrow();
+    await expect(
+      getAssetScanLog(makeCtx(new Set<Permission>(["asset_tracking:read"])), { awbs: [AWB_1] }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("manual refresh: dark tenant + unknown merchant are refused before any SF call", async () => {
+    // TENANT_OFF's operator: flag off → ForbiddenError.
+    await expect(
+      refreshTenantAssetTracking(
+        makeCtx(new Set<Permission>(["asset_tracking:read"]), TENANT_OFF),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    // Admin refreshing the dark merchant: refused, not silently skipped.
+    await expect(
+      refreshMerchantAssetTracking(makeCtx(SYSADMIN_PERMS), SLUG_OFF),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    // Unknown merchant: NotFound → throws.
+    await expect(
+      refreshMerchantAssetTracking(makeCtx(SYSADMIN_PERMS), `no-such-${RUN_ID}`),
+    ).rejects.toThrow();
   });
 
   it("permission gates: missing read_all / read → ForbiddenError", async () => {

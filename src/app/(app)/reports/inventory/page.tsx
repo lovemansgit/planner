@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 
 import { InventoryView } from "@/components/asset-reports/InventoryView";
+import { RefreshButton } from "@/components/asset-reports/RefreshButton";
 import {
   formatAsOf,
   formatHistorySince,
@@ -96,12 +97,15 @@ export default async function InventoryReportPage({ searchParams }: InventoryPag
           </section>
         ) : report ? (
           <>
-            <DateRangeFilter
-              today={today}
-              initialFrom={from}
-              initialTo={to}
-              basePath="/reports/inventory"
-            />
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <DateRangeFilter
+                today={today}
+                initialFrom={from}
+                initialTo={to}
+                basePath="/reports/inventory"
+              />
+              <RefreshButton />
+            </div>
             <div className="mt-8">
               <InventoryView
                 byDate={report.byDate}

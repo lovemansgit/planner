@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 
 import { InventoryView } from "@/components/asset-reports/InventoryView";
+import { RefreshButton } from "@/components/asset-reports/RefreshButton";
 import {
   formatAsOf,
   formatHistorySince,
@@ -92,7 +93,12 @@ export default async function AdminInventoryPage({ searchParams }: AdminInventor
             initialTo={to}
             basePath="/admin/inventory"
           />
-          <MerchantFilterDropdown merchants={dropdownMerchants} currentSlug={merchantSlug ?? null} />
+          <span className="flex items-center gap-4">
+            {merchantSlug !== undefined && report !== null && report.enabled ? (
+              <RefreshButton merchantSlug={merchantSlug} />
+            ) : null}
+            <MerchantFilterDropdown merchants={dropdownMerchants} currentSlug={merchantSlug ?? null} />
+          </span>
         </div>
 
         {merchantSlug === undefined ? (

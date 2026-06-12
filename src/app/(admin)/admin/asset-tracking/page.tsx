@@ -7,14 +7,15 @@
 // appear (query-level scoping); an all-dark fleet renders the empty
 // state.
 //
-// "Allocated Asset → Asset Log" hyperlink lands in P3 (the log page
-// ships there); until then every value drills down to /admin/tasks
-// filtered to its AWB set, same as the other columns.
+// "Allocated Asset" links to the Asset Log (P3 — the business spec's
+// log hyperlink); every other value drills down to /admin/tasks
+// filtered to its AWB set.
 
 import { randomUUID } from "node:crypto";
 
 import { redirect } from "next/navigation";
 
+import { RefreshButton } from "@/components/asset-reports/RefreshButton";
 import { CountCell, ReportHeaderCells } from "@/components/asset-reports/ReportCells";
 import {
   awbsHref,
@@ -134,7 +135,10 @@ export default async function AdminAssetTrackingPage({ searchParams }: AdminAsse
             initialTo={to}
             basePath="/admin/asset-tracking"
           />
-          <MerchantFilterDropdown merchants={dropdownMerchants} currentSlug={merchantSlug ?? null} />
+          <span className="flex items-center gap-4">
+            {merchantSlug !== undefined ? <RefreshButton merchantSlug={merchantSlug} /> : null}
+            <MerchantFilterDropdown merchants={dropdownMerchants} currentSlug={merchantSlug ?? null} />
+          </span>
         </div>
 
         {groups.length === 0 ? (
@@ -175,7 +179,7 @@ function MerchantRows({ group }: { readonly group: MerchantGroup }) {
         <td className={`${TD} font-semibold`}>{group.merchantName}</td>
         <CountCell
           value={sum(group.dates, (r) => r.allocatedAssets)}
-          href={awbsHref(base, unionAwbs(group.dates, (r) => r.awbs), extra)}
+          href={awbsHref("/admin/asset-tracking/log", unionAwbs(group.dates, (r) => r.awbs))}
         />
         <CountCell
           value={sum(group.dates, (r) => r.suppQuantity)}
@@ -208,7 +212,7 @@ function MerchantRows({ group }: { readonly group: MerchantGroup }) {
           className="border-b border-[color:var(--color-border-subtle)] last:border-b-0"
         >
           <td className={`${TD} pl-12 text-[color:var(--color-text-secondary)]`}>{row.deliveryDate}</td>
-          <CountCell value={row.allocatedAssets} href={awbsHref(base, row.awbs, extra)} />
+          <CountCell value={row.allocatedAssets} href={awbsHref("/admin/asset-tracking/log", row.awbs)} />
           <CountCell value={row.suppQuantity} href={awbsHref(base, row.awbs, extra)} />
           <CountCell value={row.collected} href={awbsHref(base, row.awbsByState.collected, extra)} />
           <CountCell value={row.received} href={awbsHref(base, row.awbsByState.received, extra)} />
