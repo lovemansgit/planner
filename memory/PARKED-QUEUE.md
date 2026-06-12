@@ -121,3 +121,20 @@ ORCH-PARK — PR #452, head `6e7b12f`. Parked `parked-t3` (workflow change; the 
 
 **Clears on:** your one sentence naming #452 cleared → it rides the Action/clearance mechanic → the verdict-comment trigger is then provable end-to-end.
 
+## PR #481 — docs(d54): love-cleared allow-rule — reconciliation audit + shared-identity resolved-by-ruling
+
+- Label: `parked-t2`
+- Head SHA: `7f1f884cc92744c214af62daed21ce8760031120`
+
+ORCH-PARK (parked-t2) — PR #481
+
+**What it does:** records Love's 2026-06-12 ruling that the `love-cleared` allow-rule is agent-appliable, files the standing reconciliation audit in the orchestration runbook, and closes the shared-identity open question as resolved-by-ruling (revisit post-UAT). Documentation only.
+
+**What it touches:** `scripts/orchestration/RUNBOOK.md` + three `memory/` docs. No code, no settings, no workflows, no data path.
+
+**Reviewer verdict:** APPROVE at `7f1f884`, with LOVE-TRIGGER(1) flagged-not-resolved — the allow-rule (already landed at `14709c0`) is global to every local session; the reconciliation audit is detective, not preventive. You already ruled with that caveat understood, so it is surfaced per standing order, not reopened.
+
+**SQL TO APPLY:** no.
+
+**Why parked:** edits the orchestration runbook → off the docs auto-merge allowlist. Clear by sentence, or apply `love-cleared`.
+
