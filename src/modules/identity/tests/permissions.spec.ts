@@ -605,3 +605,25 @@ describe("consignee:churn role gate (Day-54 — Love's ruling: merchant-level on
     }
   });
 });
+
+// -----------------------------------------------------------------------------
+// Day-54 P1 — asset-tracking report permissions
+// -----------------------------------------------------------------------------
+
+describe("asset-tracking report permissions (Day-54 P1)", () => {
+  it("defines asset_tracking:read_all as systemOnly (Transcorp cross-tenant report gate)", () => {
+    expect(isKnownPermission("asset_tracking:read_all")).toBe(true);
+    expect(PERMISSIONS["asset_tracking:read_all" as PermissionId].systemOnly).toBe(true);
+  });
+
+  it("grants asset_tracking:read_all to transcorp-sysadmin and to NO merchant role", () => {
+    expect(ROLES["transcorp-sysadmin"].permissions.has("asset_tracking:read_all" as PermissionId)).toBe(true);
+    for (const slug of ["tenant-admin", "ops-manager", "cs-agent"] as const) {
+      expect(ROLES[slug].permissions.has("asset_tracking:read_all" as PermissionId)).toBe(false);
+    }
+  });
+
+  it("grants asset_tracking:read to CS Agent (Love's ruling: read-only Inventory access)", () => {
+    expect(ROLES["cs-agent"].permissions.has("asset_tracking:read" as PermissionId)).toBe(true);
+  });
+});

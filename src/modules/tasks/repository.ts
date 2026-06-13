@@ -583,6 +583,12 @@ export interface ListTasksOpts {
   readonly dateFrom?: string;
   /** Inclusive `delivery_date` upper bound (YYYY-MM-DD). */
   readonly dateTo?: string;
+  /**
+   * Day-54 P2 — exact AWB-set filter (`external_tracking_number =
+   * ANY(...)`). Powers the bag-tracking report drill-downs (plan #502
+   * Q4 ruling). Page boundary validates AWB shape before passing.
+   */
+  readonly awbs?: readonly string[];
 }
 
 /**
@@ -634,13 +640,14 @@ export async function listTasksByTenant(
   tenantId: Uuid,
   opts: ListTasksOpts = {},
 ): Promise<readonly TaskListRow[]> {
-  const { limit, offset = 0, status, searchTerm, dateFrom, dateTo } = opts;
+  const { limit, offset = 0, status, searchTerm, dateFrom, dateTo, awbs } = opts;
   const statusFilter = status
     ? sqlTag`AND t.internal_status = ${status}`
     : sqlTag``;
   const searchFilter = buildTaskSearchFilter(searchTerm);
   const dateFromFilter = buildDateFromFilter(dateFrom);
   const dateToFilter = buildDateToFilter(dateTo);
+  const awbsFilter = buildAwbsFilter(awbs);
   const limitClause = limit !== undefined ? sqlTag`LIMIT ${limit}` : sqlTag``;
   const offsetClause = offset > 0 ? sqlTag`OFFSET ${offset}` : sqlTag``;
   // R6-part-1: the consignees join is now UNCONDITIONAL (was search-gated
@@ -672,6 +679,7 @@ export async function listTasksByTenant(
       ${searchFilter}
       ${dateFromFilter}
       ${dateToFilter}
+      ${awbsFilter}
     ORDER BY t.created_at DESC
     ${limitClause}
     ${offsetClause}
@@ -765,6 +773,8 @@ export interface ListAllTasksFilters {
   readonly dateFrom?: string;
   /** Inclusive `delivery_date` upper bound (YYYY-MM-DD). */
   readonly dateTo?: string;
+  /** Day-54 P2 — exact AWB-set filter; see ListTasksOpts.awbs. */
+  readonly awbs?: readonly string[];
 }
 
 /**
@@ -821,6 +831,7 @@ export async function listAllTasksRows(
   const searchFilter = buildAdminTaskSearchFilter(filters.searchTerm);
   const dateFromFilter = buildDateFromFilter(filters.dateFrom);
   const dateToFilter = buildDateToFilter(filters.dateTo);
+  const awbsFilter = buildAwbsFilter(filters.awbs);
 
   const rows = await tx.execute<AdminTaskJoinRow>(sqlTag`
     SELECT
@@ -839,6 +850,7 @@ export async function listAllTasksRows(
       ${searchFilter}
       ${dateFromFilter}
       ${dateToFilter}
+      ${awbsFilter}
     ORDER BY t.delivery_date DESC, t.created_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
@@ -880,6 +892,17 @@ function buildDateToFilter(dateTo: string | undefined) {
 }
 
 /**
+ * Day-54 P2 — exact AWB-set fragment via `= ANY($::text[])`. Array
+ * literal built the bulkUpdateTaskStatuses way (uuid[] precedent at
+ * the `id = ANY(...)` site); the page boundary has already validated
+ * each AWB against the strict shape, so the literal join is safe.
+ */
+function buildAwbsFilter(awbs: readonly string[] | undefined) {
+  if (!awbs || awbs.length === 0) return sqlTag``;
+  return sqlTag`AND t.external_tracking_number = ANY(${"{" + awbs.join(",") + "}"}::text[])`;
+}
+
+/**
  * Day-24 PM: cross-tenant COUNT of tasks matching the same filter set
  * as `listAllTasksRows`. Same JOIN topology + composable filter
  * fragments — drops ORDER BY + LIMIT/OFFSET. Returns a single integer
@@ -905,6 +928,7 @@ export async function countAllTasksRows(
   const searchFilter = buildAdminTaskSearchFilter(filters.searchTerm);
   const dateFromFilter = buildDateFromFilter(filters.dateFrom);
   const dateToFilter = buildDateToFilter(filters.dateTo);
+  const awbsFilter = buildAwbsFilter(filters.awbs);
 
   const rows = await tx.execute<{ count: number }>(sqlTag`
     SELECT COUNT(*)::int AS count
@@ -918,6 +942,7 @@ export async function countAllTasksRows(
       ${searchFilter}
       ${dateFromFilter}
       ${dateToFilter}
+      ${awbsFilter}
   `);
   return rows[0]?.count ?? 0;
 }
@@ -1030,9 +1055,10 @@ export async function countTasksByTenant(
     readonly searchTerm?: string;
     readonly dateFrom?: string;
     readonly dateTo?: string;
+    readonly awbs?: readonly string[];
   } = {},
 ): Promise<number> {
-  const { status, searchTerm, dateFrom, dateTo } = opts;
+  const { status, searchTerm, dateFrom, dateTo, awbs } = opts;
   const statusFilter = status
     ? sqlTag`AND t.internal_status = ${status}`
     : sqlTag``;
@@ -1042,6 +1068,7 @@ export async function countTasksByTenant(
     : sqlTag``;
   const dateFromFilter = buildDateFromFilter(dateFrom);
   const dateToFilter = buildDateToFilter(dateTo);
+  const awbsFilter = buildAwbsFilter(awbs);
   type Row = { count: string | number };
   const rows = await tx.execute<Row>(sqlTag`
     SELECT COUNT(*)::int AS count FROM tasks t
@@ -1051,6 +1078,7 @@ export async function countTasksByTenant(
       ${searchFilter}
       ${dateFromFilter}
       ${dateToFilter}
+      ${awbsFilter}
   `);
   const raw = rows[0]?.count ?? 0;
   return typeof raw === "string" ? Number.parseInt(raw, 10) : raw;

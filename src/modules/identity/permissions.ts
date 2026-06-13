@@ -476,6 +476,15 @@ const PERMISSIONS_DRAFT = {
     systemOnly: false,
   },
 
+  "asset_tracking:read_all": {
+    id: "asset_tracking:read_all",
+    resource: "asset_tracking",
+    action: "read_all",
+    description:
+      "Day 54 / P1. Cross-tenant read access to asset-tracking data across all merchants. Powers the /admin/asset-tracking report + the all-merchants Inventory view per the bag-tracking plan (PR #502, Love-cleared). Granted only to transcorp-sysadmin (via the ALL set); tenant operators see only their own tenant's data via asset_tracking:read. Exact sibling of task:read_all.",
+    systemOnly: true,
+  },
+
   // ---- audit_event -------------------------------------------------------
   // No write permissions — emit is a system-only path through `withServiceRole`,
   // not an action a tenant actor can take. Only `read` is in the catalogue.
@@ -821,6 +830,9 @@ export const API_KEY_FORBIDDEN_PERMISSIONS: ReadonlySet<PermissionId> = Object.f
     "task:read_all",
     "consignee:read_all",
     "subscription:read_all",
+    // Day 54 / P1 — cross-tenant asset-tracking read is systemOnly;
+    // API keys must not exfiltrate cross-merchant asset data.
+    "asset_tracking:read_all",
     // Day 26 / T3 — region management perm is systemOnly per brief §3.6
     // (v1.14); API keys must not mutate SuiteFleet routing config.
     "region:manage",

@@ -248,6 +248,16 @@ export function createSuiteFleetLastMileAdapter(
       return client.fetchByAwb({ session, awb });
     },
 
+    async fetchAssetTrackingByAwbs(session, awbs) {
+      const credentials = await resolveCredentials(session.tenantId);
+      const client = createSuiteFleetAssetTrackingClient({
+        fetch: deps.fetch,
+        clientId: credentials.clientId,
+        baseUrl: deps.baseUrl,
+      });
+      return client.fetchByAwbs({ session, awbs });
+    },
+
     async verifyWebhookRequest(tenantId, headers, body) {
       // body is unused by the SuiteFleet verifier (Client ID/Secret
       // header verification, not HMAC), but stays on the interface

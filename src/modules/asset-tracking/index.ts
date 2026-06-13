@@ -9,12 +9,23 @@
 // for terminology + design rationale.
 
 export type {
+  AssetScanLogEntryInput,
+  AssetScanLogRow,
+  AssetScanSource,
   AssetTrackingCacheRow,
   AssetTrackingPackage,
+  AssetTrackingPollSummary,
   AssetTrackingState,
   AssetType,
 } from "./types";
 
-export { findCacheByAwb, upsertCacheRow } from "./repository";
+export { POLL_AWB_CAP } from "./types";
 
-export { getAssetTrackingForTask } from "./service";
+export {
+  findCacheByAwb,
+  findScanLogByAwb,
+  insertScanLogEntries,
+  upsertCacheRow,
+} from "./repository";
+
+export { getAssetTrackingForTask, runAssetTrackingPoll } from "./service";

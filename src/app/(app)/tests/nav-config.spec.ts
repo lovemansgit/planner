@@ -14,6 +14,7 @@ import {
   ADMIN_NAV_ITEMS,
   LANDING_CARDS,
   NAV_ITEMS,
+  groupNavItems,
   isActiveNavPath,
   visibleAdminNavItems,
   visibleLandingCards,
@@ -154,7 +155,7 @@ describe("visibleAdminNavItems", () => {
   // (all systemOnly; only transcorp-sysadmin carries them).
   const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
 
-  it("transcorp-sysadmin sees all 6 admin nav items (Overview first — the fleet-dashboard entry, renamed from 'Calendar' Day-53; Users tail per Day-24 PR #259)", () => {
+  it("transcorp-sysadmin sees all 8 admin nav items (Overview first; Reports pair tails per Day-54 P2)", () => {
     expect(visibleAdminNavItems(TRANSCORP_SYSADMIN).map((i) => i.label)).toEqual([
       "Overview",
       "Merchants",
@@ -162,6 +163,8 @@ describe("visibleAdminNavItems", () => {
       "Consignees",
       "Subscriptions",
       "Users",
+      "Asset Tracking",
+      "Inventory",
     ]);
   });
 
@@ -210,5 +213,82 @@ describe("catalogue drift guard", () => {
         expect(isKnownPermission(extra)).toBe(true);
       }
     }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Day-54 P2 — bag-tracking dark switch on the nav (posture 7b)
+// -----------------------------------------------------------------------------
+
+describe("Inventory nav item — dark-switch gating (Day-54 P2)", () => {
+  const INVENTORY_PERMS = new Set<Permission>(["asset_tracking:read"]);
+
+  it("hides Inventory when the tenant flag is off, even with the permission", () => {
+    const items = visibleNavItems(INVENTORY_PERMS, { assetTrackingEnabled: false });
+    expect(items.find((i) => i.path === "/reports/inventory")).toBeUndefined();
+  });
+
+  it("hides Inventory when no flag option is passed at all (default dark)", () => {
+    const items = visibleNavItems(INVENTORY_PERMS);
+    expect(items.find((i) => i.path === "/reports/inventory")).toBeUndefined();
+  });
+
+  it("shows Inventory only with BOTH the permission AND the flag", () => {
+    const lit = visibleNavItems(INVENTORY_PERMS, { assetTrackingEnabled: true });
+    expect(lit.find((i) => i.path === "/reports/inventory")?.label).toBe("Inventory");
+
+    const noPerm = visibleNavItems(new Set<Permission>(["task:read"]), {
+      assetTrackingEnabled: true,
+    });
+    expect(noPerm.find((i) => i.path === "/reports/inventory")).toBeUndefined();
+  });
+
+  it("admin nav carries the two report entries behind asset_tracking:read_all", () => {
+    const reportItems = ADMIN_NAV_ITEMS.filter(
+      (i) => i.path === "/admin/asset-tracking" || i.path === "/admin/inventory",
+    );
+    expect(reportItems).toHaveLength(2);
+    for (const item of reportItems) {
+      expect(item.permission).toBe("asset_tracking:read_all");
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Day-54 walk F2 — Reports dropdown grouping (overflow repair)
+// -----------------------------------------------------------------------------
+
+describe("groupNavItems", () => {
+  const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
+
+  it("folds the two admin report items into one Reports group at the first member's slot", () => {
+    const entries = groupNavItems(visibleAdminNavItems(TRANSCORP_SYSADMIN));
+    expect(
+      entries.map((e) => (e.kind === "item" ? e.item.label : `group:${e.label}`)),
+    ).toEqual([
+      "Overview",
+      "Merchants",
+      "Tasks",
+      "Consignees",
+      "Subscriptions",
+      "Users",
+      "group:Reports",
+    ]);
+    const reports = entries.find((e) => e.kind === "group");
+    expect(reports?.kind === "group" && reports.items.map((i) => i.label)).toEqual([
+      "Asset Tracking",
+      "Inventory",
+    ]);
+  });
+
+  it("grouping is presentation-only: permission filtering still drops group members", () => {
+    // An actor without asset_tracking:read_all gets no Reports group at all.
+    const entries = groupNavItems(visibleAdminNavItems(NONE));
+    expect(entries).toHaveLength(0);
+  });
+
+  it("ungrouped items pass through as flat entries", () => {
+    const entries = groupNavItems(visibleNavItems(TENANT_ADMIN));
+    expect(entries.every((e) => e.kind === "item")).toBe(true);
   });
 });

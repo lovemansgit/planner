@@ -125,6 +125,14 @@ class StubAdapter implements LastMileAdapter {
     void awb;
     return [];
   }
+  async fetchAssetTrackingByAwbs(
+    session: AuthenticatedSession,
+    awbs: readonly string[],
+  ): Promise<readonly import("../types").AssetTrackingPackage[]> {
+    void session;
+    void awbs;
+    return [];
+  }
   async updateTask(
     session: AuthenticatedSession,
     awb: string,

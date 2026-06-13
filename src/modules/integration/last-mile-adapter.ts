@@ -131,6 +131,18 @@ export interface LastMileAdapter {
     awb: string,
   ): Promise<readonly AssetTrackingPackage[]>;
   /**
+   * Day-54 P1 — batch variant of fetchAssetTrackingByAwb: one GET with
+   * a comma-separated `awbs=` list (probe-verified accepted
+   * 2026-06-12; merged multi-AWB content unproven until the first
+   * non-empty batch response). Powers the 30-minute poll, which chunks
+   * in-motion AWBs to bound per-call list size. Same error contract as
+   * the single variant.
+   */
+  fetchAssetTrackingByAwbs(
+    session: AuthenticatedSession,
+    awbs: readonly string[],
+  ): Promise<readonly AssetTrackingPackage[]>;
+  /**
    * Verify an inbound webhook request against the tenant-specific
    * webhook credentials. tenantId is supplied by the route handler
    * (post-Day-5 dynamic route `/api/webhooks/suitefleet/[tenantId]`).
