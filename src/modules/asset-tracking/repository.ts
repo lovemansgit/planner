@@ -40,7 +40,10 @@ import { sql as sqlTag } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
+import { POLL_AWB_CAP } from "./types";
 import type {
+  AssetScanLogEntryInput,
+  AssetScanLogRow,
   AssetTrackingCacheRow,
   AssetTrackingPackage,
   AssetTrackingState,
@@ -306,4 +309,135 @@ export async function findTaskIdByExternalId(
     WHERE external_id = ${String(externalTaskId)} AND tenant_id = ${tenantId}
   `);
   return (rows[0]?.id as Uuid | undefined) ?? null;
+}
+
+// -----------------------------------------------------------------------------
+// Append-only scan log (Day-54 P1 — 0032_asset_scan_log.sql)
+// -----------------------------------------------------------------------------
+
+type ScanLogDbRow = {
+  id: string;
+  tenant_id: string;
+  task_id: string;
+  tracking_id: string;
+  awb: string;
+  state: AssetTrackingState;
+  vendor_scanned_at: Date | string | null;
+  received_at: Date | string;
+  scanned_by: unknown | null;
+  source: "read_through" | "poll" | "webhook";
+  sf_payload: unknown | null;
+  created_at: Date | string;
+} & Record<string, unknown>;
+
+function mapScanLogRow(row: ScanLogDbRow): AssetScanLogRow {
+  return {
+    id: row.id as Uuid,
+    tenantId: row.tenant_id as Uuid,
+    taskId: row.task_id as Uuid,
+    trackingId: row.tracking_id,
+    awb: row.awb,
+    state: row.state,
+    vendorScannedAt: row.vendor_scanned_at === null ? null : toIso(row.vendor_scanned_at),
+    receivedAt: toIso(row.received_at),
+    scannedBy: row.scanned_by,
+    source: row.source,
+    sfPayload: row.sf_payload,
+    createdAt: toIso(row.created_at),
+  };
+}
+
+/**
+ * Append scan-log lines. INSERT only — the 0032 trigger raises on any
+ * UPDATE or DELETE, so a buggy caller fails loudly instead of
+ * rewriting history. One INSERT per entry keeps the statement simple;
+ * entry counts are small (bounded by packages-per-AWB × transitions
+ * observed in one refresh).
+ */
+export async function insertScanLogEntries(
+  tx: DbTx,
+  tenantId: Uuid,
+  entries: readonly AssetScanLogEntryInput[],
+): Promise<void> {
+  for (const entry of entries) {
+    const scannedByJson = entry.scannedBy === null ? null : JSON.stringify(entry.scannedBy);
+    const sfPayloadJson = entry.sfPayload === null ? null : JSON.stringify(entry.sfPayload);
+    await tx.execute(sqlTag`
+      INSERT INTO asset_scan_log (
+        tenant_id,
+        task_id,
+        tracking_id,
+        awb,
+        state,
+        vendor_scanned_at,
+        received_at,
+        scanned_by,
+        source,
+        sf_payload
+      ) VALUES (
+        ${tenantId},
+        ${entry.taskId},
+        ${entry.trackingId},
+        ${entry.awb},
+        ${entry.state},
+        ${entry.vendorScannedAt},
+        ${entry.receivedAt},
+        ${scannedByJson === null ? null : sqlTag`${scannedByJson}::jsonb`},
+        ${entry.source},
+        ${sfPayloadJson === null ? null : sqlTag`${sfPayloadJson}::jsonb`}
+      )
+    `);
+  }
+}
+
+/**
+ * List scan-log lines for an AWB, newest observation first. P2's
+ * Asset Log surface reads through this.
+ */
+export async function findScanLogByAwb(
+  tx: DbTx,
+  tenantId: Uuid,
+  awb: string,
+): Promise<readonly AssetScanLogRow[]> {
+  const rows = await tx.execute<ScanLogDbRow>(sqlTag`
+    SELECT * FROM asset_scan_log
+    WHERE tenant_id = ${tenantId} AND awb = ${awb}
+    ORDER BY COALESCE(vendor_scanned_at, received_at) DESC, id DESC
+  `);
+  return rows.map(mapScanLogRow);
+}
+
+// -----------------------------------------------------------------------------
+// Poll scoping (Day-54 P1 — "AWBs plausibly in motion", Love's constraint 3)
+// -----------------------------------------------------------------------------
+
+/**
+ * AWBs "plausibly in motion" for the 30-minute poll:
+ *   - any non-terminal task (CREATED / ASSIGNED / IN_TRANSIT /
+ *     ON_HOLD) with an AWB whose delivery_date is within the look-
+ *     back window, OR
+ *   - a terminal task (DELIVERED / FAILED / CANCELED) delivered
+ *     recently — bags RETURN after delivery, so the RETURNED scan
+ *     lands days after the task closes.
+ *
+ * 7-day look-back, 1-day look-ahead, newest first, capped at
+ * POLL_AWB_CAP distinct AWBs.
+ */
+export async function findAwbsInMotion(
+  tx: DbTx,
+  tenantId: Uuid,
+): Promise<readonly string[]> {
+  type Row = { awb: string } & Record<string, unknown>;
+  const rows = await tx.execute<Row>(sqlTag`
+    SELECT DISTINCT external_tracking_number AS awb,
+           MAX(delivery_date) AS most_recent
+    FROM tasks
+    WHERE tenant_id = ${tenantId}
+      AND external_tracking_number IS NOT NULL
+      AND delivery_date BETWEEN CURRENT_DATE - 7 AND CURRENT_DATE + 1
+    GROUP BY external_tracking_number
+    ORDER BY most_recent DESC
+    LIMIT ${POLL_AWB_CAP}
+  `);
+  return rows.map((r) => r.awb);
 }
