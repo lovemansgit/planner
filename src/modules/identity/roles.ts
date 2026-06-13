@@ -192,6 +192,11 @@ const ROLES_DRAFT = {
       // auto-pickup). Tenant Admin (TENANT_SCOPED) and Ops Manager
       // (permsFor("consignee")) pick it up automatically.
       "consignee:churn",
+      // Day-54 P1 — bag-tracking reports. Love's ruling (plan #502
+      // Q6): CS Agent gets read-only Inventory access ("where's my
+      // bag" support questions). Explicit add because CS Agent's
+      // permission list is hand-rolled (no permsFor auto-pickup).
+      "asset_tracking:read",
     ]),
   },
 

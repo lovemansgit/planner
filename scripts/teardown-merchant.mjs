@@ -181,6 +181,12 @@ async function main() {
     //    restores the RULE state.
     await sql.begin(async (tx) => {
       await tx`ALTER TABLE audit_events DISABLE RULE audit_events_no_delete`;
+      // Day-54 P1 — asset_scan_log is append-only (trigger) AND
+      // RESTRICTs the tenant delete (forensic data; 0032 header).
+      // Teardown is the ONE sanctioned deleter: set the session GUC,
+      // clear the log, then delete the tenant. ROLLBACK restores all.
+      await tx`SET LOCAL app.allow_scan_log_delete = 'on'`;
+      await tx`DELETE FROM asset_scan_log WHERE tenant_id = ${tenantId}`;
       const result = await tx`DELETE FROM tenants WHERE id = ${tenantId}`;
       await tx`ALTER TABLE audit_events ENABLE RULE audit_events_no_delete`;
       console.log(`[teardown] deleted ${result.count} tenant row(s) + cascaded children`);

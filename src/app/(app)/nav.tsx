@@ -31,11 +31,13 @@ import { UserMenu } from "./user-menu";
 export interface TopNavProps {
   readonly permissions: ReadonlySet<Permission>;
   readonly userIdentity: UserIdentity | null;
+  /** Day-54 P2 — tenant dark switch; gates requiresAssetTracking items. */
+  readonly assetTrackingEnabled?: boolean;
 }
 
-export function TopNav({ permissions, userIdentity }: TopNavProps) {
+export function TopNav({ permissions, userIdentity, assetTrackingEnabled }: TopNavProps) {
   const pathname = usePathname() ?? "/";
-  const items = visibleNavItems(permissions);
+  const items = visibleNavItems(permissions, { assetTrackingEnabled });
 
   return (
     <nav

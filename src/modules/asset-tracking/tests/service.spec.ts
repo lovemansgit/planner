@@ -20,6 +20,8 @@ vi.mock("../repository", () => ({
   findTaskAwb: vi.fn(),
   findTaskIdByExternalId: vi.fn(),
   upsertCacheRow: vi.fn(),
+  insertScanLogEntries: vi.fn(),
+  findAwbsInMotion: vi.fn(),
 }));
 
 vi.mock("@/modules/integration/providers/suitefleet/get-adapter", () => ({
@@ -41,12 +43,14 @@ import type {
 } from "@/modules/integration";
 
 import {
+  findAwbsInMotion,
   findCacheByAwb,
   findTaskAwb,
   findTaskIdByExternalId,
+  insertScanLogEntries,
   upsertCacheRow,
 } from "../repository";
-import { getAssetTrackingForTask } from "../service";
+import { getAssetTrackingForTask, runAssetTrackingPoll } from "../service";
 import type { AssetTrackingCacheRow } from "../types";
 
 const mockWithTenant = vi.mocked(withTenant);
@@ -55,6 +59,8 @@ const mockFindCacheByAwb = vi.mocked(findCacheByAwb);
 const mockFindTaskAwb = vi.mocked(findTaskAwb);
 const mockFindTaskIdByExternalId = vi.mocked(findTaskIdByExternalId);
 const mockUpsertCacheRow = vi.mocked(upsertCacheRow);
+const mockInsertScanLogEntries = vi.mocked(insertScanLogEntries);
+const mockFindAwbsInMotion = vi.mocked(findAwbsInMotion);
 const mockGetSuiteFleetAdapter = vi.mocked(getSuiteFleetAdapter);
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
@@ -164,6 +170,9 @@ function makeAdapter(records: readonly AssetTrackingPackage[]): LastMileAdapter 
     async fetchAssetTrackingByAwb() {
       return records;
     },
+    async fetchAssetTrackingByAwbs() {
+      return records;
+    },
     async verifyWebhookRequest() {
       return { ok: true, authTier: "tier_1_only" };
     },
@@ -184,6 +193,8 @@ beforeEach(() => {
   mockFindTaskAwb.mockReset();
   mockFindTaskIdByExternalId.mockReset();
   mockUpsertCacheRow.mockReset();
+  mockInsertScanLogEntries.mockReset();
+  mockFindAwbsInMotion.mockReset();
   mockGetSuiteFleetAdapter.mockReset();
   // withTenant runs its callback against an opaque tx stub.
   mockWithTenant.mockImplementation(async (_t, fn) => fn({} as never));
@@ -440,6 +451,176 @@ describe("getAssetTrackingForTask — empty SF response", () => {
       awb: AWB,
       previous_synced_at: null,
       record_count: 0,
+    });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Scan-log writes (Day-54 P1 — append-only asset_scan_log feeder)
+// -----------------------------------------------------------------------------
+
+describe("getAssetTrackingForTask — scan-log writes on refresh", () => {
+  it("inserts one scan-log entry per state transition, with receivedAt set and vendorScannedAt null", async () => {
+    const cached = rowFixture({ state: "COLLECTED" });
+    const stale = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    mockFindTaskAwb.mockResolvedValue({ kind: "ok", awb: AWB });
+    mockFindCacheByAwb
+      .mockResolvedValueOnce([{ ...cached, lastSyncedAt: stale }])
+      .mockResolvedValueOnce([rowFixture({ state: "EN_ROUTE" })]);
+    mockFindTaskIdByExternalId.mockResolvedValue(TASK_ID);
+    mockGetSuiteFleetAdapter.mockReturnValue(
+      makeAdapter([pkgFixture({ state: "EN_ROUTE", enrouteBy: { name: "courier-7" } })]),
+    );
+
+    await getAssetTrackingForTask(ctx(["asset_tracking:read"]), TASK_ID);
+
+    expect(mockInsertScanLogEntries).toHaveBeenCalledTimes(1);
+    const [, , entries] = mockInsertScanLogEntries.mock.calls[0];
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      taskId: TASK_ID,
+      trackingId: "MPL-12345678-1",
+      awb: AWB,
+      state: "EN_ROUTE",
+      vendorScannedAt: null,
+      source: "read_through",
+      scannedBy: { name: "courier-7" },
+    });
+    expect(typeof entries[0].receivedAt).toBe("string");
+    expect(Number.isNaN(Date.parse(entries[0].receivedAt))).toBe(false);
+  });
+
+  it("logs first-seen packages (empty cache) as scan-log entries too", async () => {
+    mockFindTaskAwb.mockResolvedValue({ kind: "ok", awb: AWB });
+    mockFindCacheByAwb
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([rowFixture({ state: "COLLECTED" })]);
+    mockFindTaskIdByExternalId.mockResolvedValue(TASK_ID);
+    mockGetSuiteFleetAdapter.mockReturnValue(
+      makeAdapter([pkgFixture({ state: "COLLECTED" })]),
+    );
+
+    await getAssetTrackingForTask(ctx(["asset_tracking:read"]), TASK_ID);
+
+    expect(mockInsertScanLogEntries).toHaveBeenCalledTimes(1);
+    const [, , entries] = mockInsertScanLogEntries.mock.calls[0];
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ state: "COLLECTED", source: "read_through" });
+  });
+
+  it("does NOT write scan-log entries when SF state matches the cached state", async () => {
+    const cached = rowFixture({ state: "EN_ROUTE" });
+    const stale = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    mockFindTaskAwb.mockResolvedValue({ kind: "ok", awb: AWB });
+    mockFindCacheByAwb
+      .mockResolvedValueOnce([{ ...cached, lastSyncedAt: stale }])
+      .mockResolvedValueOnce([cached]);
+    mockFindTaskIdByExternalId.mockResolvedValue(TASK_ID);
+    mockGetSuiteFleetAdapter.mockReturnValue(makeAdapter([pkgFixture({ state: "EN_ROUTE" })]));
+
+    await getAssetTrackingForTask(ctx(["asset_tracking:read"]), TASK_ID);
+
+    expect(mockInsertScanLogEntries).not.toHaveBeenCalled();
+  });
+
+  it("orphaned records (unresolvable taskId) are dropped WITHOUT scan-log entries", async () => {
+    mockFindTaskAwb.mockResolvedValue({ kind: "ok", awb: AWB });
+    mockFindCacheByAwb.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    mockFindTaskIdByExternalId.mockResolvedValue(null);
+    mockGetSuiteFleetAdapter.mockReturnValue(makeAdapter([pkgFixture()]));
+
+    await getAssetTrackingForTask(ctx(["asset_tracking:read"]), TASK_ID);
+
+    expect(mockInsertScanLogEntries).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// 30-minute poll path (Day-54 P1 — runAssetTrackingPoll, system actor)
+// -----------------------------------------------------------------------------
+
+function makePollAdapter(
+  byChunk: ReadonlyArray<readonly AssetTrackingPackage[]>,
+): { adapter: LastMileAdapter; batchCalls: string[][] } {
+  const batchCalls: string[][] = [];
+  let call = 0;
+  const adapter = {
+    ...makeAdapter([]),
+    async fetchAssetTrackingByAwbs(_session: AuthenticatedSession, awbs: readonly string[]) {
+      batchCalls.push([...awbs]);
+      const result = byChunk[call] ?? [];
+      call += 1;
+      return result;
+    },
+  } as unknown as LastMileAdapter;
+  return { adapter, batchCalls };
+}
+
+describe("runAssetTrackingPoll", () => {
+  it("returns a zero summary and never calls SF when no AWBs are in motion", async () => {
+    mockFindAwbsInMotion.mockResolvedValue([]);
+    const { adapter, batchCalls } = makePollAdapter([]);
+    mockGetSuiteFleetAdapter.mockReturnValue(adapter);
+
+    const summary = await runAssetTrackingPoll(TENANT_ID);
+
+    expect(summary).toMatchObject({ awbsPolled: 0, chunks: 0, recordCount: 0 });
+    expect(batchCalls).toHaveLength(0);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("chunks AWBs at 10 per batch GET and emits refreshed per chunk with trigger_source poll + system actor", async () => {
+    const awbs = Array.from({ length: 23 }, (_, i) => `MPL-${10000000 + i}`);
+    mockFindAwbsInMotion.mockResolvedValue(awbs);
+    mockFindCacheByAwb.mockResolvedValue([]);
+    mockFindTaskIdByExternalId.mockResolvedValue(TASK_ID);
+    const { adapter, batchCalls } = makePollAdapter([[], [], []]);
+    mockGetSuiteFleetAdapter.mockReturnValue(adapter);
+
+    const summary = await runAssetTrackingPoll(TENANT_ID);
+
+    expect(batchCalls).toHaveLength(3);
+    expect(batchCalls[0]).toHaveLength(10);
+    expect(batchCalls[1]).toHaveLength(10);
+    expect(batchCalls[2]).toHaveLength(3);
+    expect(summary).toMatchObject({ awbsPolled: 23, chunks: 3 });
+
+    const refreshed = mockEmit.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.eventType === "asset_tracking.refreshed");
+    expect(refreshed).toHaveLength(3);
+    for (const e of refreshed) {
+      expect(e.actorKind).toBe("system");
+      expect(e.metadata).toMatchObject({ trigger_source: "poll" });
+    }
+  });
+
+  it("upserts, writes scan-log entries with source poll, and emits state_changed on poll-observed transitions", async () => {
+    mockFindAwbsInMotion.mockResolvedValue([AWB]);
+    const cached = rowFixture({ state: "COLLECTED" });
+    mockFindCacheByAwb.mockResolvedValue([cached]);
+    mockFindTaskIdByExternalId.mockResolvedValue(TASK_ID);
+    const { adapter } = makePollAdapter([[pkgFixture({ state: "RECEIVED" })]]);
+    mockGetSuiteFleetAdapter.mockReturnValue(adapter);
+
+    const summary = await runAssetTrackingPoll(TENANT_ID);
+
+    expect(mockUpsertCacheRow).toHaveBeenCalledTimes(1);
+    expect(summary).toMatchObject({ recordCount: 1, stateChanges: 1 });
+    const [, , entries] = mockInsertScanLogEntries.mock.calls[0];
+    expect(entries[0]).toMatchObject({
+      state: "RECEIVED",
+      source: "poll",
+      vendorScannedAt: null,
+    });
+    const stateChanged = mockEmit.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.eventType === "asset_tracking.state_changed");
+    expect(stateChanged?.actorKind).toBe("system");
+    expect(stateChanged?.metadata).toMatchObject({
+      previous_state: "COLLECTED",
+      new_state: "RECEIVED",
+      trigger_source: "poll",
     });
   });
 });

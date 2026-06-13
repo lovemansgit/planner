@@ -19,6 +19,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
+import { getTenantAssetTrackingEnabled } from "@/modules/asset-tracking/report-service";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
 
@@ -50,6 +51,7 @@ export default async function AppLayout({
 
   let permissions: ReadonlySet<Permission>;
   let userIdentity: UserIdentity | null = null;
+  let assetTrackingEnabled = false;
   try {
     const ctx = await buildRequestContext(path, requestId);
     if (ctx.actor.kind !== "user") {
@@ -62,6 +64,12 @@ export default async function AppLayout({
       tenantName: ctx.actor.tenantName ?? "",
       tenantSlug: ctx.actor.tenantSlug ?? "",
     };
+    // Day-54 P2 — bag-tracking dark switch (posture 7b): the Inventory
+    // nav item renders only when the tenant's flag is on. One indexed
+    // read per request alongside the context build.
+    if (ctx.tenantId && permissions.has("asset_tracking:read")) {
+      assetTrackingEnabled = (await getTenantAssetTrackingEnabled(ctx.tenantId)).enabled;
+    }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent(path));
@@ -74,7 +82,11 @@ export default async function AppLayout({
 
   return (
     <>
-      <TopNav permissions={permissions} userIdentity={userIdentity} />
+      <TopNav
+        permissions={permissions}
+        userIdentity={userIdentity}
+        assetTrackingEnabled={assetTrackingEnabled}
+      />
       {children}
     </>
   );

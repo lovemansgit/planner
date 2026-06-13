@@ -58,21 +58,43 @@ import { getSuiteFleetAdapter } from "@/modules/integration/providers/suitefleet
 import type { AssetTrackingPackage } from "@/modules/integration/types";
 import { withTenant } from "@/shared/db";
 import { NotFoundError, ValidationError } from "@/shared/errors";
+import { logger } from "@/shared/logger";
 import type { Actor, RequestContext } from "@/shared/tenant-context";
-import type { Uuid } from "@/shared/types";
+import type { IsoTimestamp, Uuid } from "@/shared/types";
 
 import { requirePermission } from "../identity";
 
 import {
+  findAwbsInMotion,
   findCacheByAwb,
   findTaskAwb,
   findTaskIdByExternalId,
+  insertScanLogEntries,
   upsertCacheRow,
 } from "./repository";
-import type { AssetTrackingCacheRow } from "./types";
+import { POLL_AWB_CAP } from "./types";
+import type {
+  AssetScanLogEntryInput,
+  AssetScanSource,
+  AssetTrackingCacheRow,
+  AssetTrackingPollSummary,
+} from "./types";
+
+const log = logger.with({ component: "asset_tracking_service" });
 
 /** 5-minute TTL per the design memo. */
 const TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Day-54 P1 — AWBs per batch GET on the 30-minute poll. 10 keeps the
+ * query string short and the per-call blast radius small while the
+ * batch separator's merged-content behaviour is still unproven on
+ * real data (probe-verified ACCEPTED only).
+ */
+const POLL_CHUNK_SIZE = 10;
+
+/** System actor id for poll-path audit emits. */
+const POLL_ACTOR_ID = "asset_tracking_poll";
 
 /**
  * System actor id used on the orphan-dropped emit. Distinguishable
@@ -176,33 +198,12 @@ async function refreshFromSf(
           existing[0].lastSyncedAt,
         );
 
-  let upsertedCount = 0;
-  const stateChanges: Array<{
-    pkg: AssetTrackingPackage;
-    previous: AssetTrackingCacheRow | undefined;
-  }> = [];
-  const orphans: AssetTrackingPackage[] = [];
-
-  for (const pkg of records) {
-    const internalTaskId = await withTenant(tenantId, async (tx) =>
-      findTaskIdByExternalId(tx, tenantId, pkg.taskIdExternal),
-    );
-    if (internalTaskId === null) {
-      orphans.push(pkg);
-      continue;
-    }
-
-    const previous = previousByTrackingId.get(pkg.trackingId);
-
-    await withTenant(tenantId, async (tx) =>
-      upsertCacheRow(tx, tenantId, internalTaskId, pkg),
-    );
-    upsertedCount += 1;
-
-    if (previous === undefined || previous.state !== pkg.state) {
-      stateChanges.push({ pkg, previous });
-    }
-  }
+  const { upsertedCount, stateChanges, orphans } = await ingestRecords(
+    tenantId,
+    records,
+    previousByTrackingId,
+    "read_through",
+  );
 
   // Emit the refresh event regardless of whether any records came
   // back. Operators investigating cache miss-rate need to see "we
@@ -282,4 +283,234 @@ function isCacheFresh(rows: readonly AssetTrackingCacheRow[]): boolean {
     if (Number.isNaN(synced) || now - synced > TTL_MS) return false;
   }
   return true;
+}
+
+// -----------------------------------------------------------------------------
+// Shared ingest core (Day-54 P1)
+// -----------------------------------------------------------------------------
+
+interface IngestOutcome {
+  readonly upsertedCount: number;
+  readonly stateChanges: ReadonlyArray<{
+    pkg: AssetTrackingPackage;
+    previous: AssetTrackingCacheRow | undefined;
+  }>;
+  readonly orphans: readonly AssetTrackingPackage[];
+}
+
+/**
+ * Map a state to the SF `*_by` block that accompanies it. SORTED has
+ * no known wire counterpart yet (the original doc pre-dates the
+ * vendor-confirmed fifth state) — null until the first real sample.
+ */
+function scannedByFor(pkg: AssetTrackingPackage): unknown | null {
+  switch (pkg.state) {
+    case "COLLECTED":
+      return pkg.collectedBy;
+    case "EN_ROUTE":
+      return pkg.enrouteBy;
+    case "RECEIVED":
+      return pkg.receivedBy;
+    case "RETURNED":
+      return pkg.returnedBy;
+    case "SORTED":
+      return null;
+  }
+}
+
+/**
+ * Per-record ingest shared by the read-through refresh and the
+ * 30-minute poll: resolve the parent task, upsert the cache row,
+ * detect state transitions, and append one scan-log line per observed
+ * transition (first sighting included).
+ *
+ * Scan-log timestamp policy (Love's ruling, verbatim "if no timestamp
+ * then put actual timestamp of receiving the data"): SF does not ship
+ * scan timestamps yet, so `vendorScannedAt` is written NULL and
+ * `receivedAt` carries the observation time. The display layer
+ * prefers vendorScannedAt when it exists — activation checklist in
+ * memory/followup_vendor_scanned_at_activation.md.
+ */
+async function ingestRecords(
+  tenantId: Uuid,
+  records: readonly AssetTrackingPackage[],
+  previousByTrackingId: ReadonlyMap<string, AssetTrackingCacheRow>,
+  source: AssetScanSource,
+): Promise<IngestOutcome> {
+  let upsertedCount = 0;
+  const stateChanges: Array<{
+    pkg: AssetTrackingPackage;
+    previous: AssetTrackingCacheRow | undefined;
+  }> = [];
+  const orphans: AssetTrackingPackage[] = [];
+  const scanEntries: AssetScanLogEntryInput[] = [];
+
+  for (const pkg of records) {
+    const internalTaskId = await withTenant(tenantId, async (tx) =>
+      findTaskIdByExternalId(tx, tenantId, pkg.taskIdExternal),
+    );
+    if (internalTaskId === null) {
+      orphans.push(pkg);
+      continue;
+    }
+
+    const previous = previousByTrackingId.get(pkg.trackingId);
+
+    await withTenant(tenantId, async (tx) =>
+      upsertCacheRow(tx, tenantId, internalTaskId, pkg),
+    );
+    upsertedCount += 1;
+
+    if (previous === undefined || previous.state !== pkg.state) {
+      stateChanges.push({ pkg, previous });
+      scanEntries.push({
+        taskId: internalTaskId,
+        trackingId: pkg.trackingId,
+        awb: pkg.awb,
+        state: pkg.state,
+        vendorScannedAt: null,
+        receivedAt: new Date().toISOString() as IsoTimestamp,
+        scannedBy: scannedByFor(pkg),
+        source,
+        sfPayload: pkg,
+      });
+    }
+  }
+
+  if (scanEntries.length > 0) {
+    await withTenant(tenantId, async (tx) =>
+      insertScanLogEntries(tx, tenantId, scanEntries),
+    );
+  }
+
+  return { upsertedCount, stateChanges, orphans };
+}
+
+// -----------------------------------------------------------------------------
+// 30-minute poll (Day-54 P1 — Love's cadence ruling)
+// -----------------------------------------------------------------------------
+
+/**
+ * One tenant's poll tick: sweep AWBs plausibly in motion in bounded
+ * batch GETs, ingest into cache + scan log, emit system-actor audit
+ * events. Called by the QStash-scheduled /api/cron/asset-tracking-poll
+ * route for each tenant whose `task_asset_tracking_enabled` flag is
+ * on — NO user permission gate (system path; the route authenticates
+ * the schedule, the flag gates the tenant).
+ */
+export async function runAssetTrackingPoll(
+  tenantId: Uuid,
+): Promise<AssetTrackingPollSummary> {
+  const awbs = await withTenant(tenantId, async (tx) =>
+    findAwbsInMotion(tx, tenantId),
+  );
+
+  if (awbs.length === 0) {
+    return {
+      tenantId,
+      awbsPolled: 0,
+      chunks: 0,
+      recordCount: 0,
+      stateChanges: 0,
+      orphansDropped: 0,
+    };
+  }
+  if (awbs.length >= POLL_AWB_CAP) {
+    // No silent caps: the repository LIMITs at POLL_AWB_CAP; hitting
+    // it means in-motion AWBs beyond the cap were NOT swept this tick.
+    log.warn({
+      operation: "asset_tracking_poll",
+      tenant_id: tenantId,
+      awb_count: awbs.length,
+      message: `poll AWB cap (${POLL_AWB_CAP}) reached — oldest in-motion AWBs skipped this tick`,
+    });
+  }
+
+  const adapter = getSuiteFleetAdapter();
+  const session = await adapter.authenticate(tenantId);
+
+  let chunks = 0;
+  let recordCount = 0;
+  let stateChangeCount = 0;
+  let orphanCount = 0;
+
+  for (let i = 0; i < awbs.length; i += POLL_CHUNK_SIZE) {
+    const chunk = awbs.slice(i, i + POLL_CHUNK_SIZE);
+    const records = await adapter.fetchAssetTrackingByAwbs(session, chunk);
+    chunks += 1;
+
+    const existing: AssetTrackingCacheRow[] = [];
+    for (const awb of chunk) {
+      const rows = await withTenant(tenantId, async (tx) =>
+        findCacheByAwb(tx, tenantId, awb),
+      );
+      existing.push(...rows);
+    }
+    const previousByTrackingId = new Map<string, AssetTrackingCacheRow>();
+    for (const row of existing) {
+      previousByTrackingId.set(row.trackingId, row);
+    }
+
+    const outcome = await ingestRecords(tenantId, records, previousByTrackingId, "poll");
+    recordCount += outcome.upsertedCount;
+    stateChangeCount += outcome.stateChanges.length;
+    orphanCount += outcome.orphans.length;
+
+    // One refreshed event per batch GET. metadata.awbs (plural) is the
+    // poll-path variant of the read-through's single-awb metadata —
+    // same event type, trigger_source distinguishes the paths.
+    await emit({
+      eventType: "asset_tracking.refreshed",
+      actorKind: "system",
+      actorId: POLL_ACTOR_ID,
+      tenantId,
+      resourceType: "asset_tracking",
+      metadata: {
+        awbs: chunk,
+        record_count: outcome.upsertedCount,
+        trigger_source: "poll",
+      },
+    });
+
+    for (const change of outcome.stateChanges) {
+      await emit({
+        eventType: "asset_tracking.state_changed",
+        actorKind: "system",
+        actorId: POLL_ACTOR_ID,
+        tenantId,
+        resourceType: "asset_tracking",
+        metadata: {
+          tracking_id: change.pkg.trackingId,
+          task_id_external: change.pkg.taskIdExternal,
+          previous_state: change.previous?.state ?? null,
+          new_state: change.pkg.state,
+          trigger_source: "poll",
+        },
+      });
+    }
+
+    for (const pkg of outcome.orphans) {
+      await emit({
+        eventType: "asset_tracking.orphan_dropped",
+        actorKind: "system",
+        actorId: ORPHAN_DROP_ACTOR_ID,
+        tenantId,
+        resourceType: "asset_tracking",
+        metadata: {
+          tracking_id: pkg.trackingId,
+          task_id_external: pkg.taskIdExternal,
+          awb: pkg.awb,
+        },
+      });
+    }
+  }
+
+  return {
+    tenantId,
+    awbsPolled: awbs.length,
+    chunks,
+    recordCount,
+    stateChanges: stateChangeCount,
+    orphansDropped: orphanCount,
+  };
 }

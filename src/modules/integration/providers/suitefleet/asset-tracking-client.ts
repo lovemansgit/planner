@@ -53,6 +53,9 @@ const ASSET_STATES: ReadonlySet<string> = new Set<AssetTrackingState>([
   "EN_ROUTE",
   "RECEIVED",
   "RETURNED",
+  // Vendor-confirmed fifth state (Aqib, 2026-06-12): present on SF's
+  // own report screens, confirmed part of the complete enum.
+  "SORTED",
 ]);
 
 export interface SuiteFleetAssetTrackingClientDeps {
@@ -65,6 +68,17 @@ export interface SuiteFleetAssetTrackingClient {
   fetchByAwb(args: {
     session: AuthenticatedSession;
     awb: string;
+  }): Promise<readonly AssetTrackingPackage[]>;
+  /**
+   * Batch lookup: one GET with comma-separated `awbs=`. The separator
+   * was probe-verified ACCEPTED on 2026-06-12 (200 + valid wrapper);
+   * merged multi-AWB content is unproven until the first non-empty
+   * batch response (sandbox has zero records). Each record's `awb`
+   * derives from its own trackingId — no single-AWB hint applies.
+   */
+  fetchByAwbs(args: {
+    session: AuthenticatedSession;
+    awbs: readonly string[];
   }): Promise<readonly AssetTrackingPackage[]>;
 }
 
@@ -204,94 +218,119 @@ export function createSuiteFleetAssetTrackingClient(
 ): SuiteFleetAssetTrackingClient {
   const baseUrl = (deps.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
+  // Shared request core for single + batch lookups. `awbsParam` is the
+  // raw (pre-encoding) value of the `awbs=` query parameter; `awbHint`
+  // feeds parseAssetTrackingRecord's defensive AWB fallback (single
+  // mode only — batch mode derives per-record from each trackingId).
+  async function requestRecords(
+    session: AuthenticatedSession,
+    awbsParam: string,
+    awbHint: string,
+  ): Promise<readonly AssetTrackingPackage[]> {
+    const url = `${baseUrl}/api/task-asset-tracking?awbs=${encodeURIComponent(awbsParam)}`;
+
+    let response: Response;
+    try {
+      response = await deps.fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.token}`,
+          Clientid: deps.clientId,
+          Accept: "application/json",
+        },
+      });
+    } catch (err) {
+      log.warn({
+        operation: "fetch_asset_tracking",
+        awb: awbsParam,
+        tenant_id: session.tenantId,
+        error_code: "network_error",
+        message: err instanceof Error ? err.message : "unknown",
+      });
+      throw new CredentialError(
+        "SuiteFleet asset-tracking fetch network error",
+        err instanceof Error ? { cause: err } : undefined,
+      );
+    }
+
+    if (response.status === 401) {
+      throw new CredentialError(
+        "SuiteFleet asset-tracking fetch rejected — credentials invalid or session expired",
+      );
+    }
+    if (response.status >= 500) {
+      // Plan #317 §3.1 / F-1: read 5xx body before throwing — mirrors
+      // task-client.ts's 5xx branches so downstream failure_detail
+      // (via CredentialError.message) carries SF's own error text.
+      let responseText: string;
+      try { responseText = await response.text(); } catch { responseText = ""; }
+      log.warn({
+        operation: "fetch_asset_tracking",
+        awb: awbsParam,
+        tenant_id: session.tenantId,
+        status: response.status,
+        error_code: "server_5xx",
+        response_excerpt: responseText.slice(0, 400),
+      });
+      throw new CredentialError(
+        `SuiteFleet asset-tracking fetch returned ${response.status}: ${responseText.slice(0, 2000)}`,
+      );
+    }
+    if (response.status >= 400) {
+      log.warn({
+        operation: "fetch_asset_tracking",
+        awb: awbsParam,
+        tenant_id: session.tenantId,
+        status: response.status,
+        error_code: "client_4xx",
+      });
+      throw new ValidationError(
+        `SuiteFleet asset-tracking fetch rejected with status ${response.status}`,
+      );
+    }
+
+    let parsedBody: unknown;
+    try {
+      parsedBody = await response.json();
+    } catch (err) {
+      throw new ValidationError(
+        "SuiteFleet asset-tracking response was not valid JSON",
+        { cause: err instanceof Error ? err : undefined },
+      );
+    }
+
+    const records = parseAssetTrackingPage(parsedBody, awbHint);
+
+    log.info({
+      operation: "fetch_asset_tracking",
+      awb: awbsParam,
+      tenant_id: session.tenantId,
+      record_count: records.length,
+    });
+
+    return records;
+  }
+
   return {
     async fetchByAwb({ session, awb }) {
       if (typeof awb !== "string" || awb.length === 0) {
         throw new ValidationError("fetchAssetTrackingByAwb requires non-empty awb");
       }
+      return requestRecords(session, awb, awb);
+    },
 
-      const url = `${baseUrl}/api/task-asset-tracking?awbs=${encodeURIComponent(awb)}`;
-
-      let response: Response;
-      try {
-        response = await deps.fetch(url, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${session.token}`,
-            Clientid: deps.clientId,
-            Accept: "application/json",
-          },
-        });
-      } catch (err) {
-        log.warn({
-          operation: "fetch_asset_tracking",
-          awb,
-          tenant_id: session.tenantId,
-          error_code: "network_error",
-          message: err instanceof Error ? err.message : "unknown",
-        });
-        throw new CredentialError(
-          "SuiteFleet asset-tracking fetch network error",
-          err instanceof Error ? { cause: err } : undefined,
-        );
+    async fetchByAwbs({ session, awbs }) {
+      if (!Array.isArray(awbs) || awbs.length === 0) {
+        throw new ValidationError("fetchAssetTrackingByAwbs requires a non-empty awb list");
       }
-
-      if (response.status === 401) {
-        throw new CredentialError(
-          "SuiteFleet asset-tracking fetch rejected — credentials invalid or session expired",
-        );
+      for (const awb of awbs) {
+        if (typeof awb !== "string" || awb.length === 0) {
+          throw new ValidationError("fetchAssetTrackingByAwbs requires non-empty awbs");
+        }
       }
-      if (response.status >= 500) {
-        // Plan #317 §3.1 / F-1: read 5xx body before throwing — mirrors
-        // task-client.ts's 5xx branches so downstream failure_detail
-        // (via CredentialError.message) carries SF's own error text.
-        let responseText: string;
-        try { responseText = await response.text(); } catch { responseText = ""; }
-        log.warn({
-          operation: "fetch_asset_tracking",
-          awb,
-          tenant_id: session.tenantId,
-          status: response.status,
-          error_code: "server_5xx",
-          response_excerpt: responseText.slice(0, 400),
-        });
-        throw new CredentialError(
-          `SuiteFleet asset-tracking fetch returned ${response.status}: ${responseText.slice(0, 2000)}`,
-        );
-      }
-      if (response.status >= 400) {
-        log.warn({
-          operation: "fetch_asset_tracking",
-          awb,
-          tenant_id: session.tenantId,
-          status: response.status,
-          error_code: "client_4xx",
-        });
-        throw new ValidationError(
-          `SuiteFleet asset-tracking fetch rejected with status ${response.status}`,
-        );
-      }
-
-      let parsedBody: unknown;
-      try {
-        parsedBody = await response.json();
-      } catch (err) {
-        throw new ValidationError(
-          "SuiteFleet asset-tracking response was not valid JSON",
-          { cause: err instanceof Error ? err : undefined },
-        );
-      }
-
-      const records = parseAssetTrackingPage(parsedBody, awb);
-
-      log.info({
-        operation: "fetch_asset_tracking",
-        awb,
-        tenant_id: session.tenantId,
-        record_count: records.length,
-      });
-
-      return records;
+      // Batch mode: per-record AWB derives from each trackingId; the
+      // empty hint is never reached for SF-shaped trackingIds.
+      return requestRecords(session, awbs.join(","), "");
     },
   };
 }
