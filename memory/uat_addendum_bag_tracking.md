@@ -28,7 +28,34 @@ false) — these legs run on a PREVIEW deployment first (staged posture
    real proof; (b) un-blocks the walk if Aqib's staging lags.
 4. **QStash schedule registration** (one command, $0-verified) — only
    needed for the "as of" stamp to advance on its own; the manual
-   Refresh button covers the walk without it.
+   Refresh button covers the walk without it. **DEFERRED to the first
+   real-tenant flip** (Love's ruling, 2026-06-14: "QStash registration
+   DEFERRED to the first real-tenant flip — do not register now"). A
+   dark fleet has nothing to poll, so registering earlier is a no-op;
+   it becomes the first flip's second step (see "Flag-flip runbook
+   step" below).
+
+## Flag-flip runbook step — lighting the first REAL tenant
+
+When Love names a real merchant to light (gating item 2), run BOTH
+steps, first flip only:
+
+1. **Flip the flag** — one-row UPDATE on Love's per-tenant sentence:
+   `UPDATE tenants SET task_asset_tracking_enabled = true,
+   default_task_asset_type = 'BAGS' WHERE slug = '<named-merchant>';`
+   Builder executes and states the route. (Pre-req: Aqib's sandbox
+   scans have proven the 30-minute ingest end-to-end — the flag never
+   flips for a real tenant before that.)
+2. **Register the QStash schedule — FIRST FLIP ONLY** (deferred from
+   ship per Love's 2026-06-14 ruling): `set -a && source .env.local &&
+   set +a; PUBLIC_BASE_URL=https://<prod-domain> node
+   scripts/create-qstash-asset-poll-schedule.mjs` — needs `QSTASH_TOKEN`
+   (production secret; pull into the local env or run where it is
+   available — never through chat). Idempotent (dedupes by
+   `scheduleId`); $0 at 48 msg/day on the free tier. The route
+   `/api/cron/asset-tracking-poll` is already deployed + signature-gated
+   in production (verified 403 to unsigned POST). Subsequent tenant
+   flips do NOT re-register (one schedule polls all lit tenants).
 
 ## The three legs (plan §8, Love-accepted)
 
