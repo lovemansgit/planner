@@ -39,6 +39,8 @@ import {
   listAllSubscriptions,
 } from "@/modules/subscriptions/service";
 import type { Subscription } from "@/modules/subscriptions/types";
+
+import { MaterializeButton } from "./_components/MaterializeButton";
 import {
   ForbiddenError,
   NoTenantConfiguredError,
@@ -150,6 +152,9 @@ function SubscriptionsTable({ rows }: { rows: readonly AdminSubscriptionRow[] })
           <Th>Cadence</Th>
           <Th>Window</Th>
           <Th>Start date</Th>
+          <Th>
+            <span className="sr-only">Actions</span>
+          </Th>
         </tr>
       </thead>
       <tbody>
@@ -184,6 +189,11 @@ function Row({ row }: { row: AdminSubscriptionRow }) {
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
         {row.subscription.startDate}
+      </Td>
+      <Td className="text-right">
+        {row.subscription.status === "active" ? (
+          <MaterializeButton subscriptionId={row.subscription.id} />
+        ) : null}
       </Td>
     </tr>
   );
