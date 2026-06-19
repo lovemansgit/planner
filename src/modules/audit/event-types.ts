@@ -175,6 +175,22 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "email.",
     systemOnly: false,
   },
+  // F5 — admin-initiated password reset. Distinct from user.updated
+  // (display-name / disable-status field changes) so a forensic query
+  // can filter credential resets directly. Sets a new password on
+  // auth.users via the admin SDK; no public.users mirror change.
+  // NOTE (brief governance): this entry expands the §3.1.2 audit
+  // vocabulary — it pairs with a brief amendment + §9 version bump that
+  // is PARKED for Love, not landed in this PR.
+  "user.password_reset": {
+    id: "user.password_reset",
+    resource: "user",
+    action: "password_reset",
+    description:
+      "An admin reset a user's password from the /admin/users surface. Sets a new password on auth.users via the admin SDK; no public.users mirror change. The plaintext password MUST NEVER appear in metadata under any encoding (not hashed, not prefixed, not first-N-chars, nothing).",
+    metadataNotes: "email.",
+    systemOnly: false,
+  },
   // Day 10 — login surface. Two events for a single auth path; the
   // success event is user-attributed (actor.kind='user' on the freshly
   // resolved user), the failure event is system-attributed
