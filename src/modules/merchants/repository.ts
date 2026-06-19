@@ -262,6 +262,47 @@ export async function updateMerchantStatus(
   return rows.length > 0;
 }
 
+// -----------------------------------------------------------------------------
+// F4 — asset-tracking gate (task_asset_tracking_enabled, migration 0034)
+// -----------------------------------------------------------------------------
+
+/**
+ * Read just the per-tenant asset-tracking gate flag. Returns null when
+ * the tenant row is missing. Caller wraps in withServiceRole (the flag
+ * lives on the RLS-protected tenants table; the Transcorp-staff read is
+ * cross-tenant).
+ */
+export async function selectAssetTrackingFlag(
+  tx: DbTx,
+  id: Uuid,
+): Promise<boolean | null> {
+  const rows = await tx.execute<{ task_asset_tracking_enabled: boolean }>(sqlTag`
+    SELECT task_asset_tracking_enabled FROM tenants WHERE id = ${id}
+  `);
+  return rows.length > 0 ? rows[0].task_asset_tracking_enabled : null;
+}
+
+/**
+ * Flip the per-tenant asset-tracking gate. Returns false when no row
+ * matched the id (caller maps to NotFound). Caller is responsible for
+ * the read-before-write diff (so an already-at-target flip is a no-op
+ * that skips the audit emit).
+ */
+export async function updateAssetTrackingFlag(
+  tx: DbTx,
+  id: Uuid,
+  enabled: boolean,
+): Promise<boolean> {
+  const rows = await tx.execute<{ id: string } & Record<string, unknown>>(sqlTag`
+    UPDATE tenants
+    SET task_asset_tracking_enabled = ${enabled},
+        updated_at = now()
+    WHERE id = ${id}
+    RETURNING id
+  `);
+  return rows.length > 0;
+}
+
 /**
  * UPDATE one tenant row with the supplied patch — Pattern A
  * COALESCE-style: each editable column is updated to the patch value
