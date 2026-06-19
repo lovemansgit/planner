@@ -217,8 +217,9 @@ describe("Day-67 P1 — status from master payload + monotonic guard (real Postg
       "TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY"
     );
 
-    expect(result.applied).toBe(false);
-    if (!result.applied) expect(result.reason).toBe("status_not_advanced");
+    // Webhook is consumed (applied:true — documented contract), but the
+    // monotonic/terminal guard blocks the status write: stays DELIVERED.
+    expect(result.applied).toBe(true);
     expect(await readStatus(TASK_DEDICATED)).toBe("DELIVERED");
   });
 
@@ -251,8 +252,9 @@ describe("Day-67 P1 — status from master payload + monotonic guard (real Postg
       dedicated,
       "TASK_STATUS_UPDATED_TO_DELIVERED"
     );
-    // Status did not advance (already DELIVERED) — but POD was captured.
-    expect(dedicatedResult.applied).toBe(false);
+    // Webhook consumed (applied:true); the status guard blocked the (no-op)
+    // status write, but the decoupled POD write still captured the photos.
+    expect(dedicatedResult.applied).toBe(true);
 
     const [postDed] = await withServiceRole("wsmp pod post", async (tx) =>
       tx.execute(sqlTag`SELECT pod_photos FROM tasks WHERE id = ${TASK_POD} LIMIT 1`)

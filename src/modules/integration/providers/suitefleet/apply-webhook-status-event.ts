@@ -90,11 +90,7 @@ export type ApplyWebhookStatusEventResult =
   | { readonly applied: true; readonly taskId: Uuid; readonly newStatus: InternalTaskStatus }
   | {
       readonly applied: false;
-      readonly reason:
-        | "non_lifecycle_or_unknown"
-        | "duplicate"
-        | "task_not_found"
-        | "status_not_advanced";
+      readonly reason: "non_lifecycle_or_unknown" | "duplicate" | "task_not_found";
     };
 
 interface EmbeddedChange {
@@ -552,18 +548,13 @@ export async function applyWebhookStatusEvent(
         podWritten,
       };
 
-      // "applied" means the event persisted SOMETHING — a status advance, an
-      // unguarded embedded schedule-delta, or a (decoupled) POD write. A pure
-      // no-op (status not ahead, no delta, no POD) reports status_not_advanced
-      // so the receiver logs the monotonic guard / duplicate-collapse. This
-      // preserves the prior contract that an embedded-delta-on-SKIPPED event
-      // still reports applied:true and still audits the schedule delta.
-      const didPersist = advance || actualChanges.length > 0 || podWritten;
-      const statusOutcome: ApplyWebhookStatusEventResult = didPersist
-        ? { applied: true, taskId, newStatus }
-        : { applied: false, reason: "status_not_advanced" };
-
-      return { outcome: statusOutcome, meta };
+      // outcome.applied stays true once the event is consumed past the receipt
+      // — preserving the documented contract that a SKIPPED-guarded no-op still
+      // reports applied:true ("this webhook was consumed"; see
+      // skip-sf-outbound-and-webhook-convergence.spec.ts). The monotonic guard
+      // changes only WHAT persists (status / audit / POD), never the consumed
+      // signal. `newStatus` echoes the event's mapped status as before.
+      return { outcome: { applied: true, taskId, newStatus }, meta };
     });
 
   // Step 7: audit emits AFTER the tx commits. Day-67 P1: gate on what ACTUALLY
