@@ -283,7 +283,7 @@ export async function applyWebhookEditEvent(
       // status in a TOP-LEVEL `status` field that Planner previously ignored —
       // so a tenant subscribed only to the master webhook never left CREATED
       // though SF was sending the status on every payload. Advance
-      // internal_status from it under the SAME monotonic/terminal guard the
+      // internal_status from it under the SAME transition guard the
       // status applier uses, so the master and the dedicated
       // TASK_STATUS_UPDATED_TO_* events compose idempotently (no double-apply /
       // no regression). The SKIPPED guard rides in the SQL too.

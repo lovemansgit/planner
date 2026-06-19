@@ -46,48 +46,62 @@ describe("mapSuiteFleetStatusValueToInternal — observed SF `status` field valu
   });
 });
 
-describe("shouldAdvanceStatus — monotonic / terminal guard", () => {
-  it("advances forward CREATED -> IN_TRANSIT", () => {
+// Love's ruling (2026-06-19): allow Reschedule/Reattempt/Failed to MOVE the
+// status — they are real transitions operators must see. BLOCK only:
+//   (1) moving OUT of a terminal (DELIVERED / CANCELED);
+//   (2) overwriting operator-set SKIPPED;
+//   (3) re-applying the SAME status (master + dedicated dedup);
+//   (4) a stale early webhook dropping a forward-linear status BACK
+//       (CREATED < ASSIGNED < IN_TRANSIT only).
+describe("shouldAdvanceStatus — Love-ruled transition policy", () => {
+  it("advances the forward linear path CREATED -> ASSIGNED -> IN_TRANSIT", () => {
+    expect(shouldAdvanceStatus("CREATED", "ASSIGNED")).toBe(true);
     expect(shouldAdvanceStatus("CREATED", "IN_TRANSIT")).toBe(true);
-  });
-
-  it("advances forward IN_TRANSIT -> DELIVERED", () => {
+    expect(shouldAdvanceStatus("ASSIGNED", "IN_TRANSIT")).toBe(true);
     expect(shouldAdvanceStatus("IN_TRANSIT", "DELIVERED")).toBe(true);
   });
 
-  it("does NOT regress DELIVERED -> IN_TRANSIT (lagging webhook — the core bug)", () => {
-    expect(shouldAdvanceStatus("DELIVERED", "IN_TRANSIT")).toBe(false);
-  });
-
-  it("does NOT regress ASSIGNED -> CREATED (lagging ORDERED)", () => {
-    expect(shouldAdvanceStatus("ASSIGNED", "CREATED")).toBe(false);
-  });
-
-  it("is a no-op on equal status (dedup: master + dedicated compose)", () => {
-    expect(shouldAdvanceStatus("IN_TRANSIT", "IN_TRANSIT")).toBe(false);
-    expect(shouldAdvanceStatus("DELIVERED", "DELIVERED")).toBe(false);
-  });
-
-  it("treats DELIVERED as hard-terminal (no DELIVERED -> CANCELED via webhook)", () => {
+  // (1) terminals don't un-happen
+  it("blocks moving OUT of DELIVERED / CANCELED (terminal-lock)", () => {
+    expect(shouldAdvanceStatus("DELIVERED", "IN_TRANSIT")).toBe(false); // the core bug
     expect(shouldAdvanceStatus("DELIVERED", "CANCELED")).toBe(false);
-  });
-
-  it("treats CANCELED as terminal", () => {
     expect(shouldAdvanceStatus("CANCELED", "IN_TRANSIT")).toBe(false);
     expect(shouldAdvanceStatus("CANCELED", "DELIVERED")).toBe(false);
   });
 
-  it("preserves the operator-set SKIPPED guard (never overwritten by a webhook status)", () => {
+  // (2) operator-set SKIPPED is never overwritten by a webhook status
+  it("blocks overwriting operator-set SKIPPED", () => {
     expect(shouldAdvanceStatus("SKIPPED", "IN_TRANSIT")).toBe(false);
     expect(shouldAdvanceStatus("SKIPPED", "DELIVERED")).toBe(false);
   });
 
-  it("allows ON_HOLD -> IN_TRANSIT (resume from a hold)", () => {
-    expect(shouldAdvanceStatus("ON_HOLD", "IN_TRANSIT")).toBe(true);
+  // (3) same-status dedup (master + dedicated event for one transition)
+  it("is a no-op on the same status (dedup)", () => {
+    expect(shouldAdvanceStatus("IN_TRANSIT", "IN_TRANSIT")).toBe(false);
+    expect(shouldAdvanceStatus("ON_HOLD", "ON_HOLD")).toBe(false);
   });
 
-  it("allows a non-terminal task to reach a terminal failure", () => {
+  // (4) stale early webhook may not drag the forward-linear path backward
+  it("blocks a stale early webhook dropping In-transit back to Created/Assigned", () => {
+    expect(shouldAdvanceStatus("IN_TRANSIT", "ASSIGNED")).toBe(false);
+    expect(shouldAdvanceStatus("IN_TRANSIT", "CREATED")).toBe(false);
+    expect(shouldAdvanceStatus("ASSIGNED", "CREATED")).toBe(false);
+  });
+
+  // Love-ruled ALLOW: Reschedule / Reattempt / Failed move the status.
+  it("ALLOWS In-transit -> On-hold (a rescheduled/re-attempted parcel)", () => {
+    expect(shouldAdvanceStatus("IN_TRANSIT", "ON_HOLD")).toBe(true);
+  });
+
+  it("ALLOWS Failed -> On-hold and Failed -> In-transit (re-attempt un-freezes)", () => {
+    expect(shouldAdvanceStatus("FAILED", "ON_HOLD")).toBe(true);
+    expect(shouldAdvanceStatus("FAILED", "IN_TRANSIT")).toBe(true);
+  });
+
+  it("ALLOWS On-hold -> In-transit (resume) and any non-terminal -> Failed/Cancelled/Delivered", () => {
+    expect(shouldAdvanceStatus("ON_HOLD", "IN_TRANSIT")).toBe(true);
     expect(shouldAdvanceStatus("IN_TRANSIT", "FAILED")).toBe(true);
     expect(shouldAdvanceStatus("IN_TRANSIT", "CANCELED")).toBe(true);
+    expect(shouldAdvanceStatus("FAILED", "DELIVERED")).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-// SuiteFleet `status` FIELD → internal status, + monotonic/terminal guard.
+// SuiteFleet `status` FIELD → internal status, + transition guard.
 // Day-67 P1 (2026-06-19): the master TASK_HAS_BEEN_UPDATED webhook (and the
 // dedicated TASK_STATUS_UPDATED_TO_* events) carry the live driver status in a
 // TOP-LEVEL `status` field. Planner previously advanced internal_status only
@@ -12,7 +12,7 @@
 //     the value is `ARRIVED_IN_DC` while the action is
 //     `TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC` (IN vs ON). So this is its own
 //     explicit table, never derived by slicing the action string.
-//   - shouldAdvanceStatus: monotonic/terminal guard so the master and dedicated
+//   - shouldAdvanceStatus: transition guard so the master and dedicated
 //     events compose idempotently (no double-apply / double-audit) and status
 //     never regresses on an out-of-order (lagging) webhook.
 
@@ -67,47 +67,55 @@ export function mapSuiteFleetStatusValueToInternal(value: string): InternalTaskS
   return null;
 }
 
-// Monotonic progress rank. Higher = further along the lifecycle. The guard only
-// advances strictly forward, so an out-of-order (lagging) webhook cannot move a
-// task backward, and a repeated status (master + dedicated event for the same
-// transition) is a no-op (no double audit emit).
-const PROGRESS_RANK: Readonly<Record<InternalTaskStatus, number>> = {
-  CREATED: 0,
-  ASSIGNED: 1,
-  ON_HOLD: 2,
-  IN_TRANSIT: 3,
-  FAILED: 4,
-  DELIVERED: 5,
-  CANCELED: 6,
-};
-
 // Hard-terminal states: once here, a webhook status NEVER changes the task.
 // DELIVERED is the success end-state; CANCELED is the cancel end-state. (FAILED
-// is intentionally NOT hard-terminal — a reattempt can still reach DELIVERED.)
+// is intentionally NOT hard-terminal — a re-attempt legitimately moves a Failed
+// parcel back to On-hold / In-transit; see Love's ruling below.)
 const HARD_TERMINAL: ReadonlySet<string> = new Set(["DELIVERED", "CANCELED"]);
+
+// The FORWARD-LINEAR spine of the lifecycle. A stale early webhook may not drag
+// a parcel back DOWN this spine (e.g. a late "Ordered" must not undo "Assigned",
+// a late "Picked up" must not undo "In transit"). Branch states — ON_HOLD
+// (Reschedule/Reattempt), FAILED — are deliberately NOT on this spine: they are
+// real transitions that operators must see, so they are never blocked as
+// "backward". Only same-rung-or-lower moves WITHIN this spine are regressions.
+const LINEAR_RANK: Readonly<Partial<Record<InternalTaskStatus, number>>> = {
+  CREATED: 0,
+  ASSIGNED: 1,
+  IN_TRANSIT: 2,
+};
 
 /**
  * Decide whether an inbound webhook status (`next`, already mapped to an
  * InternalTaskStatus) should overwrite the task's `current` status.
  *
- * Rules (in order):
- *   1. SKIPPED is operator-set and Planner-local — never overwritten by a
- *      webhook status (preserves the existing SKIPPED guard).
- *   2. DELIVERED / CANCELED are hard-terminal — never changed via webhook.
- *   3. Otherwise advance only strictly forward by PROGRESS_RANK. Equal rank
- *      (same status, or two SF sub-states that collapse to the same internal
- *      status, e.g. PICKED_UP then OUT_FOR_DELIVERY -> both IN_TRANSIT) is a
- *      no-op, which is what makes the master + dedicated events idempotent.
+ * Love's ruling (2026-06-19): allow Reschedule / Reattempt / Failed to MOVE the
+ * status — they are real transitions operators must see; hiding them recreates
+ * the silent-staleness class this fix exists to kill. BLOCK only, in order:
+ *   1. SKIPPED is operator-set and Planner-local — never overwritten.
+ *   2. DELIVERED / CANCELED are terminal — they don't un-happen.
+ *   3. Same status — no-op (master + dedicated event for one transition, and SF
+ *      sub-states that collapse to the same internal status, e.g. PICKED_UP then
+ *      OUT_FOR_DELIVERY -> both IN_TRANSIT). This is the idempotency guard.
+ *   4. A stale early webhook may not drag the FORWARD-LINEAR spine backward
+ *      (In-transit -> Assigned/Created, Assigned -> Created).
+ * Everything else — On-hold, Failed, re-attempt back to In-transit, etc. — is
+ * allowed: the inbound status reflects SuiteFleet's real truth.
  *
  * `current` is typed as string because it is read from the DB column, which may
  * hold the operator-only 'SKIPPED' sentinel that is outside InternalTaskStatus.
  */
 export function shouldAdvanceStatus(current: string, next: InternalTaskStatus): boolean {
-  if (current === "SKIPPED") return false;
-  if (HARD_TERMINAL.has(current)) return false;
+  if (current === "SKIPPED") return false; // (1)
+  if (HARD_TERMINAL.has(current)) return false; // (2)
+  if (next === current) return false; // (3) dedup
 
-  const currentRank = PROGRESS_RANK[current as InternalTaskStatus];
-  if (currentRank === undefined) return false; // unknown current — do not touch
+  // (4) backward only WITHIN the forward-linear spine.
+  const currentLinear = LINEAR_RANK[current as InternalTaskStatus];
+  const nextLinear = LINEAR_RANK[next];
+  if (currentLinear !== undefined && nextLinear !== undefined && nextLinear < currentLinear) {
+    return false;
+  }
 
-  return PROGRESS_RANK[next] > currentRank;
+  return true;
 }

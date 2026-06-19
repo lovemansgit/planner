@@ -494,13 +494,13 @@ export async function applyWebhookStatusEvent(
         actualChanges = computed;
       }
 
-      // Day-67 P1: monotonic / terminal guard on the status write. The status
-      // UPDATE only fires when the inbound status is strictly AHEAD of the
-      // row's current status, so a lagging / out-of-order webhook cannot
-      // regress the status, and a repeated status (the master TASK_HAS_BEEN_-
-      // UPDATED and the dedicated TASK_STATUS_UPDATED_TO_* event for the same
-      // transition) is a no-op — no double UPDATE, no double audit. The SKIPPED
-      // guard stays in the SQL too (operator-set, belt-and-braces).
+      // Day-67 P1: transition guard on the status write (Love's 2026-06-19
+      // ruling — see status-progression.ts). The status UPDATE is skipped only
+      // when the inbound status would leave a terminal (DELIVERED/CANCELED),
+      // overwrite SKIPPED, repeat the current status (master + dedicated dedup),
+      // or drag the forward-linear spine backward. Real Reschedule/Reattempt/
+      // Failed transitions DO move the status. The SKIPPED guard also stays in
+      // the SQL (operator-set, belt-and-braces).
       const advance = shouldAdvanceStatus(previousStatus, newStatus);
       if (advance) {
         await tx.execute(sqlTag`
@@ -551,7 +551,7 @@ export async function applyWebhookStatusEvent(
       // outcome.applied stays true once the event is consumed past the receipt
       // — preserving the documented contract that a SKIPPED-guarded no-op still
       // reports applied:true ("this webhook was consumed"; see
-      // skip-sf-outbound-and-webhook-convergence.spec.ts). The monotonic guard
+      // skip-sf-outbound-and-webhook-convergence.spec.ts). The transition guard
       // changes only WHAT persists (status / audit / POD), never the consumed
       // signal. `newStatus` echoes the event's mapped status as before.
       return { outcome: { applied: true, taskId, newStatus }, meta };

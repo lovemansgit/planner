@@ -55,6 +55,7 @@ const TASK_SKIPPED = randomUUID() as Uuid;
 const TASK_NODIFF = randomUUID() as Uuid;
 const TASK_DEDICATED = randomUUID() as Uuid;
 const TASK_POD = randomUUID() as Uuid;
+const TASK_RESCHEDULE = randomUUID() as Uuid;
 
 const AWB_REPRO = `WSMP-${RUN_ID}-REPRO`;
 const AWB_NO_REGRESS = `WSMP-${RUN_ID}-NOREGRESS`;
@@ -62,6 +63,7 @@ const AWB_SKIPPED = `WSMP-${RUN_ID}-SKIPPED`;
 const AWB_NODIFF = `WSMP-${RUN_ID}-NODIFF`;
 const AWB_DEDICATED = `WSMP-${RUN_ID}-DEDICATED`;
 const AWB_POD = `WSMP-${RUN_ID}-POD`;
+const AWB_RESCHEDULE = `WSMP-${RUN_ID}-RESCHED`;
 
 // Master TASK_HAS_BEEN_UPDATED event carrying a top-level `status` field.
 function buildMasterEvent(
@@ -139,6 +141,9 @@ describe("Day-67 P1 — status from master payload + monotonic guard (real Postg
            'DELIVERED', '2026-06-19', '08:00:00', '10:00:00', 'manual_admin'),
           (${TASK_POD}, ${TENANT}, ${CONSIGNEE}, ${`WSMP-POD-${RUN_ID}`},
            ${String(EXT_ID_BASE + 6)}, ${AWB_POD}, ${ADDR},
+           'IN_TRANSIT', '2026-06-19', '08:00:00', '10:00:00', 'manual_admin'),
+          (${TASK_RESCHEDULE}, ${TENANT}, ${CONSIGNEE}, ${`WSMP-RESCHED-${RUN_ID}`},
+           ${String(EXT_ID_BASE + 7)}, ${AWB_RESCHEDULE}, ${ADDR},
            'IN_TRANSIT', '2026-06-19', '08:00:00', '10:00:00', 'manual_admin')
       `);
     });
@@ -169,7 +174,7 @@ describe("Day-67 P1 — status from master payload + monotonic guard (real Postg
     expect(meta.sf_action).toBe("TASK_HAS_BEEN_UPDATED");
   });
 
-  it("monotonic guard (master) — status=OUT_FOR_DELIVERY does NOT regress a DELIVERED task", async () => {
+  it("terminal guard (master) — status=OUT_FOR_DELIVERY does NOT move a DELIVERED task", async () => {
     expect(await readStatus(TASK_NO_REGRESS)).toBe("DELIVERED");
 
     const event = buildMasterEvent(AWB_NO_REGRESS, "2026-06-19T12:59:00.000Z", {
@@ -205,7 +210,7 @@ describe("Day-67 P1 — status from master payload + monotonic guard (real Postg
     expect(await readStatus(TASK_NODIFF)).toBe("CREATED");
   });
 
-  it("monotonic guard (dedicated) — TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY returns status_not_advanced on a DELIVERED task", async () => {
+  it("terminal guard (dedicated) — TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY does NOT move a DELIVERED task (webhook still consumed)", async () => {
     expect(await readStatus(TASK_DEDICATED)).toBe("DELIVERED");
 
     const event = buildStatusEvent(AWB_DEDICATED, "2026-06-19T13:00:00.000Z", {
@@ -262,5 +267,20 @@ describe("Day-67 P1 — status from master payload + monotonic guard (real Postg
     const pod = (postDed as { pod_photos: unknown }).pod_photos;
     expect(Array.isArray(pod)).toBe(true);
     expect((pod as unknown[]).length).toBe(2);
+  });
+
+  it("Love-ruled — a rescheduled In-transit parcel ADVANCES to On-hold (real transition, not dropped)", async () => {
+    expect(await readStatus(TASK_RESCHEDULE)).toBe("IN_TRANSIT");
+
+    // SF `status` value RESCHEDULED maps to ON_HOLD. Per Love's 2026-06-19
+    // ruling this real transition must move the displayed status — it is NOT a
+    // backward move to be blocked (ON_HOLD is off the forward-linear spine).
+    const event = buildMasterEvent(AWB_RESCHEDULE, "2026-06-19T13:10:00.000Z", {
+      status: "RESCHEDULED",
+    });
+    const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
+
+    expect(result.applied).toBe(true);
+    expect(await readStatus(TASK_RESCHEDULE)).toBe("ON_HOLD");
   });
 });
