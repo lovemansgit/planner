@@ -28,7 +28,10 @@ import { notFound, redirect } from "next/navigation";
 
 import { CopyableUrl } from "@/components/CopyableUrl";
 import { findRegionForMerchant, type Region } from "@/modules/credentials";
-import { getMerchantById } from "@/modules/merchants/service";
+import {
+  getMerchantAssetTrackingEnabled,
+  getMerchantById,
+} from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import { buildWebhookUrl, resolvePublicBaseUrl } from "@/modules/webhooks";
 import {
@@ -41,6 +44,7 @@ import type { Uuid } from "@/shared/types";
 
 import { authMethodBadge } from "../../regions/_helpers";
 import { merchantEffectiveAuthMethod, statusBadgeSurface } from "../_helpers";
+import { AssetTrackingToggle } from "./_components/AssetTrackingToggle";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -59,6 +63,7 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
   let region: Region | null = null;
   let canEdit: boolean;
   let canManageCredentials: boolean;
+  let assetTrackingEnabled = false;
   try {
     const ctx = await buildRequestContext(`/admin/merchants/${id}`, requestId);
     merchant = await getMerchantById(ctx, id as Uuid);
@@ -66,6 +71,8 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
     canManageCredentials = ctx.actor.permissions.has("merchant:update");
     if (merchant) {
       region = await findRegionForMerchant(ctx, merchant.suitefleetRegionId);
+      assetTrackingEnabled =
+        (await getMerchantAssetTrackingEnabled(ctx, id as Uuid)) ?? false;
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -223,6 +230,27 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
               the current deploy environment — for Production, use the value displayed at
               planner-olive-sigma.vercel.app.
             </p>
+          </div>
+        </Section>
+
+        <Section title="Asset tracking">
+          <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+                Bag / asset tracking
+              </p>
+              <p className="mt-2 text-xs text-[color:var(--color-text-tertiary)]">
+                Gates the Inventory + Asset Tracking reports, the tracking
+                poll, and the related nav entries for this merchant. Off by
+                default; turning it on lights those surfaces for this merchant
+                only.
+              </p>
+            </div>
+            <AssetTrackingToggle
+              tenantId={merchant.tenantId}
+              enabled={assetTrackingEnabled}
+              canEdit={canEdit}
+            />
           </div>
         </Section>
 
