@@ -963,9 +963,9 @@ const EVENT_TYPES_DRAFT = {
     resource: "merchant",
     action: "updated",
     description:
-      "Day 25 / T3. A merchant tenant was updated via the Transcorp-staff updateMerchant service. Captures field-level diffs (before / after) for each changed column. Does NOT capture status changes — those land in merchant.activated / merchant.deactivated. systemOnly per brief §2.3 (v1.12).",
+      "Day 25 / T3. A merchant tenant was updated via the Transcorp-staff updateMerchant service, OR its asset-tracking gate was flipped via the F4 setMerchantAssetTracking service. Captures field-level diffs (before / after) for each changed column. Does NOT capture lifecycle status changes — those land in merchant.activated / merchant.deactivated. systemOnly per brief §2.3 (v1.12).",
     metadataNotes:
-      "tenant_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: name, slug, pickup_address.line, pickup_address.district, pickup_address.emirate, suitefleet_customer_code). DELIBERATE divergence from merchant.created's NESTED pickup_address shape: this event uses FLAT dot-notation in the diff so single-sub-field changes surface atomically to audit-trail readers without nested-object parsing. Only changed fields appear in the changes object; an update that mutates zero fields throws ValidationError and never reaches emit.",
+      "tenant_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: name, slug, pickup_address.line, pickup_address.district, pickup_address.emirate, suitefleet_customer_code, task_asset_tracking_enabled (boolean — F4 per-merchant asset-tracking gate flip, migration 0034)). DELIBERATE divergence from merchant.created's NESTED pickup_address shape: this event uses FLAT dot-notation in the diff so single-sub-field changes surface atomically to audit-trail readers without nested-object parsing. Only changed fields appear in the changes object; an update that mutates zero fields throws ValidationError and never reaches emit.",
     systemOnly: true,
   },
 
