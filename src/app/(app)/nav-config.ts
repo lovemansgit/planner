@@ -165,7 +165,7 @@ export function visibleLandingCards(
 // -----------------------------------------------------------------------------
 
 export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
-  // "Overview" (the fleet dashboard) lives on a dedicated /admin/calendar
+  // "Overview" (the operations dashboard) lives on a dedicated /admin/calendar
   // route so the Transcorp variant renders under the (admin)/ shell +
   // AdminTopNav. The tenant /calendar route keeps the tenant variant +
   // tenant nav shell. Previously this entry pointed to /calendar which
@@ -174,8 +174,8 @@ export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
   // NAV_ITEMS ordering — the home view, lists are drill-downs.
   //
   // Label renamed "Calendar" → "Overview" on Day-53 (Love's audit ruling):
-  // there is no admin calendar surface — /admin/calendar renders the fleet
-  // overview dashboard (page <h1> "Fleet overview"), so "Calendar" mislabelled
+  // there is no admin calendar surface — /admin/calendar renders the operations
+  // overview dashboard (page <h1> "Operations overview"), so "Calendar" mislabelled
   // it. Admin persona ONLY; the tenant NAV_ITEMS "Calendar" entry (→ /calendar)
   // is unchanged. Rename is label-only — the route stays /admin/calendar.
   { label: "Overview", path: "/admin/calendar", permission: "task:read_all" },
