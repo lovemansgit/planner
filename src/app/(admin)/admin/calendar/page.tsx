@@ -88,7 +88,7 @@ export default async function AdminCalendarPage() {
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Transcorp · Admin
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Fleet overview</h1>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Operations overview</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             {todayHeader}
           </p>

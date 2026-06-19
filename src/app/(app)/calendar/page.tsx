@@ -227,7 +227,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             Subscription planner
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">
-            {isTranscorpAdmin ? "Fleet overview" : "All deliveries"}
+            {isTranscorpAdmin ? "Operations overview" : "All deliveries"}
           </h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             {todayHeader}

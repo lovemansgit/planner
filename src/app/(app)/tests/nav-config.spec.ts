@@ -186,7 +186,7 @@ describe("visibleAdminNavItems", () => {
     // /calendar (tenant shell), dropping Transcorp staff into the tenant
     // nav. It must stay on /admin/calendar so the (admin)/ layout renders.
     // (Label renamed 'Calendar'→'Overview' Day-53 per Love's audit ruling —
-    // the route is unchanged; it renders the fleet overview, not a calendar.)
+    // the route is unchanged; it renders the operations overview, not a calendar.)
     const overview = ADMIN_NAV_ITEMS.find((i) => i.label === "Overview");
     expect(overview).toBeDefined();
     expect(overview?.path).toBe("/admin/calendar");
