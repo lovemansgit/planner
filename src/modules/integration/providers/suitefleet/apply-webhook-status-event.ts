@@ -81,6 +81,7 @@ import type { Uuid } from "@/shared/types";
 import type { InternalTaskStatus, WebhookEvent } from "../../types";
 
 import { mapSuiteFleetStatusToInternal } from "./status-mapper";
+import { shouldAdvanceStatus } from "./status-progression";
 import { utcTimeToDubaiLocal } from "./tz";
 
 const log = logger.with({ component: "apply_webhook_status_event" });
@@ -92,7 +93,8 @@ export type ApplyWebhookStatusEventResult =
       readonly reason:
         | "non_lifecycle_or_unknown"
         | "duplicate"
-        | "task_not_found";
+        | "task_not_found"
+        | "status_not_advanced";
     };
 
 interface EmbeddedChange {
@@ -111,6 +113,11 @@ interface AuditMeta {
   readonly eventTimestamp: string;
   readonly podPhotoCount: number | null;
   readonly changedFields: readonly EmbeddedChange[];
+  // Day-67 P1: what actually changed in the tx, so the post-commit audit gates
+  // on reality rather than on outcome.applied (status may be guard-blocked
+  // while POD is still captured, or vice-versa).
+  readonly statusChanged: boolean;
+  readonly podWritten: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,9 +201,7 @@ function extractAndConvertEmbedded(rawPayload: unknown): ConvertedEmbedded {
   // Wrap-inversion is only meaningful when BOTH times are present after
   // conversion. Half-windows (start only or end only) cannot invert.
   const wrapInversion =
-    convertedStart !== undefined &&
-    convertedEnd !== undefined &&
-    convertedEnd < convertedStart;
+    convertedStart !== undefined && convertedEnd !== undefined && convertedEnd < convertedStart;
 
   return {
     deliveryDate: parsed.deliveryDate,
@@ -212,13 +217,10 @@ function computeEmbeddedChanges(
     readonly delivery_start_time: string | null;
     readonly delivery_end_time: string | null;
   },
-  embedded: ConvertedEmbedded,
+  embedded: ConvertedEmbedded
 ): readonly EmbeddedChange[] {
   const changes: EmbeddedChange[] = [];
-  if (
-    embedded.deliveryDate !== undefined &&
-    embedded.deliveryDate !== row.delivery_date
-  ) {
+  if (embedded.deliveryDate !== undefined && embedded.deliveryDate !== row.delivery_date) {
     changes.push({
       field: "delivery_date",
       previous: row.delivery_date,
@@ -248,10 +250,7 @@ function computeEmbeddedChanges(
   return changes;
 }
 
-function buildEmbeddedSetFragment(
-  column: string,
-  value: unknown,
-): ReturnType<typeof sqlTag> {
+function buildEmbeddedSetFragment(column: string, value: unknown): ReturnType<typeof sqlTag> {
   switch (column) {
     case "delivery_date":
       return sqlTag`delivery_date = ${value}::date`;
@@ -283,7 +282,7 @@ function buildEmbeddedSetFragment(
 export async function applyWebhookStatusEvent(
   tenantId: Uuid,
   event: WebhookEvent,
-  sfAction: string,
+  sfAction: string
 ): Promise<ApplyWebhookStatusEventResult> {
   // Step 1+2: resolve status; skip if null (non-lifecycle or unknown).
   const newStatus = mapSuiteFleetStatusToInternal(sfAction);
@@ -423,7 +422,7 @@ export async function applyWebhookStatusEvent(
       const embeddedChanges = computeEmbeddedChanges(taskRows[0], embedded);
       const effectiveChanges: readonly EmbeddedChange[] = embedded.wrapInversion
         ? embeddedChanges.filter(
-            (c) => c.field !== "delivery_start_time" && c.field !== "delivery_end_time",
+            (c) => c.field !== "delivery_start_time" && c.field !== "delivery_end_time"
           )
         : embeddedChanges;
 
@@ -450,13 +449,13 @@ export async function applyWebhookStatusEvent(
       let actualChanges: readonly EmbeddedChange[] = [];
 
       if (effectiveChanges.length > 0) {
-        const embeddedSetFragments: ReturnType<typeof sqlTag>[] = effectiveChanges.map(
-          (c) => buildEmbeddedSetFragment(c.field, c.new),
+        const embeddedSetFragments: ReturnType<typeof sqlTag>[] = effectiveChanges.map((c) =>
+          buildEmbeddedSetFragment(c.field, c.new)
         );
         embeddedSetFragments.push(sqlTag`updated_at = now()`);
         const embeddedSetClause = embeddedSetFragments.reduce(
           (acc, frag, i) => (i === 0 ? frag : sqlTag`${acc}, ${frag}`),
-          embeddedSetFragments[0],
+          embeddedSetFragments[0]
         );
 
         const embeddedReturning = (await tx.execute(sqlTag`
@@ -499,47 +498,87 @@ export async function applyWebhookStatusEvent(
         actualChanges = computed;
       }
 
-      const statusSetFragments: ReturnType<typeof sqlTag>[] = [
-        sqlTag`internal_status = ${newStatus}`,
-      ];
-      if (newStatus === "DELIVERED") {
-        statusSetFragments.push(sqlTag`pod_photos = ${podPhotosJson}::jsonb`);
+      // Day-67 P1: monotonic / terminal guard on the status write. The status
+      // UPDATE only fires when the inbound status is strictly AHEAD of the
+      // row's current status, so a lagging / out-of-order webhook cannot
+      // regress the status, and a repeated status (the master TASK_HAS_BEEN_-
+      // UPDATED and the dedicated TASK_STATUS_UPDATED_TO_* event for the same
+      // transition) is a no-op — no double UPDATE, no double audit. The SKIPPED
+      // guard stays in the SQL too (operator-set, belt-and-braces).
+      const advance = shouldAdvanceStatus(previousStatus, newStatus);
+      if (advance) {
+        await tx.execute(sqlTag`
+          UPDATE tasks
+          SET internal_status = ${newStatus}, updated_at = now()
+          WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND internal_status NOT IN ('SKIPPED')
+        `);
       }
-      statusSetFragments.push(sqlTag`updated_at = now()`);
-      const statusSetClause = statusSetFragments.reduce(
-        (acc, frag, i) => (i === 0 ? frag : sqlTag`${acc}, ${frag}`),
-        statusSetFragments[0],
-      );
 
-      await tx.execute(sqlTag`
-        UPDATE tasks
-        SET ${statusSetClause}
-        WHERE id = ${taskId} AND tenant_id = ${tenantId}
-          AND internal_status NOT IN ('SKIPPED')
-      `);
+      // POD capture is DECOUPLED from the status guard. A DELIVERED event that
+      // carries photos writes pod_photos whenever the column is still NULL —
+      // regardless of whether the status itself advanced. This keeps POD from
+      // being lost when a master TASK_HAS_BEEN_UPDATED already moved the task to
+      // DELIVERED (the master payload's `photos` is empirically null) BEFORE
+      // the dedicated TASK_STATUS_UPDATED_TO_DELIVERED (photos present) arrives:
+      // the guard blocks the second status write, but the POD must still land.
+      // `pod_photos IS NULL` makes it idempotent — no double-write, no double
+      // pod_received audit.
+      let podWritten = false;
+      if (newStatus === "DELIVERED" && podPhotosJson !== null) {
+        const podRows = (await tx.execute(sqlTag`
+          UPDATE tasks
+          SET pod_photos = ${podPhotosJson}::jsonb, updated_at = now()
+          WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND pod_photos IS NULL
+            AND internal_status NOT IN ('SKIPPED')
+          RETURNING id
+        `)) as readonly { id: string }[];
+        podWritten = podRows.length > 0;
+      }
 
       const meta: AuditMeta = {
         taskId,
         suitefleetTaskId: event.externalTaskId,
         previousStatus,
-        newStatus,
+        // Truthful: the audit's new_status reflects what was actually persisted.
+        newStatus: advance ? newStatus : previousStatus,
         sfAction,
         webhookEventsId,
         eventTimestamp: event.occurredAt,
-        podPhotoCount: podPhotos === null ? null : podPhotos.length,
+        podPhotoCount: podWritten && podPhotos !== null ? podPhotos.length : null,
         changedFields: actualChanges,
+        statusChanged: advance,
+        podWritten,
       };
 
-      return {
-        outcome: { applied: true, taskId, newStatus } as const,
-        meta,
-      };
+      // "applied" means the event persisted SOMETHING — a status advance, an
+      // unguarded embedded schedule-delta, or a (decoupled) POD write. A pure
+      // no-op (status not ahead, no delta, no POD) reports status_not_advanced
+      // so the receiver logs the monotonic guard / duplicate-collapse. This
+      // preserves the prior contract that an embedded-delta-on-SKIPPED event
+      // still reports applied:true and still audits the schedule delta.
+      const didPersist = advance || actualChanges.length > 0 || podWritten;
+      const statusOutcome: ApplyWebhookStatusEventResult = didPersist
+        ? { applied: true, taskId, newStatus }
+        : { applied: false, reason: "status_not_advanced" };
+
+      return { outcome: statusOutcome, meta };
     });
 
-  // Step 7: audit emits AFTER the tx commits.
-  if (txBundle.outcome.applied && txBundle.meta !== null) {
-    await emitStatusChangedAudit(tenantId, txBundle.meta);
-    if (txBundle.meta.podPhotoCount !== null && txBundle.meta.podPhotoCount > 0) {
+  // Step 7: audit emits AFTER the tx commits. Day-67 P1: gate on what ACTUALLY
+  // changed (meta flags), not on outcome.applied — so POD captured while the
+  // status guard blocked the status write is still audited (and conversely a
+  // guard-blocked duplicate status emits nothing).
+  if (txBundle.meta !== null) {
+    // Emit the status-changed audit when status advanced OR an embedded
+    // schedule-delta persisted (the latter preserves the prior contract that a
+    // schedule edit riding a SKIPPED-task status event is still audited, with a
+    // truthful new_status == previous_status).
+    if (txBundle.meta.statusChanged || txBundle.meta.changedFields.length > 0) {
+      await emitStatusChangedAudit(tenantId, txBundle.meta);
+    }
+    if (txBundle.meta.podWritten) {
       await emitPodReceivedAudit(tenantId, txBundle.meta);
 
       // Day-53 EVE — durable POD capture (cleared #413): enqueue the
