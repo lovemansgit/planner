@@ -42,10 +42,13 @@ const BASE_URL = "https://api.suitefleet.test";
 
 /**
  * The empirical empty-content wrapper captured 1 May 2026 against
- * task 59113 (AWB MPS-98410409, status DELIVERED). Pinned verbatim:
- * any divergence in field names / types breaks the test. When the
- * first NON-EMPTY response surfaces, this fixture grows to include
- * a populated-content variant alongside.
+ * task 59113 (AWB MPS-98410409) whose TASK delivery status was
+ * DELIVERED — that is the task's delivery status, NOT an asset-record
+ * state (the asset-record enum is Collected/Received/Sorted/EnRoute/
+ * Returned; there is no DELIVERED asset state). Pinned verbatim: any
+ * divergence in field names / types breaks the test. The first
+ * NON-EMPTY response has since surfaced — see
+ * EMPIRICAL_POPULATED_WRAPPER below.
  */
 const EMPIRICAL_EMPTY_WRAPPER = {
   content: [],
