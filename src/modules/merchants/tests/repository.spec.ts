@@ -467,7 +467,7 @@ describe("listMerchants", () => {
       "mlp",
     ];
 
-    it("composes allowlist OR (active/inactive/suspended AND slug !~ hex-test-pattern)", async () => {
+    it("composes allowlist OR (non-archived status AND slug !~ hex-test-pattern)", async () => {
       const tx = makeStubTx([[]]);
       await listMerchants(tx, { excludeTestTenants: true });
       const captured = compile(tx.execute.mock.calls[0][0]);
@@ -482,13 +482,14 @@ describe("listMerchants", () => {
         expect(captured.params).toContain(slug);
       }
 
-      // Status restricted to active/inactive/suspended (excludes
-      // provisioning + archived from the default view).
+      // Status restricted to the default-view set (everything but
+      // archived) — Love's clearance ruling added provisioning so
+      // genuine newly-onboarded merchants show.
       expect(captured.sql).toMatch(/status\s+in\s*\(/i);
       expect(captured.params).toEqual(
-        expect.arrayContaining(["active", "inactive", "suspended"]),
+        expect.arrayContaining(["active", "inactive", "suspended", "provisioning"]),
       );
-      expect(captured.params).not.toContain("provisioning");
+      expect(captured.params).not.toContain("archived");
     });
 
     it("does NOT also emit the default status != 'archived' clause (no redundancy)", async () => {

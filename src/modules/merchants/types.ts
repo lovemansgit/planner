@@ -282,10 +282,11 @@ export interface ListMerchantsFilters {
   /**
    * F8 (20 Jun 2026) — genuine-merchant default view. When `true`, the
    * list shows only genuine merchants: the six allowlisted slugs always,
-   * plus any tenant whose status is active/inactive/suspended and whose
-   * slug carries no 8-hex automated-test fragment. Hides ~1,825 test
-   * tenants without deleting them; the admin "show all" toggle clears
-   * this flag. Precedence: an explicit `status` filter wins over this
+   * plus any non-archived tenant whose slug carries no 8-hex automated-
+   * test fragment (provisioning included so newly-onboarded merchants
+   * show). Hides ~1,825 test tenants without deleting them; the admin
+   * "show all" toggle clears this flag. Precedence: an explicit `status`
+   * filter wins over this
    * flag (forensic paths keep working); this flag wins over
    * `excludeArchived`. See ./genuine-merchants.ts for the contract.
    */

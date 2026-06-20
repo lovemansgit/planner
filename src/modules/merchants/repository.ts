@@ -382,8 +382,8 @@ export async function updateMerchantFields(
  *                                     `excludeArchived` is ignored.
  *   - `status === undefined` +
  *     `excludeTestTenants: true`    → F8 genuine default view: allowlist
- *                                     OR (active/inactive/suspended AND
- *                                     slug has no 8-hex test fragment).
+ *                                     OR (status != archived AND slug
+ *                                     has no 8-hex test fragment).
  *                                     Wins over `excludeArchived` (does
  *                                     not also emit `!= 'archived'`).
  *   - `status === undefined` (no
@@ -426,9 +426,10 @@ export async function listMerchants(
 
 /**
  * F8 (20 Jun 2026) genuine-merchant default-view filter. A row shows
- * when it is allowlisted (the six genuine slugs) OR its status is one of
- * active/inactive/suspended AND its slug carries no 8-hex automated-test
- * fragment. Built from the shared constants in ./genuine-merchants.ts so
+ * when it is allowlisted (the six genuine slugs) OR its status is in the
+ * default-view set (everything but archived) AND its slug carries no
+ * 8-hex automated-test fragment. Built from the shared constants in
+ * ./genuine-merchants.ts so
  * this SQL and the JS `isGenuineMerchant` predicate cannot diverge. The
  * allowlist + statuses bind as `$N` params; the test pattern binds to
  * the Postgres `!~` regex operator.

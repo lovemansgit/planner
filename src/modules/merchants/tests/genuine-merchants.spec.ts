@@ -65,14 +65,21 @@ describe("isGenuineMerchant (F8 default-view contract)", () => {
     }
   });
 
-  it("shows a non-allowlisted real merchant with a clean slug (active/inactive/suspended)", () => {
+  it("shows a non-allowlisted real merchant with a clean slug (any non-archived status)", () => {
     expect(isGenuineMerchant({ slug: "acme-foods", status: "active" })).toBe(true);
     expect(isGenuineMerchant({ slug: "acme-foods", status: "inactive" })).toBe(true);
     expect(isGenuineMerchant({ slug: "acme-foods", status: "suspended" })).toBe(true);
   });
 
-  it("hides provisioning + archived non-allowlisted rows from the default view", () => {
-    expect(isGenuineMerchant({ slug: "acme-foods", status: "provisioning" })).toBe(false);
+  it("shows a genuine newly-onboarded (provisioning) merchant with a clean slug", () => {
+    // Love's clearance ruling (20 Jun 2026): provisioning is in the
+    // default view so newly-created merchants appear and can be activated
+    // without leaving it. A provisioning TEST tenant still hides because
+    // it carries the 8-hex fragment (asserted above).
+    expect(isGenuineMerchant({ slug: "acme-foods", status: "provisioning" })).toBe(true);
+  });
+
+  it("still hides archived non-allowlisted rows from the default view", () => {
     expect(isGenuineMerchant({ slug: "acme-foods", status: "archived" })).toBe(false);
   });
 });

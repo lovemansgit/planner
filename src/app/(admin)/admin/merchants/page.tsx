@@ -98,10 +98,9 @@ export default async function MerchantsAdminPage({
             </p>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">Merchants</h1>
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              Genuine merchants on the platform. Automated-test tenants, plus provisioning and
-              archived rows, are hidden by default — use “Show all” to include them (e.g. to
-              activate a newly-created merchant). Deactivate live merchants to stop new task
-              generation.
+              Genuine merchants on the platform. Automated-test tenants and archived rows are
+              hidden by default — use “Show all” to include them. Activate provisioning merchants
+              when ready; deactivate live merchants to stop new task generation.
             </p>
           </div>
           <Link
@@ -254,7 +253,7 @@ function EmptyState({
     ? "Clear the search to see all merchants."
     : showAll
       ? "Create your first merchant to get started."
-      : "Automated-test tenants are hidden by default — choose “Show all” to include them.";
+      : "Automated-test tenants and archived merchants are hidden by default — choose “Show all” to include them.";
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
       <p className="text-base text-navy">{headline}</p>

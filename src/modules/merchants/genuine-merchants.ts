@@ -43,8 +43,12 @@ export const GENUINE_MERCHANT_SLUGS: readonly string[] = [
 ];
 
 /**
- * Statuses shown in the default genuine view. Excludes `provisioning`
- * (the bulk of test exhaust) and `archived` per Love's ruling. Archived
+ * Statuses shown in the default genuine view. Includes `provisioning`
+ * (Love's clearance ruling, 20 Jun 2026) so genuine newly-onboarded
+ * merchants — which land as `provisioning` — appear in the default view
+ * and can be activated without leaving it. The ~1,825 provisioning test
+ * tenants stay hidden anyway: they carry the 8-hex slug fragment caught
+ * by TEST_TENANT_SLUG_PATTERN. Only `archived` is excluded here; it
  * remains reachable via the explicit `?status=archived` forensic path
  * and via the "show all" toggle.
  */
@@ -52,6 +56,7 @@ export const DEFAULT_VIEW_STATUSES: readonly TenantStatus[] = [
   "active",
   "inactive",
   "suspended",
+  "provisioning",
 ];
 
 /**
