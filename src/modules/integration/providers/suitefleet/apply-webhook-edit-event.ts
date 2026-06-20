@@ -30,7 +30,8 @@ import { isUniqueViolation } from "@/shared/db-errors";
 import { logger } from "@/shared/logger";
 import type { Uuid } from "@/shared/types";
 
-import type { WebhookEvent } from "../../types";
+import type { InternalTaskStatus, WebhookEvent } from "../../types";
+import { mapSuiteFleetStatusValueToInternal, shouldAdvanceStatus } from "./status-progression";
 import { utcTimeToDubaiLocal } from "./tz";
 
 const log = logger.with({ component: "apply_webhook_edit_event" });
@@ -78,6 +79,11 @@ const webhookEditPayloadSchema = z.object({
   deliveryEndTime: z.string().regex(HMS_TIME_REGEX).optional(),
   deliveryInformation: deliveryInformationSchema.optional(),
   consignee: consigneeSchema.optional(),
+  // Day-67 P1: SF puts the live driver status in this TOP-LEVEL field on the
+  // master TASK_HAS_BEEN_UPDATED webhook (e.g. "PICKED_UP", "DELIVERED").
+  // `.nullable().optional()` per the inbound-webhook null-tolerance contract
+  // (memory/followup_inbound_webhook_null_tolerance_regression.md).
+  status: z.string().nullable().optional(),
 });
 
 type WebhookEditPayload = z.infer<typeof webhookEditPayloadSchema>;
@@ -108,7 +114,15 @@ interface AuditMeta {
   readonly taskId: Uuid;
   readonly suitefleetTaskId: string;
   readonly webhookEventsId: string;
+  readonly eventTimestamp: string;
   readonly changedFields: readonly ChangedField[];
+  // Day-67 P1: whether the field-edit columns moved (drives the
+  // task.edit_applied_via_webhook emit) vs. whether the master `status` field
+  // advanced internal_status (drives a task.status_changed_via_webhook emit).
+  readonly editColumnsChanged: boolean;
+  readonly statusChanged: boolean;
+  readonly previousStatus: string;
+  readonly newStatus: InternalTaskStatus | null;
 }
 
 /**
@@ -138,7 +152,7 @@ interface AuditMeta {
 export async function applyWebhookEditEvent(
   tenantId: Uuid,
   event: WebhookEvent,
-  sfAction: string,
+  sfAction: string
 ): Promise<ApplyWebhookEditEventResult> {
   if (sfAction !== "TASK_HAS_BEEN_UPDATED") {
     return { applied: false, reason: "wrong_action" };
@@ -206,6 +220,7 @@ export async function applyWebhookEditEvent(
       const taskRows = (await tx.execute(sqlTag`
         SELECT
           id,
+          internal_status,
           delivery_date,
           delivery_start_time,
           delivery_end_time,
@@ -264,26 +279,54 @@ export async function applyWebhookEditEvent(
       const columnsToUpdate = allChanges.filter((c) => c.field !== "address");
       const auditMetadataFields = allChanges;
 
-      if (columnsToUpdate.length === 0) {
-        // No column moved — return no_diff (X.A + Z.A). Webhook_events row
-        // already preserves the receipt; no audit emit; no UPDATE issued.
+      // Day-67 P1: the master TASK_HAS_BEEN_UPDATED carries the live driver
+      // status in a TOP-LEVEL `status` field that Planner previously ignored —
+      // so a tenant subscribed only to the master webhook never left CREATED
+      // though SF was sending the status on every payload. Advance
+      // internal_status from it under the SAME transition guard the
+      // status applier uses, so the master and the dedicated
+      // TASK_STATUS_UPDATED_TO_* events compose idempotently (no double-apply /
+      // no regression). The SKIPPED guard rides in the SQL too.
+      const statusValue = parsed.status ?? undefined;
+      const nextStatus =
+        statusValue !== undefined ? mapSuiteFleetStatusValueToInternal(statusValue) : null;
+      const statusAdvanced =
+        nextStatus !== null && shouldAdvanceStatus(row.internal_status, nextStatus);
+
+      // no_diff only when NEITHER an edit column moved NOR the status advanced
+      // (X.A + Z.A, extended for the status path). Webhook_events receipt is
+      // already preserved; no UPDATE, no audit.
+      if (columnsToUpdate.length === 0 && !statusAdvanced) {
         return {
           outcome: { applied: false, reason: "no_diff" } as const,
           meta: null,
         };
       }
 
-      await applyConditionalUpdate(tx, tenantId, taskId, columnsToUpdate);
+      if (columnsToUpdate.length > 0) {
+        await applyConditionalUpdate(tx, tenantId, taskId, columnsToUpdate);
+      }
+      if (statusAdvanced) {
+        await tx.execute(sqlTag`
+          UPDATE tasks
+          SET internal_status = ${nextStatus}, updated_at = now()
+          WHERE id = ${taskId} AND tenant_id = ${tenantId}
+            AND internal_status NOT IN ('SKIPPED')
+        `);
+      }
 
       const meta: AuditMeta = {
         taskId,
         suitefleetTaskId: event.externalTaskId,
         webhookEventsId,
+        eventTimestamp: event.occurredAt,
         changedFields: auditMetadataFields,
+        editColumnsChanged: columnsToUpdate.length > 0,
+        statusChanged: statusAdvanced,
+        previousStatus: row.internal_status,
+        newStatus: statusAdvanced ? nextStatus : null,
       };
 
-      // Past the columnsToUpdate.length === 0 gate above, wasApplied is
-      // intrinsically true (X.A: outcome.applied = "≥1 column actually moved").
       return {
         outcome: {
           applied: true,
@@ -294,8 +337,17 @@ export async function applyWebhookEditEvent(
       };
     });
 
-  if (txBundle.outcome.applied && txBundle.meta !== null) {
-    await emitEditAppliedAudit(tenantId, txBundle.meta);
+  // Audit emits AFTER the tx commits. Day-67 P1: edit_applied fires only when
+  // field-edit columns moved; a status advance from the master `status` field
+  // fires task.status_changed_via_webhook (the same event the dedicated status
+  // applier emits) so the timeline/history reflect the transition either way.
+  if (txBundle.meta !== null) {
+    if (txBundle.meta.editColumnsChanged) {
+      await emitEditAppliedAudit(tenantId, txBundle.meta);
+    }
+    if (txBundle.meta.statusChanged && txBundle.meta.newStatus !== null) {
+      await emitStatusChangedFromMasterAudit(tenantId, txBundle.meta);
+    }
   }
 
   return txBundle.outcome;
@@ -307,6 +359,7 @@ export async function applyWebhookEditEvent(
 
 interface TaskRow {
   readonly id: string;
+  readonly internal_status: string;
   readonly delivery_date: string | null;
   readonly delivery_start_time: string | null;
   readonly delivery_end_time: string | null;
@@ -383,7 +436,7 @@ function extractEditFields(parsed: WebhookEditPayload): ExtractedFields {
 function computeChangedFields(
   row: TaskRow,
   extracted: ExtractedFields,
-  parsed: WebhookEditPayload,
+  parsed: WebhookEditPayload
 ): ChangedField[] {
   const changes: ChangedField[] = [];
 
@@ -402,19 +455,19 @@ function computeChangedFields(
     changes,
     "failure_reason_comment",
     row.failure_reason_comment,
-    extracted.failure_reason_comment,
+    extracted.failure_reason_comment
   );
   diffNumeric(
     changes,
     "completion_latitude",
     row.completion_latitude,
-    extracted.completion_latitude,
+    extracted.completion_latitude
   );
   diffNumeric(
     changes,
     "completion_longitude",
     row.completion_longitude,
-    extracted.completion_longitude,
+    extracted.completion_longitude
   );
 
   // Address-audit-only entry (plan §4.3 ruling: Option (ii)).
@@ -439,7 +492,7 @@ function diffField(
   changes: ChangedField[],
   field: string,
   current: unknown,
-  incoming: unknown,
+  incoming: unknown
 ): void {
   if (incoming === undefined) return;
   if (current === incoming) return;
@@ -450,16 +503,12 @@ function diffNumeric(
   changes: ChangedField[],
   field: string,
   current: string | number | null,
-  incoming: number | undefined,
+  incoming: number | undefined
 ): void {
   if (incoming === undefined) return;
   // Postgres numeric returns as string; normalise to number for diff.
   const currentAsNumber =
-    current === null
-      ? null
-      : typeof current === "string"
-      ? Number(current)
-      : current;
+    current === null ? null : typeof current === "string" ? Number(current) : current;
   if (currentAsNumber === incoming) return;
   changes.push({ field, previous: current, new: incoming });
 }
@@ -468,7 +517,7 @@ async function applyConditionalUpdate(
   tx: Parameters<Parameters<typeof withTenant>[1]>[0],
   tenantId: Uuid,
   taskId: Uuid,
-  changes: readonly ChangedField[],
+  changes: readonly ChangedField[]
 ): Promise<void> {
   // Build a column-by-column UPDATE. Only the fields that changed are
   // written. updated_at always refreshes when the UPDATE fires.
@@ -487,7 +536,7 @@ async function applyConditionalUpdate(
   // Compose with commas. Drizzle's sql.join is the safe path.
   const setClause = setFragments.reduce(
     (acc, frag, i) => (i === 0 ? frag : sqlTag`${acc}, ${frag}`),
-    setFragments[0],
+    setFragments[0]
   );
 
   await tx.execute(sqlTag`
@@ -565,6 +614,35 @@ async function emitEditAppliedAudit(tenantId: Uuid, meta: AuditMeta): Promise<vo
       suitefleet_task_id: meta.suitefleetTaskId,
       webhook_events_id: meta.webhookEventsId,
       changed_fields: meta.changedFields,
+    },
+  });
+}
+
+/**
+ * Day-67 P1: emit task.status_changed_via_webhook for a status advance derived
+ * from the master TASK_HAS_BEEN_UPDATED `status` field. Same event type + actor
+ * as the dedicated status applier so downstream surfaces (timeline / history)
+ * are source-agnostic. sf_action is the master action; changed_fields is empty
+ * (the status transition is the change — field edits, if any, are recorded
+ * separately by emitEditAppliedAudit).
+ */
+async function emitStatusChangedFromMasterAudit(tenantId: Uuid, meta: AuditMeta): Promise<void> {
+  await auditEmit({
+    eventType: "task.status_changed_via_webhook",
+    actorKind: "system",
+    actorId: "system:webhook_receiver",
+    tenantId,
+    resourceType: "task",
+    resourceId: meta.taskId,
+    metadata: {
+      task_id: meta.taskId,
+      suitefleet_task_id: meta.suitefleetTaskId,
+      previous_status: meta.previousStatus,
+      new_status: meta.newStatus,
+      sf_action: "TASK_HAS_BEEN_UPDATED",
+      webhook_events_id: meta.webhookEventsId,
+      event_timestamp: meta.eventTimestamp,
+      changed_fields: [],
     },
   });
 }
