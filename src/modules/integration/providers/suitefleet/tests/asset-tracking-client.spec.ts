@@ -111,7 +111,10 @@ const DOC_POPULATED_WRAPPER = {
 /**
  * EMPIRICAL populated record — captured 20 Jun 2026 (read-only, Love-
  * authorized) from the FIRST real asset record on production: Meal Up
- * (tenant `mlp`), task 61970, AWB MLU-97015852, status DELIVERED.
+ * (tenant `mlp`), task 61970, AWB MLU-97015852, asset status COLLECTED
+ * (the asset-record state enum is Collected/Received/Sorted/EnRoute/
+ * Returned — there is no DELIVERED asset state; the task's delivery
+ * status is a separate concern).
  * Verbatim structural shape (values sanitised; the `*_by` PII block is
  * representative, not the real courier).
  *
