@@ -5,7 +5,26 @@
 // (page.tsx) and the server actions (_actions.ts) both consume.
 
 import type { RegionAuthMethod } from "@/modules/credentials";
-import type { TenantStatus } from "@/modules/merchants/types";
+import type { ListMerchantsFilters, TenantStatus } from "@/modules/merchants/types";
+
+/**
+ * F8 (20 Jun 2026) — choose the `listMerchants` filters for the admin
+ * list given the URL state. The default view hides the ~1,825
+ * automated-test tenants (`excludeTestTenants`); the one-click "show
+ * all" toggle (`?view=all`) clears that and surfaces every row,
+ * including archived + test tenants, so nothing is truly hidden.
+ *
+ * Pure helper; lives here (not page.tsx) so the toggle contract is unit-
+ * tested without rendering the server component.
+ */
+export function selectMerchantListFilters(opts: {
+  readonly searchTerm?: string;
+  readonly showAll: boolean;
+}): ListMerchantsFilters {
+  return opts.showAll
+    ? { searchTerm: opts.searchTerm, excludeArchived: false }
+    : { searchTerm: opts.searchTerm, excludeTestTenants: true };
+}
 
 /**
  * Effective SF auth method for a merchant — the override when set,

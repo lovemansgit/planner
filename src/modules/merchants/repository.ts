@@ -30,6 +30,11 @@ import { sql as sqlTag } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
+import {
+  DEFAULT_VIEW_STATUSES,
+  GENUINE_MERCHANT_SLUGS,
+  TEST_TENANT_SLUG_PATTERN,
+} from "./genuine-merchants";
 import type {
   CreateMerchantInput,
   ListMerchantsFilters,
@@ -375,16 +380,24 @@ export async function updateMerchantFields(
  *                                     this via `?status=archived`.)
  *   - `status === <other>`          → returns rows in that status;
  *                                     `excludeArchived` is ignored.
- *   - `status === undefined`        → applies `excludeArchived`
+ *   - `status === undefined` +
+ *     `excludeTestTenants: true`    → F8 genuine default view: allowlist
+ *                                     OR (status != archived AND slug
+ *                                     has no 8-hex test fragment).
+ *                                     Wins over `excludeArchived` (does
+ *                                     not also emit `!= 'archived'`).
+ *   - `status === undefined` (no
+ *     excludeTestTenants)           → applies `excludeArchived`
  *                                     (default `true`).
  *     - `excludeArchived: true`     → `WHERE status != 'archived'`
  *                                     (default; demo-hygiene).
  *     - `excludeArchived: false`    → no filter; all rows including
- *                                     archived (debug only).
+ *                                     archived (debug only / "show all").
  *
  * Day-24: composable filter refactor. Status + archive + search are
  * each independent SQL fragments composed into a single SELECT — was
- * three forked branches per Day-18, now one statement.
+ * three forked branches per Day-18, now one statement. F8 adds the
+ * genuine-view branch (see buildGenuineMerchantsFilter).
  */
 export async function listMerchants(
   tx: DbTx,
@@ -394,9 +407,11 @@ export async function listMerchants(
   const statusFilter =
     filters.status !== undefined
       ? sqlTag`AND status = ${filters.status}`
-      : excludeArchived
-        ? sqlTag`AND status != 'archived'`
-        : sqlTag``;
+      : filters.excludeTestTenants
+        ? buildGenuineMerchantsFilter()
+        : excludeArchived
+          ? sqlTag`AND status != 'archived'`
+          : sqlTag``;
   const searchFilter = buildMerchantSearchFilter(filters.searchTerm);
 
   const rows = await tx.execute<TenantRow>(sqlTag`
@@ -407,6 +422,31 @@ export async function listMerchants(
     ORDER BY created_at DESC
   `);
   return rows.map(mapRow);
+}
+
+/**
+ * F8 (20 Jun 2026) genuine-merchant default-view filter. A row shows
+ * when it is allowlisted (the six genuine slugs) OR its status is in the
+ * default-view set (everything but archived) AND its slug carries no
+ * 8-hex automated-test fragment. Built from the shared constants in
+ * ./genuine-merchants.ts so
+ * this SQL and the JS `isGenuineMerchant` predicate cannot diverge. The
+ * allowlist + statuses bind as `$N` params; the test pattern binds to
+ * the Postgres `!~` regex operator.
+ */
+function buildGenuineMerchantsFilter() {
+  const allowlist = sqlTag.join(
+    GENUINE_MERCHANT_SLUGS.map((slug) => sqlTag`${slug}`),
+    sqlTag`, `,
+  );
+  const statuses = sqlTag.join(
+    DEFAULT_VIEW_STATUSES.map((status) => sqlTag`${status}`),
+    sqlTag`, `,
+  );
+  return sqlTag`AND (
+    slug IN (${allowlist})
+    OR (status IN (${statuses}) AND slug !~ ${TEST_TENANT_SLUG_PATTERN})
+  )`;
 }
 
 function buildMerchantSearchFilter(searchTerm: string | undefined) {

@@ -12,6 +12,7 @@ import {
   normaliseSlug,
   parseCreateMerchantForm,
   parseEditMerchantForm,
+  selectMerchantListFilters,
   statusAction,
   statusBadgeSurface,
   validateSlug,
@@ -656,6 +657,36 @@ describe("merchantEffectiveAuthMethod", () => {
     expect(merchantEffectiveAuthMethod("oauth", "oauth")).toEqual({
       method: "oauth",
       overrideActive: true,
+    });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// F8 (20 Jun 2026) — merchant-list default-view / "show all" toggle selection.
+// -----------------------------------------------------------------------------
+describe("selectMerchantListFilters", () => {
+  it("default view (showAll=false) requests the genuine-only filter", () => {
+    expect(selectMerchantListFilters({ showAll: false })).toEqual({
+      searchTerm: undefined,
+      excludeTestTenants: true,
+    });
+  });
+
+  it("show-all view surfaces every merchant including archived + test tenants", () => {
+    expect(selectMerchantListFilters({ showAll: true })).toEqual({
+      searchTerm: undefined,
+      excludeArchived: false,
+    });
+  });
+
+  it("threads the search term through both views", () => {
+    expect(selectMerchantListFilters({ showAll: false, searchTerm: "demo" })).toEqual({
+      searchTerm: "demo",
+      excludeTestTenants: true,
+    });
+    expect(selectMerchantListFilters({ showAll: true, searchTerm: "demo" })).toEqual({
+      searchTerm: "demo",
+      excludeArchived: false,
     });
   });
 });
