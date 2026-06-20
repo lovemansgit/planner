@@ -41,6 +41,7 @@ import {
   createOrFetchAuthUser as defaultCreateOrFetchAuthUser,
   disableAuthUser as defaultDisableAuthUser,
   enableAuthUser as defaultEnableAuthUser,
+  resetAuthUserPassword as defaultResetAuthUserPassword,
 } from "./auth-admin";
 import { requirePermission } from "./require-permission";
 import { ROLES, type BuiltInRoleSlug } from "./roles";
@@ -763,6 +764,88 @@ export async function enableUser(
   });
 
   return { userId: input.userId, transitioned: !alreadyEnabled };
+}
+
+// -----------------------------------------------------------------------------
+// F5 — resetUserPassword (admin-initiated temporary-password reset)
+// -----------------------------------------------------------------------------
+
+export interface ResetUserPasswordInput {
+  readonly userId: Uuid;
+  readonly newPassword: string;
+}
+
+export interface ResetUserPasswordResult {
+  readonly userId: Uuid;
+}
+
+/**
+ * Admin-initiated password reset. Sets a new temporary password on the
+ * target's auth.users row via the admin SDK; there is NO public.users
+ * mirror write (the credential lives only in auth.users), so unlike
+ * disable/enable this path performs no tenant-scoped UPDATE.
+ *
+ * Permission gate: `user:update` (same as disable/enable). Cross-tenant
+ * resets require `merchant:read_all` (Transcorp-staff marker) per the
+ * #259 precedent — a tenant-admin cannot reset a password for a user in
+ * another tenant.
+ *
+ * Self-reset is permitted: setting your own temporary password is not a
+ * lock-out footgun (contrast self-disable, which is blocked).
+ *
+ * "Force change on next login" is NOT enforced here — Supabase exposes
+ * no clean force-change primitive without session-layer middleware; that
+ * enforcement is a Phase-1.5 follow-up. The admin hands the temporary
+ * password to the user out-of-band.
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `user:update`, or attempts a
+ *                       cross-tenant reset without `merchant:read_all`.
+ *   - ValidationError   newPassword shorter than 8 characters.
+ *   - NotFoundError     user not found.
+ *   - ConflictError     auth admin SDK error (mapped from AuthAdminError).
+ */
+export async function resetUserPassword(
+  ctx: RequestContext,
+  input: ResetUserPasswordInput,
+  deps: {
+    readonly resetAuthUserPassword?: typeof defaultResetAuthUserPassword;
+  } = {},
+): Promise<ResetUserPasswordResult> {
+  requirePermission(ctx, "user:update");
+
+  if (!input.newPassword || input.newPassword.length < 8) {
+    throw new ValidationError("password must be at least 8 characters");
+  }
+
+  const target = await fetchUserForDisableEnable(input.userId);
+  if (target === null) {
+    throw new NotFoundError(`user not found: ${input.userId}`);
+  }
+  assertCanWriteToTenant(ctx, target.tenantId);
+
+  const resetAuth = deps.resetAuthUserPassword ?? defaultResetAuthUserPassword;
+  try {
+    await resetAuth(input.userId, input.newPassword);
+  } catch (err) {
+    if (err instanceof AuthAdminError) {
+      throw new ConflictError(err.message);
+    }
+    throw err;
+  }
+
+  await emit({
+    eventType: "user.password_reset",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: target.tenantId,
+    resourceType: "user",
+    resourceId: input.userId,
+    metadata: { email: target.email },
+    requestId: ctx.requestId,
+  });
+
+  return { userId: input.userId };
 }
 
 /**

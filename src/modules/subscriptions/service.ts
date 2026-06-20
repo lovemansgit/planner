@@ -444,6 +444,121 @@ export async function listAllSubscriptions(
 }
 
 // -----------------------------------------------------------------------------
+// F6 — triggerManualMaterialization (guarded admin/Ops on-demand trigger)
+// -----------------------------------------------------------------------------
+
+export interface TriggerManualMaterializationInput {
+  readonly subscriptionId: Uuid;
+}
+
+export interface TriggerManualMaterializationResult {
+  /** Tasks INSERTed by this run. 0 when the horizon was already
+   *  materialized (idempotent re-run). */
+  readonly newInsertedTaskCount: number;
+  /** Rows whose address resolution returned NULL (consignee data gap)
+   *  and so were NOT materialized — surfaced so Ops can act. */
+  readonly addressResolutionFailedCount: number;
+}
+
+/**
+ * Force a single subscription's tasks to materialize NOW, off-cycle from
+ * the daily 12:00 UTC (16:00 Dubai) cron tick. Wraps the existing
+ * `materializeSubscriptionForDateRange` so Ops don't have to wait up to
+ * ~24h for the calendar to reflect a fixed consignee/schedule. Creates
+ * only the tasks the cron would create anyway (same CTE, same
+ * ON CONFLICT idempotency) over [today, horizon] in Asia/Dubai — no new
+ * capability, just on-demand timing.
+ *
+ * Guard: `subscription:update`. Cross-tenant triggers (a Transcorp admin
+ * acting on another tenant's subscription, as on the /admin/subscriptions
+ * surface) additionally require `subscription:read_all` — a tenant
+ * operator without that marker can only materialize their own tenant's
+ * subscriptions. The subscription's real tenant is resolved via
+ * `withServiceRole` so the cross-tenant lookup is not hidden by RLS
+ * before the authority check runs.
+ *
+ * Audit: emits the existing `cron.on_demand_invoked` event with
+ * `triggered_by='admin_manual_trigger'` (additive enum value) on success
+ * only — a failed materialization throws to the caller and writes no
+ * audit row, matching `invokeOnDemandMaterialization`.
+ *
+ * Push posture matches the scheduled path: newly-materialized tasks pick
+ * up SuiteFleet push on the next cron tick (no enqueue coupled here).
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `subscription:update`, or a
+ *                       cross-tenant trigger without `subscription:read_all`.
+ *   - NotFoundError     no subscription with that id.
+ */
+export async function triggerManualMaterialization(
+  ctx: RequestContext,
+  input: TriggerManualMaterializationInput,
+): Promise<TriggerManualMaterializationResult> {
+  requirePermission(ctx, "subscription:update");
+
+  const targetTenantId = await withServiceRole(
+    "admin:lookup_subscription_tenant_for_materialize",
+    async (tx) => {
+      const rows = await tx.execute<{ tenant_id: string }>(
+        sqlTag`SELECT tenant_id FROM subscriptions WHERE id = ${input.subscriptionId}`,
+      );
+      return rows.length === 0 ? null : (rows[0].tenant_id as Uuid);
+    },
+  );
+  if (targetTenantId === null) {
+    throw new NotFoundError(`subscription not found: ${input.subscriptionId}`);
+  }
+
+  // Cross-tenant authority gate — mirrors the identity-module pattern.
+  if (ctx.tenantId !== targetTenantId && !ctx.actor.permissions.has("subscription:read_all")) {
+    throw new ForbiddenError(
+      "cross-tenant materialization requires subscription:read_all",
+    );
+  }
+
+  const now = new Date();
+  const startDate = computeTodayInDubai(now);
+  const endDate = computeTargetDateInDubai(now);
+  const correlationId = randomUUID() as Uuid;
+
+  const result = await withServiceRole(
+    `admin:manual_materialize subscription ${input.subscriptionId}`,
+    async (tx) =>
+      materializeSubscriptionForDateRange(tx, {
+        subscriptionId: input.subscriptionId,
+        startDate,
+        endDate,
+        requestId: ctx.requestId,
+      }),
+  );
+
+  await emit({
+    eventType: "cron.on_demand_invoked",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: targetTenantId,
+    resourceType: "task_materialization",
+    resourceId: input.subscriptionId,
+    requestId: ctx.requestId,
+    metadata: {
+      tenant_id: targetTenantId,
+      triggered_by: "admin_manual_trigger",
+      subscription_id: input.subscriptionId,
+      correlation_id: correlationId,
+      target_date: endDate,
+      new_inserted_task_count: result.newInsertedTaskIds.length,
+      address_resolution_failed_count: result.addressResolutionFailedCount,
+      capped_by_gate: false,
+    },
+  });
+
+  return {
+    newInsertedTaskCount: result.newInsertedTaskIds.length,
+    addressResolutionFailedCount: result.addressResolutionFailedCount,
+  };
+}
+
+// -----------------------------------------------------------------------------
 // updateSubscription (generic patch — schedule / window / cosmetic)
 // -----------------------------------------------------------------------------
 

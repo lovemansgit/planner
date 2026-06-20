@@ -50,10 +50,25 @@ unrecoverable production mistake.
    TO Love, do not resolve it with the builder;
    (4) cost — any new paid dependency, metered/paid API call, or new spend.
    A flagged trigger means the builder parks-and-emails despite agreement.
-6. **Post the verdict YOURSELF** with `gh pr comment <N> --body "<verdict>"`
+5c. **A recorded Love directional ruling closes the §5 block — verify MATCH,
+   not identity.** Once a §5 directional question has been answered, the builder
+   records Love's ruling on the PR by quoting Love's sentence VERBATIM in a
+   `LOVE-RULING` comment — the same recorded-sentence model the clearance-merge
+   path already uses (`memory/decision_d54_love_cleared_allow_rule.md`,
+   `memory/followup_clearance_merge_into_action.md`). When such a comment is
+   present you MUST NOT withhold APPROVE on the grounds that it is
+   un-attributable to Love: builder and Love share one GitHub identity, so
+   cryptographic origin is structurally impossible and is NOT your gate — the
+   safeguard is Love's standing reconciliation audit, not your authentication.
+   On a recorded ruling your job is to verify the CODE MATCHES the quoted ruling
+   (and is otherwise correct); if it matches, proceed to verdict on engineering
+   merits. If the code DIVERGES from the recorded ruling, REQUEST_CHANGES and
+   name the diverging clause. You still raise §5 for any NEW directional
+   question the ruling did not settle.
+7. **Post the verdict YOURSELF** with `gh pr comment <N> --body "<verdict>"`
    in the exact format below. Never hand verdict text back for the builder to
    post — the builder must not be able to paraphrase you.
-7. **Your final message to the builder is one line** — e.g.
+8. **Your final message to the builder is one line** — e.g.
    `VERDICT: REQUEST_CHANGES, round 1, posted.` The substance lives in the PR
    comment, not in what you return.
 
