@@ -175,6 +175,22 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "email.",
     systemOnly: false,
   },
+  // F5 — admin-initiated password reset. Distinct from user.updated
+  // (display-name / disable-status field changes) so a forensic query
+  // can filter credential resets directly. Sets a new password on
+  // auth.users via the admin SDK; no public.users mirror change.
+  // NOTE (brief governance): this entry expands the §3.1.2 audit
+  // vocabulary — it pairs with a brief amendment + §9 version bump that
+  // is PARKED for Love, not landed in this PR.
+  "user.password_reset": {
+    id: "user.password_reset",
+    resource: "user",
+    action: "password_reset",
+    description:
+      "An admin reset a user's password from the /admin/users surface. Sets a new password on auth.users via the admin SDK; no public.users mirror change. The plaintext password MUST NEVER appear in metadata under any encoding (not hashed, not prefixed, not first-N-chars, nothing).",
+    metadataNotes: "email.",
+    systemOnly: false,
+  },
   // Day 10 — login surface. Two events for a single auth path; the
   // success event is user-attributed (actor.kind='user' on the freshly
   // resolved user), the failure event is system-attributed
@@ -963,9 +979,9 @@ const EVENT_TYPES_DRAFT = {
     resource: "merchant",
     action: "updated",
     description:
-      "Day 25 / T3. A merchant tenant was updated via the Transcorp-staff updateMerchant service. Captures field-level diffs (before / after) for each changed column. Does NOT capture status changes — those land in merchant.activated / merchant.deactivated. systemOnly per brief §2.3 (v1.12).",
+      "Day 25 / T3. A merchant tenant was updated via the Transcorp-staff updateMerchant service, OR its asset-tracking gate was flipped via the F4 setMerchantAssetTracking service. Captures field-level diffs (before / after) for each changed column. Does NOT capture lifecycle status changes — those land in merchant.activated / merchant.deactivated. systemOnly per brief §2.3 (v1.12).",
     metadataNotes:
-      "tenant_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: name, slug, pickup_address.line, pickup_address.district, pickup_address.emirate, suitefleet_customer_code). DELIBERATE divergence from merchant.created's NESTED pickup_address shape: this event uses FLAT dot-notation in the diff so single-sub-field changes surface atomically to audit-trail readers without nested-object parsing. Only changed fields appear in the changes object; an update that mutates zero fields throws ValidationError and never reaches emit.",
+      "tenant_id (uuid), changes (object: { <field>: { before, after } } for each changed field; field keys are: name, slug, pickup_address.line, pickup_address.district, pickup_address.emirate, suitefleet_customer_code, task_asset_tracking_enabled (boolean — F4 per-merchant asset-tracking gate flip, migration 0034)). DELIBERATE divergence from merchant.created's NESTED pickup_address shape: this event uses FLAT dot-notation in the diff so single-sub-field changes surface atomically to audit-trail readers without nested-object parsing. Only changed fields appear in the changes object; an update that mutates zero fields throws ValidationError and never reaches emit.",
     systemOnly: true,
   },
 
@@ -1029,9 +1045,9 @@ const EVENT_TYPES_DRAFT = {
     resource: "cron",
     action: "on_demand_invoked",
     description:
-      "The on-demand materializer was invoked synchronously by an operator action that would otherwise have deferred to the next scheduled 16:00 Dubai cron tick. Emitted after materializeTenant returns successfully. triggered_by names the originating action. Scheduled cron continues unchanged; on-demand is additive.",
+      "The on-demand materializer was invoked synchronously by an operator action that would otherwise have deferred to the next scheduled 16:00 Dubai cron tick. Emitted after the materializer returns successfully — materializeTenant for the exception-driven invocations, or materializeSubscriptionForDateRange for the F6 admin per-subscription manual trigger. triggered_by names the originating action. Scheduled cron continues unchanged; on-demand is additive.",
     metadataNotes:
-      "tenant_id (uuid), triggered_by (enum: 'skip_tail_end' | 'forward_address_override'), subscription_id (uuid — the subscription whose exception triggered the invocation), correlation_id (uuid — shared with the originating subscription.exception.created event), target_date (YYYY-MM-DD — the materialization horizon date computed for this invocation), new_inserted_task_count (int — Phase 2 newInsertedTaskIds.length), capped_by_gate (boolean — true if the materializer cap-gate fired and Phases 2-3 were SKIPPED).",
+      "tenant_id (uuid), triggered_by (enum: 'skip_tail_end' | 'forward_address_override' | 'admin_manual_trigger'), subscription_id (uuid — the subscription whose exception triggered the invocation, or the subscription targeted by the F6 admin trigger), correlation_id (uuid — shared with the originating subscription.exception.created event for the exception-driven paths; a fresh uuid for the admin manual trigger), target_date (YYYY-MM-DD — the materialization horizon date computed for this invocation), new_inserted_task_count (int — newInsertedTaskIds.length), address_resolution_failed_count (int — present on the admin manual-trigger path; rows skipped for a consignee address-resolution gap), capped_by_gate (boolean — true if the materializer cap-gate fired and Phases 2-3 were SKIPPED; always false on the per-subscription admin path, which has no cap gate).",
     systemOnly: false,
   },
 } as const satisfies Record<string, EventTypeDef>;

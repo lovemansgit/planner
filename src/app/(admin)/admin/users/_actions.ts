@@ -15,7 +15,11 @@
 import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 
-import { disableUser, enableUser } from "@/modules/identity/service";
+import {
+  disableUser,
+  enableUser,
+  resetUserPassword,
+} from "@/modules/identity/service";
 import {
   ConflictError,
   ForbiddenError,
@@ -76,6 +80,66 @@ export async function enableUserAction(
   } catch (err) {
     return mapError(err);
   }
+}
+
+// ---------------------------------------------------------------------------
+// F5 — admin-initiated password reset
+// ---------------------------------------------------------------------------
+
+export type UserPasswordResetActionResult =
+  | { readonly kind: "idle" }
+  | { readonly kind: "reset"; readonly userId: string }
+  | { readonly kind: "validation"; readonly message: string }
+  | { readonly kind: "forbidden"; readonly message: string }
+  | { readonly kind: "conflict"; readonly message: string }
+  | { readonly kind: "not_found"; readonly message: string };
+
+/**
+ * Bound at the trigger-button render site with the target userId. The
+ * form posts a single `newPassword` field (the temporary password the
+ * admin types). The plaintext is forwarded to the service layer and is
+ * NEVER returned to the client or logged — the admin already holds it,
+ * having typed it.
+ */
+export async function resetUserPasswordAction(
+  userId: string,
+  _prevState: UserPasswordResetActionResult,
+  formData: FormData,
+): Promise<UserPasswordResetActionResult> {
+  const requestId = randomUUID();
+  const newPassword = (formData.get("newPassword") as string | null) ?? "";
+  try {
+    const ctx = await buildRequestContext("/admin/users", requestId);
+    await resetUserPassword(ctx, { userId: userId as Uuid, newPassword });
+    return { kind: "reset", userId };
+  } catch (err) {
+    return mapResetError(err);
+  }
+}
+
+function mapResetError(err: unknown): UserPasswordResetActionResult {
+  if (err instanceof ValidationError) {
+    return { kind: "validation", message: err.message };
+  }
+  if (err instanceof ForbiddenError) {
+    return {
+      kind: "forbidden",
+      message: "You don't have permission to reset this user's password.",
+    };
+  }
+  if (err instanceof ConflictError) {
+    return { kind: "conflict", message: err.message };
+  }
+  if (err instanceof NotFoundError) {
+    return { kind: "not_found", message: err.message };
+  }
+  return {
+    kind: "conflict",
+    message:
+      err instanceof Error
+        ? `Unexpected error: ${err.message}`
+        : "Unexpected error.",
+  };
 }
 
 function mapError(err: unknown): UserStatusActionResult {

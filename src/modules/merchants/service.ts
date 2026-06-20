@@ -62,6 +62,8 @@ import {
   findMerchantForStatusUpdate,
   insertMerchant,
   listMerchants as listMerchantsRows,
+  selectAssetTrackingFlag,
+  updateAssetTrackingFlag,
   updateMerchantFields,
   updateMerchantStatus,
   type UpdateMerchantFieldsPatch,
@@ -559,6 +561,116 @@ export async function updateMerchant(
   });
 
   return { status: "updated", tenantId, changedFields };
+}
+
+// -----------------------------------------------------------------------------
+// F4 — per-merchant asset-tracking gate toggle (migration 0034)
+// -----------------------------------------------------------------------------
+
+export interface SetMerchantAssetTrackingInput {
+  readonly tenantId: Uuid;
+  readonly enabled: boolean;
+}
+
+export interface SetMerchantAssetTrackingResult {
+  readonly tenantId: Uuid;
+  readonly enabled: boolean;
+  /** False when the flag was already at the requested value (idempotent
+   *  no-op — no UPDATE issued, no audit emitted). */
+  readonly changed: boolean;
+}
+
+/**
+ * Read the per-tenant asset-tracking gate (`task_asset_tracking_enabled`,
+ * migration 0034) for one merchant. Gated on `merchant:read_all`;
+ * cross-tenant read via `withServiceRole`. Returns null when the tenant
+ * does not exist. No audit emit (reads are not audited per R-4).
+ */
+export async function getMerchantAssetTrackingEnabled(
+  ctx: RequestContext,
+  tenantId: Uuid,
+): Promise<boolean | null> {
+  requirePermission(ctx, "merchant:read_all");
+  return withServiceRole(
+    `transcorp_staff:get_asset_tracking ${tenantId}`,
+    async (tx) => selectAssetTrackingFlag(tx, tenantId),
+  );
+}
+
+/**
+ * Flip the per-merchant asset-tracking gate — THE DARK SWITCH from
+ * migration 0034. Lights (or hides) every bag-tracking surface for the
+ * tenant: the Inventory / Asset Tracking reports, the 30-minute poll,
+ * and the nav entries all read this flag.
+ *
+ * Permission gate: `merchant:update` (Transcorp-staff-only, per the
+ * systemOnly merchant:* family). Cross-tenant write via `withServiceRole`
+ * — the flag lives on the RLS-protected tenants table and this is a
+ * Transcorp-admin action across tenants.
+ *
+ * Idempotent: a flip to the value the flag already holds is a no-op
+ * that issues no UPDATE and emits no audit event (`changed: false`),
+ * mirroring updateMerchant's empty-diff skip.
+ *
+ * Audit: reuses the existing `merchant.updated` event with a
+ * `changed_fields` / `changes` diff for `task_asset_tracking_enabled`
+ * (no new event type — this is a merchant field change).
+ *
+ * NOTE (staged posture / SF sync): per migration 0034 the webhook path
+ * must NEVER auto-flip this gate ON. This service is the MANUAL admin
+ * authority only; whether/how SF's `customer.taskAssetTrackingEnabled`
+ * field should ever drive this flag is a PARKED product question for
+ * Love (see the PR's ORCH-PARK).
+ *
+ * Throws:
+ *   - ForbiddenError    actor lacks `merchant:update`.
+ *   - NotFoundError     tenant id not found.
+ */
+export async function setMerchantAssetTracking(
+  ctx: RequestContext,
+  input: SetMerchantAssetTrackingInput,
+): Promise<SetMerchantAssetTrackingResult> {
+  requirePermission(ctx, "merchant:update");
+
+  const { tenantId, enabled } = input;
+  let before: boolean | null = null;
+  let changed = false;
+
+  await withServiceRole(
+    `transcorp_staff:set_asset_tracking ${tenantId}`,
+    async (tx) => {
+      before = await selectAssetTrackingFlag(tx, tenantId);
+      if (before === null) {
+        throw new NotFoundError(`merchant not found: ${tenantId}`);
+      }
+      if (before === enabled) {
+        changed = false;
+        return;
+      }
+      await updateAssetTrackingFlag(tx, tenantId, enabled);
+      changed = true;
+    },
+  );
+
+  if (changed) {
+    await emit({
+      eventType: "merchant.updated",
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId: null,
+      resourceType: "merchant",
+      resourceId: tenantId,
+      metadata: {
+        tenant_id: tenantId,
+        changes: {
+          task_asset_tracking_enabled: { before, after: enabled },
+        },
+      },
+      requestId: ctx.requestId,
+    });
+  }
+
+  return { tenantId, enabled, changed };
 }
 
 /**

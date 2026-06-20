@@ -28,7 +28,34 @@ false) — these legs run on a PREVIEW deployment first (staged posture
    real proof; (b) un-blocks the walk if Aqib's staging lags.
 4. **QStash schedule registration** (one command, $0-verified) — only
    needed for the "as of" stamp to advance on its own; the manual
-   Refresh button covers the walk without it.
+   Refresh button covers the walk without it. **DEFERRED to the first
+   real-tenant flip** (Love's ruling, 2026-06-14: "QStash registration
+   DEFERRED to the first real-tenant flip — do not register now"). A
+   dark fleet has nothing to poll, so registering earlier is a no-op;
+   it becomes the first flip's second step (see "Flag-flip runbook
+   step" below).
+
+## Flag-flip runbook step — lighting the first REAL tenant
+
+When Love names a real merchant to light (gating item 2), run BOTH
+steps, first flip only:
+
+1. **Flip the flag** — one-row UPDATE on Love's per-tenant sentence:
+   `UPDATE tenants SET task_asset_tracking_enabled = true,
+   default_task_asset_type = 'BAGS' WHERE slug = '<named-merchant>';`
+   Builder executes and states the route. (Pre-req: Aqib's sandbox
+   scans have proven the 30-minute ingest end-to-end — the flag never
+   flips for a real tenant before that.)
+2. **Register the QStash schedule — FIRST FLIP ONLY** (deferred from
+   ship per Love's 2026-06-14 ruling): `set -a && source .env.local &&
+   set +a; PUBLIC_BASE_URL=https://<prod-domain> node
+   scripts/create-qstash-asset-poll-schedule.mjs` — needs `QSTASH_TOKEN`
+   (production secret; pull into the local env or run where it is
+   available — never through chat). Idempotent (dedupes by
+   `scheduleId`); $0 at 48 msg/day on the free tier. The route
+   `/api/cron/asset-tracking-poll` is already deployed + signature-gated
+   in production (verified 403 to unsigned POST). Subsequent tenant
+   flips do NOT re-register (one schedule polls all lit tenants).
 
 ## The three legs (plan §8, Love-accepted)
 
@@ -90,3 +117,38 @@ false) — these legs run on a PREVIEW deployment first (staged posture
 If all seven hold: that's the preview walk — your sign-off sentence
 releases the stack to merge (it still stays dark in production until
 your per-tenant flag sentences).
+
+## Status — 2026-06-13 (Day 54/55): re-walk PASS, shipped DARK
+
+The preview walk was run and signed off ("Re-walk PASS — the
+bag-tracking stack #507 → #508 → #509 → #513 is cleared to merge").
+
+- **Legs 1 + 2 PROVEN on the preview** (admin Asset Tracking + Asset
+  Log; merchant Inventory; dark-switch scoping; AWB drill-downs;
+  tooltips). Walk findings F1 (admin Inventory all-merchants view) and
+  F2 (admin nav overflow → Reports dropdown) were fixed in P4 (#513)
+  and re-walked.
+- **Stack merged** to main via collapse-to-#513 (squash `d02b198`) and
+  **promoted DARK** to production (`e00a4ae`, `dpl_9EGTCnv8…`, rollback
+  anchor `d64e835`). Migrations 0032/0033/0034 already on the
+  production Supabase. The `/api/cron/asset-tracking-poll` route is
+  deployed and signature-gated (unsigned POST → 403). Fleet all-dark
+  (`lit tenants = 0`); the walk's synthetic seed was removed post-walk
+  (scan_log 18 / cache 6 / tasks 4 / consignees 2 deleted, zero SYN
+  residue).
+- **Leg 3 (live SF scan) — STILL UAT-OPPORTUNISTIC**, unchanged: it
+  waits on Aqib's staged sandbox scans (bags + ice packs through the
+  five statuses on sandbox AWBs). When they land, one poll tick (or
+  Refresh) ingests, the counts move, the Asset Log grows lines without
+  rewriting old ones, and the first real wire record is
+  fixture-snapshotted (retires the doc-derived inner-shape caveat,
+  vendor Q9).
+- **QStash 30-minute schedule registration — OUTSTANDING.** Needs
+  `QSTASH_TOKEN` (production secret, not in the local env). Deferrable
+  to the first real-tenant flip: a dark fleet has nothing to poll, and
+  the manual Refresh covers any walk. Register at the same gate as the
+  first per-tenant flag sentence.
+- **The flag flips for a REAL tenant ONLY on Love's explicit
+  per-tenant sentence**, and only AFTER Aqib's scans prove the
+  30-minute ingest end-to-end. Until then the feature is dark in
+  production by construction (0034 default false).

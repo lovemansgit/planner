@@ -28,6 +28,7 @@ import {
 
 import { UserDisableModal } from "./_components/UserDisableModal";
 import { UserEnableButton } from "./_components/UserEnableButton";
+import { UserPasswordResetModal } from "./_components/UserPasswordResetModal";
 import {
   ForbiddenError,
   NoTenantConfiguredError,
@@ -207,11 +208,14 @@ function Row({ row }: { row: AdminUserRow }) {
         {row.createdAt.slice(0, 10)}
       </Td>
       <Td className="text-right">
-        {disabled ? (
-          <UserEnableButton userId={row.userId} />
-        ) : (
-          <UserDisableModal userId={row.userId} email={row.email} />
-        )}
+        <div className="inline-flex items-center justify-end gap-2">
+          <UserPasswordResetModal userId={row.userId} email={row.email} />
+          {disabled ? (
+            <UserEnableButton userId={row.userId} />
+          ) : (
+            <UserDisableModal userId={row.userId} email={row.email} />
+          )}
+        </div>
       </Td>
     </tr>
   );

@@ -155,6 +155,30 @@ export async function enableAuthUser(authUserId: string): Promise<void> {
   }
 }
 
+/**
+ * Set a new password on a Supabase Auth user (admin-initiated reset).
+ * Uses the same `updateUserById` admin primitive as disable/enable.
+ * The plaintext password is passed straight to the hosted Auth service
+ * and is never persisted, returned, or logged by this module.
+ *
+ * Idempotent in the sense that re-issuing the same password is a no-op
+ * to the user; the Auth service simply re-hashes it.
+ */
+export async function resetAuthUserPassword(
+  authUserId: string,
+  newPassword: string,
+): Promise<void> {
+  const client = adminClient();
+  const { error } = await client.auth.admin.updateUserById(authUserId, {
+    password: newPassword,
+  });
+  if (error) {
+    throw new AuthAdminError(
+      `auth.admin.updateUserById password reset failed: ${error.message}`,
+    );
+  }
+}
+
 export class AuthAdminError extends Error {
   constructor(message: string) {
     super(message);
