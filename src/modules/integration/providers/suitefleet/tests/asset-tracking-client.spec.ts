@@ -72,7 +72,7 @@ const DOC_POPULATED_WRAPPER = {
       taskId: 59113,
       trackingId: "MPS-98410409-1",
       type: "BAGS",
-      state: "EN_ROUTE",
+      status: "EN_ROUTE",
       photos: null,
       notes: "leaving warehouse",
       supplementaryQuantity: 1,
@@ -87,7 +87,7 @@ const DOC_POPULATED_WRAPPER = {
       taskId: 59113,
       trackingId: "MPS-98410409-2",
       type: "BAGS",
-      state: "COLLECTED",
+      status: "COLLECTED",
       photos: null,
       notes: null,
       supplementaryQuantity: null,
@@ -104,6 +104,63 @@ const DOC_POPULATED_WRAPPER = {
   first: true,
   number: 0,
   numberOfElements: 2,
+  size: 50,
+  empty: false,
+};
+
+/**
+ * EMPIRICAL populated record — captured 20 Jun 2026 (read-only, Love-
+ * authorized) from the FIRST real asset record on production: Meal Up
+ * (tenant `mlp`), task 61970, AWB MLU-97015852, status DELIVERED.
+ * Verbatim structural shape (values sanitised; the `*_by` PII block is
+ * representative, not the real courier).
+ *
+ * Two ways the SF doc — and therefore our original parser — were WRONG,
+ * both proven by this capture:
+ *   1. The per-record state field is named `status` on the wire, NOT
+ *      `state`. The doc-derived parser read `record.state` (always
+ *      undefined here) → threw "unknown state" → HTTP 400. THIS is the
+ *      "Refresh failed" root cause.
+ *   2. `trackingId` is the BARE AWB ("MLU-97015852") with NO `-<index>`
+ *      suffix. The doc asserted `<awb>-<index>`. (deriveAwb + the 0011
+ *      generated `awb` column both mis-derive a bare AWB — tracked as a
+ *      separate PARKED schema follow-up; not fixed here. Counts are
+ *      task_id-joined so they are correct; only the per-number AWB
+ *      drill-down is affected.)
+ *
+ * The `status` VALUE ("COLLECTED") and `type` ("BAGS") are both already
+ * in our enums — so no CHECK-constraint migration is needed.
+ */
+const EMPIRICAL_POPULATED_WRAPPER = {
+  content: [
+    {
+      id: 880142,
+      taskId: 61970,
+      trackingId: "MLU-97015852",
+      type: "BAGS",
+      status: "COLLECTED",
+      photos: null,
+      notes: "delivered to reception",
+      supplementaryQuantity: 3,
+      containerId: null,
+      collectedBy: {
+        id: 4021,
+        name: "Sample Courier",
+        firstName: "Sample",
+        lastName: "Courier",
+        email: "courier@example.test",
+      },
+      receivedBy: null,
+      enrouteBy: null,
+      returnedBy: null,
+    },
+  ],
+  last: true,
+  totalElements: 1,
+  totalPages: 1,
+  first: true,
+  number: 0,
+  numberOfElements: 1,
   size: 50,
   empty: false,
 };
@@ -201,6 +258,34 @@ describe("SuiteFleetAssetTrackingClient — doc-derived populated fixture", () =
   });
 });
 
+describe("SuiteFleetAssetTrackingClient — REAL wire shape (empirical, 20 Jun 2026)", () => {
+  // RED before the parser fix: the doc-derived parser reads `record.state`,
+  // which is undefined on the real wire (the field is `status`), so it
+  // threw "unknown state 'undefined'" → ValidationError → HTTP 400. This
+  // is the production "Refresh failed". GREEN after the parser reads
+  // `status`.
+  it("parses the real record whose state arrives in the `status` field, not `state`", () => {
+    const records = parseAssetTrackingPage(EMPIRICAL_POPULATED_WRAPPER, "MLU-97015852");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      externalRecordId: 880142,
+      taskIdExternal: 61970,
+      trackingId: "MLU-97015852",
+      type: "BAGS",
+      state: "COLLECTED",
+      supplementaryQuantity: 3,
+    });
+  });
+
+  it("still rejects a record that carries neither `status` nor a known value", () => {
+    const body = {
+      ...EMPIRICAL_POPULATED_WRAPPER,
+      content: [{ ...EMPIRICAL_POPULATED_WRAPPER.content[0], status: "TELEPORTED" }],
+    };
+    expect(() => parseAssetTrackingPage(body, "MLU-97015852")).toThrow(/unknown status/i);
+  });
+});
+
 describe("SuiteFleetAssetTrackingClient — error mapping", () => {
   it("maps 401 to CredentialError", async () => {
     const fetch = makeFetch(jsonResponse({ error: "unauth" }, 401));
@@ -266,7 +351,7 @@ describe("SuiteFleetAssetTrackingClient — shape validation throws on surprises
     );
   });
 
-  it("throws ValidationError on an unknown state value", () => {
+  it("throws ValidationError on an unknown status value", () => {
     const body = {
       content: [
         {
@@ -274,11 +359,11 @@ describe("SuiteFleetAssetTrackingClient — shape validation throws on surprises
           taskId: 1,
           trackingId: "X-1",
           type: "BAGS",
-          state: "MYSTERY_STATE",
+          status: "MYSTERY_STATE",
         },
       ],
     };
-    expect(() => parseAssetTrackingPage(body, "X")).toThrow(/unknown state/i);
+    expect(() => parseAssetTrackingPage(body, "X")).toThrow(/unknown status/i);
   });
 
   it("throws ValidationError on an unknown type value", () => {
@@ -289,7 +374,7 @@ describe("SuiteFleetAssetTrackingClient — shape validation throws on surprises
           taskId: 1,
           trackingId: "X-1",
           type: "GLITTER",
-          state: "COLLECTED",
+          status: "COLLECTED",
         },
       ],
     };
@@ -297,7 +382,7 @@ describe("SuiteFleetAssetTrackingClient — shape validation throws on surprises
   });
 
   it("throws ValidationError when id / taskId / trackingId missing or wrong type", () => {
-    const baseRow = { id: 1, taskId: 1, trackingId: "X-1", type: "BAGS", state: "COLLECTED" };
+    const baseRow = { id: 1, taskId: 1, trackingId: "X-1", type: "BAGS", status: "COLLECTED" };
     expect(() =>
       parseAssetTrackingPage({ content: [{ ...baseRow, id: undefined }] }, "X"),
     ).toThrow(ValidationError);
@@ -334,7 +419,7 @@ describe("parseAssetTrackingRecord — SORTED state (vendor-confirmed)", () => {
   it("accepts SORTED — Aqib confirmed the 5-state enum (Collected/Received/Sorted/EnRoute/Returned)", () => {
     const body = {
       ...DOC_POPULATED_WRAPPER,
-      content: [{ ...DOC_POPULATED_WRAPPER.content[0], state: "SORTED" }],
+      content: [{ ...DOC_POPULATED_WRAPPER.content[0], status: "SORTED" }],
     };
     const records = parseAssetTrackingPage(body, "MPS-98410409");
     expect(records).toHaveLength(1);
@@ -344,9 +429,9 @@ describe("parseAssetTrackingRecord — SORTED state (vendor-confirmed)", () => {
   it("still rejects states outside the confirmed five", () => {
     const body = {
       ...DOC_POPULATED_WRAPPER,
-      content: [{ ...DOC_POPULATED_WRAPPER.content[0], state: "TELEPORTED" }],
+      content: [{ ...DOC_POPULATED_WRAPPER.content[0], status: "TELEPORTED" }],
     };
-    expect(() => parseAssetTrackingPage(body, "MPS-98410409")).toThrow(/unknown state/i);
+    expect(() => parseAssetTrackingPage(body, "MPS-98410409")).toThrow(/unknown status/i);
   });
 });
 

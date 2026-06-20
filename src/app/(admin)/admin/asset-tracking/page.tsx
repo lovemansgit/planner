@@ -176,7 +176,16 @@ function MerchantRows({ group }: { readonly group: MerchantGroup }) {
   return (
     <>
       <tr className="border-b border-[color:var(--color-border-subtle)] bg-[color:var(--color-tint-navy-subtle)]">
-        <td className={`${TD} font-semibold`}>{group.merchantName}</td>
+        <td className={`${TD} font-semibold`}>
+          {/* Per-merchant refresh — gives Transcorp staff a pull control on
+              the all-merchants view (walk finding: admin had none). Scoped
+              to one merchant per click, so it never fans out across the
+              fleet (the #509 cost guard the page deliberately kept). */}
+          <span className="flex items-center gap-3">
+            {group.merchantName}
+            <RefreshButton merchantSlug={group.merchantSlug} />
+          </span>
+        </td>
         <CountCell
           value={sum(group.dates, (r) => r.allocatedAssets)}
           href={awbsHref("/admin/asset-tracking/log", unionAwbs(group.dates, (r) => r.awbs))}
