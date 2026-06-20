@@ -93,7 +93,12 @@ interface SuiteFleetAssetTrackingRecord {
   readonly taskId?: number;
   readonly trackingId?: string;
   readonly type?: string;
-  readonly state?: string;
+  // Wire field is `status` (empirically confirmed 20 Jun 2026 against the
+  // first real record — task 61970 / AWB MLU-97015852). The SF doc and
+  // this parser originally read `state`; that field does not exist on the
+  // wire, which is what produced the "Refresh failed" HTTP 400. The value
+  // maps onto our internal `AssetTrackingPackage.state`.
+  readonly status?: string;
   readonly photos?: unknown;
   readonly notes?: string | null;
   readonly supplementaryQuantity?: number | null;
@@ -145,9 +150,9 @@ export function parseAssetTrackingRecord(
       `SuiteFleet asset-tracking record has unknown type '${String(record.type)}'`,
     );
   }
-  if (typeof record.state !== "string" || !ASSET_STATES.has(record.state)) {
+  if (typeof record.status !== "string" || !ASSET_STATES.has(record.status)) {
     throw new ValidationError(
-      `SuiteFleet asset-tracking record has unknown state '${String(record.state)}'`,
+      `SuiteFleet asset-tracking record has unknown status '${String(record.status)}'`,
     );
   }
 
@@ -161,7 +166,7 @@ export function parseAssetTrackingRecord(
     trackingId,
     awb,
     type: record.type as AssetType,
-    state: record.state as AssetTrackingState,
+    state: record.status as AssetTrackingState,
     photos: record.photos ?? null,
     notes: typeof record.notes === "string" ? record.notes : null,
     supplementaryQuantity:

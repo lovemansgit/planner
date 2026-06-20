@@ -19,6 +19,7 @@ import type { AdminInventoryMerchantSection } from "@/modules/asset-tracking/rep
 
 import { ConsigneeRows } from "./ConsigneeRows";
 import { CountCell, ReportHeaderCells } from "./ReportCells";
+import { RefreshButton } from "./RefreshButton";
 import { awbsHref } from "./report-helpers";
 
 const TD = "px-4 py-3 text-sm tabular-nums";
@@ -87,20 +88,26 @@ function MerchantSectionRows({
     <>
       <tr className="border-b border-[color:var(--color-border-subtle)] last:border-b-0">
         <td className={`${TD} font-medium`}>
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={isOpen}
-            className="flex items-center gap-2 rounded-sm text-left hover:text-[color:var(--color-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy"
-          >
-            <span aria-hidden="true" className="inline-block w-3 text-xs">
-              {isOpen ? "▾" : "▸"}
-            </span>
-            {section.merchantName}
-            <span className="text-xs text-[color:var(--color-text-secondary)]">
-              ({new Set(section.consignees.map((row) => row.consigneeId)).size} consignees)
-            </span>
-          </button>
+          {/* Refresh sits beside the toggle (a sibling, not nested — it must
+              not toggle the section). Scoped to this one merchant, so it
+              never fans out across the fleet (the #509 cost guard). */}
+          <span className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={isOpen}
+              className="flex items-center gap-2 rounded-sm text-left hover:text-[color:var(--color-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy"
+            >
+              <span aria-hidden="true" className="inline-block w-3 text-xs">
+                {isOpen ? "▾" : "▸"}
+              </span>
+              {section.merchantName}
+              <span className="text-xs text-[color:var(--color-text-secondary)]">
+                ({new Set(section.consignees.map((row) => row.consigneeId)).size} consignees)
+              </span>
+            </button>
+            <RefreshButton merchantSlug={section.merchantSlug} />
+          </span>
         </td>
         <CountCell
           value={rollup?.allocatedAssets ?? 0}
