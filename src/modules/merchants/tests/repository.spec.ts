@@ -449,6 +449,72 @@ describe("listMerchants", () => {
       expect(captured.params).toContain("%demo%");
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // F8 (20 Jun 2026) — excludeTestTenants genuine default-view filter.
+  // Asserts the SQL surface that hides ~1,825 automated-test tenants while
+  // always surfacing the six genuine merchants (allowlist safety net). The
+  // behavioural truth of the predicate is proven in genuine-merchants.spec.ts;
+  // these assert the query is built from that same contract.
+  // ---------------------------------------------------------------------------
+  describe("excludeTestTenants filter (F8 genuine default view)", () => {
+    const GENUINE = [
+      "meal-plan-scheduler",
+      "dr-nutrition",
+      "fresh-butchers",
+      "transcorp",
+      "hem",
+      "mlp",
+    ];
+
+    it("composes allowlist OR (active/inactive/suspended AND slug !~ hex-test-pattern)", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, { excludeTestTenants: true });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+
+      // Un-anchored 8-hex isolation fragment, bound as a parameter.
+      expect(captured.sql).toMatch(/slug\s*!~\s*\$\d+/i);
+      expect(captured.params).toContain("[0-9a-f]{8}");
+
+      // Allowlist IN clause carries all six genuine slugs as params.
+      expect(captured.sql).toMatch(/slug\s+in\s*\(/i);
+      for (const slug of GENUINE) {
+        expect(captured.params).toContain(slug);
+      }
+
+      // Status restricted to active/inactive/suspended (excludes
+      // provisioning + archived from the default view).
+      expect(captured.sql).toMatch(/status\s+in\s*\(/i);
+      expect(captured.params).toEqual(
+        expect.arrayContaining(["active", "inactive", "suspended"]),
+      );
+      expect(captured.params).not.toContain("provisioning");
+    });
+
+    it("does NOT also emit the default status != 'archived' clause (no redundancy)", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, { excludeTestTenants: true });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/status\s*!=\s*'archived'/i);
+    });
+
+    it("composes with the searchTerm ILIKE filter", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, { excludeTestTenants: true, searchTerm: "demo" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/slug\s*!~/i);
+      expect(captured.sql).toMatch(/ILIKE/i);
+      expect(captured.params).toContain("%demo%");
+    });
+
+    it("explicit status filter wins over excludeTestTenants (precedence)", async () => {
+      const tx = makeStubTx([[]]);
+      await listMerchants(tx, { excludeTestTenants: true, status: "active" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/status\s*=\s*\$\d+/i);
+      expect(captured.sql).not.toMatch(/slug\s*!~/i);
+    });
+  });
 });
 
 describe("mapRow — pickupAddress nested-vs-flat translation", () => {

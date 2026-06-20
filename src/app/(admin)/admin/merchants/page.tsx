@@ -33,7 +33,11 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 
 import { MerchantStatusModal } from "./_components/MerchantStatusModal";
-import { statusAction, statusBadgeSurface } from "./_helpers";
+import {
+  selectMerchantListFilters,
+  statusAction,
+  statusBadgeSurface,
+} from "./_helpers";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -41,6 +45,7 @@ export const revalidate = 0;
 interface MerchantsAdminPageProps {
   readonly searchParams: Promise<{
     readonly q?: string;
+    readonly view?: string;
   }>;
 }
 
@@ -50,11 +55,14 @@ export default async function MerchantsAdminPage({
   const requestId = randomUUID();
   const params = await searchParams;
   const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
+  // F8: default view hides automated-test tenants; ?view=all is the
+  // one-click reversible "show all" toggle.
+  const showAll = params.view === "all";
 
   let merchants: readonly Merchant[];
   try {
     const ctx = await buildRequestContext("/admin/merchants", requestId);
-    merchants = await listMerchants(ctx, { searchTerm: q });
+    merchants = await listMerchants(ctx, selectMerchantListFilters({ searchTerm: q, showAll }));
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/admin/merchants"));
@@ -71,6 +79,15 @@ export default async function MerchantsAdminPage({
     throw err;
   }
 
+  // F8 toggle: flip the view while preserving the active search term.
+  const toggleParams = new URLSearchParams();
+  if (q !== undefined) toggleParams.set("q", q);
+  if (!showAll) toggleParams.set("view", "all");
+  const toggleQuery = toggleParams.toString();
+  const toggleHref = `/admin/merchants${toggleQuery ? `?${toggleQuery}` : ""}`;
+  const countLabel =
+    q !== undefined ? "Matching merchants" : showAll ? "All merchants" : "Genuine merchants";
+
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-6xl px-12 py-16">
@@ -81,8 +98,10 @@ export default async function MerchantsAdminPage({
             </p>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">Merchants</h1>
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              All merchants on the platform. Activate provisioning merchants when ready; deactivate
-              live merchants to stop new task generation.
+              Genuine merchants on the platform. Automated-test tenants, plus provisioning and
+              archived rows, are hidden by default — use “Show all” to include them (e.g. to
+              activate a newly-created merchant). Deactivate live merchants to stop new task
+              generation.
             </p>
           </div>
           <Link
@@ -97,9 +116,17 @@ export default async function MerchantsAdminPage({
           <p className="font-serif text-5xl font-light tabular-nums leading-none">
             {merchants.length}
           </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {q !== undefined ? "Matching merchants" : "Total merchants"}
-          </p>
+          <div className="flex flex-col items-end gap-2">
+            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+              {countLabel}
+            </p>
+            <Link
+              href={toggleHref}
+              className="text-[11px] font-medium uppercase tracking-[0.1em] text-navy underline decoration-[color:var(--color-border-strong)] underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+            >
+              {showAll ? "Show genuine merchants only" : "Show all (incl. test tenants)"}
+            </Link>
+          </div>
         </section>
 
         <SearchBar
@@ -107,7 +134,11 @@ export default async function MerchantsAdminPage({
           label="Search merchants by name or slug"
         />
 
-        {merchants.length === 0 ? <EmptyState filtered={q !== undefined} /> : <MerchantsTable rows={merchants} />}
+        {merchants.length === 0 ? (
+          <EmptyState filtered={q !== undefined} showAll={showAll} />
+        ) : (
+          <MerchantsTable rows={merchants} />
+        )}
       </div>
     </main>
   );
@@ -207,15 +238,27 @@ function Td({ children, className = "" }: { children: React.ReactNode; className
   return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
-function EmptyState({ filtered }: { readonly filtered: boolean }) {
+function EmptyState({
+  filtered,
+  showAll,
+}: {
+  readonly filtered: boolean;
+  readonly showAll: boolean;
+}) {
+  const headline = filtered
+    ? "No merchants match the search."
+    : showAll
+      ? "No merchants yet."
+      : "No genuine merchants to show.";
+  const detail = filtered
+    ? "Clear the search to see all merchants."
+    : showAll
+      ? "Create your first merchant to get started."
+      : "Automated-test tenants are hidden by default — choose “Show all” to include them.";
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
-      <p className="text-base text-navy">
-        {filtered ? "No merchants match the search." : "No merchants yet."}
-      </p>
-      <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        {filtered ? "Clear the search to see all merchants." : "Create your first merchant to get started."}
-      </p>
+      <p className="text-base text-navy">{headline}</p>
+      <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">{detail}</p>
     </div>
   );
 }
