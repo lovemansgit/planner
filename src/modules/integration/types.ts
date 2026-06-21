@@ -30,6 +30,46 @@ export type InternalTaskStatus =
   | "ON_HOLD";
 
 /**
+ * Fine-grained SuiteFleet courier status — the 14 distinct delivery
+ * lifecycle states, carried for *render* distinctness (brief §3.1.10,
+ * v1.31 / Phase 8). Kept SEPARATE from the coarse 7-value
+ * `InternalTaskStatus`, which all business logic continues to read; the
+ * SF provider (Lane 2) maps each courier state to BOTH a coarse internal
+ * status and a fine courier status. On a task row, NULL = no SF courier
+ * detail yet / a Planner-only state (SKIPPED, manual cancel) /
+ * a pre-backfill row — render then falls back to the coarse status map.
+ *
+ * This is the SINGLE shared contract the mapper (Lane 2) and the render
+ * layer (Lanes 3-5) both import. Order + spelling are load-bearing and
+ * MUST mirror the `tasks.courier_status` CHECK in
+ * `supabase/migrations/0035_tasks_courier_status.sql`. `ARRIVED_ON_DC`
+ * (action suffix) and `ARRIVED_IN_DC` (status-field value) fold to the
+ * single `ARRIVED_AT_DC` (one state spelled two ways). The non-lifecycle
+ * `TASK_HAS_BEEN_UPDATED` edit is NOT a courier status (renders nothing).
+ *
+ * `COURIER_STATUS_VALUES` is the runtime value list for validation +
+ * exhaustiveness; `CourierStatus` is its derived union.
+ */
+export const COURIER_STATUS_VALUES = [
+  "ORDERED",
+  "ASSIGNED",
+  "PICKED_UP",
+  "ARRIVED_AT_DC",
+  "IN_TRANSIT",
+  "HUB_TRANSFER",
+  "OUT_FOR_DELIVERY",
+  "DELIVERED",
+  "FAILED",
+  "PROCESS_FOR_RETURN",
+  "RETURNED_TO_SHIPPER",
+  "CANCELED",
+  "RESCHEDULED",
+  "REATTEMPT",
+] as const;
+
+export type CourierStatus = (typeof COURIER_STATUS_VALUES)[number];
+
+/**
  * Authenticated session returned by `authenticate` and refreshed by
  * `refreshSession`. Treated as opaque by callers — pass it back to the
  * adapter on every call. The token fields are present for the cache

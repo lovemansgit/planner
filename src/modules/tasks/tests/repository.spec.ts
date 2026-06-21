@@ -290,6 +290,39 @@ describe("findTaskById", () => {
   });
 });
 
+// Phase 8 / Lane 1 — the repository projects `tasks.courier_status`
+// (migration 0035) through `SELECT t.*` and the mapper narrows it to the
+// `CourierStatus | null` read-model field. Proves downstream lanes can
+// read the fine courier status; the narrow is defensive (mirrors
+// `mapOutboundSyncState`).
+describe("findTaskById — courierStatus mapping (Phase 8 / Lane 1)", () => {
+  it("returns the fine courier_status when present on the row", async () => {
+    const tx = makeStubTx([
+      [taskRowWithPackagesFixture([], { courier_status: "OUT_FOR_DELIVERY" })],
+    ]);
+    const result = await findTaskById(tx, TASK_ID);
+    expect(result?.courierStatus).toBe("OUT_FOR_DELIVERY");
+  });
+
+  it("maps a NULL courier_status to null (no SF detail / Planner-only / pre-backfill)", async () => {
+    const tx = makeStubTx([[taskRowWithPackagesFixture([], { courier_status: null })]]);
+    const result = await findTaskById(tx, TASK_ID);
+    expect(result?.courierStatus).toBeNull();
+  });
+
+  it("defensively collapses an unknown courier_status value to null (schema drift)", async () => {
+    const tx = makeStubTx([[taskRowWithPackagesFixture([], { courier_status: "BOGUS" })]]);
+    const result = await findTaskById(tx, TASK_ID);
+    expect(result?.courierStatus).toBeNull();
+  });
+
+  it("maps an absent courier_status column to null (non-t.* projection)", async () => {
+    const tx = makeStubTx([[taskRowWithPackagesFixture([])]]);
+    const result = await findTaskById(tx, TASK_ID);
+    expect(result?.courierStatus).toBeNull();
+  });
+});
+
 describe("listTasksByTenant", () => {
   it("returns mapped rows in input order", async () => {
     const tx = makeStubTx([
