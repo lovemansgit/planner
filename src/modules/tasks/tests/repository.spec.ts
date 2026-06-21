@@ -381,12 +381,13 @@ describe("listTasksByTenant", () => {
     });
 
     it("composes searchTerm with the status filter (both clauses present)", async () => {
+      // D56 Lane 3 — the status filter is now the FINE courier_status column.
       const tx = makeStubTx([[]]);
-      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "Sarah", status: "DELIVERED" });
+      await listTasksByTenant(tx, TENANT_ID, { searchTerm: "Sarah", status: "OUT_FOR_DELIVERY" });
       const captured = compile(tx.execute.mock.calls[0][0]);
-      expect(captured.sql).toMatch(/internal_status\s*=\s*\$/i);
+      expect(captured.sql).toMatch(/t\.courier_status\s*=\s*\$/i);
       expect(captured.sql).toMatch(/ILIKE/i);
-      expect(captured.params).toContain("DELIVERED");
+      expect(captured.params).toContain("OUT_FOR_DELIVERY");
       expect(captured.params).toContain("%Sarah%");
     });
   });
@@ -701,7 +702,8 @@ describe("countTasksByTenant — Day-24 PM date range extension", () => {
     });
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/t\.delivery_date\s*>=/i);
-    expect(captured.sql).toMatch(/t\.internal_status\s*=/i);
+    // D56 Lane 3 — the status filter is now the FINE courier_status column.
+    expect(captured.sql).toMatch(/t\.courier_status\s*=/i);
     expect(captured.sql).toMatch(/ILIKE/i);
   });
 
@@ -754,11 +756,12 @@ describe("listAllTaskIdsByTenant", () => {
   });
 
   it("appends the status filter when provided", async () => {
+    // D56 Lane 3 — the across-pages select filters on the FINE courier_status.
     const tx = makeStubTx([[]]);
-    await listAllTaskIdsByTenant(tx, TENANT_ID, { status: "DELIVERED" });
+    await listAllTaskIdsByTenant(tx, TENANT_ID, { status: "OUT_FOR_DELIVERY" });
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/internal_status\s*=\s*\$/i);
-    expect(captured.params).toContain("DELIVERED");
+    expect(captured.sql).toMatch(/courier_status\s*=\s*\$/i);
+    expect(captured.params).toContain("OUT_FOR_DELIVERY");
   });
 
   it("orders by created_at DESC to match listTasksByTenant", async () => {

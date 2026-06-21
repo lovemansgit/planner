@@ -620,7 +620,14 @@ export async function listVisibleTaskExternalIds(
 export interface ListTasksOpts {
   readonly limit?: number;
   readonly offset?: number;
-  readonly status?: TaskInternalStatus;
+  /**
+   * D56 Phase 8 / Lane 3 — the operator `/tasks` filter is now the FINE
+   * `courier_status` (Love ruling: ?status= carries the 14-state vocabulary).
+   * Matches on `tasks.courier_status`; NULL-courier rows (pre-backfill /
+   * Planner-only) only surface under the no-filter "All" view. The coarse
+   * `internal_status` filter lives on in the admin list path (Lane 5).
+   */
+  readonly status?: CourierStatus;
   /**
    * Optional case-insensitive substring match against the AWB
    * (`external_tracking_number`), the operator-set `customer_order_number`,
@@ -693,8 +700,9 @@ export async function listTasksByTenant(
   opts: ListTasksOpts = {},
 ): Promise<readonly TaskListRow[]> {
   const { limit, offset = 0, status, searchTerm, dateFrom, dateTo, awbs } = opts;
+  // D56 Lane 3 — fine courier_status filter (NULL-courier rows are "All"-only).
   const statusFilter = status
-    ? sqlTag`AND t.internal_status = ${status}`
+    ? sqlTag`AND t.courier_status = ${status}`
     : sqlTag``;
   const searchFilter = buildTaskSearchFilter(searchTerm);
   const dateFromFilter = buildDateFromFilter(dateFrom);
@@ -1019,11 +1027,12 @@ export async function countAllTasksRows(
 export async function listAllTaskIdsByTenant(
   tx: DbTx,
   tenantId: Uuid,
-  opts: { readonly status?: TaskInternalStatus } = {},
+  opts: { readonly status?: CourierStatus } = {},
 ): Promise<readonly Uuid[]> {
   const { status } = opts;
+  // D56 Lane 3 — fine courier_status filter (matches listTasksByTenant).
   const statusFilter = status
-    ? sqlTag`AND internal_status = ${status}`
+    ? sqlTag`AND courier_status = ${status}`
     : sqlTag``;
   type Row = { id: string };
   const rows = await tx.execute<Row>(sqlTag`
@@ -1103,7 +1112,8 @@ export async function countTasksByTenant(
   tx: DbTx,
   tenantId: Uuid,
   opts: {
-    readonly status?: TaskInternalStatus;
+    // D56 Lane 3 — fine courier_status filter (mirrors ListTasksOpts.status).
+    readonly status?: CourierStatus;
     readonly searchTerm?: string;
     readonly dateFrom?: string;
     readonly dateTo?: string;
@@ -1112,7 +1122,7 @@ export async function countTasksByTenant(
 ): Promise<number> {
   const { status, searchTerm, dateFrom, dateTo, awbs } = opts;
   const statusFilter = status
-    ? sqlTag`AND t.internal_status = ${status}`
+    ? sqlTag`AND t.courier_status = ${status}`
     : sqlTag``;
   const searchFilter = buildTaskSearchFilter(searchTerm);
   const consigneeJoin = needsConsigneeJoin(searchTerm)
