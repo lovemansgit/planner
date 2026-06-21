@@ -66,6 +66,14 @@ export const TASK_HISTORY_METADATA_ALLOW_LIST: ReadonlySet<string> = new Set([
   "awb",
   "suitefleet_task_id",
   "customer_order_number",
+  // move-to-date link (D56) — counterpart AWBs + dates rendered both
+  // directions in the timeline drawer. AWBs are operator references, not PII.
+  // The counterpart task_ids are deliberately NOT listed (internal UUIDs,
+  // stripped); moved_to_awb is injected by getTaskHistory at read time.
+  "moved_from_awb",
+  "moved_from_delivery_date",
+  "moved_to_awb",
+  "moved_to_delivery_date",
 ]);
 
 /** Drop every metadata key not on the allow-list. */

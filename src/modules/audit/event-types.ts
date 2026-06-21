@@ -480,6 +480,26 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "task_id, completed_via — ui | api | webhook.",
     systemOnly: false,
   },
+  "task.moved_in": {
+    id: "task.moved_in",
+    resource: "task",
+    action: "moved_in",
+    description:
+      "D56 / Phase-5. The NEW task created by a move-to-date override — the chosen-date replacement for a cancelled original. Emitted on the new task (resourceId = new task id) so its timeline drawer can render 'Moved from [old delivery_date] / replaces AWB [old AWB]'. Paired with task.moved_out (on the original) and subscription.exception.created by a shared correlation_id. AWBs are operator references, not PII.",
+    metadataNotes:
+      "task_id (new task uuid), moved_from_task_id (original task uuid — internal, stripped from the drawer payload), moved_from_awb (string|null — the original's external tracking number; null when the original was unpushed), moved_from_delivery_date (YYYY-MM-DD — the original delivery date), correlation_id (uuid — shared; stripped from the drawer payload).",
+    systemOnly: false,
+  },
+  "task.moved_out": {
+    id: "task.moved_out",
+    resource: "task",
+    action: "moved_out",
+    description:
+      "D56 / Phase-5. The ORIGINAL (cancelled) task of a move-to-date override. Emitted on the original task (resourceId = original task id) so its timeline drawer can render 'Moved to [new delivery_date] / see AWB [new AWB]'. The new task's AWB is NOT known at move time (SuiteFleet assigns it after the asynchronous push) — getTaskHistory resolves it at read time from the new task row (moved_to_awb); before then the drawer shows an AWB-pending sub-line. Paired with task.moved_in (on the new task) and subscription.exception.created by a shared correlation_id.",
+    metadataNotes:
+      "task_id (original task uuid), moved_to_task_id (new task uuid — internal, stripped from the drawer payload; getTaskHistory uses it to resolve the new AWB), moved_to_delivery_date (YYYY-MM-DD — the chosen target date), correlation_id (uuid — shared; stripped). moved_to_awb (string) is NOT stored on the event — it is injected by getTaskHistory at read time from the new task's current external_tracking_number.",
+    systemOnly: false,
+  },
   "task.bulk_created": {
     id: "task.bulk_created",
     resource: "task",
@@ -858,9 +878,9 @@ const EVENT_TYPES_DRAFT = {
     resource: "subscription",
     action: "exception.created",
     description:
-      "Day 13 / T3. A subscription exception (skip / pause_window / address_override_one_off / address_override_forward / append_without_skip) was created. Emitted in the same database transaction as the originating service call. For type='skip' without skip_without_append=true, emitted alongside subscription.end_date.extended with shared correlation_id. Day 29 / §D(2) Phase-1 (plan-PR #302): for type='skip' variants 1+2 (plain skip / skip-without-append) the metadata carries outbound_emission to record whether an outbound SF cancel was enqueued. Variant 3 (move-to-date) omits outbound_emission entirely until Phase 2 lands rescheduleTask.",
+      "Day 13 / T3. A subscription exception (skip / pause_window / address_override_one_off / address_override_forward / append_without_skip) was created. Emitted in the same database transaction as the originating service call. For type='skip' without skip_without_append=true, emitted alongside subscription.end_date.extended with shared correlation_id — EXCEPT move-to-date, which never extends end_date (it materializes one task at the chosen date instead). Day 29 / §D(2) Phase-1 (plan-PR #302): for type='skip' the metadata carries outbound_emission to record whether an outbound SF cancel was enqueued. D56 / Phase-5 (OQ-5): this now covers ALL type='skip' variants including move-to-date — the move-to-date original is CANCELLED on SF (not rescheduled), superseding the parked Phase-2 rescheduleTask path, and a fresh task is materialized + pushed at the target date, so no skip variant leaves a stale original live.",
     metadataNotes:
-      "subscription_id (uuid), exception_id (uuid), type (enum — see subscription_exceptions_type_check), target_date (YYYY-MM-DD — start_date of the exception), compensating_date (YYYY-MM-DD or null — populated only for type='skip' without skip_without_append), correlation_id (uuid). Day-29 §D(2) Phase-1 addition: outbound_emission ({ kind: 'cancel', task_id: uuid } | { kind: 'none' }) is present for type='skip' variants 1+2; absent for type='skip' variant 3 (move-to-date) and all non-skip types. kind='cancel' means enqueueCancelTask was invoked post-commit with the recorded task_id; kind='none' means no outbound (task not materialized or no external_tracking_number). Phase 2 will extend the kind enum to include 'reschedule'.",
+      "subscription_id (uuid), exception_id (uuid), type (enum — see subscription_exceptions_type_check), target_date (YYYY-MM-DD — start_date of the exception), compensating_date (YYYY-MM-DD or null — populated for type='skip' without skip_without_append, incl. move-to-date where it is the target date), correlation_id (uuid). Day-29 §D(2) Phase-1 + D56 / Phase-5 (OQ-5): outbound_emission ({ kind: 'cancel', task_id: uuid } | { kind: 'none' }) is present for ALL type='skip' variants (default skip, skip-without-append, AND move-to-date); absent for non-skip types. kind='cancel' means enqueueCancelTask was invoked post-commit with the recorded task_id (the ORIGINAL task); kind='none' means no outbound (task not materialized or no external_tracking_number). For move-to-date the moved task at the target date is pushed via the standard batch pipeline (enqueueTaskPushBatch), not recorded in outbound_emission.",
     systemOnly: false,
   },
 

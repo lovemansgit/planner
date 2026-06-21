@@ -45,6 +45,8 @@ import { emit } from "@/modules/audit/emit";
 
 import {
   buildCandidateAndEligibleDatesCte,
+  buildEligibleDatesCte,
+  buildOneOffCandidateDatesCte,
   buildResolvedAddressesCte,
 } from "./cte-builder";
 import { computeTargetDateInDubai } from "./dubai-date";
@@ -671,6 +673,160 @@ export async function materializeSubscriptionForDateRange(
   return {
     newInsertedTaskIds,
     addressResolutionFailedCount: quarantinedRows.length,
+  };
+}
+
+// =============================================================================
+// materializeSubscriptionOneOffDate — D56 / Phase-5 move-to-date rework
+// =============================================================================
+//
+// Materialize EXACTLY ONE task at a single literal date for one subscription,
+// with NO end_date cap. This is the create-side of move-to-date: the operator
+// moves a delivery to a date BEYOND the schedule end (within-schedule targets
+// are rejected at the service layer because they already deliver), and the
+// capped range materializer (materializeSubscriptionForDateRange) can never
+// insert beyond `s.end_date`. This primitive uses buildOneOffCandidateDatesCte
+// (single literal date, no generate_series, no LEAST(..., end_date) cap)
+// composed with the SAME buildEligibleDatesCte (skip/pause exclusion) +
+// buildResolvedAddressesCte (4-layer address resolution) + INSERT projection
+// (created_via='subscription', SUB-… order number) as every other materialized
+// task, so the moved delivery is indistinguishable from a normally-materialized
+// one and pushes through the standard pipeline.
+//
+// Caller passes an OPEN tx. Move-to-date runs this inside the same withTenant
+// transaction as the skip exception (RLS `tasks_tenant_isolation` is FOR ALL
+// with `WITH CHECK (tenant_id = current_tenant_id)`; the inserted tenant_id is
+// the subscription's own tenant, so the WITH CHECK passes) — keeping the
+// create atomic with the skip so a failure rolls the whole operation back
+// rather than cancelling the original on SF with no replacement.
+
+export interface MaterializeSubscriptionOneOffDateInput {
+  /** Subscription to materialize the single date for. */
+  subscriptionId: Uuid;
+  /** The single target date (ISO YYYY-MM-DD, Asia/Dubai). */
+  date: string;
+  /** Request id for log/Sentry context propagation. */
+  requestId: string;
+}
+
+export interface MaterializeSubscriptionOneOffDateResult {
+  /** Id of the task INSERTed at `date`, or null when ON CONFLICT collapsed the
+   * insert (a task already existed at that (subscription_id, delivery_date)) or
+   * the date produced no eligible candidate row. */
+  insertedTaskId: Uuid | null;
+  /** True iff the single candidate date resolved to a NULL address (consignee
+   * data gap). The caller treats this as a hard failure — the moved delivery
+   * cannot be created, so the whole move-to-date operation must roll back
+   * rather than half-apply (skip the original, create nothing). */
+  addressResolutionFailed: boolean;
+}
+
+/**
+ * Materialize one task at one literal date for one subscription, ignoring the
+ * subscription's end_date. Idempotent — re-runs collapse via ON CONFLICT DO
+ * NOTHING on the partial UNIQUE (subscription_id, delivery_date) WHERE
+ * subscription_id IS NOT NULL.
+ *
+ * Returns `{ insertedTaskId, addressResolutionFailed }`. `insertedTaskId` is
+ * non-null on a fresh insert; null on ON CONFLICT or no-candidate.
+ * `addressResolutionFailed` is true only when the date produced a candidate
+ * row whose 4-layer address resolution returned NULL (consignee data gap).
+ */
+export async function materializeSubscriptionOneOffDate(
+  tx: DbTx,
+  input: MaterializeSubscriptionOneOffDateInput,
+): Promise<MaterializeSubscriptionOneOffDateResult> {
+  const { subscriptionId, date, requestId } = input;
+  const subLog = log.with({
+    subscription_id: subscriptionId,
+    request_id: requestId,
+    target_date: date,
+  });
+
+  const candidateCte = buildOneOffCandidateDatesCte({ subscriptionId, date });
+  const fullCte = sqlTag`${candidateCte}, ${buildEligibleDatesCte()}, ${buildResolvedAddressesCte()}`;
+
+  type InsertedRow = { id: Uuid };
+  const insertedRows = await tx.execute<InsertedRow>(sqlTag`
+    WITH ${fullCte}
+    INSERT INTO tasks (
+      tenant_id,
+      consignee_id,
+      subscription_id,
+      created_via,
+      customer_order_number,
+      internal_status,
+      delivery_date,
+      delivery_start_time,
+      delivery_end_time,
+      delivery_type,
+      task_kind,
+      address_id
+    )
+    SELECT
+      ra.tenant_id,
+      ra.consignee_id,
+      ra.subscription_id,
+      'subscription'                                                     AS created_via,
+      'SUB-' || substring(replace(ra.subscription_id::text, '-', ''), 1, 12)
+              || '-' || to_char(ra.delivery_date, 'YYYYMMDD')            AS customer_order_number,
+      'CREATED'                                                          AS internal_status,
+      ra.delivery_date,
+      ra.delivery_window_start                                           AS delivery_start_time,
+      ra.delivery_window_end                                            AS delivery_end_time,
+      'STANDARD'                                                         AS delivery_type,
+      'DELIVERY'                                                         AS task_kind,
+      ra.resolved_address_id                                            AS address_id
+    FROM resolved_addresses ra
+    WHERE ra.resolved_address_id IS NOT NULL
+    ON CONFLICT (subscription_id, delivery_date) WHERE subscription_id IS NOT NULL DO NOTHING
+    RETURNING id
+  `);
+
+  type QuarantinedRow = {
+    subscription_id: Uuid;
+    consignee_id: Uuid;
+    delivery_date: string;
+  };
+  const quarantinedRows = await tx.execute<QuarantinedRow>(sqlTag`
+    WITH ${fullCte}
+    SELECT
+      ra.subscription_id,
+      ra.consignee_id,
+      ra.delivery_date
+    FROM resolved_addresses ra
+    WHERE ra.resolved_address_id IS NULL
+  `);
+
+  if (quarantinedRows.length > 0) {
+    const row = quarantinedRows[0];
+    subLog.warn(
+      {
+        event: "materialization.address_resolution_failed",
+        consignee_id: row.consignee_id,
+        subscription_id: row.subscription_id,
+        target_date: row.delivery_date,
+      },
+      "address resolution failed (move-to-date one-off) — moved task not materialized (consignee data gap)",
+    );
+    captureException(
+      new Error(
+        `materialization.address_resolution_failed (one-off): subscription=${row.subscription_id} consignee=${row.consignee_id} target_date=${row.delivery_date}`,
+      ),
+      {
+        component: "task_materialization_service",
+        operation: "address_resolution_failed_one_off",
+        consignee_id: row.consignee_id,
+        subscription_id: row.subscription_id,
+        target_date: row.delivery_date,
+        request_id: requestId,
+      },
+    );
+  }
+
+  return {
+    insertedTaskId: insertedRows[0]?.id ?? null,
+    addressResolutionFailed: quarantinedRows.length > 0,
   };
 }
 

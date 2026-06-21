@@ -123,6 +123,57 @@ export function buildCandidateAndEligibleDatesCte(args: BuildCteArgs): SQL {
         AND s.status = 'active'
         AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
     ),
+    ${buildEligibleDatesCte()}
+  `;
+}
+
+/**
+ * D56 / Phase-5 move-to-date rework — candidate_dates CTE for a SINGLE
+ * literal date, with NO generate_series and NO end_date cap.
+ *
+ * The range builder above (buildCandidateAndEligibleDatesCte) bounds its
+ * upper edge at `LEAST(endDate, COALESCE(s.end_date, endDate))`, so it can
+ * never materialize a date beyond `s.end_date`. Move-to-date moves a delivery
+ * to a date BEYOND the schedule end (within-schedule targets are rejected at
+ * the service layer because they already deliver), so it needs a candidate
+ * row that ignores the end_date cap entirely — exactly one row for the chosen
+ * date, emitted only if the subscription is active and the date falls on an
+ * eligible delivery weekday.
+ *
+ * Same column shape as the range builder so buildEligibleDatesCte (skip/pause
+ * exclusion) and buildResolvedAddressesCte (4-layer address resolution)
+ * compose on top unchanged.
+ */
+export function buildOneOffCandidateDatesCte(args: {
+  subscriptionId: Uuid;
+  date: string;
+}): SQL {
+  return sql`
+    candidate_dates AS (
+      SELECT
+        s.id            AS subscription_id,
+        s.tenant_id     AS tenant_id,
+        s.consignee_id  AS consignee_id,
+        s.delivery_window_start AS delivery_window_start,
+        s.delivery_window_end   AS delivery_window_end,
+        ${args.date}::date AS delivery_date
+      FROM subscriptions s
+      WHERE s.id = ${args.subscriptionId}
+        AND s.status = 'active'
+        AND EXTRACT(ISODOW FROM ${args.date}::date)::int = ANY(s.days_of_week)
+    )
+  `;
+}
+
+/**
+ * The eligible_dates CTE — filters candidate_dates down to dates not excluded
+ * by a skip or pause_window exception. Shared by BOTH candidate builders (the
+ * range builder and the one-off builder) so the exception-exclusion logic
+ * cannot drift between the cron path and the move-to-date path. Reads
+ * `candidate_dates` by name; the caller must emit that CTE first.
+ */
+export function buildEligibleDatesCte(): SQL {
+  return sql`
     eligible_dates AS (
       SELECT cd.*
       FROM candidate_dates cd

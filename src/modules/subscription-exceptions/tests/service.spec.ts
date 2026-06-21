@@ -49,6 +49,13 @@ vi.mock("@/modules/task-outbound-queue", () => ({
   enqueueCancelTask: vi.fn(async () => undefined),
 }));
 
+// D56 / Phase-5 move-to-date rework — the move-to-date create-side calls the
+// post-commit batch push for the newly-materialized moved task. Mock the
+// publisher so the real QStash client never constructs in unit tests.
+vi.mock("@/modules/task-materialization/queue", () => ({
+  enqueueTaskPushBatch: vi.fn(async () => ({ enqueuedCount: 1, failedChunks: 0 })),
+}));
+
 // R1 (calendar-management Phase 1) — on-demand materializer invocation
 // is wired into addSubscriptionException's skip-tail-extension post-commit
 // block. The real primitive opens a withServiceRole connection, which the
@@ -64,6 +71,13 @@ vi.mock("@/modules/task-materialization/service", () => ({
     runRowOutcome: { kind: "inserted" },
     cappedByGate: false,
   })),
+  // D56 / Phase-5 — the move-to-date create-side materializes one task at the
+  // target date inside the same tx. Default to the idempotent-conflict shape
+  // (no insert, no failure); tests that assert the create+push override it.
+  materializeSubscriptionOneOffDate: vi.fn(async () => ({
+    insertedTaskId: null,
+    addressResolutionFailed: false,
+  })),
 }));
 
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/shared/errors";
@@ -76,6 +90,13 @@ import {
   getRecentExceptionsForSubscription,
 } from "../service";
 import type { AddSubscriptionExceptionInput } from "../types";
+import { enqueueCancelTask } from "@/modules/task-outbound-queue";
+import { enqueueTaskPushBatch } from "@/modules/task-materialization/queue";
+import { materializeSubscriptionOneOffDate } from "@/modules/task-materialization/service";
+
+const mockEnqueueCancel = vi.mocked(enqueueCancelTask);
+const mockEnqueuePush = vi.mocked(enqueueTaskPushBatch);
+const mockMaterializeOneOff = vi.mocked(materializeSubscriptionOneOffDate);
 
 // -----------------------------------------------------------------------------
 // Test fixtures
@@ -297,20 +318,20 @@ describe("addSubscriptionException — permission matrix", () => {
         targetDateOverride: "2026-07-06",
       }),
     });
-    // Service order for target_date_override path post-fix:
-    // [sub, replay, INSERT, UPDATE end_date, UPDATE task].
-    // Collision-check call was removed from service.ts per Block 4-B
-    // fix-2 routing — cron handles override-date tagging on next tick.
+    // Service order for the move-to-date path (D56 rework):
+    // [sub, replay, INSERT, UPDATE task]. No end_date UPDATE — move-to-date
+    // never extends end_date (target 2026-07-06 is BEYOND the default
+    // end_date 2026-06-30, so it is a valid beyond-schedule move). The
+    // one-off materialization is module-mocked (no execute call).
     mockExecute.mockReset();
     mockExecute.mockResolvedValueOnce([subscriptionRow()]); // 1. sub
     mockExecute.mockResolvedValueOnce([]); // 2. replay none
     mockExecute.mockResolvedValueOnce([
       insertedExceptionRow({ compensatingDate: "2026-07-06", targetDateOverride: "2026-07-06" }),
     ]); // 3. INSERT
-    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown); // 4. UPDATE end_date
     mockExecute.mockResolvedValueOnce([
       { id: "00000000-0000-0000-0000-00000000ffff", external_tracking_number: null },
-    ]); // 5. UPDATE task SKIPPED (RETURNING per Day-29)
+    ]); // 4. UPDATE task SKIPPED (RETURNING per Day-29)
 
     const ctx = ctxWith(["subscription:override_skip_rules"]);
     const result = await addSubscriptionException(ctx, SUBSCRIPTION_ID, input, { now: NOW });
@@ -1109,6 +1130,322 @@ describe("addSubscriptionException — open-ended subscription (end_date IS NULL
         { now: NOW },
       ),
     ).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+// ===========================================================================
+// D56 / Phase-5 — move-to-date: cancel the original on SF AND materialize a
+// real one-off task at the target date (Love: "build them properly, do not
+// paper over it"). Plus the cancel sweep for the other skip variants.
+// ===========================================================================
+//
+// Move-to-date moves a delivery to a date BEYOND the schedule end. Within-
+// schedule targets already deliver, so they are REJECTED at the service layer
+// (Love's ruling) rather than silently no-op'd. The valid (beyond-end_date)
+// case: skip-cancel the original (cancel on SF if pushed) AND materialize +
+// push one fresh task at the target — so SF holds exactly ONE delivery.
+
+describe("addSubscriptionException — move-to-date create-side (D56)", () => {
+  const PUSHED_AWB = "MLU-21789001";
+  const ORIGINAL_TASK_ID = "00000000-0000-0000-0000-00000000ffff";
+  const MOVED_TASK_ID = "00000000-0000-0000-0000-00000000a1a1" as Uuid;
+  const BEYOND_END_TARGET = "2026-07-06"; // Monday, > default end_date 2026-06-30
+  const WITHIN_END_TARGET = "2026-06-15"; // Monday, <= default end_date 2026-06-30
+
+  // markTaskSkipped's UPDATE ... RETURNING row. external_tracking_number is the
+  // original's AWB when pushed; null when materialized-but-not-pushed.
+  function skippedTaskRow(awb: string | null) {
+    return [{ id: ORIGINAL_TASK_ID, external_tracking_number: awb }];
+  }
+
+  // Wire the 4 execute calls of a valid move-to-date: sub, replay, INSERT,
+  // markTaskSkipped. (No end_date UPDATE; the one-off materializer is mocked.)
+  function setupMoveToDate(opts: { endDate?: string | null; skippedAwb: string | null }) {
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([
+      subscriptionRow("endDate" in opts ? { endDate: opts.endDate } : {}),
+    ]);
+    mockExecute.mockResolvedValueOnce([]); // replay none
+    mockExecute.mockResolvedValueOnce([
+      insertedExceptionRow({
+        compensatingDate: BEYOND_END_TARGET,
+        targetDateOverride: BEYOND_END_TARGET,
+      }),
+    ]);
+    mockExecute.mockResolvedValueOnce(skippedTaskRow(opts.skippedAwb));
+  }
+
+  it("beyond-end_date on a pushed original: creates exactly ONE task at target, cancels the original AWB, pushes the moved task", async () => {
+    setupMoveToDate({ skippedAwb: PUSHED_AWB });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    const result = await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    expect(result.status).toBe("inserted");
+    // exactly one task materialized at the target date
+    expect(mockMaterializeOneOff).toHaveBeenCalledTimes(1);
+    expect(mockMaterializeOneOff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ subscriptionId: SUBSCRIPTION_ID, date: BEYOND_END_TARGET }),
+    );
+    // original cancelled on SF
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCancel).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: ORIGINAL_TASK_ID, awb: PUSHED_AWB }),
+    );
+    // moved task pushed (standard pipeline)
+    expect(mockEnqueuePush).toHaveBeenCalledTimes(1);
+    expect(mockEnqueuePush).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: TENANT_ID, taskIds: [MOVED_TASK_ID] }),
+    );
+  });
+
+  it("beyond-end_date does NOT extend end_date and does NOT fan out (no end_date.extended event)", async () => {
+    setupMoveToDate({ skippedAwb: PUSHED_AWB });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    const result = await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    expect(result.newEndDate).toBeNull();
+    const eventTypes = mockEmit.mock.calls.map((c) => (c[0] as { eventType: string }).eventType);
+    expect(eventTypes).not.toContain("subscription.end_date.extended");
+    // single one-off materialization (not a range/fan-out)
+    expect(mockMaterializeOneOff).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits task.moved_in on the new task carrying the original AWB + original date (timeline link)", async () => {
+    setupMoveToDate({ skippedAwb: PUSHED_AWB });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    const movedIn = mockEmit.mock.calls
+      .map((c) => c[0] as { eventType: string; resourceType: string; resourceId: string; metadata: Record<string, unknown> })
+      .find((e) => e.eventType === "task.moved_in");
+    expect(movedIn).toBeDefined();
+    expect(movedIn?.resourceType).toBe("task");
+    expect(movedIn?.resourceId).toBe(MOVED_TASK_ID);
+    expect(movedIn?.metadata).toEqual(
+      expect.objectContaining({
+        task_id: MOVED_TASK_ID,
+        moved_from_task_id: ORIGINAL_TASK_ID,
+        moved_from_awb: PUSHED_AWB,
+        moved_from_delivery_date: FUTURE_SKIP_DATE,
+      }),
+    );
+  });
+
+  it("emits task.moved_out on the original task pointing to the new task + target date (timeline link)", async () => {
+    setupMoveToDate({ skippedAwb: PUSHED_AWB });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    const movedOut = mockEmit.mock.calls
+      .map((c) => c[0] as { eventType: string; resourceType: string; resourceId: string; metadata: Record<string, unknown> })
+      .find((e) => e.eventType === "task.moved_out");
+    expect(movedOut).toBeDefined();
+    expect(movedOut?.resourceType).toBe("task");
+    expect(movedOut?.resourceId).toBe(ORIGINAL_TASK_ID);
+    expect(movedOut?.metadata).toEqual(
+      expect.objectContaining({
+        task_id: ORIGINAL_TASK_ID,
+        moved_to_task_id: MOVED_TASK_ID,
+        moved_to_delivery_date: BEYOND_END_TARGET,
+      }),
+    );
+    // The new AWB is NOT known at move time — never stored on the event.
+    expect(movedOut?.metadata).not.toHaveProperty("moved_to_awb");
+  });
+
+  it("unpushed original: task.moved_in carries moved_from_awb=null (no AWB to reference)", async () => {
+    setupMoveToDate({ skippedAwb: null });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    const movedIn = mockEmit.mock.calls
+      .map((c) => c[0] as { eventType: string; metadata: Record<string, unknown> })
+      .find((e) => e.eventType === "task.moved_in");
+    expect(movedIn?.metadata).toEqual(
+      expect.objectContaining({ moved_from_awb: null, moved_from_delivery_date: FUTURE_SKIP_DATE }),
+    );
+  });
+
+  it("unpushed original (no AWB): no SF cancel, but the moved task is still created and pushed", async () => {
+    setupMoveToDate({ skippedAwb: null });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    const result = await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    expect(result.status).toBe("inserted");
+    expect(mockEnqueueCancel).not.toHaveBeenCalled();
+    expect(mockMaterializeOneOff).toHaveBeenCalledTimes(1);
+    expect(mockEnqueuePush).toHaveBeenCalledWith(
+      expect.objectContaining({ taskIds: [MOVED_TASK_ID] }),
+    );
+  });
+
+  it("within-schedule target on a bounded subscription (<= end_date) is rejected — no exception, no cancel, no materialize", async () => {
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]); // sub (end_date 2026-06-30)
+    mockExecute.mockResolvedValueOnce([]); // replay none
+
+    await expect(
+      addSubscriptionException(
+        ctxWith(["subscription:override_skip_rules"]),
+        SUBSCRIPTION_ID,
+        { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: WITHIN_END_TARGET },
+        { now: NOW },
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    expect(mockMaterializeOneOff).not.toHaveBeenCalled();
+    expect(mockEnqueueCancel).not.toHaveBeenCalled();
+    expect(mockEnqueuePush).not.toHaveBeenCalled();
+  });
+
+  it("any eligible target on an open-ended subscription (end_date IS NULL) is rejected — every day already delivers", async () => {
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow({ endDate: null })]); // open-ended
+    mockExecute.mockResolvedValueOnce([]); // replay none
+
+    await expect(
+      addSubscriptionException(
+        ctxWith(["subscription:override_skip_rules"]),
+        SUBSCRIPTION_ID,
+        { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+        { now: NOW },
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    expect(mockMaterializeOneOff).not.toHaveBeenCalled();
+    expect(mockEnqueueCancel).not.toHaveBeenCalled();
+    expect(mockEnqueuePush).not.toHaveBeenCalled();
+  });
+
+  it("address-gap at target (resolution failed) rolls back atomically — no SF cancel, no push", async () => {
+    setupMoveToDate({ skippedAwb: PUSHED_AWB });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: null,
+      addressResolutionFailed: true,
+    });
+
+    await expect(
+      addSubscriptionException(
+        ctxWith(["subscription:override_skip_rules"]),
+        SUBSCRIPTION_ID,
+        { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+        { now: NOW },
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    // tx rolled back: post-commit cancel + push never run
+    expect(mockEnqueueCancel).not.toHaveBeenCalled();
+    expect(mockEnqueuePush).not.toHaveBeenCalled();
+  });
+});
+
+describe("addSubscriptionException — outbound cancel sweep (default skip / skip-without-append)", () => {
+  const PUSHED_AWB = "MLU-21789002";
+  const ORIGINAL_TASK_ID = "00000000-0000-0000-0000-00000000ffff";
+
+  function skippedTaskRow(awb: string | null) {
+    return [{ id: ORIGINAL_TASK_ID, external_tracking_number: awb }];
+  }
+
+  it("default skip cancels a pushed original on SF", async () => {
+    // sequence: sub, replay, pause-windows, INSERT, UPDATE end_date, markTaskSkipped
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]);
+    mockExecute.mockResolvedValueOnce([]); // pause-windows
+    mockExecute.mockResolvedValueOnce([insertedExceptionRow({ compensatingDate: "2026-07-01" })]);
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockExecute.mockResolvedValueOnce(skippedTaskRow(PUSHED_AWB));
+
+    await addSubscriptionException(
+      ctxWith(["subscription:skip"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY },
+      { now: NOW },
+    );
+
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCancel).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: ORIGINAL_TASK_ID, awb: PUSHED_AWB }),
+    );
+  });
+
+  it("skip-without-append cancels a pushed original on SF", async () => {
+    // sequence: sub, replay, INSERT, markTaskSkipped (no pause-windows, no end_date)
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]);
+    mockExecute.mockResolvedValueOnce([
+      insertedExceptionRow({ skipWithoutAppend: true, compensatingDate: null }),
+    ]);
+    mockExecute.mockResolvedValueOnce(skippedTaskRow(PUSHED_AWB));
+
+    await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, skipWithoutAppend: true },
+      { now: NOW },
+    );
+
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCancel).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: ORIGINAL_TASK_ID, awb: PUSHED_AWB }),
+    );
   });
 });
 
