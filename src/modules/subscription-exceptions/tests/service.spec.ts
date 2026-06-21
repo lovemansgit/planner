@@ -75,7 +75,10 @@ import {
   appendWithoutSkip,
   getRecentExceptionsForSubscription,
 } from "../service";
+import { enqueueCancelTask } from "@/modules/task-outbound-queue";
 import type { AddSubscriptionExceptionInput } from "../types";
+
+const mockEnqueueCancel = vi.mocked(enqueueCancelTask);
 
 // -----------------------------------------------------------------------------
 // Test fixtures
@@ -1197,5 +1200,118 @@ describe("getRecentExceptionsForSubscription", () => {
       SUBSCRIPTION_ID,
     );
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Outbound SF cancel enqueue — override path sweep (Phase 5 / OQ-5)
+// ===========================================================================
+//
+// The ORIGINAL task of a skip is cancelled on SuiteFleet via enqueueCancelTask
+// when it carries a live AWB. Pre-fix, the move-to-date variant was excluded by
+// a `!isMoveToDate` guard — the original was flipped to pending_cancel locally
+// but never cancelled on SF, leaving it live → double delivery (original + the
+// compensating task at the target date). OQ-5: fix via the existing cancel path.
+// These tests sweep ALL three skip variants (default / skip-without-append /
+// move-to-date) — each must cancel a pushed original — and assert the negative
+// (no AWB → nothing to cancel).
+
+describe("addSubscriptionException — outbound cancel enqueue (override sweep)", () => {
+  const PUSHED_AWB = "MLU-21789001";
+  const ORIGINAL_TASK_ID = "00000000-0000-0000-0000-00000000ffff";
+
+  // markTaskSkipped's UPDATE ... RETURNING row. external_tracking_number = the
+  // original's AWB when pushed; null when unmaterialized/unpushed.
+  function skippedTaskRow(awb: string | null) {
+    return [{ id: ORIGINAL_TASK_ID, external_tracking_number: awb }];
+  }
+
+  it("default skip cancels a pushed original on SF", async () => {
+    // sequence: sub, replay, pause-windows, INSERT, UPDATE end_date, UPDATE task
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]);
+    mockExecute.mockResolvedValueOnce([]); // pause-windows
+    mockExecute.mockResolvedValueOnce([insertedExceptionRow({ compensatingDate: "2026-07-01" })]);
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockExecute.mockResolvedValueOnce(skippedTaskRow(PUSHED_AWB));
+
+    await addSubscriptionException(ctxWith(["subscription:skip"]), SUBSCRIPTION_ID, {
+      type: "skip",
+      date: FUTURE_SKIP_DATE,
+      idempotencyKey: IDEMPOTENCY_KEY,
+    }, { now: NOW });
+
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCancel).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: ORIGINAL_TASK_ID, awb: PUSHED_AWB }),
+    );
+  });
+
+  it("skip-without-append cancels a pushed original on SF", async () => {
+    // sequence: sub, replay, INSERT, UPDATE task (no pause-windows, no end_date)
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]);
+    mockExecute.mockResolvedValueOnce([
+      insertedExceptionRow({ skipWithoutAppend: true, compensatingDate: null }),
+    ]);
+    mockExecute.mockResolvedValueOnce(skippedTaskRow(PUSHED_AWB));
+
+    await addSubscriptionException(ctxWith(["subscription:override_skip_rules"]), SUBSCRIPTION_ID, {
+      type: "skip",
+      date: FUTURE_SKIP_DATE,
+      idempotencyKey: IDEMPOTENCY_KEY,
+      skipWithoutAppend: true,
+    }, { now: NOW });
+
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCancel).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: ORIGINAL_TASK_ID, awb: PUSHED_AWB }),
+    );
+  });
+
+  it("move-to-date override cancels the pushed ORIGINAL on SF (Phase 5 fix — was double-delivery)", async () => {
+    // sequence: sub, replay, INSERT, UPDATE end_date, UPDATE task
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]);
+    mockExecute.mockResolvedValueOnce([
+      insertedExceptionRow({ compensatingDate: "2026-07-06", targetDateOverride: "2026-07-06" }),
+    ]);
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockExecute.mockResolvedValueOnce(skippedTaskRow(PUSHED_AWB));
+
+    await addSubscriptionException(ctxWith(["subscription:override_skip_rules"]), SUBSCRIPTION_ID, {
+      type: "skip",
+      date: FUTURE_SKIP_DATE,
+      idempotencyKey: IDEMPOTENCY_KEY,
+      targetDateOverride: "2026-07-06",
+    }, { now: NOW });
+
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCancel).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: ORIGINAL_TASK_ID, awb: PUSHED_AWB }),
+    );
+  });
+
+  it("move-to-date override with an UNPUSHED original enqueues nothing (no AWB to cancel)", async () => {
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValueOnce([subscriptionRow()]);
+    mockExecute.mockResolvedValueOnce([]);
+    mockExecute.mockResolvedValueOnce([
+      insertedExceptionRow({ compensatingDate: "2026-07-06", targetDateOverride: "2026-07-06" }),
+    ]);
+    mockExecute.mockResolvedValueOnce({ count: 1 } as unknown);
+    mockExecute.mockResolvedValueOnce(skippedTaskRow(null));
+
+    await addSubscriptionException(ctxWith(["subscription:override_skip_rules"]), SUBSCRIPTION_ID, {
+      type: "skip",
+      date: FUTURE_SKIP_DATE,
+      idempotencyKey: IDEMPOTENCY_KEY,
+      targetDateOverride: "2026-07-06",
+    }, { now: NOW });
+
+    expect(mockEnqueueCancel).not.toHaveBeenCalled();
   });
 });

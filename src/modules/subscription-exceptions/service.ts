@@ -711,25 +711,24 @@ export async function addSubscriptionException(
     forwardOverriddenTasks,
   } = txResult;
 
-  // Day-29 §D(2) Phase-1 (plan-PR #302 §7 + §3.6 OQ-3 ruling Option A):
-  // compute the outbound_emission metadata field for the
-  // subscription.exception.created audit row. Phase 1 emits kind values
-  // 'cancel' | 'none' for variants 1+2. Variant 3 (move-to-date) omits
-  // the field entirely — Phase 2 will add 'reschedule' when the
-  // rescheduleTask adapter ships (Aqib-gated). registered metadata in
-  // event-types.ts subscription.exception.created.metadataNotes is
-  // updated in lock-step per §3.6 binding constraint.
-  const isMoveToDate =
-    input.type === "skip" &&
-    input.targetDateOverride !== undefined &&
-    input.skipWithoutAppend !== true;
-
+  // Day-29 §D(2) Phase-1 + Day-56 Phase-5 (OQ-5): compute the
+  // outbound_emission metadata for the subscription.exception.created audit
+  // row. ALL type='skip' variants — default skip, skip-without-append, AND
+  // move-to-date — cancel the ORIGINAL task on SuiteFleet when it carries a
+  // live AWB. Move-to-date now cancels the original (not "reschedule, parked
+  // on the Aqib-gated rescheduleTask adapter") per Love's OQ-5 ruling: the
+  // compensating task at the target date materializes + pushes fresh on the
+  // next cron tick, so SF holds exactly one delivery instead of two
+  // (pre-fix double-delivery). kind='cancel' when a pushed original was
+  // enqueued, else 'none'. event-types.ts
+  // subscription.exception.created.metadataNotes updated in lock-step per the
+  // §3.6 binding constraint.
   type OutboundEmissionMeta =
     | { readonly kind: "cancel"; readonly task_id: Uuid }
     | { readonly kind: "none" };
 
   const outboundEmission: OutboundEmissionMeta | undefined =
-    input.type === "skip" && !isMoveToDate
+    input.type === "skip"
       ? skippedTask !== null && skippedTask.externalTrackingNumber !== null
         ? { kind: "cancel", task_id: skippedTask.taskId }
         : { kind: "none" }
@@ -799,12 +798,16 @@ export async function addSubscriptionException(
     });
   }
 
-  // Day-29 §D(2) Phase-1 — outbound SF cancel enqueue for variants 1+2.
-  // Mirrors the optimistic-ack pattern documented at brief §3.1.4 line
-  // 319 and the operator-initiated cancelTask precedent at
-  // src/modules/tasks/service.ts:1326-1362. Variant 3 (move-to-date) is
-  // Aqib-gated on the SF rescheduleTask wire contract and lives in the
-  // Phase 2 code-PR — Phase 1 emits no outbound for variant 3.
+  // Day-29 §D(2) Phase-1 + Day-56 Phase-5 (OQ-5) — outbound SF cancel enqueue
+  // for the ORIGINAL task of ANY skip variant (default skip /
+  // skip-without-append / move-to-date). Mirrors the optimistic-ack pattern
+  // (brief §3.1.4 line 319) and the operator-initiated cancelTask precedent
+  // (src/modules/tasks/service.ts). Move-to-date cancels the original HERE
+  // rather than waiting on the Aqib-gated rescheduleTask adapter (Love's OQ-5
+  // ruling, superseding the parked Phase-2 path): without this the original
+  // stayed live on SF while the compensating task pushed → double delivery.
+  // The compensating task at the target date materializes + pushes fresh on
+  // the next cron tick.
   //
   // Local DB is already committed at this point; a publisher throw
   // does NOT roll back. We re-throw so the route layer surfaces the
@@ -814,7 +817,6 @@ export async function addSubscriptionException(
   // subsequent QStash success-path webhook ack flips it.
   if (
     input.type === "skip" &&
-    !isMoveToDate &&
     skippedTask !== null &&
     skippedTask.externalTrackingNumber !== null
   ) {
