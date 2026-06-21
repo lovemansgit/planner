@@ -32,7 +32,7 @@ const CONSIGNEE_A = randomUUID();
 const CONSIGNEE_B = randomUUID();
 
 const TASK_A_MAY01 = randomUUID();
-const TASK_A_MAY10_DELIVERED = randomUUID();
+const TASK_A_MAY10_OFD = randomUUID();
 const TASK_A_MAY15 = randomUUID();
 const TASK_B_MAY15 = randomUUID();
 
@@ -55,20 +55,26 @@ describe("Day-24 PM tenant count pin — countTasksByTenant", () => {
            'Addr B', 'Dubai', 'Al Quoz', 'ACTIVE')
       `);
 
+      // D56 Lane 3 — countTasksByTenant's status filter is now the FINE
+      // courier_status column. Seed fine values: the MAY10 row carries coarse
+      // IN_TRANSIT but fine OUT_FOR_DELIVERY (the headline decoupling — a fine
+      // filter narrows to it while coarse stays IN_TRANSIT); MAY01 is left with
+      // a NULL courier_status to pin that pre-backfill rows are excluded from a
+      // specific fine filter (forward-only behaviour).
       await tx.execute(sqlTag`
         INSERT INTO tasks
           (id, tenant_id, consignee_id, customer_order_number,
            delivery_date, delivery_start_time, delivery_end_time,
-           internal_status, external_tracking_number, created_via)
+           internal_status, courier_status, external_tracking_number, created_via)
         VALUES
           (${TASK_A_MAY01}, ${TENANT_A}, ${CONSIGNEE_A}, ${`TTC-${RUN_ID}-1`},
-           '2026-05-01', '08:00', '10:00', 'CREATED', NULL, 'manual_admin'),
-          (${TASK_A_MAY10_DELIVERED}, ${TENANT_A}, ${CONSIGNEE_A}, ${`TTC-${RUN_ID}-2`},
-           '2026-05-10', '10:00', '12:00', 'DELIVERED', NULL, 'manual_admin'),
+           '2026-05-01', '08:00', '10:00', 'CREATED', NULL, NULL, 'manual_admin'),
+          (${TASK_A_MAY10_OFD}, ${TENANT_A}, ${CONSIGNEE_A}, ${`TTC-${RUN_ID}-2`},
+           '2026-05-10', '10:00', '12:00', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', NULL, 'manual_admin'),
           (${TASK_A_MAY15}, ${TENANT_A}, ${CONSIGNEE_A}, ${`TTC-${RUN_ID}-3`},
-           '2026-05-15', '14:00', '16:00', 'FAILED', NULL, 'manual_admin'),
+           '2026-05-15', '14:00', '16:00', 'FAILED', 'FAILED', NULL, 'manual_admin'),
           (${TASK_B_MAY15}, ${TENANT_B}, ${CONSIGNEE_B}, ${`TTC-${RUN_ID}-B`},
-           '2026-05-15', '09:00', '11:00', 'CREATED', NULL, 'manual_admin')
+           '2026-05-15', '09:00', '11:00', 'CREATED', NULL, NULL, 'manual_admin')
       `);
     });
   });
@@ -80,9 +86,13 @@ describe("Day-24 PM tenant count pin — countTasksByTenant", () => {
     expect(result).toBe(3);
   });
 
-  it("status filter narrows (DELIVERED → 1)", async () => {
+  it("fine courier_status filter narrows (OUT_FOR_DELIVERY → 1); NULL-courier rows excluded", async () => {
+    // D56 Lane 3 — matches the one row whose fine courier_status is
+    // OUT_FOR_DELIVERY (coarse IN_TRANSIT). The CREATED/NULL-courier row does
+    // NOT match a specific fine filter; the FAILED row has a different fine
+    // value. Proves both the fine filter and the forward-only NULL exclusion.
     const result = await withTenant(TENANT_A as Uuid, async (tx) =>
-      countTasksByTenant(tx, TENANT_A as Uuid, { status: "DELIVERED" }),
+      countTasksByTenant(tx, TENANT_A as Uuid, { status: "OUT_FOR_DELIVERY" }),
     );
     expect(result).toBe(1);
   });
