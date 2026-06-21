@@ -4,6 +4,10 @@
 
 **Brief base:** v1.30 (re-fetched fresh from `main`; the earlier session read a stale v1.29 WebFetch cache — corrected). §10 acknowledge protocol absorbed. **SQL TO APPLY: no (plan only).**
 
+**STATUS — CLEARED by Love (21 Jun 2026, Day 56), with two ruling changes (amend round).** OQ dispositions recorded in §11. The plan is approved subject to those two overrides; the build is still NOT scoped into lanes until the reviewer re-reads this amended head. Love's two ruling changes:
+1. **Label correction (Love's terminology — verbatim):** `ARRIVED_AT_DC` renders as **"Arrived in DC"** (DC = Distribution Centre). Internal `courier_status` value stays `ARRIVED_AT_DC` (the ON_DC/IN_DC wire-spelling fold is unchanged); only the displayed label changes.
+2. **OQ-3 OVERRULED:** the operator filters by **all 14 fine courier states**, delivered as a **dropdown** (not 14 pill buttons, not the coarse 7), on **BOTH `/tasks` AND the calendar view**. The family-grouped legend (OQ-4) is a separate control and still stands.
+
 **Love's enumeration rulings — BAKED IN, not re-litigated:**
 1. **Color groups by FAMILY** (amber ramp for the in-transit journey; red for the failure family; etc.). Where two states share a family colour, the **icon + label** make them distinct. **No new hex, no palette widening.** Every state must be glance-distinguishable by the **combination** of colour + icon + label — that satisfies the A2 "render distinctly, no collapsing" mandate.
 2. **OUT_FOR_DELIVERY gets the brightest amber** (Signal Amber `#E8A33C`) — it is the highest-attention state. Mid-journey in-transit states demote down the amber ramp.
@@ -62,7 +66,7 @@ Colours are **family-grouped** (Love's ruling); the **icon + label** disambiguat
 | 1 | `ORDERED` | CREATED | Ordered | `PackageIcon` (existing) | **Neutral** — Stone 200 `#D3CEC2` fill / Stone 600 `#4E4A42` text | observed | pre-movement; matches current "Created" neutral pill |
 | 2 | `ASSIGNED` | ASSIGNED | Driver assigned | `VanIcon` (existing) | **Info** — Ocean Blue `#1F6FA8` | observed (action) | ⚠ **changes** current amber ASSIGNED pill → Ocean Blue, freeing amber for the transit ramp and giving "assigned" its own family |
 | 3 | `PICKED_UP` | IN_TRANSIT | Picked up | **`PickupIcon`** (NEW) | **Amber ramp** — Amber 100 `#FBE4BD` fill / Amber Deep `#8E5A14` text | observed | ramp step 1; ⚠ Amber 100 is a tint — fill-only, dark text |
-| 4 | `ARRIVED_AT_DC` | IN_TRANSIT | At distribution centre | **`DcIcon`** (NEW) | **Amber ramp** — Amber 300 `#F1BF6B` | observed | folds ON_DC/IN_DC wire-spelling |
+| 4 | `ARRIVED_AT_DC` | IN_TRANSIT | Arrived in DC | **`DcIcon`** (NEW) | **Amber ramp** — Amber 300 `#F1BF6B` | observed | label is Love's term (DC = Distribution Centre); folds ON_DC/IN_DC wire-spelling; internal value unchanged |
 | 5 | `IN_TRANSIT` | IN_TRANSIT | In transit | `TruckIcon` (existing) | **Amber ramp** — Amber 600 `#C98726` | observed | |
 | 6 | `HUB_TRANSFER` | IN_TRANSIT | Hub transfer | **`HubTransferIcon`** (NEW) | **Amber ramp** — Amber Deep `#8E5A14` | inferred | |
 | 7 | `OUT_FOR_DELIVERY` | IN_TRANSIT | Out for delivery | **`OutForDeliveryIcon`** (NEW) | **Amber ramp — CORE** Signal Amber `#E8A33C` | observed | **Love-locked: brightest/hi-vis** — highest-attention state |
@@ -105,16 +109,16 @@ Keep the coarse maps for business logic; add fine maps + a fine-advance guard. T
 ## §6. The 9 render surfaces + 3 shared maps (surface-by-surface)
 
 **3 shared source-of-truth maps (edited once, propagate):**
-1. **`tasks/status.ts` `TASK_STATUS_FILTERS`** — the `/tasks` filter pills. → OQ-3: **keep filters at the coarse 7 lifecycle buckets** (14 filter pills is unusable); the **row** renders the fine `courier_status`. Add a shared `COURIER_STATUS_DISPLAY` map (label + pill class + icon ref per fine state) consumed by all row renders.
+1. **`tasks/status.ts`** — **OQ-3 OVERRULED (Love): the filter is the fine-14 set, surfaced as a DROPDOWN** (not the coarse 7, not 14 pills), on **both `/tasks` AND the calendar**. Add a fine-14 filter model + a `<CourierStatusFilter>` dropdown control (all 14 states + an "All" option). **URL/query state** carries the selection: **recommend a new `?courier_status=` param** (additive — preserves existing coarse `?status=` bookmarks; the two can coexist, with the coarse pills retiring later) over repointing `?status=` to fine values (which would break coarse bookmarks). **This is a real code-PR fork — Love rules `?courier_status=` vs repointed `?status=` at code-PR.** Add a `parseCourierStatusParam` validator mirroring `parseStatusParam` (drops unknowns to no-filter). Single-select vs multi-select dropdown is a code-PR detail (recommend single-select first). Also add the shared `COURIER_STATUS_DISPLAY` map (label + pill class + icon ref per fine state) consumed by every row render. The existing coarse `TASK_STATUS_FILTERS` is retired-or-coexists per the param ruling.
 2. **`StatusIcon.tsx`** — re-key the dispatcher on `courier_status` (fall back to `internal_status` for NULL), add the 6 new icons; keep `CANCELED`/null-glyph behaviour.
 3. **`DayDisplayStatus.ts`** — per §5.
 
 **9 human-facing surfaces (each reads fine `courier_status`, NULL-falls-back to coarse):**
-1. `/tasks` operator list (`tasks/client.tsx`) — row pill + glyph fine; **filter pills stay coarse**.
-2. `/admin/tasks` cross-tenant list (`(admin)/admin/tasks/page.tsx`) — row pill + glyph fine.
+1. `/tasks` operator list (`tasks/client.tsx`) — row pill + glyph fine; **fine-14 dropdown filter** wired to `?courier_status=` (OQ-3 overruled).
+2. `/admin/tasks` cross-tenant list (`(admin)/admin/tasks/page.tsx`) — row pill + glyph fine; same fine-14 dropdown filter.
 3. Consignee calendar month cells (`CalendarMonthView.tsx`) — via `DayDisplayStatus`.
-4. Calendar status legend (`CalendarStatusLegend.tsx`) — expand (OQ-4).
-5. Consolidated day view (`calendar/_components/ConsolidatedDayView.tsx`).
+4. Calendar status legend (`CalendarStatusLegend.tsx`) — expand, family-grouped (OQ-4; a separate control from the filter).
+5. Consolidated calendar (`/calendar`, `calendar/_components/ConsolidatedDayView.tsx`) — **gains the same fine-14 dropdown filter control** (OQ-3 overruled: the calendar filters by all 14 fine states, not just the grouped legend); URL-state via the same `?courier_status=` param.
 6. Day-action popover (`DayActionPopover.tsx`).
 7. POD card (`CalendarPodCard.tsx`) — where status shows.
 8. Subscription tasks list (`subscriptions/[id]/_components/SubscriptionTasksList.tsx`).
@@ -179,22 +183,24 @@ RED-first each lane per §7.1.
 
 - **Lane 1 — model + migration.** `0035` (Love-authorized SQL) · `CourierStatus` type · `Task.courierStatus` read model + repository select. Tests: type/exhaustiveness; repository returns the column.
 - **Lane 2 — mapper.** Fine action/value maps + `shouldAdvanceCourierStatus` (in-transit ramp rank) + applier dual-write. Tests: each action/value → fine state; ramp advance/regress guard; coarse-no-op-while-fine-advances; terminal/SKIPPED guards.
-- **Lane 3 — shared render maps + icons.** `COURIER_STATUS_DISPLAY` (label/colour/icon) · 6 new icons · `StatusIcon` re-key + fallback · `TASK_STATUS_FILTERS` stays coarse. Tests: every fine state has a display entry; NULL falls back to coarse; filter parse unchanged.
-- **Lane 4 — calendar.** `DayDisplayStatus` unfold + mislabel fix · `DAY_DISPLAY_VISUALS` expand · legend (family-grouped). Tests: IN_TRANSIT≠OUT_FOR_DELIVERY; ASSIGNED/CREATED/ON_HOLD no longer "Scheduled"; exception precedence intact.
+- **Lane 3 — shared render maps + icons + fine-14 filter.** `COURIER_STATUS_DISPLAY` (label/colour/icon) · 6 new icons · `StatusIcon` re-key + fallback · **the fine-14 filter model + `<CourierStatusFilter>` dropdown + `parseCourierStatusParam` URL-state (`?courier_status=`)** — this lane now owns filter-model + URL-state work, not just row render (OQ-3 overruled). Tests: every fine state has a display entry; NULL falls back to coarse; dropdown lists all 14 + "All"; param parse round-trips and drops unknowns to no-filter.
+- **Lane 4 — calendar.** `DayDisplayStatus` unfold + mislabel fix · `DAY_DISPLAY_VISUALS` expand · legend (family-grouped) · **wire the fine-14 dropdown filter control onto the calendar surfaces** (shares Lane-3's filter model + `?courier_status=`). Tests: IN_TRANSIT≠OUT_FOR_DELIVERY; ASSIGNED/CREATED/ON_HOLD no longer "Scheduled"; calendar filters to a single fine state; exception precedence intact.
 - **Lane 5 — surfaces.** Wire the 9 surfaces; **timeline drawer coordinated with merged #537**. Tests: page-test snapshots per surface render the fine label.
 
 ---
 
-## §11. Open questions (numbered — one recommendation each; "all recommendations" answerable)
+## §11. Open questions — RESOLVED by Love (21 Jun 2026, Day 56)
 
-1. **Carrier model:** (A) expand `internal_status` to 14 vs **(B) new nullable `courier_status` + unchanged 8-value `internal_status`**. → **Recommend B** (isolates blast radius from v1.17–v1.30 lifecycle gates; clean forward-only backfill; Planner-only states keep coarse-only).
-2. **ARRIVED fold:** treat `ARRIVED_ON_DC`/`ARRIVED_IN_DC` as one `ARRIVED_AT_DC`. → **Recommend yes.**
-3. **`/tasks` filter granularity:** coarse-7 filter + fine-14 row render vs 14 filter pills. → **Recommend coarse filter + fine row render.**
-4. **Legend density:** flat 14 chips vs family-grouped (5 headers + sub-states). → **Recommend family-grouped.**
-5. **Backfill:** forward-only + render fallback vs partial unambiguous backfill. → **Recommend forward-only + render fallback.**
-6. **Amber rung exactness:** OUT_FOR_DELIVERY = Signal Amber is Love-locked; the 4 mid-journey rungs are a render detail. → **Recommend the build lane finalizes rungs** (icon+label carry the distinction).
-7. **#537 timeline drawer:** now MERGED → normal surface. Update it in Lane 5 vs defer to a follow-up. → **Recommend update in Lane 5, coordinating with the move-link feature** (no expected conflict).
-8. **New icons:** hand-rolled in the existing `*Icon.tsx` style vs pull from an icon lib. → **Recommend hand-rolled** (6 glyphs; matches the existing set; no new dependency).
+1. **Carrier model:** (A) expand `internal_status` to 14 vs (B) new nullable `courier_status` + unchanged 8-value `internal_status`. → ✅ **RULED B.**
+2. **ARRIVED fold:** treat `ARRIVED_ON_DC`/`ARRIVED_IN_DC` as one `ARRIVED_AT_DC`. → ✅ **RULED yes.**
+3. **Filter granularity:** ~~coarse-7 filter + fine-14 row render~~ → ❌ **OVERRULED.** Operator filters by **all 14 fine courier states**, delivered as a **DROPDOWN** (not 14 pills, not coarse 7), on **BOTH `/tasks` AND the calendar**. URL-state recommend new `?courier_status=` param (the `?status=` vs `?courier_status=` choice is a real code-PR fork — Love rules there). See §6 item 1 + §10 Lanes 3/4.
+4. **Legend density:** flat 14 chips vs family-grouped. → ✅ **RULED family-grouped** (separate control from the OQ-3 dropdown filter; both stand).
+5. **Backfill:** forward-only + render fallback vs partial unambiguous backfill. → ✅ **RULED forward-only + render fallback.**
+6. **Amber rung exactness:** OUT_FOR_DELIVERY = Signal Amber locked; mid-journey rungs a render detail. → ✅ **RULED build lane finalizes rungs.**
+7. **#537 timeline drawer:** now MERGED → normal surface. → ✅ **RULED update in Lane 5**, coordinating with the move-link feature.
+8. **New icons:** hand-rolled vs icon lib. → ✅ **RULED hand-rolled** (6 glyphs; matches the existing set; no new dependency).
+
+The **ASSIGNED → Ocean Blue** pill change (flagged in §3 row 2) was seen and **accepted** by Love.
 
 ---
 
