@@ -18,6 +18,7 @@ export type {
   AssetType,
   AuthenticatedSession,
   ConsigneeSnapshot,
+  CourierStatus,
   DeliveryAddress,
   DeliveryWindow,
   HeadersLike,
@@ -32,6 +33,7 @@ export type {
   WebhookVerificationResult,
 } from "./types";
 
+export { COURIER_STATUS_VALUES } from "./types";
 export { verifySuiteFleetWebhook } from "./providers/suitefleet/webhook-verifier";
 export { parseSuiteFleetWebhookEvents } from "./providers/suitefleet/webhook-parser";
 export { mapSuiteFleetStatusToInternal } from "./providers/suitefleet/status-mapper";

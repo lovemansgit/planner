@@ -46,6 +46,7 @@
 
 import { sql as sqlTag, type SQL } from "drizzle-orm";
 
+import type { CourierStatus } from "@/modules/integration";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
@@ -93,6 +94,13 @@ type TaskRow = {
   customer_order_number: string;
   reference_number: string | null;
   internal_status: TaskInternalStatus;
+  /**
+   * Phase 8 (migration 0035) — fine SuiteFleet courier status; nullable
+   * text. Projected by `SELECT t.*`. Mapper narrows the string to
+   * `CourierStatus | null` (unknown / NULL → null). The coarse
+   * `internal_status` is unchanged.
+   */
+  courier_status: string | null;
   external_id: string | null;
   external_tracking_number: string | null;
   delivery_date: Date | string;
@@ -221,6 +229,7 @@ function mapTask(row: TaskRow, packages: readonly TaskPackage[]): Task {
     customerOrderNumber: row.customer_order_number,
     referenceNumber: row.reference_number,
     internalStatus: row.internal_status,
+    courierStatus: mapCourierStatus(row.courier_status),
     externalId: row.external_id,
     externalTrackingNumber: row.external_tracking_number,
     deliveryDate: toDateString(row.delivery_date),
@@ -281,6 +290,49 @@ function mapOutboundSyncState(value: unknown): TaskOutboundSyncState {
     return value;
   }
   return "pending";
+}
+
+/**
+ * The 14 fine courier states, typed against `CourierStatus` so a typo is
+ * a compile error. Mirrors `COURIER_STATUS_VALUES` in
+ * integration/types.ts (the mapper + migration's source of truth); kept
+ * inline here — exactly like `mapOutboundSyncState`'s value list — so the
+ * data layer takes `CourierStatus` type-only and never pulls the
+ * integration barrel (and its provider/db module-load side effects) into
+ * a plain row-mapper.
+ */
+const COURIER_STATUSES: ReadonlySet<CourierStatus> = new Set([
+  "ORDERED",
+  "ASSIGNED",
+  "PICKED_UP",
+  "ARRIVED_AT_DC",
+  "IN_TRANSIT",
+  "HUB_TRANSFER",
+  "OUT_FOR_DELIVERY",
+  "DELIVERED",
+  "FAILED",
+  "PROCESS_FOR_RETURN",
+  "RETURNED_TO_SHIPPER",
+  "CANCELED",
+  "RESCHEDULED",
+  "REATTEMPT",
+]);
+
+/**
+ * Phase 8 (brief §3.1.10, v1.31) — narrow the fine `tasks.courier_status`
+ * column (string-or-NULL at the wire) to `CourierStatus | null` at the
+ * boundary. Defensive, mirroring `mapOutboundSyncState`: NULL, undefined
+ * (column absent from a non-`t.*` SELECT), or any value outside the 14
+ * known states collapses to null — a pre-backfill row, a Planner-only
+ * state with no SF courier detail, or a future CHECK extension code-side
+ * hasn't picked up. Render falls back to the coarse `internalStatus` map
+ * when this is null. The DB CHECK (migration 0035) is the primary guard;
+ * this narrow is belt-and-braces against schema drift.
+ */
+function mapCourierStatus(value: unknown): CourierStatus | null {
+  return typeof value === "string" && (COURIER_STATUSES as ReadonlySet<string>).has(value)
+    ? (value as CourierStatus)
+    : null;
 }
 
 /**

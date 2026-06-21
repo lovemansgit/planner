@@ -27,6 +27,8 @@
 //     the webhook receiver wires up in Day 6 / a future task).
 //   - createdAt, updatedAt — repository-managed.
 
+import type { CourierStatus } from "@/modules/integration";
+
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
 /**
@@ -166,6 +168,18 @@ export interface Task {
   readonly customerOrderNumber: string;
   readonly referenceNumber: string | null;
   readonly internalStatus: TaskInternalStatus;
+  /**
+   * Phase 8 (brief §3.1.10, v1.31) — fine-grained SuiteFleet courier
+   * status, the *render* companion to the coarse `internalStatus`. The SF
+   * webhook applier (Lane 2) writes both. NULL = no SF courier detail yet
+   * / a Planner-only state (SKIPPED, manual cancel) / a pre-backfill row;
+   * render falls back to the coarse status map. Mirrors
+   * `tasks.courier_status` (migration 0035). Optional in this shape so the
+   * field can be omitted by literal Task constructors; the repository
+   * mapper always populates it (NULL when absent). System-managed via SF
+   * webhooks — deliberately NOT in any write patch here.
+   */
+  readonly courierStatus?: CourierStatus | null;
   /** Set by the Day-7 push path; null until pushed. */
   readonly externalId: string | null;
   /** Set by the Day-7 push path; null until pushed. */
