@@ -1,49 +1,77 @@
 // Day-20 §3.3.3 — calendar render-time DayDisplayStatus projection.
 //
-// Per DECISION-2 (ii) at memory/plans/day-20-consignee-detail-calendar-survey.md:
-// the legend conflates 4 task statuses + 2 subscription-exception kinds.
-// CANCELED renders muted/strikethrough on the day cell (NOT in legend
-// per reviewer Day-20 ruling). The 6 legend-visible statuses are:
-// Delivered / Out for delivery / Scheduled / Skipped / Appended / Failed.
+// D56 Phase 8 / Lane 4 (brief v1.31 §3.1.10 + §3.3.11) — the calendar stops
+// FOLDING and MISLABELING delivery states. Before: `projectDayDisplayStatus`
+// collapsed the coarse 7 internal statuses down to ~6 display states and
+// mislabeled `IN_TRANSIT → "Out for delivery"` (wrong — in-transit and
+// out-for-delivery are two distinct statuses) and `ASSIGNED | CREATED |
+// ON_HOLD → "Scheduled"` (lost three states). Now each task renders the FINE
+// SuiteFleet courier state distinctly via Lane 3's shared `resolveCourierDisplay`
+// (the single source of truth used by /tasks + every other surface): it reads
+// `task.courier_status` and falls back to the coarse `internal_status` map when
+// NULL (Planner-only states + pre-backfill rows). The label/colour/icon
+// therefore always agree across surfaces.
 //
-// Pure helper — no side effects, no I/O. Exported for unit-test
-// coverage via the page-test convention.
+// The calendar keeps three render treatments that are NOT courier states —
+// subscription-exception overlays (SKIPPED, APPENDED) and the muted
+// CANCELED cell — so the projection is a discriminated union: an `exception`
+// overlay (drawn from `DAY_DISPLAY_VISUALS` below) or a `courier` render
+// (drawn from Lane 3's `COURIER_STATUS_DISPLAY` via `resolveCourierDisplay`).
+//
+// Pure helper — no side effects, no I/O. Exported for unit-test coverage via
+// the page-test convention.
 
+import {
+  resolveCourierDisplay,
+  type CourierStatusDisplay,
+} from "@/app/(app)/tasks/status";
+import type { CourierStatus } from "@/modules/integration";
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
 import type { Task } from "@/modules/tasks/types";
 
-export type DayDisplayStatus =
-  | "DELIVERED"
-  | "OUT_FOR_DELIVERY"
-  | "SCHEDULED"
-  | "SKIPPED"
-  | "APPENDED"
-  | "FAILED"
-  | "CANCELED";
+/**
+ * Calendar-only display states that are NOT SuiteFleet courier states:
+ * the two subscription-exception overlays + the muted CANCELED treatment.
+ * Every courier state renders via `resolveCourierDisplay` instead.
+ */
+export type DayExceptionStatus = "SKIPPED" | "APPENDED" | "CANCELED";
 
 /**
- * Project a single day-cell's display status from (task | null) +
- * matching subscription exceptions that fall on `date`.
+ * Discriminated projection result:
+ *  - `exception` → a calendar overlay (SKIPPED/APPENDED/CANCELED), rendered
+ *    from `DAY_DISPLAY_VISUALS`.
+ *  - `courier`   → the fine courier render (label + family pill + icon),
+ *    rendered from Lane 3's `COURIER_STATUS_DISPLAY` via `resolveCourierDisplay`.
+ */
+export type DayDisplayProjection =
+  | { readonly kind: "exception"; readonly status: DayExceptionStatus }
+  | { readonly kind: "courier"; readonly display: CourierStatusDisplay };
+
+const EXCEPTION_SKIPPED: DayDisplayProjection = { kind: "exception", status: "SKIPPED" };
+const EXCEPTION_APPENDED: DayDisplayProjection = { kind: "exception", status: "APPENDED" };
+const EXCEPTION_CANCELED: DayDisplayProjection = { kind: "exception", status: "CANCELED" };
+
+/**
+ * Project a single day-cell's display from (task | null) + matching
+ * subscription exceptions that fall on `date`.
  *
- * Precedence:
- *   1. No task + skip exception with start_date === date → SKIPPED
- *   2. Task + append-without-skip exception with start_date === date
- *      (which equals task.delivery_date for the appended day) → APPENDED
- *   3. Task fall-through:
- *        DELIVERED → DELIVERED
- *        IN_TRANSIT → OUT_FOR_DELIVERY
- *        ASSIGNED | CREATED | ON_HOLD → SCHEDULED
- *        FAILED → FAILED
- *        CANCELED → CANCELED
- *
- * Returns null when there's no task AND no relevant exception for the
- * date — calendar cell renders empty (— placeholder).
+ * Precedence (UNCHANGED from Day-20 — only the task fall-through now renders
+ * the fine courier state instead of the folded/mislabeled coarse map):
+ *   1. No task + skip exception on `date` → SKIPPED overlay
+ *   2. No task + no relevant exception     → null (empty cell, — placeholder)
+ *   3. Task + append-without-skip exception on `date` → APPENDED overlay
+ *   4. Task CANCELED → CANCELED overlay (muted+strikethrough, not in legend)
+ *   5. Task-level SKIPPED row → SKIPPED overlay (Day-28 production fix)
+ *   6. Otherwise → the fine courier render:
+ *        IN_TRANSIT → "In transit"; OUT_FOR_DELIVERY → "Out for delivery"
+ *        (two distinct statuses); ASSIGNED → "Driver assigned"; CREATED-coarse
+ *        → "Created"; ON_HOLD-coarse → "On hold"; etc. — never folded.
  */
 export function projectDayDisplayStatus(
   task: Task | null,
   exceptions: readonly SubscriptionException[],
   date: string,
-): DayDisplayStatus | null {
+): DayDisplayProjection | null {
   const skipException = exceptions.find(
     (e) => e.type === "skip" && e.startDate === date,
   );
@@ -51,72 +79,46 @@ export function projectDayDisplayStatus(
     (e) => e.type === "append_without_skip" && e.startDate === date,
   );
 
-  if (task === null && skipException !== undefined) return "SKIPPED";
+  if (task === null && skipException !== undefined) return EXCEPTION_SKIPPED;
   if (task === null) return null;
-  if (appendException !== undefined) return "APPENDED";
+  if (appendException !== undefined) return EXCEPTION_APPENDED;
 
-  switch (task.internalStatus) {
-    case "DELIVERED":
-      return "DELIVERED";
-    case "IN_TRANSIT":
-      return "OUT_FOR_DELIVERY";
-    case "ASSIGNED":
-    case "CREATED":
-    case "ON_HOLD":
-      return "SCHEDULED";
-    case "FAILED":
-      return "FAILED";
-    case "CANCELED":
-      return "CANCELED";
-    case "SKIPPED":
-      // Task row in SKIPPED state (set by addSubscriptionException type='skip'
-      // per Day-13 §3.1.1). Routes to the existing SKIPPED visual — same
-      // muted/strikethrough treatment as the no-task + skip-exception path.
-      return "SKIPPED";
-    default: {
-      // Exhaustiveness guard: future additions to the TaskInternalStatus
-      // union become a compile error here rather than a production TypeError
-      // downstream (`DAY_DISPLAY_VISUALS[undefined].label` was the Day-28
-      // failure mode). Render-time degrade: unknown status renders as an
-      // empty day-cell rather than crashing the whole calendar render.
-      const _exhaustive: never = task.internalStatus;
-      void _exhaustive;
-      return null;
-    }
-  }
+  // Calendar overlays that predate — and stay distinct from — the fine model.
+  if (task.internalStatus === "CANCELED") return EXCEPTION_CANCELED;
+  // Task row in internal_status='SKIPPED' (set by addSubscriptionException
+  // type='skip' per Day-13 §3.1.1 + migration 0019) — same muted treatment as
+  // the no-task + skip-exception path. Closes the Day-28 production TypeError.
+  if (task.internalStatus === "SKIPPED") return EXCEPTION_SKIPPED;
+
+  // Every remaining state renders the fine courier status (falling back to the
+  // coarse map when courier_status is NULL). Compile-time exhaustiveness over
+  // the courier + coarse vocabularies lives in Lane 3's `COURIER_STATUS_DISPLAY`
+  // (Record<CourierStatus>) + `COARSE_STATUS_DISPLAY` (Record<TaskInternalStatus>)
+  // — a new status value is a compile error there, not a render-time TypeError.
+  return {
+    kind: "courier",
+    display: resolveCourierDisplay(task.courierStatus, task.internalStatus),
+  };
 }
 
-/**
- * Visual map — 6 legend-visible statuses + CANCELED muted treatment.
- * Reuses brand-canon tokens: green (success), amber (in-progress),
- * stone-tertiary (neutral), red (alarm). Matches the existing palette
- * established by the calendar views' STATUS_VISUALS map + the
- * TASK_STATUS_FILTERS in the operator /tasks chrome.
- *
- * `inLegend: false` for CANCELED — renders muted+strikethrough on the
- * day cell but is excluded from the legend block per Day-20 ruling.
- */
-export const DAY_DISPLAY_VISUALS: Record<DayDisplayStatus, {
+export interface DayDisplayVisual {
   readonly label: string;
   readonly classes: string;
   readonly inLegend: boolean;
-}> = {
-  DELIVERED: {
-    label: "Delivered",
-    classes: "bg-green/15 text-green",
-    inLegend: true,
-  },
-  OUT_FOR_DELIVERY: {
-    label: "Out for delivery",
-    classes: "bg-amber/20 text-amber",
-    inLegend: true,
-  },
-  SCHEDULED: {
-    label: "Scheduled",
-    classes:
-      "bg-[color:var(--color-text-tertiary)]/20 text-[color:var(--color-text-secondary)]",
-    inLegend: true,
-  },
+}
+
+/**
+ * Visual map for the calendar-only OVERLAY states (SKIPPED / APPENDED /
+ * CANCELED). Fine courier states render from Lane 3's `COURIER_STATUS_DISPLAY`
+ * (single source of truth) — they are deliberately NOT duplicated here, so the
+ * calendar can never drift from the /tasks pill colours/labels. The
+ * `Record<DayExceptionStatus, …>` keeps the exhaustiveness guard for the
+ * overlay union at compile time.
+ *
+ * `inLegend: false` for CANCELED — renders muted+strikethrough on the day
+ * cell but is excluded from the legend per the Day-20 ruling.
+ */
+export const DAY_DISPLAY_VISUALS: Record<DayExceptionStatus, DayDisplayVisual> = {
   SKIPPED: {
     label: "Skipped",
     classes:
@@ -128,11 +130,6 @@ export const DAY_DISPLAY_VISUALS: Record<DayDisplayStatus, {
     classes: "border border-green/30 bg-green/10 text-green",
     inLegend: true,
   },
-  FAILED: {
-    label: "Failed",
-    classes: "bg-red/15 text-red",
-    inLegend: true,
-  },
   CANCELED: {
     label: "Canceled",
     classes:
@@ -140,3 +137,41 @@ export const DAY_DISPLAY_VISUALS: Record<DayDisplayStatus, {
     inLegend: false,
   },
 };
+
+/**
+ * Filter calendar tasks to a single fine courier state (the calendar's
+ * `?status=` control). Mirrors Lane 3's server-side predicate exactly
+ * (`t.courier_status = ${status}`): a NULL-courier row (Planner-only state /
+ * pre-backfill) never matches a fine filter — it appears only under "All"
+ * (OQ-5 forward-only). A `null` filter is the "All" view and returns the list
+ * unchanged. Pure — render-layer narrowing of an already-fetched range.
+ */
+export function filterTasksByCourierStatus(
+  tasks: readonly Task[],
+  courierStatus: CourierStatus | null,
+): readonly Task[] {
+  if (courierStatus === null) return tasks;
+  return tasks.filter((t) => t.courierStatus === courierStatus);
+}
+
+export interface DayCellVisual {
+  readonly label: string;
+  readonly classes: string;
+}
+
+/**
+ * Normalise a projection to the `{ label, classes }` a day cell (and the
+ * DayActionPopover status pill) render. Overlay states use
+ * `DAY_DISPLAY_VISUALS`; courier states use the fine `pillClass` + label from
+ * `resolveCourierDisplay`. The within-family distinction on the dense month
+ * cells is carried by the label text (e.g. "Picked up" vs "Out for delivery"
+ * share the amber family) — the per-state icon is showcased in the legend +
+ * the roomier day-view rows.
+ */
+export function dayCellVisual(projection: DayDisplayProjection): DayCellVisual {
+  if (projection.kind === "exception") {
+    const visual = DAY_DISPLAY_VISUALS[projection.status];
+    return { label: visual.label, classes: visual.classes };
+  }
+  return { label: projection.display.label, classes: projection.display.pillClass };
+}

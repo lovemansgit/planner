@@ -21,6 +21,8 @@
 
 import Link from "next/link";
 
+import { CourierStatusFilter } from "@/app/(app)/tasks/_components/CourierStatusFilter";
+import type { CourierStatus } from "@/modules/integration";
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 import type { Task } from "@/modules/tasks/types";
@@ -37,7 +39,8 @@ import {
 } from "./calendar-dates";
 import { CalendarStatusLegend } from "./CalendarStatusLegend";
 import {
-  DAY_DISPLAY_VISUALS,
+  dayCellVisual,
+  filterTasksByCourierStatus,
   projectDayDisplayStatus,
 } from "./DayDisplayStatus";
 import { DayActionPopover, type CalendarActionPermissions } from "./DayActionPopover";
@@ -76,6 +79,13 @@ export interface CalendarMonthViewProps {
    * vendor" / "Vendor refused recall — final delivery").
    */
   readonly consigneeChurned: boolean;
+  /**
+   * D56 Phase 8 / Lane 4 — active fine courier-status filter (`?status=`),
+   * or null for the "All" view. Narrows the rendered deliveries to a single
+   * fine state (mirrors /tasks); when set, the no-task skip markers are
+   * suppressed (a skipped day has no delivery of the filtered status).
+   */
+  readonly courierStatusFilter?: CourierStatus | null;
 }
 
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -89,15 +99,21 @@ export function CalendarMonthView({
   permissions,
   availableAddresses,
   failedPushTaskIds,
+  courierStatusFilter = null,
 }: CalendarMonthViewProps) {
   const monthEnd = computeMonthEnd(new Date(`${monthStart}T00:00:00Z`));
   const gridStart = computeMonthGridStart(monthStart);
   const gridEnd = computeMonthGridEnd(monthEnd);
   const days = enumerateDates(gridStart, gridEnd);
 
+  // D56 Lane 4 — narrow to the single fine courier state when a filter is
+  // active (NULL-courier rows drop out, mirroring the /tasks server filter).
+  const visibleTasks = filterTasksByCourierStatus(tasks, courierStatusFilter);
+  const isFiltered = courierStatusFilter !== null;
+
   // Partition tasks by deliveryDate for O(1) per-cell lookup.
   const tasksByDate: Record<string, Task[]> = {};
-  for (const t of tasks) {
+  for (const t of visibleTasks) {
     if (!tasksByDate[t.deliveryDate]) tasksByDate[t.deliveryDate] = [];
     tasksByDate[t.deliveryDate].push(t);
   }
@@ -110,27 +126,29 @@ export function CalendarMonthView({
     new Date(`${addDays(monthEnd, 1)}T00:00:00Z`),
   );
   const todayMonth = computeMonthStart(new Date());
+  // Preserve the active fine-status filter across month navigation.
+  const statusSuffix = courierStatusFilter ? `&status=${courierStatusFilter}` : "";
 
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Link
-            href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${prevMonth}`}
+            href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${prevMonth}${statusSuffix}`}
             className="rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
             aria-label="Previous month"
           >
             ←
           </Link>
           <Link
-            href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${nextMonth}`}
+            href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${nextMonth}${statusSuffix}`}
             className="rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
             aria-label="Next month"
           >
             →
           </Link>
           <Link
-            href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${todayMonth}`}
+            href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${todayMonth}${statusSuffix}`}
             className="ml-2 rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
           >
             Today
@@ -139,6 +157,13 @@ export function CalendarMonthView({
         <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
           {formatMonthLabel(monthStart)}
         </p>
+      </div>
+
+      {/* D56 Lane 4 — fine-14 courier-status filter (shared ?status= param,
+          Lane 3's component). Single fine state at a time; preserved across
+          month nav above. */}
+      <div className="mb-6 flex justify-end">
+        <CourierStatusFilter />
       </div>
 
       <CalendarStatusLegend />
@@ -156,10 +181,13 @@ export function CalendarMonthView({
           const dayTasks = tasksByDate[isoDate] ?? [];
           const isToday = isoDate === today;
           const isOffMonth = isoDate < monthStart || isoDate > monthEnd;
+          // Skip markers (no-task days) are suppressed under an active fine
+          // filter — a skipped day has no delivery of the filtered status.
           const skipForDay =
-            dayTasks.length === 0
+            dayTasks.length === 0 && !isFiltered
               ? projectDayDisplayStatus(null, exceptions, isoDate)
               : null;
+          const skipVisual = skipForDay !== null ? dayCellVisual(skipForDay) : null;
           const dayNum = String(parseInt(isoDate.slice(8, 10), 10));
           return (
             <div
@@ -177,11 +205,11 @@ export function CalendarMonthView({
               >
                 {dayNum}
               </p>
-              {dayTasks.length === 0 && skipForDay !== null ? (
+              {skipVisual !== null ? (
                 <span
-                  className={`block w-full rounded-sm px-1 py-0.5 text-left text-[9px] font-medium uppercase tracking-[0.1em] ${DAY_DISPLAY_VISUALS[skipForDay].classes}`}
+                  className={`block w-full rounded-sm px-1 py-0.5 text-left text-[9px] font-medium uppercase tracking-[0.1em] ${skipVisual.classes}`}
                 >
-                  {DAY_DISPLAY_VISUALS[skipForDay].label}
+                  {skipVisual.label}
                 </span>
               ) : null}
               {dayTasks.length > 0 ? (
@@ -193,7 +221,7 @@ export function CalendarMonthView({
                       isoDate,
                     );
                     if (displayStatus === null) return null;
-                    const visual = DAY_DISPLAY_VISUALS[displayStatus];
+                    const visual = dayCellVisual(displayStatus);
                     const subscriptionId = task.subscriptionId;
                     return (
                       <li key={task.id}>

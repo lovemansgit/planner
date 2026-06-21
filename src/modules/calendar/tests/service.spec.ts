@@ -20,7 +20,6 @@ vi.mock("../repository", () => ({
   countTasksGroupedByDay: vi.fn(),
   listDistinctCrmStates: vi.fn(),
   listDistinctDistricts: vi.fn(),
-  listDistinctTaskStatuses: vi.fn(),
   listPerMerchantBreakdown: vi.fn(),
   listTasksForDayAcrossConsignees: vi.fn(),
   listTopMerchantsTodayWithTaskCount: vi.fn(),
@@ -38,7 +37,6 @@ import {
   countTasksGroupedByDay,
   listDistinctCrmStates,
   listDistinctDistricts,
-  listDistinctTaskStatuses,
   listPerMerchantBreakdown,
   listTasksForDayAcrossConsignees,
   listTopMerchantsTodayWithTaskCount,
@@ -64,7 +62,6 @@ const mockComputeMetrics = vi.mocked(computeMetrics);
 const mockComputeTranscorpAdminMetrics = vi.mocked(computeTranscorpAdminMetrics);
 const mockListDistinctDistricts = vi.mocked(listDistinctDistricts);
 const mockListDistinctCrmStates = vi.mocked(listDistinctCrmStates);
-const mockListDistinctTaskStatuses = vi.mocked(listDistinctTaskStatuses);
 const mockListTasksForDayAcrossConsignees = vi.mocked(listTasksForDayAcrossConsignees);
 const mockListTopMerchantsToday = vi.mocked(listTopMerchantsTodayWithTaskCount);
 const mockListPerMerchantBreakdown = vi.mocked(listPerMerchantBreakdown);
@@ -111,7 +108,6 @@ beforeEach(() => {
   });
   mockListDistinctDistricts.mockResolvedValue([]);
   mockListDistinctCrmStates.mockResolvedValue([]);
-  mockListDistinctTaskStatuses.mockResolvedValue([]);
   mockListTopMerchantsToday.mockResolvedValue([]);
   mockListPerMerchantBreakdown.mockResolvedValue([]);
 });
@@ -300,20 +296,20 @@ describe("getCalendarFilterOptions", () => {
     await expect(getCalendarFilterOptions(ctx)).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it("parallel-fetches districts, crm states, and statuses", async () => {
+  // D56 Lane 4 (E1) — the status dimension is retired here (the `?status=`
+  // filter uses the static fine-14 COURIER_STATUS_FILTER_OPTIONS); only the
+  // district + crm DISTINCT lookups remain.
+  it("parallel-fetches districts and crm states (no status round-trip)", async () => {
     const ctx = userCtx(["task:read"]);
     mockListDistinctDistricts.mockResolvedValue(["Al Quoz", "Jumeirah"]);
     mockListDistinctCrmStates.mockResolvedValue(["ACTIVE", "HIGH_RISK"]);
-    mockListDistinctTaskStatuses.mockResolvedValue(["CREATED", "FAILED"]);
     const result = await getCalendarFilterOptions(ctx);
     expect(result).toEqual({
       districts: ["Al Quoz", "Jumeirah"],
       crmStates: ["ACTIVE", "HIGH_RISK"],
-      statuses: ["CREATED", "FAILED"],
     });
     expect(mockListDistinctDistricts).toHaveBeenCalledOnce();
     expect(mockListDistinctCrmStates).toHaveBeenCalledOnce();
-    expect(mockListDistinctTaskStatuses).toHaveBeenCalledOnce();
   });
 });
 

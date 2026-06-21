@@ -52,6 +52,7 @@ import {
   getTasksForSubscription,
 } from "@/modules/tasks";
 import type { Task } from "@/modules/tasks/types";
+import { parseCourierStatusParam } from "@/app/(app)/tasks/status";
 import { listFailedPushTaskIdsForTenant } from "@/modules/failed-pushes";
 
 import { Toast } from "@/components/Toast";
@@ -99,6 +100,8 @@ interface PageProps {
     readonly month?: string;
     readonly year?: string;
     readonly created?: string;
+    // D56 Phase 8 / Lane 4 — fine courier-status filter on the Calendar tab.
+    readonly status?: string;
   }>;
 }
 
@@ -120,7 +123,11 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
     month: monthParam,
     year: yearParam,
     created: createdParam,
+    status: statusParam,
   } = await searchParams;
+  // D56 Lane 4 — validated fine courier-status filter (unknown / stale coarse
+  // values degrade to null = the "All" view, mirroring /tasks).
+  const courierStatusFilter = parseCourierStatusParam(statusParam) ?? null;
   const activeTab: TabName = (VALID_TABS as readonly string[]).includes(tabParam ?? "")
     ? (tabParam as TabName)
     : "overview";
@@ -452,6 +459,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                   availableAddresses={calendarAddresses}
                   failedPushTaskIds={calendarFailedPushTaskIds}
                   consigneeChurned={consignee.crmState === "CHURNED"}
+                  courierStatusFilter={courierStatusFilter}
                 />
               ) : null}
               {activeView === "year" ? (

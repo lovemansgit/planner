@@ -24,7 +24,8 @@
 //   3. Three tasks for the date → returns three rows ordered by
 //      delivery_start_time ASC then consignee name ASC
 //   4. Cross-tenant filter — tasks from another tenant not surfaced
-//   5. Empty filter set vs filter narrowing (status filter)
+//   5. Empty filter set vs filter narrowing (D56 Lane 4: the status filter is
+//      now the FINE courier_status, not the coarse internal_status)
 // =============================================================================
 
 import { randomUUID } from "node:crypto";
@@ -90,18 +91,20 @@ describe("Day-23 schema-drift pin — listTasksForDayAcrossConsignees", () => {
       const aTask2 = randomUUID();
       const aTask3 = randomUUID();
       TASK_IDS_A_DAY.push(aTask1, aTask2, aTask3);
+      // D56 Lane 4 — seed the fine courier_status alongside coarse
+      // internal_status so the (now-fine) status filter has surface to narrow.
       await tx.execute(sqlTag`
         INSERT INTO tasks
           (id, tenant_id, consignee_id, customer_order_number,
            delivery_date, delivery_start_time, delivery_end_time,
-           internal_status, external_tracking_number, created_via)
+           internal_status, courier_status, external_tracking_number, created_via)
         VALUES
           (${aTask1}, ${TENANT_A}, ${CONSIGNEE_A1}, ${`CDV-A-${RUN_ID}-1`},
-           ${DAY_WITH_TASKS}, '08:00', '10:00', 'CREATED', 'AWB-A-001', 'manual_admin'),
+           ${DAY_WITH_TASKS}, '08:00', '10:00', 'CREATED', 'ORDERED', 'AWB-A-001', 'manual_admin'),
           (${aTask2}, ${TENANT_A}, ${CONSIGNEE_A2}, ${`CDV-A-${RUN_ID}-2`},
-           ${DAY_WITH_TASKS}, '10:00', '12:00', 'DELIVERED', 'AWB-A-002', 'manual_admin'),
+           ${DAY_WITH_TASKS}, '10:00', '12:00', 'DELIVERED', 'DELIVERED', 'AWB-A-002', 'manual_admin'),
           (${aTask3}, ${TENANT_A}, ${CONSIGNEE_A1}, ${`CDV-A-${RUN_ID}-3`},
-           ${DAY_WITH_TASKS}, '14:00', '16:00', 'FAILED', NULL, 'manual_admin')
+           ${DAY_WITH_TASKS}, '14:00', '16:00', 'FAILED', 'PROCESS_FOR_RETURN', NULL, 'manual_admin')
       `);
 
       // One task for tenant B on the same date — cross-tenant probe.
@@ -110,10 +113,10 @@ describe("Day-23 schema-drift pin — listTasksForDayAcrossConsignees", () => {
         INSERT INTO tasks
           (id, tenant_id, consignee_id, customer_order_number,
            delivery_date, delivery_start_time, delivery_end_time,
-           internal_status, external_tracking_number, created_via)
+           internal_status, courier_status, external_tracking_number, created_via)
         VALUES
           (${TASK_ID_B_DAY}, ${TENANT_B}, ${CONSIGNEE_B1}, ${`CDV-B-${RUN_ID}-1`},
-           ${DAY_WITH_TASKS}, '09:00', '11:00', 'CREATED', 'AWB-B-001', 'manual_admin')
+           ${DAY_WITH_TASKS}, '09:00', '11:00', 'CREATED', 'ORDERED', 'AWB-B-001', 'manual_admin')
       `);
     });
   });
@@ -129,9 +132,9 @@ describe("Day-23 schema-drift pin — listTasksForDayAcrossConsignees", () => {
     expect(result).toEqual([]);
   });
 
-  it("returns one task for the date with the camelCase domain mapping", async () => {
-    // Narrow to one task via the status filter so the assertion is
-    // deterministic regardless of seed-order.
+  it("returns one task for the date with the camelCase domain mapping (incl. fine courierStatus)", async () => {
+    // Narrow to one task via the FINE courier_status filter (D56 Lane 4) so the
+    // assertion is deterministic regardless of seed-order.
     const result = await withServiceRole("cdv test one row", async (tx) => {
       return listTasksForDayAcrossConsignees(tx, TENANT_A as Uuid, DAY_WITH_TASKS, {
         status: "DELIVERED",
@@ -145,6 +148,7 @@ describe("Day-23 schema-drift pin — listTasksForDayAcrossConsignees", () => {
     expect(row.district).toBe("Al Quoz");
     expect(row.crmState).toBe("ACTIVE");
     expect(row.status).toBe("DELIVERED");
+    expect(row.courierStatus).toBe("DELIVERED");
     // The bug being pinned: deliveryWindowStart sourced from
     // tasks.delivery_start_time at the SQL layer. If the broken
     // column reference came back, this query would throw 42703
@@ -153,6 +157,20 @@ describe("Day-23 schema-drift pin — listTasksForDayAcrossConsignees", () => {
     expect(row.deliveryWindowEnd).toContain("12:00");
     expect(row.externalTrackingNumber).toBe("AWB-A-002");
     expect(row.subscriptionId).toBeNull();
+  });
+
+  it("filters on the FINE courier_status (a fine-only state with no coarse equivalent)", async () => {
+    // PROCESS_FOR_RETURN folds to coarse FAILED but is a distinct fine state.
+    // A genuinely-fine filter returns exactly the one PROCESS_FOR_RETURN task
+    // (aTask3) — proving `?status=` matches courier_status, not internal_status.
+    const result = await withServiceRole("cdv test fine status filter", async (tx) => {
+      return listTasksForDayAcrossConsignees(tx, TENANT_A as Uuid, DAY_WITH_TASKS, {
+        status: "PROCESS_FOR_RETURN",
+      });
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].taskId).toBe(TASK_IDS_A_DAY[2]); // 14:00, FAILED / PROCESS_FOR_RETURN
+    expect(result[0].courierStatus).toBe("PROCESS_FOR_RETURN");
   });
 
   it("returns three rows for the date ordered by delivery_start_time ASC", async () => {

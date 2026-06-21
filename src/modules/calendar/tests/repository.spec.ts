@@ -18,7 +18,6 @@ import {
   countTasksGroupedByDay,
   listDistinctCrmStates,
   listDistinctDistricts,
-  listDistinctTaskStatuses,
   listPerMerchantBreakdown,
   listTasksForDayAcrossConsignees,
   listTopMerchantsTodayWithTaskCount,
@@ -96,17 +95,20 @@ describe("countTasksGroupedByDay", () => {
     const filters: CalendarFilters = {
       crm: "HIGH_RISK",
       district: "Al Quoz",
-      status: "FAILED",
+      status: "OUT_FOR_DELIVERY",
     };
     const tx = makeStubTx([[]]);
     await countTasksGroupedByDay(tx, TENANT_ID, WEEK_START, WEEK_END, filters);
     const { sql, params } = compile(tx.execute.mock.calls[0][0]);
     expect(sql).toMatch(/c\.crm_state = /);
     expect(sql).toMatch(/c\.district = /);
-    expect(sql).toMatch(/t\.internal_status = /);
+    // D56 Lane 4 (E1) — the status filter now matches the FINE courier_status,
+    // not the coarse internal_status.
+    expect(sql).toMatch(/t\.courier_status = /);
+    expect(sql).not.toContain("internal_status");
     expect(params).toContain("HIGH_RISK");
     expect(params).toContain("Al Quoz");
-    expect(params).toContain("FAILED");
+    expect(params).toContain("OUT_FOR_DELIVERY");
   });
 
   it("does NOT emit any delivery_start_time predicate (window filter dropped Day-23n)", async () => {
@@ -405,15 +407,9 @@ describe("listDistinctCrmStates", () => {
   });
 });
 
-describe("listDistinctTaskStatuses", () => {
-  it("returns the internal_status values that exist for the tenant", async () => {
-    const tx = makeStubTx([
-      [{ value: "CREATED" }, { value: "DELIVERED" }, { value: "FAILED" }],
-    ]);
-    const rows = await listDistinctTaskStatuses(tx, TENANT_ID);
-    expect(rows).toEqual(["CREATED", "DELIVERED", "FAILED"]);
-  });
-});
+// D56 Lane 4 (E1) — listDistinctTaskStatuses retired: the `?status=` filter is
+// the FINE 14-state courier vocabulary (static COURIER_STATUS_FILTER_OPTIONS),
+// so no per-tenant DISTINCT of the coarse internal_status is needed.
 
 // ---------------------------------------------------------------------------
 // buildWeekDays — pure assembly helper
@@ -482,6 +478,8 @@ describe("listTasksForDayAcrossConsignees", () => {
     expect(sql).toMatch(/FROM tasks t/);
     expect(sql).toMatch(/JOIN consignees c/);
     expect(sql).toMatch(/ORDER BY t.delivery_start_time ASC/);
+    // D56 Lane 4 — the fine courier_status is selected for the day-view render.
+    expect(sql).toMatch(/t\.courier_status/);
     expect(params).toContain(TENANT_ID);
     expect(params).toContain(DATE);
   });
@@ -492,7 +490,7 @@ describe("listTasksForDayAcrossConsignees", () => {
     expect(result).toEqual([]);
   });
 
-  it("maps DB row columns to the CalendarDayTaskRow camelCase shape", async () => {
+  it("maps DB row columns to the CalendarDayTaskRow camelCase shape (incl. fine courierStatus)", async () => {
     const tx = makeStubTx([
       [
         {
@@ -502,7 +500,7 @@ describe("listTasksForDayAcrossConsignees", () => {
           district: "Dubai Marina",
           crm_state: "HIGH_RISK",
           internal_status: "FAILED",
-          courier_status: "RETURNED_TO_SHIPPER",
+          courier_status: "PROCESS_FOR_RETURN",
           delivery_start_time: "08:00:00",
           delivery_end_time: "10:00:00",
           external_tracking_number: "AWB-001",
@@ -519,8 +517,7 @@ describe("listTasksForDayAcrossConsignees", () => {
       district: "Dubai Marina",
       crmState: "HIGH_RISK",
       status: "FAILED",
-      // D56 Lane 5 — the fine courier_status threads through for distinct render.
-      courierStatus: "RETURNED_TO_SHIPPER",
+      courierStatus: "PROCESS_FOR_RETURN",
       deliveryWindowStart: "08:00:00",
       deliveryWindowEnd: "10:00:00",
       externalTrackingNumber: "AWB-001",
@@ -528,36 +525,36 @@ describe("listTasksForDayAcrossConsignees", () => {
     });
   });
 
-  it("selects t.courier_status and maps a NULL / unknown value to null", async () => {
+  it("narrows a NULL / unknown courier_status to null (render falls back to coarse status)", async () => {
+    const baseRow = {
+      task_id: "t1",
+      consignee_id: "c1",
+      consignee_name: "Sarah Khouri",
+      district: null,
+      crm_state: "ACTIVE",
+      internal_status: "IN_TRANSIT",
+      delivery_start_time: "08:00:00",
+      delivery_end_time: "10:00:00",
+      external_tracking_number: null,
+      subscription_id: null,
+    };
     const tx = makeStubTx([
       [
-        {
-          task_id: "t2",
-          consignee_id: "c2",
-          consignee_name: "Omar Najjar",
-          district: "JLT",
-          crm_state: "ACTIVE",
-          internal_status: "IN_TRANSIT",
-          courier_status: null,
-          delivery_start_time: "09:00:00",
-          delivery_end_time: "11:00:00",
-          external_tracking_number: null,
-          subscription_id: null,
-        },
+        { ...baseRow, task_id: "t1", courier_status: null },
+        { ...baseRow, task_id: "t2", courier_status: "NOT_A_REAL_STATUS" },
       ],
     ]);
     const rows = await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
-    const { sql } = compile(tx.execute.mock.calls[0][0]);
-    expect(sql).toMatch(/t\.courier_status/i);
-    expect(rows[0].courierStatus).toBeNull();
+    expect(rows.map((r) => r.courierStatus)).toEqual([null, null]);
   });
 
-  it("applies filter predicates (crm, status) into the WHERE bound params", async () => {
+  it("applies the fine status filter (crm, courier_status) into the WHERE bound params", async () => {
     const tx = makeStubTx([[]]);
-    const filters: CalendarFilters = { crm: "HIGH_RISK", status: "FAILED" };
+    const filters: CalendarFilters = { crm: "HIGH_RISK", status: "OUT_FOR_DELIVERY" };
     await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, filters);
-    const { params } = compile(tx.execute.mock.calls[0][0]);
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/t\.courier_status = /);
     expect(params).toContain("HIGH_RISK");
-    expect(params).toContain("FAILED");
+    expect(params).toContain("OUT_FOR_DELIVERY");
   });
 });

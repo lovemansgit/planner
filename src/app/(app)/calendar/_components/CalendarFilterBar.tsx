@@ -2,13 +2,19 @@
 //
 // Four-filter bar atop the consolidated `/calendar` view per brief
 // §3.3.4: search by consignee name/phone + CRM state + area/district
-// + task status. Day-23n polish dropped the time-window dropdown
+// + delivery status. Day-23n polish dropped the time-window dropdown
 // (no consumer in the post-narrowing UX). URL-state precedent
 // mirrored from /tasks (per reviewer OQ-3 ruling: no shared-primitive
 // extraction; build inline). Each filter change pushes a new URL via
 // useRouter().push so the operator can share / bookmark a filtered
 // view; non-filter params (view, week/month/date anchors, etc.) are
 // preserved across writes.
+//
+// D56 Phase 8 / Lane 4 (Love's E1 ruling) — the status select carries the
+// FINE 14-state courier vocabulary (`COURIER_STATUS_FILTER_OPTIONS`, the
+// single source of truth in tasks/status.ts), matching /tasks. `?status=`
+// is the fine param on both surfaces; the coarse `internal_status` options
+// (and the per-tenant DISTINCT that fed them) are retired.
 //
 // Search input is debounced ~300ms; selects fire immediately on
 // change. `page` param is dropped on every filter write so the
@@ -24,6 +30,8 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { COURIER_STATUS_FILTER_OPTIONS } from "@/app/(app)/tasks/status";
+
 import type { CalendarFiltersValue } from "../_types";
 
 export interface CalendarFilterOption {
@@ -35,7 +43,6 @@ export interface CalendarFilterBarProps {
   readonly initialValues: CalendarFiltersValue;
   readonly crmOptions: readonly CalendarFilterOption[];
   readonly districtOptions: readonly CalendarFilterOption[];
-  readonly statusOptions: readonly CalendarFilterOption[];
 }
 
 const FILTER_KEYS = ["q", "crm", "district", "status"] as const;
@@ -69,7 +76,6 @@ export function CalendarFilterBar({
   initialValues,
   crmOptions,
   districtOptions,
-  statusOptions,
 }: CalendarFilterBarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -136,10 +142,10 @@ export function CalendarFilterBar({
         onChange={(event) => onSelectChange("district", event)}
       />
       <FilterSelect
-        ariaLabel="Task status"
+        ariaLabel="Delivery status"
         placeholder="All statuses"
         value={initialValues.status}
-        options={statusOptions}
+        options={COURIER_STATUS_FILTER_OPTIONS}
         onChange={(event) => onSelectChange("status", event)}
       />
     </div>
