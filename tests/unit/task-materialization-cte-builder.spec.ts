@@ -77,6 +77,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
               AND s.status = 'active'
               AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
           ),
+          
           eligible_dates AS (
             SELECT cd.*
             FROM candidate_dates cd
@@ -90,6 +91,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
                 )
             )
           )
+        
         ",
       }
     `);
@@ -129,6 +131,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
               AND s.status = 'active'
               AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
           ),
+          
           eligible_dates AS (
             SELECT cd.*
             FROM candidate_dates cd
@@ -142,6 +145,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
                 )
             )
           )
+        
         ",
       }
     `);
@@ -186,6 +190,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
               AND s.status = 'active'
               AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
           ),
+          
           eligible_dates AS (
             SELECT cd.*
             FROM candidate_dates cd
@@ -199,6 +204,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
                 )
             )
           )
+        
         ",
       }
     `);
@@ -243,6 +249,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
               AND s.status = 'active'
               AND EXTRACT(ISODOW FROM d)::int = ANY(s.days_of_week)
           ),
+          
           eligible_dates AS (
             SELECT cd.*
             FROM candidate_dates cd
@@ -256,6 +263,7 @@ describe("cte-builder — buildCandidateAndEligibleDatesCte (CONCERN C)", () => 
                 )
             )
           )
+        
         ",
       }
     `);

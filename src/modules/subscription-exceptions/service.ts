@@ -55,7 +55,11 @@ import {
   enqueueUpdateTask,
 } from "@/modules/task-outbound-queue";
 import type { UpdateTaskPayload } from "@/modules/task-outbound-queue";
-import { invokeOnDemandMaterialization } from "@/modules/task-materialization/service";
+import {
+  invokeOnDemandMaterialization,
+  materializeSubscriptionOneOffDate,
+} from "@/modules/task-materialization/service";
+import { enqueueTaskPushBatch } from "@/modules/task-materialization/queue";
 import { logger } from "@/shared/logger";
 import { captureException } from "@/shared/sentry-capture";
 // Day 16 / Block 4-E §B B1 — shared cross-consignee address
@@ -498,6 +502,10 @@ export async function addSubscriptionException(
     let compensatingDate: IsoDate | null = null;
     let newEndDate: IsoDate | null = null;
     let endDateExtended = false;
+    // D56 / Phase-5 — set to the move-to-date target when this is a valid
+    // (beyond-schedule) move-to-date; drives the in-tx one-off materialization
+    // + post-commit push below. null for every other variant.
+    let moveToDateTarget: IsoDate | null = null;
 
     if (input.type === "skip") {
       if (input.skipWithoutAppend === true) {
@@ -505,7 +513,7 @@ export async function addSubscriptionException(
         compensatingDate = null;
         newEndDate = null;
       } else if (input.targetDateOverride !== undefined) {
-        // Operator-picked compensating date.
+        // Move-to-date — operator moves the delivery to a chosen date.
         const target = input.targetDateOverride;
         const targetWeekday = isoWeekdayOf(target);
         if (!subscription.daysOfWeek.includes(targetWeekday)) {
@@ -513,19 +521,32 @@ export async function addSubscriptionException(
             `targetDateOverride ${target} is not an eligible delivery weekday for this subscription`,
           );
         }
-        // Per merged plan §3.2 step 13b: if a task already exists at
-        // the override date, cron's normal flow tags it on next tick.
-        // No exception-create-time task INSERT or collision check
-        // needed — the cron-decoupled materialization handler
-        // (PR #153 §4.4) is the address-resolution authority for
-        // materialized tasks.
-        compensatingDate = target;
-        if (subscription.endDate !== null && target > subscription.endDate) {
-          newEndDate = target;
-          endDateExtended = true;
-        } else {
-          newEndDate = null;
+        // D56 / Phase-5 (Love's ruling) — move-to-date means "move to a date
+        // that ISN'T already delivering". A within-schedule target already has
+        // a scheduled delivery, so "moving" onto it would silently drop the
+        // original with no replacement (a disguised skip-without-append).
+        // Reject it at the service layer (not just the UI). For a bounded
+        // subscription that's target <= end_date; for an open-ended
+        // subscription (end_date IS NULL) EVERY eligible day already delivers,
+        // so any move-to-date is rejected.
+        if (subscription.endDate === null) {
+          throw new ValidationError(
+            `targetDateOverride ${target} already has a scheduled delivery — this subscription is open-ended, so every eligible day already delivers. Use skip-without-append to cancel ${skipDate} instead.`,
+          );
         }
+        if (target <= subscription.endDate) {
+          throw new ValidationError(
+            `targetDateOverride ${target} already has a scheduled delivery on this subscription (on or before the schedule end ${subscription.endDate}). Use skip-without-append to cancel ${skipDate}, or pick a date after ${subscription.endDate} to move it.`,
+          );
+        }
+        // Valid move: target is BEYOND the schedule end. Record the
+        // compensating delivery at the target; do NOT extend end_date (that
+        // would make the nightly cron fan out every intermediate eligible
+        // day). The single moved task is materialized in-tx below.
+        compensatingDate = target;
+        newEndDate = null;
+        endDateExtended = false;
+        moveToDateTarget = target;
       } else {
         // Default skip: walk forward from current end_date via wrapper.
         compensatingDate = await computeCompensatingDateForSkip(
@@ -595,6 +616,30 @@ export async function addSubscriptionException(
           );
         }
       }
+    }
+
+    // 12a. D56 / Phase-5 — move-to-date create-side. Materialize EXACTLY ONE
+    // task at the (beyond-schedule) target date, in this SAME tx, so the
+    // create is atomic with the skip: if it can't be created we roll back the
+    // whole operation rather than cancelling the original on SF with no
+    // replacement. The capped range materializer can't insert beyond
+    // s.end_date, so this uses the no-cap one-off primitive. ON CONFLICT makes
+    // it idempotent. A NULL-address resolution (consignee data gap) is a hard
+    // failure — reject (rollback) so the operator fixes the address and
+    // retries, rather than half-applying.
+    let movedTaskId: Uuid | null = null;
+    if (moveToDateTarget !== null) {
+      const oneOff = await materializeSubscriptionOneOffDate(tx, {
+        subscriptionId,
+        date: moveToDateTarget,
+        requestId: ctx.requestId,
+      });
+      if (oneOff.addressResolutionFailed) {
+        throw new ValidationError(
+          `cannot move the delivery to ${moveToDateTarget}: the consignee has no resolvable delivery address for that date. Fix the consignee's primary address and retry.`,
+        );
+      }
+      movedTaskId = oneOff.insertedTaskId;
     }
 
     // 12b. R4 (plan-PR #335 §2.R4, Love-ruled Day-52) — one-off address
@@ -689,6 +734,7 @@ export async function addSubscriptionException(
       compensatingDate,
       endDateExtended,
       skippedTask,
+      movedTaskId,
       overriddenTask,
       overrideSnapshot,
       forwardOverriddenTasks,
@@ -706,30 +752,29 @@ export async function addSubscriptionException(
     newEndDate,
     endDateExtended,
     skippedTask,
+    movedTaskId,
     overriddenTask,
     overrideSnapshot,
     forwardOverriddenTasks,
   } = txResult;
 
-  // Day-29 §D(2) Phase-1 (plan-PR #302 §7 + §3.6 OQ-3 ruling Option A):
-  // compute the outbound_emission metadata field for the
-  // subscription.exception.created audit row. Phase 1 emits kind values
-  // 'cancel' | 'none' for variants 1+2. Variant 3 (move-to-date) omits
-  // the field entirely — Phase 2 will add 'reschedule' when the
-  // rescheduleTask adapter ships (Aqib-gated). registered metadata in
-  // event-types.ts subscription.exception.created.metadataNotes is
-  // updated in lock-step per §3.6 binding constraint.
-  const isMoveToDate =
-    input.type === "skip" &&
-    input.targetDateOverride !== undefined &&
-    input.skipWithoutAppend !== true;
-
+  // Day-29 §D(2) Phase-1 + D56 / Phase-5 (OQ-5): compute the outbound_emission
+  // metadata field for the subscription.exception.created audit row. ALL
+  // type='skip' variants — default skip, skip-without-append, AND move-to-date
+  // — cancel the ORIGINAL task on SuiteFleet when it carries a live AWB.
+  // Move-to-date no longer defers to a parked Aqib-gated rescheduleTask adapter
+  // (Love's D56 ruling, superseding the Phase-2 reschedule path): the original
+  // is cancelled HERE and a fresh task is materialized + pushed at the target
+  // date (see the move-to-date create-side above), so SF holds exactly one
+  // delivery. kind='cancel' when a pushed original was enqueued, else 'none'.
+  // event-types.ts subscription.exception.created.metadataNotes is updated in
+  // lock-step per the §3.6 binding constraint.
   type OutboundEmissionMeta =
     | { readonly kind: "cancel"; readonly task_id: Uuid }
     | { readonly kind: "none" };
 
   const outboundEmission: OutboundEmissionMeta | undefined =
-    input.type === "skip" && !isMoveToDate
+    input.type === "skip"
       ? skippedTask !== null && skippedTask.externalTrackingNumber !== null
         ? { kind: "cancel", task_id: skippedTask.taskId }
         : { kind: "none" }
@@ -799,12 +844,15 @@ export async function addSubscriptionException(
     });
   }
 
-  // Day-29 §D(2) Phase-1 — outbound SF cancel enqueue for variants 1+2.
-  // Mirrors the optimistic-ack pattern documented at brief §3.1.4 line
-  // 319 and the operator-initiated cancelTask precedent at
-  // src/modules/tasks/service.ts:1326-1362. Variant 3 (move-to-date) is
-  // Aqib-gated on the SF rescheduleTask wire contract and lives in the
-  // Phase 2 code-PR — Phase 1 emits no outbound for variant 3.
+  // Day-29 §D(2) Phase-1 + D56 / Phase-5 (OQ-5) — outbound SF cancel enqueue
+  // for the ORIGINAL task of ANY skip variant (default skip /
+  // skip-without-append / move-to-date). Mirrors the optimistic-ack pattern
+  // (brief §3.1.4 line 319) and the operator-initiated cancelTask precedent
+  // (src/modules/tasks/service.ts). Move-to-date cancels the original HERE
+  // (Love's D56 ruling, superseding the parked Aqib-gated rescheduleTask
+  // adapter); without it the original stayed live on SF while the moved task
+  // was never created — a net-loss double-or-zero delivery bug. The moved task
+  // is materialized in-tx (committed by now) and pushed just below.
   //
   // Local DB is already committed at this point; a publisher throw
   // does NOT roll back. We re-throw so the route layer surfaces the
@@ -814,7 +862,6 @@ export async function addSubscriptionException(
   // subsequent QStash success-path webhook ack flips it.
   if (
     input.type === "skip" &&
-    !isMoveToDate &&
     skippedTask !== null &&
     skippedTask.externalTrackingNumber !== null
   ) {
@@ -841,6 +888,46 @@ export async function addSubscriptionException(
         operation: "enqueue_cancel_task",
         tenant_id: tenantId,
         task_id: skippedTask.taskId,
+        exception_id: exception.id,
+      });
+      throw err;
+    }
+  }
+
+  // D56 / Phase-5 — outbound SF push enqueue for the MOVED task created by
+  // move-to-date. The moved task was materialized in-tx (committed by now) and
+  // is pushed through the standard batch pipeline — NOT special-cased — so SF
+  // receives the new delivery at the target date to pair with the cancel of
+  // the original above. Same post-commit posture as the cancel block: the DB
+  // is committed, a publisher throw does NOT roll back, and we re-throw so the
+  // form action surfaces "saved locally; SF push pending" (the moved task row
+  // is re-discovered by next-tick reconciliation via pushed_to_external_at IS
+  // NULL). movedTaskId is null only on an idempotent ON CONFLICT (the target
+  // already had a task — e.g. a replayed move) — nothing to push.
+  if (movedTaskId !== null) {
+    try {
+      await enqueueTaskPushBatch({
+        tenantId,
+        taskIds: [movedTaskId],
+        requestId: ctx.requestId,
+      });
+    } catch (err) {
+      logger.error(
+        {
+          operation: "move_to_date_enqueue_push_task",
+          tenant_id: tenantId,
+          task_id: movedTaskId,
+          exception_id: exception.id,
+          correlation_id: exception.correlationId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "addSubscriptionException: local DB committed; QStash push enqueue for moved task failed (caller surfaces)",
+      );
+      captureException(err, {
+        component: "subscription_exceptions_service_add_exception",
+        operation: "enqueue_push_moved_task",
+        tenant_id: tenantId,
+        task_id: movedTaskId,
         exception_id: exception.id,
       });
       throw err;
@@ -999,8 +1086,9 @@ export async function addSubscriptionException(
   //   input.type === 'skip' && endDateExtended && compensatingDate !== null
   //
   // skipWithoutAppend skips this path (compensatingDate is null);
-  // move-to-date skips this path when target is inside the existing
-  // end_date window (endDateExtended is false).
+  // move-to-date ALWAYS skips this path (endDateExtended is never true for
+  // it — it materializes its single moved task in-tx above, not via the
+  // tail-end on-demand invocation).
   //
   // Mirrors enqueueCancelTask's try/catch posture: local DB already
   // committed; on-demand failure logged + Sentry + re-thrown so the
