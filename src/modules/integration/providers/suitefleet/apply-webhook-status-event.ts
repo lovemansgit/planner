@@ -80,8 +80,8 @@ import type { Uuid } from "@/shared/types";
 
 import type { InternalTaskStatus, WebhookEvent } from "../../types";
 
-import { mapSuiteFleetStatusToInternal } from "./status-mapper";
-import { shouldAdvanceStatus } from "./status-progression";
+import { mapSuiteFleetActionToCourierStatus, mapSuiteFleetStatusToInternal } from "./status-mapper";
+import { shouldAdvanceCourierStatus, shouldAdvanceStatus } from "./status-progression";
 import { utcTimeToDubaiLocal } from "./tz";
 
 const log = logger.with({ component: "apply_webhook_status_event" });
@@ -374,6 +374,7 @@ export async function applyWebhookStatusEvent(
       const taskRows = (await tx.execute(sqlTag`
         SELECT id,
                internal_status,
+               courier_status,
                delivery_date::text AS delivery_date,
                delivery_start_time::text AS delivery_start_time,
                delivery_end_time::text AS delivery_end_time
@@ -383,6 +384,7 @@ export async function applyWebhookStatusEvent(
       `)) as readonly {
         id: string;
         internal_status: string;
+        courier_status: string | null;
         delivery_date: string | null;
         delivery_start_time: string | null;
         delivery_end_time: string | null;
@@ -407,6 +409,7 @@ export async function applyWebhookStatusEvent(
 
       const taskId = taskRows[0].id as Uuid;
       const previousStatus = taskRows[0].internal_status as InternalTaskStatus;
+      const previousCourierStatus = taskRows[0].courier_status;
 
       // Day-31 A1: compute embedded field deltas by diffing the SELECTed
       // row against the converted top-level payload values. Address is
@@ -502,10 +505,31 @@ export async function applyWebhookStatusEvent(
       // Failed transitions DO move the status. The SKIPPED guard also stays in
       // the SQL (operator-set, belt-and-braces).
       const advance = shouldAdvanceStatus(previousStatus, newStatus);
-      if (advance) {
+
+      // D56 Phase 8 / Lane 2: dual-write the fine courier_status alongside the
+      // coarse internal_status. Each field advances by its OWN guard — the
+      // coarse column may no-op (PICKED_UP and OUT_FOR_DELIVERY are both coarse
+      // IN_TRANSIT) while the fine column advances within the in-transit ramp,
+      // and a lagging webhook can't regress the fine ramp. Both writes ride the
+      // SAME guarded UPDATE (one round-trip, no extra query); the SKIPPED guard
+      // in the WHERE protects BOTH columns (operator-set SKIPPED wins for both).
+      const nextCourierStatus = mapSuiteFleetActionToCourierStatus(sfAction);
+      const advanceCourier =
+        nextCourierStatus !== null &&
+        shouldAdvanceCourierStatus(previousCourierStatus, nextCourierStatus, previousStatus);
+
+      if (advance || advanceCourier) {
+        const statusSets: ReturnType<typeof sqlTag>[] = [];
+        if (advance) statusSets.push(sqlTag`internal_status = ${newStatus}`);
+        if (advanceCourier) statusSets.push(sqlTag`courier_status = ${nextCourierStatus}`);
+        statusSets.push(sqlTag`updated_at = now()`);
+        const statusSetClause = statusSets.reduce(
+          (acc, frag, i) => (i === 0 ? frag : sqlTag`${acc}, ${frag}`),
+          statusSets[0]
+        );
         await tx.execute(sqlTag`
           UPDATE tasks
-          SET internal_status = ${newStatus}, updated_at = now()
+          SET ${statusSetClause}
           WHERE id = ${taskId} AND tenant_id = ${tenantId}
             AND internal_status NOT IN ('SKIPPED')
         `);

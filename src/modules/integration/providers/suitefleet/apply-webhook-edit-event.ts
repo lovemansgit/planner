@@ -31,7 +31,12 @@ import { logger } from "@/shared/logger";
 import type { Uuid } from "@/shared/types";
 
 import type { InternalTaskStatus, WebhookEvent } from "../../types";
-import { mapSuiteFleetStatusValueToInternal, shouldAdvanceStatus } from "./status-progression";
+import {
+  mapSuiteFleetStatusValueToCourierStatus,
+  mapSuiteFleetStatusValueToInternal,
+  shouldAdvanceCourierStatus,
+  shouldAdvanceStatus,
+} from "./status-progression";
 import { utcTimeToDubaiLocal } from "./tz";
 
 const log = logger.with({ component: "apply_webhook_edit_event" });
@@ -221,6 +226,7 @@ export async function applyWebhookEditEvent(
         SELECT
           id,
           internal_status,
+          courier_status,
           delivery_date,
           delivery_start_time,
           delivery_end_time,
@@ -293,10 +299,20 @@ export async function applyWebhookEditEvent(
       const statusAdvanced =
         nextStatus !== null && shouldAdvanceStatus(row.internal_status, nextStatus);
 
-      // no_diff only when NEITHER an edit column moved NOR the status advanced
-      // (X.A + Z.A, extended for the status path). Webhook_events receipt is
-      // already preserved; no UPDATE, no audit.
-      if (columnsToUpdate.length === 0 && !statusAdvanced) {
+      // D56 Phase 8 / Lane 2: dual-write the fine courier_status from the SAME
+      // top-level `status` field. The fine column advances by its own guard, so
+      // the master payload can move the in-transit ramp even when the coarse
+      // column dedups (PICKED_UP and OUT_FOR_DELIVERY are both coarse IN_TRANSIT).
+      const nextCourierStatus =
+        statusValue !== undefined ? mapSuiteFleetStatusValueToCourierStatus(statusValue) : null;
+      const courierAdvanced =
+        nextCourierStatus !== null &&
+        shouldAdvanceCourierStatus(row.courier_status, nextCourierStatus, row.internal_status);
+
+      // no_diff only when NEITHER an edit column moved NOR EITHER status field
+      // advanced (X.A + Z.A, extended for the coarse + fine status paths).
+      // Webhook_events receipt is already preserved; no UPDATE, no audit.
+      if (columnsToUpdate.length === 0 && !statusAdvanced && !courierAdvanced) {
         return {
           outcome: { applied: false, reason: "no_diff" } as const,
           meta: null,
@@ -306,10 +322,20 @@ export async function applyWebhookEditEvent(
       if (columnsToUpdate.length > 0) {
         await applyConditionalUpdate(tx, tenantId, taskId, columnsToUpdate);
       }
-      if (statusAdvanced) {
+      if (statusAdvanced || courierAdvanced) {
+        // Coarse + fine ride the SAME guarded UPDATE (one round-trip); the
+        // SKIPPED guard in the WHERE protects BOTH columns.
+        const statusSets: ReturnType<typeof sqlTag>[] = [];
+        if (statusAdvanced) statusSets.push(sqlTag`internal_status = ${nextStatus}`);
+        if (courierAdvanced) statusSets.push(sqlTag`courier_status = ${nextCourierStatus}`);
+        statusSets.push(sqlTag`updated_at = now()`);
+        const statusSetClause = statusSets.reduce(
+          (acc, frag, i) => (i === 0 ? frag : sqlTag`${acc}, ${frag}`),
+          statusSets[0]
+        );
         await tx.execute(sqlTag`
           UPDATE tasks
-          SET internal_status = ${nextStatus}, updated_at = now()
+          SET ${statusSetClause}
           WHERE id = ${taskId} AND tenant_id = ${tenantId}
             AND internal_status NOT IN ('SKIPPED')
         `);
@@ -360,6 +386,7 @@ export async function applyWebhookEditEvent(
 interface TaskRow {
   readonly id: string;
   readonly internal_status: string;
+  readonly courier_status: string | null;
   readonly delivery_date: string | null;
   readonly delivery_start_time: string | null;
   readonly delivery_end_time: string | null;
