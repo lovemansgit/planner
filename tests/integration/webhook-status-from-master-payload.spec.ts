@@ -102,6 +102,15 @@ async function readStatus(taskId: Uuid): Promise<string> {
   return (row as { internal_status: string }).internal_status;
 }
 
+// D56 Phase 8 / Lane 2 — the master `status` field now ALSO dual-writes the
+// fine courier_status column (see apply-webhook-edit-event.ts).
+async function readCourierStatus(taskId: Uuid): Promise<string | null> {
+  const [row] = await withServiceRole("wsmp read courier_status", async (tx) =>
+    tx.execute(sqlTag`SELECT courier_status FROM tasks WHERE id = ${taskId} LIMIT 1`)
+  );
+  return (row as { courier_status: string | null }).courier_status;
+}
+
 describe("Day-67 P1 — status from master payload + monotonic guard (real Postgres)", () => {
   beforeAll(async () => {
     await withServiceRole("wsmp setup", async (tx) => {
@@ -199,15 +208,22 @@ describe("Day-67 P1 — status from master payload + monotonic guard (real Postg
     expect(await readStatus(TASK_SKIPPED)).toBe("SKIPPED");
   });
 
-  it("no_diff (master) — status=ORDERED (==CREATED) on a CREATED task with no field edits", async () => {
+  // D56 Phase 8 / Lane 2: this used to be a pure no_diff (status=ORDERED maps
+  // to coarse CREATED, which the task already is). With the fine dual-write the
+  // master reflection now BACKFILLS courier_status NULL -> ORDERED — a real row
+  // change — so the outcome is applied:true. The coarse internal_status still
+  // dedups (stays CREATED); no status_changed audit fires (coarse didn't move).
+  it("coarse dedups but the fine column backfills — status=ORDERED on a CREATED/NULL task writes courier_status=ORDERED", async () => {
+    expect(await readCourierStatus(TASK_NODIFF)).toBeNull();
+
     const event = buildMasterEvent(AWB_NODIFF, "2026-06-19T12:10:00.000Z", {
       status: "ORDERED",
     });
     const result = await applyWebhookEditEvent(TENANT, event, "TASK_HAS_BEEN_UPDATED");
 
-    expect(result.applied).toBe(false);
-    if (!result.applied) expect(result.reason).toBe("no_diff");
-    expect(await readStatus(TASK_NODIFF)).toBe("CREATED");
+    expect(result.applied).toBe(true); // fine column changed (NULL -> ORDERED)
+    expect(await readStatus(TASK_NODIFF)).toBe("CREATED"); // coarse unchanged (dedup)
+    expect(await readCourierStatus(TASK_NODIFF)).toBe("ORDERED"); // fine backfilled
   });
 
   it("terminal guard (dedicated) — TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY does NOT move a DELIVERED task (webhook still consumed)", async () => {

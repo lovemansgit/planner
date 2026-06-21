@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { mapSuiteFleetStatusToInternal } from "../status-mapper";
+import { mapSuiteFleetActionToCourierStatus, mapSuiteFleetStatusToInternal } from "../status-mapper";
 
 describe("mapSuiteFleetStatusToInternal — every lifecycle-real action", () => {
   beforeEach(() => {
@@ -170,5 +170,89 @@ describe("mapSuiteFleetStatusToInternal — interface contract", () => {
 
   it("arbitrary unknown action returns null", () => {
     expect(mapSuiteFleetStatusToInternal("not_in_any_known_set")).toBeNull();
+  });
+});
+
+// =============================================================================
+// D56 Phase 8 / Lane 2 — fine courier-status action mapper.
+//
+// Sibling of the coarse mapper above: same 14-action vocabulary, but each
+// action maps 1:1 to a DISTINCT fine `courier_status` (no collapsing). The
+// coarse map is unchanged; this fine map is what the applier dual-writes to
+// tasks.courier_status for distinct rendering.
+//
+// Load-bearing spellings:
+//   - the action suffix is ARRIVED_ON_DC but the fine state is ARRIVED_AT_DC
+//     (Love's "Arrived in DC"; DC = Distribution Centre).
+//   - TASK_HAS_BEEN_UPDATED is a non-lifecycle edit → null (renders nothing).
+// =============================================================================
+
+describe("mapSuiteFleetActionToCourierStatus — every action maps 1:1 to a distinct fine state", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["TASK_HAS_BEEN_ORDERED", "ORDERED"],
+    ["TASK_HAS_BEEN_ASSIGNED", "ASSIGNED"],
+    ["TASK_STATUS_UPDATED_TO_PICKED_UP", "PICKED_UP"],
+    // GOTCHA: action suffix is ARRIVED_ON_DC; the fine state is ARRIVED_AT_DC.
+    ["TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC", "ARRIVED_AT_DC"],
+    ["TASK_STATUS_UPDATED_TO_IN_TRANSIT", "IN_TRANSIT"],
+    ["TASK_STATUS_UPDATED_TO_HUB_TRANSFER", "HUB_TRANSFER"],
+    ["TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY", "OUT_FOR_DELIVERY"],
+    ["TASK_STATUS_UPDATED_TO_DELIVERED", "DELIVERED"],
+    ["TASK_STATUS_UPDATED_TO_FAILED", "FAILED"],
+    ["TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN", "PROCESS_FOR_RETURN"],
+    ["TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER", "RETURNED_TO_SHIPPER"],
+    ["TASK_STATUS_UPDATED_TO_CANCELED", "CANCELED"],
+    ["TASK_STATUS_UPDATED_TO_RESCHEDULED", "RESCHEDULED"],
+    ["TASK_STATUS_UPDATED_TO_REATTEMPT", "REATTEMPT"],
+  ])("maps action %s -> fine %s", (action, expected) => {
+    expect(mapSuiteFleetActionToCourierStatus(action)).toBe(expected);
+  });
+
+  it("maps the 14 lifecycle actions onto 14 DISTINCT fine states (no collapse)", () => {
+    const actions = [
+      "TASK_HAS_BEEN_ORDERED",
+      "TASK_HAS_BEEN_ASSIGNED",
+      "TASK_STATUS_UPDATED_TO_PICKED_UP",
+      "TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC",
+      "TASK_STATUS_UPDATED_TO_IN_TRANSIT",
+      "TASK_STATUS_UPDATED_TO_HUB_TRANSFER",
+      "TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY",
+      "TASK_STATUS_UPDATED_TO_DELIVERED",
+      "TASK_STATUS_UPDATED_TO_FAILED",
+      "TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN",
+      "TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER",
+      "TASK_STATUS_UPDATED_TO_CANCELED",
+      "TASK_STATUS_UPDATED_TO_RESCHEDULED",
+      "TASK_STATUS_UPDATED_TO_REATTEMPT",
+    ];
+    const fine = actions.map((a) => mapSuiteFleetActionToCourierStatus(a));
+    expect(fine.every((f) => f !== null)).toBe(true);
+    expect(new Set(fine).size).toBe(14); // all distinct — the headline anti-collapse property
+  });
+
+  it("returns null for the non-lifecycle TASK_HAS_BEEN_UPDATED edit action", () => {
+    expect(mapSuiteFleetActionToCourierStatus("TASK_HAS_BEEN_UPDATED")).toBeNull();
+  });
+
+  it("returns null for an unknown action", () => {
+    expect(mapSuiteFleetActionToCourierStatus("BRAND_NEW_SUITEFLEET_EVENT")).toBeNull();
+  });
+
+  it("does NOT warn on unknown/non-lifecycle actions (coarse mapper is the single drift sentinel)", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    mapSuiteFleetActionToCourierStatus("TASK_HAS_BEEN_UPDATED");
+    mapSuiteFleetActionToCourierStatus("BRAND_NEW_SUITEFLEET_EVENT");
+
+    const allErr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(allErr).not.toContain("unknown_action_default");
+    expect(allErr).not.toContain("BRAND_NEW_SUITEFLEET_EVENT");
   });
 });

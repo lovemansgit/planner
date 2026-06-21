@@ -18,7 +18,7 @@
 
 import { logger } from "../../../../shared/logger";
 
-import type { InternalTaskStatus } from "../../types";
+import type { CourierStatus, InternalTaskStatus } from "../../types";
 
 const log = logger.with({ component: "suitefleet_status_progression" });
 
@@ -114,6 +114,121 @@ export function shouldAdvanceStatus(current: string, next: InternalTaskStatus): 
   const currentLinear = LINEAR_RANK[current as InternalTaskStatus];
   const nextLinear = LINEAR_RANK[next];
   if (currentLinear !== undefined && nextLinear !== undefined && nextLinear < currentLinear) {
+    return false;
+  }
+
+  return true;
+}
+
+// ===========================================================================
+// D56 Phase 8 / Lane 2 — fine courier-status VALUE map + fine transition guard.
+// ===========================================================================
+//
+// Sibling of STATUS_VALUE_TO_INTERNAL: same SF `status` FIELD vocabulary, but
+// each value maps 1:1 to a DISTINCT fine courier_status instead of collapsing
+// into the coarse 7. The ARRIVED_IN_DC value (gotcha: value spelling, not the
+// action's ARRIVED_ON_DC) folds to the single fine state ARRIVED_AT_DC.
+const STATUS_VALUE_TO_COURIER: Readonly<Record<string, CourierStatus>> = {
+  ORDERED: "ORDERED",
+  ASSIGNED: "ASSIGNED",
+  PICKED_UP: "PICKED_UP",
+  ARRIVED_IN_DC: "ARRIVED_AT_DC", // GOTCHA: value IN_DC -> fine AT_DC
+  IN_TRANSIT: "IN_TRANSIT",
+  HUB_TRANSFER: "HUB_TRANSFER",
+  OUT_FOR_DELIVERY: "OUT_FOR_DELIVERY",
+  DELIVERED: "DELIVERED",
+  FAILED: "FAILED",
+  PROCESS_FOR_RETURN: "PROCESS_FOR_RETURN",
+  RETURNED_TO_SHIPPER: "RETURNED_TO_SHIPPER",
+  CANCELED: "CANCELED",
+  RESCHEDULED: "RESCHEDULED",
+  REATTEMPT: "REATTEMPT",
+};
+
+/**
+ * Map a SuiteFleet top-level `status` field VALUE to its DISTINCT fine
+ * courier_status, or null for unknown/empty.
+ *
+ * Deliberately SILENT on the null path: the coarse mapSuiteFleetStatusValueToInternal
+ * is the single vocabulary-drift sentinel (it warns on unknown values), and
+ * the edit-event applier calls it on the same value — so warning here too
+ * would only double-log. The fine map is a render carrier, not a second alert.
+ */
+export function mapSuiteFleetStatusValueToCourierStatus(value: string): CourierStatus | null {
+  return STATUS_VALUE_TO_COURIER[value] ?? null;
+}
+
+// Hard-terminal fine states — mirror of HARD_TERMINAL for the coarse guard.
+// Once the fine column is DELIVERED or CANCELED a lagging webhook never moves
+// it. FAILED / returns / holds are deliberately NOT terminal (a re-attempt
+// legitimately moves them on), exactly as in the coarse rules.
+const HARD_TERMINAL_COURIER: ReadonlySet<string> = new Set(["DELIVERED", "CANCELED"]);
+
+// The fine FORWARD-LINEAR spine. It mirrors the coarse LINEAR_RANK
+// (CREATED<ASSIGNED<IN_TRANSIT) with the single IN_TRANSIT rung expanded into
+// the five-rung in-transit ramp, so a stale early webhook may not drag a
+// moving parcel back DOWN the spine — including the new intra-IN_TRANSIT
+// regressions the coarse guard can't see (e.g. OUT_FOR_DELIVERY -> PICKED_UP).
+// Off-spine branch states (DELIVERED, FAILED, PROCESS_FOR_RETURN,
+// RETURNED_TO_SHIPPER, RESCHEDULED, REATTEMPT, CANCELED) are intentionally
+// absent: they are real transitions operators must see, never blocked as
+// "backward".
+const COURIER_LINEAR_RANK: Readonly<Partial<Record<CourierStatus, number>>> = {
+  ORDERED: 0,
+  ASSIGNED: 1,
+  PICKED_UP: 2,
+  ARRIVED_AT_DC: 3,
+  IN_TRANSIT: 4,
+  HUB_TRANSFER: 5,
+  OUT_FOR_DELIVERY: 6,
+};
+
+/**
+ * Decide whether an inbound webhook's fine `next` courier_status should
+ * overwrite the task's `current` fine column. The fine sibling of
+ * shouldAdvanceStatus — each column advances by its OWN guard, so the coarse
+ * column may no-op (PICKED_UP and OUT_FOR_DELIVERY are both coarse IN_TRANSIT)
+ * while the fine column advances within the in-transit ramp.
+ *
+ * The fine column is a REFINEMENT of the coarse lifecycle and may never
+ * advance past a coarse lock, so the coarse status (`currentCoarse`) is the
+ * authority on terminal / operator-SKIPPED freezes. This matters for the
+ * not-yet-backfilled case where courier_status is NULL but internal_status is
+ * already DELIVERED / CANCELED / SKIPPED (a manual cancel, an operator skip, or
+ * a pre-backfill row) — without the coarse check a NULL fine column would
+ * happily backfill a non-terminal fine state onto a terminal task.
+ *
+ * BLOCK, in order:
+ *   1. Coarse SKIPPED — operator-set, Planner-local; never refined by a webhook.
+ *   2. Coarse DELIVERED / CANCELED terminal-lock — they don't un-happen, so the
+ *      fine column does not move off (or onto) a coarse end-state.
+ *   3. NULL current fine — no prior fine state to regress from, so once the
+ *      coarse status is live the first fine value backfills (returns true).
+ *   4. Fine DELIVERED / CANCELED terminal-lock — belt-and-braces for the case a
+ *      fine terminal was set independently of the coarse column.
+ *   5. Same fine state — no-op (master + dedicated event for one transition).
+ *   6. A stale early webhook may not drag the forward-linear ramp backward.
+ * Everything else — failures, returns, holds, reattempt — is allowed.
+ *
+ * `current` is typed string | null because it is read from the nullable DB
+ * column (NULL before the first fine webhook / on Planner-only rows);
+ * `currentCoarse` is the row's internal_status (may hold the SKIPPED sentinel).
+ */
+export function shouldAdvanceCourierStatus(
+  current: string | null,
+  next: CourierStatus,
+  currentCoarse: string
+): boolean {
+  if (currentCoarse === "SKIPPED") return false; // (1) operator-set freeze
+  if (HARD_TERMINAL.has(currentCoarse)) return false; // (2) coarse terminal-lock
+  if (current === null) return true; // (3) first fine state backfills
+  if (HARD_TERMINAL_COURIER.has(current)) return false; // (4) fine terminal-lock
+  if (next === current) return false; // (5) dedup
+
+  // (6) backward only WITHIN the forward-linear ramp.
+  const currentRank = COURIER_LINEAR_RANK[current as CourierStatus];
+  const nextRank = COURIER_LINEAR_RANK[next];
+  if (currentRank !== undefined && nextRank !== undefined && nextRank < currentRank) {
     return false;
   }
 

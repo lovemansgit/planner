@@ -52,7 +52,7 @@
 
 import { logger } from "../../../../shared/logger";
 
-import type { InternalTaskStatus } from "../../types";
+import type { CourierStatus, InternalTaskStatus } from "../../types";
 
 const log = logger.with({ component: "suitefleet_status_mapper" });
 
@@ -109,4 +109,49 @@ export function mapSuiteFleetStatusToInternal(action: string): InternalTaskStatu
   });
 
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// D56 Phase 8 / Lane 2 — fine courier-status action map (render carrier).
+// ---------------------------------------------------------------------------
+//
+// The SAME 14 lifecycle actions as ACTION_TO_INTERNAL_STATUS, but each maps
+// 1:1 to a DISTINCT fine `courier_status` instead of collapsing into the 7
+// coarse buckets. The 5 actions the coarse map folds into IN_TRANSIT, the 3
+// it folds into FAILED, and the 2 it folds into ON_HOLD stay individually
+// addressable here so the render layer can show every SF status distinctly
+// (A2 "render distinctly, no collapsing" mandate).
+//
+// Spelling note: the action suffix is ARRIVED_ON_DC but the fine state is
+// ARRIVED_AT_DC (Love's display label "Arrived in DC"; DC = Distribution
+// Centre). The internal coarse map is intentionally NOT touched.
+const ACTION_TO_COURIER_STATUS: Readonly<Record<string, CourierStatus>> = {
+  TASK_HAS_BEEN_ORDERED: "ORDERED",
+  TASK_HAS_BEEN_ASSIGNED: "ASSIGNED",
+  TASK_STATUS_UPDATED_TO_PICKED_UP: "PICKED_UP",
+  TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC: "ARRIVED_AT_DC", // suffix ON_DC -> AT_DC
+  TASK_STATUS_UPDATED_TO_IN_TRANSIT: "IN_TRANSIT",
+  TASK_STATUS_UPDATED_TO_HUB_TRANSFER: "HUB_TRANSFER",
+  TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY: "OUT_FOR_DELIVERY",
+  TASK_STATUS_UPDATED_TO_DELIVERED: "DELIVERED",
+  TASK_STATUS_UPDATED_TO_FAILED: "FAILED",
+  TASK_STATUS_UPDATED_TO_PROCESS_FOR_RETURN: "PROCESS_FOR_RETURN",
+  TASK_STATUS_UPDATED_TO_RETURNED_TO_SHIPPER: "RETURNED_TO_SHIPPER",
+  TASK_STATUS_UPDATED_TO_CANCELED: "CANCELED",
+  TASK_STATUS_UPDATED_TO_RESCHEDULED: "RESCHEDULED",
+  TASK_STATUS_UPDATED_TO_REATTEMPT: "REATTEMPT",
+};
+
+/**
+ * Map a SuiteFleet action to its DISTINCT fine `courier_status`, or `null` for
+ * the non-lifecycle edit action (TASK_HAS_BEEN_UPDATED) and unknown actions.
+ *
+ * Deliberately SILENT on the null path: the coarse `mapSuiteFleetStatusToInternal`
+ * is the single vocabulary-drift sentinel (it warns on unknowns), and the
+ * status-event applier calls coarse first — so warning here too would only
+ * double-log the same drift. The fine map is a render carrier, not a second
+ * alerting surface.
+ */
+export function mapSuiteFleetActionToCourierStatus(action: string): CourierStatus | null {
+  return ACTION_TO_COURIER_STATUS[action] ?? null;
 }
