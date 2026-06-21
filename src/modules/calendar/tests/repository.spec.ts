@@ -502,6 +502,7 @@ describe("listTasksForDayAcrossConsignees", () => {
           district: "Dubai Marina",
           crm_state: "HIGH_RISK",
           internal_status: "FAILED",
+          courier_status: "RETURNED_TO_SHIPPER",
           delivery_start_time: "08:00:00",
           delivery_end_time: "10:00:00",
           external_tracking_number: "AWB-001",
@@ -518,11 +519,37 @@ describe("listTasksForDayAcrossConsignees", () => {
       district: "Dubai Marina",
       crmState: "HIGH_RISK",
       status: "FAILED",
+      // D56 Lane 5 — the fine courier_status threads through for distinct render.
+      courierStatus: "RETURNED_TO_SHIPPER",
       deliveryWindowStart: "08:00:00",
       deliveryWindowEnd: "10:00:00",
       externalTrackingNumber: "AWB-001",
       subscriptionId: "s1",
     });
+  });
+
+  it("selects t.courier_status and maps a NULL / unknown value to null", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          task_id: "t2",
+          consignee_id: "c2",
+          consignee_name: "Omar Najjar",
+          district: "JLT",
+          crm_state: "ACTIVE",
+          internal_status: "IN_TRANSIT",
+          courier_status: null,
+          delivery_start_time: "09:00:00",
+          delivery_end_time: "11:00:00",
+          external_tracking_number: null,
+          subscription_id: null,
+        },
+      ],
+    ]);
+    const rows = await listTasksForDayAcrossConsignees(tx, TENANT_ID, DATE, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/t\.courier_status/i);
+    expect(rows[0].courierStatus).toBeNull();
   });
 
   it("applies filter predicates (crm, status) into the WHERE bound params", async () => {

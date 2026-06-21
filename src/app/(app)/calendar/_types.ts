@@ -10,6 +10,8 @@
 // Brief §3.3.4 five metric cards (one snapshot from `getCalendarMetrics`)
 // + per-day aggregate counts (one row from `countTasksByDayAcrossConsignees`).
 
+import type { CourierStatus } from "@/modules/integration";
+
 /**
  * Five metric-card snapshot returned by `getCalendarMetrics`. Tenant
  * variant — composed of consignee + task counts for the active tenant.
@@ -106,7 +108,15 @@ export interface CalendarDayTaskRow {
   readonly consigneeName: string;
   readonly district: string | null;
   readonly crmState: string;
+  /** Coarse internal status (`tasks.internal_status`) — the NULL-courier fallback. */
   readonly status: string;
+  /**
+   * D56 Phase 8 / Lane 5 — fine SuiteFleet courier status (`tasks.courier_status`),
+   * the render companion to the coarse `status`. NULL = no SF detail yet /
+   * Planner-only / pre-backfill; ConsolidatedDayView falls back to the coarse
+   * `status` map via `resolveCourierDisplay`.
+   */
+  readonly courierStatus: CourierStatus | null;
   readonly deliveryWindowStart: string;
   readonly deliveryWindowEnd: string;
   readonly externalTrackingNumber: string | null;

@@ -38,9 +38,13 @@ import {
 } from "./actions";
 import { moveLinkFor } from "./move-link";
 import { isAwaitingPush, TASK_AWAITING_PUSH_BANNER } from "./partial-state";
+import { StatusIcon } from "@/app/(app)/tasks/_components/StatusIcon";
+import { resolveCourierDisplay } from "@/app/(app)/tasks/status";
 import type { AuditEventCursor } from "@/modules/audit";
+import type { CourierStatus } from "@/modules/integration";
 import type { TaskHistoryEntry } from "@/modules/tasks";
 import { TASK_HISTORY_METADATA_ALLOW_LIST } from "@/modules/tasks/history-metadata";
+import type { TaskInternalStatus } from "@/modules/tasks/types";
 
 interface TaskTimelineDrawerProps {
   readonly consigneeId: string;
@@ -80,7 +84,9 @@ const ACTION_LABELS: Readonly<Record<string, string>> = {
   TASK_HAS_BEEN_UPDATED: "Updated",
   TASK_HAS_BEEN_ASSIGNED: "Assigned to driver",
   TASK_STATUS_UPDATED_TO_PICKED_UP: "Picked up",
-  TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC: "Arrived at DC",
+  // D56 Lane 5 — aligned to Love's canonical label ("Arrived in DC") so the
+  // event-timeline row matches the COURIER_STATUS_DISPLAY pill for the same state.
+  TASK_STATUS_UPDATED_TO_ARRIVED_ON_DC: "Arrived in DC",
   TASK_STATUS_UPDATED_TO_OUT_FOR_DELIVERY: "Out for delivery",
   TASK_STATUS_UPDATED_TO_IN_TRANSIT: "In transit",
   TASK_STATUS_UPDATED_TO_DELIVERED: "Delivered",
@@ -159,6 +165,16 @@ export function TaskTimelineDrawer({
             <h2 className="mt-1 font-display text-lg font-semibold text-navy">
               Delivery on {deliveryDate}
             </h2>
+            {/* D56 Lane 5 — the task row's CURRENT fine courier state, rendered
+                distinctly via the shared map once the timeline loads. Reads the
+                task row (currentCourierStatus / currentInternalStatus); the
+                History move-link below reads audit events — the two compose. */}
+            {state.kind === "loaded" && state.result.kind === "success" ? (
+              <CurrentStatusPill
+                courierStatus={state.result.timeline.currentCourierStatus}
+                internalStatus={state.result.timeline.currentInternalStatus}
+              />
+            ) : null}
           </div>
           <button
             type="button"
@@ -206,6 +222,30 @@ export function TaskTimelineDrawer({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * D56 Phase 8 / Lane 5 — the task's CURRENT fine courier state, shown beneath
+ * the drawer header. Uses the shared `resolveCourierDisplay` + `StatusIcon` so
+ * the label / family colour / glyph match every other surface; NULL courier
+ * status falls back to the coarse internal status.
+ */
+function CurrentStatusPill({
+  courierStatus,
+  internalStatus,
+}: {
+  readonly courierStatus: CourierStatus | null;
+  readonly internalStatus: TaskInternalStatus;
+}) {
+  const display = resolveCourierDisplay(courierStatus, internalStatus);
+  return (
+    <span
+      className={`mt-2 inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
+    >
+      <StatusIcon courierStatus={courierStatus} status={internalStatus} />
+      {display.label}
+    </span>
   );
 }
 

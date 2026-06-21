@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { COURIER_STATUS_VALUES } from "@/modules/integration/types";
+import type { TaskInternalStatus } from "@/modules/tasks/types";
 
 import {
   ALLOWED_PAGE_SIZES,
@@ -10,32 +11,11 @@ import {
   COURIER_STATUS_FILTER_OPTIONS,
   PAGE_SIZE,
   PAGE_SIZE_DEFAULT,
-  TASK_STATUS_FILTERS,
   parseCourierStatusParam,
   parsePageParam,
   parsePerPageParam,
-  parseStatusParam,
   resolveCourierDisplay,
 } from "../status";
-
-describe("parseStatusParam", () => {
-  it("returns the status verbatim when valid", () => {
-    expect(parseStatusParam("DELIVERED")).toBe("DELIVERED");
-    expect(parseStatusParam("IN_TRANSIT")).toBe("IN_TRANSIT");
-    expect(parseStatusParam("CREATED")).toBe("CREATED");
-  });
-
-  it("returns undefined for unknown statuses", () => {
-    expect(parseStatusParam("DELIVERED_LATE")).toBeUndefined();
-    expect(parseStatusParam("delivered")).toBeUndefined(); // case-sensitive
-    expect(parseStatusParam("")).toBeUndefined();
-  });
-
-  it("returns undefined for missing or array params", () => {
-    expect(parseStatusParam(undefined)).toBeUndefined();
-    expect(parseStatusParam(["DELIVERED"])).toBeUndefined();
-  });
-});
 
 describe("parsePageParam", () => {
   it("parses positive integers", () => {
@@ -53,20 +33,6 @@ describe("parsePageParam", () => {
 
   it("returns 1 for array params (rejects ?page=1&page=2)", () => {
     expect(parsePageParam(["2"])).toBe(1);
-  });
-});
-
-describe("TASK_STATUS_FILTERS catalogue", () => {
-  it("covers every TaskInternalStatus value", () => {
-    const expected = ["CREATED", "ASSIGNED", "IN_TRANSIT", "DELIVERED", "FAILED", "CANCELED", "ON_HOLD"];
-    expect(TASK_STATUS_FILTERS.map((f) => f.value)).toEqual(expected);
-  });
-
-  it("each entry has a label and pillClass", () => {
-    for (const f of TASK_STATUS_FILTERS) {
-      expect(f.label.length).toBeGreaterThan(0);
-      expect(f.pillClass.length).toBeGreaterThan(0);
-    }
   });
 });
 
@@ -318,8 +284,20 @@ describe("resolveCourierDisplay", () => {
     expect(resolveCourierDisplay(null, "SKIPPED").iconKey).toBeNull();
   });
 
-  it("coarse fallback matches the legacy TASK_STATUS_FILTERS render (no regression)", () => {
-    for (const f of TASK_STATUS_FILTERS) {
+  it("coarse fallback preserves the legacy per-status render (no regression)", () => {
+    // The legacy coarse pill catalogue (retired TASK_STATUS_FILTERS) pinned
+    // verbatim so the NULL-courier fallback can't silently drift. SKIPPED is
+    // not in this list (it was never a filter pill) — it is covered above.
+    const legacy: ReadonlyArray<{ value: TaskInternalStatus; label: string; pillClass: string }> = [
+      { value: "CREATED", label: "Created", pillClass: "bg-[color:var(--color-text-tertiary)]/20 text-[color:var(--color-text-secondary)]" },
+      { value: "ASSIGNED", label: "Assigned", pillClass: "bg-amber/15 text-amber" },
+      { value: "IN_TRANSIT", label: "In transit", pillClass: "bg-amber/20 text-amber" },
+      { value: "DELIVERED", label: "Delivered", pillClass: "bg-green/15 text-green" },
+      { value: "FAILED", label: "Failed", pillClass: "bg-red/15 text-red" },
+      { value: "CANCELED", label: "Cancelled", pillClass: "bg-[color:var(--color-text-tertiary)]/20 text-[color:var(--color-text-tertiary)]" },
+      { value: "ON_HOLD", label: "On hold", pillClass: "bg-[color:var(--color-text-secondary)]/20 text-[color:var(--color-text-secondary)]" },
+    ];
+    for (const f of legacy) {
       const resolved = resolveCourierDisplay(null, f.value);
       expect(resolved.label).toBe(f.label);
       expect(resolved.pillClass).toBe(f.pillClass);

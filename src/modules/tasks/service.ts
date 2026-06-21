@@ -1606,6 +1606,16 @@ export interface TaskTimeline {
   readonly taskId: Uuid;
   /** Entries in chronological (oldest-first) order. */
   readonly entries: readonly TaskTimelineEntry[];
+  /**
+   * D56 Phase 8 / Lane 5 — the task row's CURRENT status, so the drawer can
+   * render the present fine state distinctly (brief v1.31 §3.1.10) via
+   * `resolveCourierDisplay`. `currentCourierStatus` is the fine SF state (NULL
+   * for Planner-only / pre-backfill rows); `currentInternalStatus` is the coarse
+   * fallback. Read off the same task this method already fetches — no extra
+   * round-trip. The entries above remain the per-event lifecycle history.
+   */
+  readonly currentInternalStatus: TaskInternalStatus;
+  readonly currentCourierStatus: CourierStatus | null;
 }
 
 type WebhookEventRow = {
@@ -1653,7 +1663,12 @@ export async function getTaskTimeline(
       }
     }
 
-    return { taskId, entries };
+    return {
+      taskId,
+      entries,
+      currentInternalStatus: task.internalStatus,
+      currentCourierStatus: task.courierStatus ?? null,
+    };
   });
 }
 

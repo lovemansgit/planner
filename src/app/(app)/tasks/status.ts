@@ -1,19 +1,25 @@
 // Day 11 / P5 — task list view: status filter + display contract.
 //
 // The internal task state machine has 8 values (TaskInternalStatus from
-// supabase/migrations/0006_task.sql + 0019). `TASK_STATUS_FILTERS` is the
-// COARSE display catalogue, still consumed by /admin/tasks (Lane 5) and as
-// the NULL-fallback render for rows that have no fine courier_status.
+// supabase/migrations/0006_task.sql + 0019). It remains the coarse spine all
+// business logic reads.
 //
-// D56 Phase 8 / Lane 3 (brief v1.31 §3.1.10 + §3.3.11) — the operator
-// surfaces now render the FINE SuiteFleet courier state distinctly: 14
-// values carried by the nullable `tasks.courier_status` column. The fine
+// D56 Phase 8 / Lane 3 + Lane 5 (brief v1.31 §3.1.10 + §3.3.11) — every
+// operator surface now renders the FINE SuiteFleet courier state distinctly:
+// 14 values carried by the nullable `tasks.courier_status` column. The fine
 // model lives below as `COURIER_STATUS_DISPLAY` (label + family-colour pill
-// + icon key), `resolveCourierDisplay` (fine, falling back to coarse when
-// NULL), the `COURIER_STATUS_FILTER_OPTIONS` dropdown set, and
-// `parseCourierStatusParam`. Render reads fine; business logic keeps reading
-// coarse `internal_status` (unchanged). NO new hex — every pill colour is a
-// §3.3.11 brand token (tailwind.config.ts / brand-tokens.css).
+// + icon key), `resolveCourierDisplay` (fine, falling back to the coarse
+// `COARSE_STATUS_DISPLAY` map when NULL), the `COURIER_STATUS_FILTER_OPTIONS`
+// dropdown set, and `parseCourierStatusParam`. Render reads fine; business
+// logic keeps reading coarse `internal_status` (unchanged). NO new hex —
+// every pill colour is a §3.3.11 brand token (tailwind.config.ts /
+// brand-tokens.css).
+//
+// Lane 5 (this surface migration) retired the legacy coarse filter
+// (`TASK_STATUS_FILTERS` / `parseStatusParam`): /admin/tasks was the last
+// consumer and now rides the fine `?status=` dropdown + `parseCourierStatusParam`
+// like /tasks. The coarse map survives ONLY as the NULL-courier render
+// fallback (`COARSE_STATUS_DISPLAY`, below).
 //
 // Filter status is URL state (?status=…) so the operator can share /
 // bookmark a specific filtered view; selection state for label
@@ -21,36 +27,6 @@
 
 import type { CourierStatus } from "@/modules/integration";
 import type { TaskInternalStatus } from "@/modules/tasks";
-
-export interface StatusFilterEntry {
-  readonly value: TaskInternalStatus;
-  readonly label: string;
-  /** Tailwind class fragment for the pill background + text. */
-  readonly pillClass: string;
-}
-
-export const TASK_STATUS_FILTERS: readonly StatusFilterEntry[] = [
-  { value: "CREATED", label: "Created", pillClass: "bg-[color:var(--color-text-tertiary)]/20 text-[color:var(--color-text-secondary)]" },
-  { value: "ASSIGNED", label: "Assigned", pillClass: "bg-amber/15 text-amber" },
-  { value: "IN_TRANSIT", label: "In transit", pillClass: "bg-amber/20 text-amber" },
-  { value: "DELIVERED", label: "Delivered", pillClass: "bg-green/15 text-green" },
-  { value: "FAILED", label: "Failed", pillClass: "bg-red/15 text-red" },
-  { value: "CANCELED", label: "Cancelled", pillClass: "bg-[color:var(--color-text-tertiary)]/20 text-[color:var(--color-text-tertiary)]" },
-  { value: "ON_HOLD", label: "On hold", pillClass: "bg-[color:var(--color-text-secondary)]/20 text-[color:var(--color-text-secondary)]" },
-] as const;
-
-const VALID_STATUSES: ReadonlySet<string> = new Set(TASK_STATUS_FILTERS.map((s) => s.value));
-
-/**
- * Parse the `?status=` query param. Returns the validated status or
- * undefined for "no filter" (including invalid input — silently drops
- * unknown statuses, matches the no-filter view).
- */
-export function parseStatusParam(raw: string | string[] | undefined): TaskInternalStatus | undefined {
-  if (typeof raw !== "string") return undefined;
-  if (!VALID_STATUSES.has(raw)) return undefined;
-  return raw as TaskInternalStatus;
-}
 
 // =============================================================================
 // D56 Phase 8 / Lane 3 — fine courier_status render contract
@@ -132,10 +108,10 @@ export const COURIER_STATUS_DISPLAY: Record<CourierStatus, CourierStatusDisplay>
 /**
  * Coarse NULL-fallback render. A row with `courier_status = NULL` (Planner-only
  * state — SKIPPED, manual cancel — or a pre-backfill row) renders EXACTLY as it
- * did before this lane: this map mirrors `TASK_STATUS_FILTERS` (label + pill)
- * plus the legacy `StatusIcon` glyph per coarse status. SKIPPED is added here
- * for exhaustiveness (it previously fell through to a label-only pill).
- * `resolveCourierDisplay` reaches for this only when the fine field is absent.
+ * did before the fine model landed: the legacy coarse label + pill + `StatusIcon`
+ * glyph per internal status. SKIPPED is added here for exhaustiveness (it
+ * previously fell through to a label-only pill). `resolveCourierDisplay` reaches
+ * for this only when the fine field is absent.
  */
 const COARSE_STATUS_DISPLAY: Record<TaskInternalStatus, CourierStatusDisplay> = {
   CREATED: {
@@ -198,16 +174,11 @@ const VALID_COURIER_STATUSES: ReadonlySet<string> = new Set(
 
 /**
  * Parse the `?status=` query param as a FINE courier_status (D56 Lane 3 — Love
- * ruling: ?status= now carries the fine 14-state vocabulary; single filter,
- * single param). Unknown values — including the retired coarse statuses
- * (CREATED, ON_HOLD, SKIPPED) carried by stale bookmarks — silently degrade to
- * "no filter" (the All view) rather than 4xx-ing the operator, mirroring the
- * coarse `parseStatusParam` posture.
- *
- * Kept separate from `parseStatusParam` (which stays coarse) because
- * /admin/tasks still consumes the coarse parser + `listAllTasks` until Lane 5
- * migrates it; repointing the shared parser in-place would break that
- * not-yet-migrated surface.
+ * ruling: ?status= carries the fine 14-state vocabulary; single filter, single
+ * param). Both /tasks AND /admin/tasks (migrated in Lane 5) parse through here.
+ * Unknown values — including the retired coarse statuses (CREATED, ON_HOLD,
+ * SKIPPED) carried by stale bookmarks — silently degrade to "no filter" (the
+ * All view) rather than 4xx-ing the operator.
  */
 export function parseCourierStatusParam(
   raw: string | string[] | undefined,

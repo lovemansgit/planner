@@ -9,7 +9,6 @@ import {
   formatDeliveryTime,
   formatDeliveryWindow,
   getDayHeaderLabel,
-  getStatusVisuals,
 } from "../ConsolidatedDayView";
 
 describe("formatDeliveryTime", () => {
@@ -30,29 +29,11 @@ describe("formatDeliveryWindow", () => {
   });
 });
 
-describe("getStatusVisuals", () => {
-  it("returns the brand red palette for FAILED", () => {
-    const visual = getStatusVisuals("FAILED");
-    expect(visual.label).toBe("Failed");
-    expect(visual.classes).toContain("bg-red/15");
-    expect(visual.classes).toContain("text-red");
-  });
-  it("returns the brand green palette for DELIVERED", () => {
-    const visual = getStatusVisuals("DELIVERED");
-    expect(visual.label).toBe("Delivered");
-    expect(visual.classes).toContain("bg-green/15");
-    expect(visual.classes).toContain("text-green");
-  });
-  it("uses sentence-case labels (not title or caps)", () => {
-    expect(getStatusVisuals("IN_TRANSIT").label).toBe("In transit");
-    expect(getStatusVisuals("ON_HOLD").label).toBe("On hold");
-  });
-  it("returns a safe fallback visual for unknown status values", () => {
-    const visual = getStatusVisuals("UNKNOWN_NEW_STATUS");
-    expect(visual.label).toBe("Unknown");
-    expect(visual.classes).toContain("bg-stone-200");
-  });
-});
+// D56 Lane 5 — the inlined STATUS_VISUALS / getStatusVisuals map was retired
+// in favour of the shared `resolveCourierDisplay` (tasks/status.ts), which is
+// exhaustively covered by src/app/(app)/tasks/tests/status.spec.ts (fine + coarse
+// fallback + null-glyph). The day-view render now reads that single source of
+// truth, so there is no surface-local status map left to unit-test here.
 
 describe("getDayHeaderLabel", () => {
   it("formats Friday 2026-05-15 as 'Friday, 15 May 2026'", () => {

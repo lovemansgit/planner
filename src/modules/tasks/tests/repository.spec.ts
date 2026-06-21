@@ -478,7 +478,9 @@ describe("listAllTasksRows", () => {
     expect(captured.sql).toMatch(/JOIN tenants ten/i);
     expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
     expect(captured.sql).not.toMatch(/ILIKE/i);
+    // D56 Lane 5 — the admin filter migrated to the FINE courier_status.
     expect(captured.sql).not.toMatch(/internal_status\s*=/i);
+    expect(captured.sql).not.toMatch(/courier_status\s*=/i);
     expect(captured.sql).not.toMatch(/ten\.slug\s*=/i);
   });
 
@@ -511,14 +513,18 @@ describe("listAllTasksRows", () => {
       const tx = makeStubTx([[]]);
       await listAllTasksRows(tx, {
         searchTerm: "Sarah",
-        status: "DELIVERED",
+        status: "OUT_FOR_DELIVERY",
         merchantSlug: "mpl",
       });
       const captured = compile(tx.execute.mock.calls[0][0]);
-      expect(captured.sql).toMatch(/t\.internal_status\s*=/i);
+      // D56 Lane 5 — admin status filter is now the FINE courier_status (the
+      // headline A2 case: OUT_FOR_DELIVERY is indistinguishable from IN_TRANSIT
+      // under the coarse internal_status).
+      expect(captured.sql).toMatch(/t\.courier_status\s*=/i);
+      expect(captured.sql).not.toMatch(/t\.internal_status\s*=/i);
       expect(captured.sql).toMatch(/ten\.slug\s*=/i);
       expect(captured.sql).toMatch(/ILIKE/i);
-      expect(captured.params).toContain("DELIVERED");
+      expect(captured.params).toContain("OUT_FOR_DELIVERY");
       expect(captured.params).toContain("mpl");
       expect(captured.params).toContain("%Sarah%");
     });
@@ -623,7 +629,7 @@ describe("listAllTasksRows — date range filter (Day-24 PM)", () => {
     const captured = compile(tx.execute.mock.calls[0][0]);
     expect(captured.sql).toMatch(/t\.delivery_date\s*>=\s*\$\d+::date/i);
     expect(captured.sql).toMatch(/t\.delivery_date\s*<=\s*\$\d+::date/i);
-    expect(captured.sql).toMatch(/t\.internal_status\s*=\s*\$\d+/i);
+    expect(captured.sql).toMatch(/t\.courier_status\s*=\s*\$\d+/i);
     expect(captured.sql).toMatch(/ten\.slug\s*=\s*\$\d+/i);
     expect(captured.sql).toMatch(/ILIKE/i);
     expect(captured.params).toContain("2026-05-01");
