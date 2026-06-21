@@ -60,13 +60,15 @@ function normaliseDateRange(from: string, to: string): { from: string; to: strin
 
 import { PageSizeDropdown } from "./page-size-dropdown";
 import { TasksClient } from "./client";
+import { CourierStatusFilter } from "./_components/CourierStatusFilter";
+import type { CourierStatus } from "@/modules/integration";
 import {
   ALLOWED_PAGE_SIZES,
+  COURIER_STATUS_DISPLAY,
   PAGE_SIZE_DEFAULT,
-  TASK_STATUS_FILTERS,
+  parseCourierStatusParam,
   parsePageParam,
   parsePerPageParam,
-  parseStatusParam,
 } from "./status";
 
 export const dynamic = "force-dynamic";
@@ -87,7 +89,7 @@ interface TasksPageProps {
 export default async function TasksPage({ searchParams }: TasksPageProps) {
   const requestId = randomUUID();
   const params = await searchParams;
-  const status = parseStatusParam(params.status);
+  const status = parseCourierStatusParam(params.status);
   const page = parsePageParam(params.page);
   const perPage = parsePerPageParam(params.perPage);
   const offset = (page - 1) * perPage;
@@ -164,7 +166,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
             label="Search tasks by AWB, consignee name or order number"
             placeholder="Search by AWB, consignee name or order #"
           />
-          <StatusFilterBar activeStatus={status} />
+          <CourierStatusFilter />
           <DateRangeFilter
             today={today}
             initialFrom={parsedFrom}
@@ -211,58 +213,21 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
   );
 }
 
-function StatusFilterBar({
-  activeStatus,
-}: {
-  readonly activeStatus: string | undefined;
-}) {
-  return (
-    <nav aria-label="Status filter" className="mb-8 flex flex-wrap items-center gap-2">
-      <FilterPill href="/tasks" active={activeStatus === undefined} label="All" />
-      {TASK_STATUS_FILTERS.map((s) => (
-        <FilterPill
-          key={s.value}
-          href={`/tasks?status=${s.value}`}
-          active={activeStatus === s.value}
-          label={s.label}
-        />
-      ))}
-    </nav>
-  );
-}
-
-function buildCountLabel(status: string | undefined, query: string): string {
+// D56 Lane 3 — the hero count band reacts to the fine courier_status filter.
+// Uses the shared display label (e.g. "Out for delivery") rather than
+// lower-casing the raw SCREAMING_SNAKE value.
+function buildCountLabel(status: CourierStatus | undefined, query: string): string {
+  const statusLabel = status ? COURIER_STATUS_DISPLAY[status].label.toLowerCase() : "";
   if (query.length > 0 && status) {
-    return `${status.toLowerCase().replace("_", " ")} matching "${query}"`;
+    return `${statusLabel} matching "${query}"`;
   }
   if (query.length > 0) {
     return `Matching "${query}"`;
   }
   if (status) {
-    return `Showing ${status.toLowerCase().replace("_", " ")} only`;
+    return `Showing ${statusLabel} only`;
   }
   return "Total tasks";
-}
-
-function FilterPill({
-  href,
-  active,
-  label,
-}: {
-  readonly href: string;
-  readonly active: boolean;
-  readonly label: string;
-}) {
-  const base =
-    "inline-flex items-center px-4 py-2 text-xs uppercase tracking-[0.15em] transition-opacity";
-  const variant = active
-    ? "border-2 border-green text-navy"
-    : "border border-[color:var(--color-border-default)] text-[color:var(--color-text-secondary)] hover:border-[color:var(--color-border-strong)] hover:text-navy";
-  return (
-    <Link href={href} className={`${base} ${variant}`} aria-current={active ? "true" : undefined}>
-      {label}
-    </Link>
-  );
 }
 
 function Pagination({

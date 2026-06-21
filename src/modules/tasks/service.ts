@@ -88,7 +88,7 @@ import type { IsoTimestamp, Uuid } from "../../shared/types";
 
 import { requirePermission } from "../identity";
 
-import type { ConsigneeSnapshot, LastMileAdapter } from "../integration";
+import type { ConsigneeSnapshot, CourierStatus, LastMileAdapter } from "../integration";
 
 // R4 ConsigneeSnapshot option B (Day-52 ruling) — server-side snapshot
 // construction for the addressId → consignee wire-mapping in
@@ -944,7 +944,8 @@ export async function getConsigneeTaskCountByDayBucket(
 export async function countTasks(
   ctx: RequestContext,
   opts: {
-    readonly status?: TaskInternalStatus;
+    // D56 Lane 3 — fine courier_status filter (mirrors ListTasksOpts.status).
+    readonly status?: CourierStatus;
     readonly searchTerm?: string;
     readonly dateFrom?: string;
     readonly dateTo?: string;
@@ -1001,7 +1002,7 @@ export async function countAllTasks(
  */
 export async function listAllTaskIds(
   ctx: RequestContext,
-  opts: { readonly status?: TaskInternalStatus } = {},
+  opts: { readonly status?: CourierStatus } = {},
 ): Promise<readonly Uuid[]> {
   requirePermission(ctx, "task:read");
   assertTenantScoped(ctx, "task:read");

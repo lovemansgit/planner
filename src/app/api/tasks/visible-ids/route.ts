@@ -23,39 +23,26 @@ import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-import { listAllTaskIds, type TaskInternalStatus } from "@/modules/tasks";
+import { listAllTaskIds } from "@/modules/tasks";
 import { buildRequestContext } from "@/shared/request-context";
+
+import { parseCourierStatusParam } from "@/app/(app)/tasks/status";
 
 import { errorResponse } from "../../_lib/error-response";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// Local validation set — keep the API route self-contained; the same
-// vocabulary is the wire-level TaskInternalStatus union. Unknown
-// values silently degrade to "no filter" rather than 4xx so that a
-// stale bookmark with a renamed status doesn't break operator flow
-// (matches the page-level parseStatusParam posture).
-const VALID_STATUSES: ReadonlySet<string> = new Set([
-  "CREATED",
-  "ASSIGNED",
-  "IN_TRANSIT",
-  "DELIVERED",
-  "FAILED",
-  "CANCELED",
-  "ON_HOLD",
-] as const);
-
-function parseStatus(raw: string | null): TaskInternalStatus | undefined {
-  if (raw === null || !VALID_STATUSES.has(raw)) return undefined;
-  return raw as TaskInternalStatus;
-}
+// D56 Lane 3 — the across-pages select uses the SAME fine courier_status
+// filter as the /tasks page (single param, single filter). Reuse the shared
+// parser so the route and page never drift; unknown / stale-coarse values
+// silently degrade to "no filter" (the All view) rather than 4xx.
 
 export async function GET(req: Request): Promise<NextResponse> {
   const requestId = randomUUID();
   try {
     const url = new URL(req.url);
-    const status = parseStatus(url.searchParams.get("status"));
+    const status = parseCourierStatusParam(url.searchParams.get("status") ?? undefined);
     const ctx = await buildRequestContext("/api/tasks/visible-ids", requestId);
     const ids = await listAllTaskIds(ctx, { status });
     return NextResponse.json({ taskIds: ids, total: ids.length });

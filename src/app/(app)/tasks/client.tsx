@@ -53,7 +53,7 @@ import { PodIcon } from "./_components/PodIcon";
 import { PodLightboxModal } from "./_components/PodLightboxModal";
 import { StatusIcon } from "./_components/StatusIcon";
 import { podCellState } from "./_components/pod-state";
-import { TASK_STATUS_FILTERS } from "./status";
+import { resolveCourierDisplay } from "./status";
 
 interface TasksClientProps {
   readonly initialTasks: readonly TaskListRow[];
@@ -344,7 +344,9 @@ function Row({
   readonly onOpenPod: (photos: readonly string[]) => void;
   readonly onOpenTimeline: () => void;
 }) {
-  const filter = TASK_STATUS_FILTERS.find((f) => f.value === task.internalStatus);
+  // D56 Lane 3 — render the FINE courier_status (label + family colour +
+  // glyph), falling back to the coarse internal_status when it is NULL.
+  const display = resolveCourierDisplay(task.courierStatus, task.internalStatus);
   const podTone = podCellState(task.podPhotos);
   const cgn = consigneeCellModel(task);
   return (
@@ -397,9 +399,9 @@ function Row({
         </button>
       </Td>
       <Td>
-        <Badge className={filter?.pillClass ?? ""}>
-          <StatusIcon status={task.internalStatus} />
-          {filter?.label ?? task.internalStatus}
+        <Badge className={display.pillClass}>
+          <StatusIcon courierStatus={task.courierStatus} status={task.internalStatus} />
+          {display.label}
         </Badge>
         {/* R6: failed-push state folded onto the Status column (was its
             own "Issues" column). */}
