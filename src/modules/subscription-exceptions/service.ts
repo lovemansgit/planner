@@ -844,6 +844,51 @@ export async function addSubscriptionException(
     });
   }
 
+  // D56 / Phase-5 — move-to-date timeline link (both directions). Two typed
+  // per-task audit events let each task's timeline drawer (brief §3.3.6)
+  // render the move from the audit path:
+  //   - task.moved_in  on the NEW task      → "Moved from [old date] / replaces AWB [old AWB]"
+  //   - task.moved_out on the ORIGINAL task → "Moved to [new date] / see AWB [new AWB]"
+  // The relationship is persisted as audit events (no tasks-table column, no
+  // migration). The original's AWB is known here (it was pushed); the NEW
+  // task's AWB is NOT (SuiteFleet assigns it after the async push), so
+  // moved_out stores the new task id + date and getTaskHistory resolves the
+  // new AWB at read time. Shared correlation_id with subscription.exception
+  // .created. AWBs are operator references, not PII. Gated on movedTaskId —
+  // a move with no created task (idempotent ON CONFLICT) has no link to draw.
+  if (movedTaskId !== null) {
+    await emit({
+      ...baseEmit,
+      eventType: "task.moved_in",
+      resourceType: "task",
+      resourceId: movedTaskId,
+      metadata: {
+        task_id: movedTaskId,
+        moved_from_task_id: skippedTask?.taskId ?? null,
+        moved_from_awb: skippedTask?.externalTrackingNumber ?? null,
+        moved_from_delivery_date: skipDate,
+        correlation_id: exception.correlationId,
+      },
+    });
+
+    // The original task only exists (and only carries a drawer) when the
+    // skip date was materialized — emit moved_out on it then.
+    if (skippedTask !== null) {
+      await emit({
+        ...baseEmit,
+        eventType: "task.moved_out",
+        resourceType: "task",
+        resourceId: skippedTask.taskId,
+        metadata: {
+          task_id: skippedTask.taskId,
+          moved_to_task_id: movedTaskId,
+          moved_to_delivery_date: input.targetDateOverride ?? null,
+          correlation_id: exception.correlationId,
+        },
+      });
+    }
+  }
+
   // Day-29 §D(2) Phase-1 + D56 / Phase-5 (OQ-5) — outbound SF cancel enqueue
   // for the ORIGINAL task of ANY skip variant (default skip /
   // skip-without-append / move-to-date). Mirrors the optimistic-ack pattern

@@ -1933,6 +1933,87 @@ describe("getTaskHistory — Day-52 / R8", () => {
     });
   });
 
+  it("task.moved_out: resolves moved_to_awb from the new task's current AWB at read time (D56 — new AWB not known at move time)", async () => {
+    const NEW_TASK_ID = "99999999-9999-9999-9999-999999999999";
+    const NEW_AWB = "MLU-21789999";
+    // 1st findById = the drawer's (original/cancelled) task; 2nd = the new task
+    // looked up to resolve its current AWB.
+    mockFindById.mockResolvedValueOnce(taskFixture({ subscriptionId: null }));
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ id: NEW_TASK_ID as never, externalTrackingNumber: NEW_AWB }),
+    );
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "task.moved_out",
+        metadata: {
+          task_id: TASK_ID,
+          moved_to_task_id: NEW_TASK_ID,
+          moved_to_delivery_date: "2099-07-06",
+          correlation_id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        },
+      }),
+    ]);
+
+    const result = await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+
+    const metadata = result.entries[0].metadata;
+    expect(metadata.moved_to_awb).toBe(NEW_AWB);
+    expect(metadata.moved_to_delivery_date).toBe("2099-07-06");
+    // internal references never leave the server
+    expect(metadata).not.toHaveProperty("moved_to_task_id");
+    expect(metadata).not.toHaveProperty("correlation_id");
+  });
+
+  it("task.moved_out: leaves moved_to_awb absent when the new task has no AWB yet (push pending)", async () => {
+    const NEW_TASK_ID = "99999999-9999-9999-9999-999999999999";
+    mockFindById.mockResolvedValueOnce(taskFixture({ subscriptionId: null }));
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ id: NEW_TASK_ID as never, externalTrackingNumber: null }),
+    );
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "task.moved_out",
+        metadata: {
+          task_id: TASK_ID,
+          moved_to_task_id: NEW_TASK_ID,
+          moved_to_delivery_date: "2099-07-06",
+        },
+      }),
+    ]);
+
+    const result = await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+
+    const metadata = result.entries[0].metadata;
+    expect(metadata).not.toHaveProperty("moved_to_awb");
+    expect(metadata.moved_to_delivery_date).toBe("2099-07-06");
+  });
+
+  it("task.moved_in: surfaces moved_from_awb + date without an extra task lookup (old AWB known at move time)", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture({ subscriptionId: null }));
+    mockListAuditForResource.mockResolvedValueOnce([
+      auditEvent({
+        eventType: "task.moved_in",
+        metadata: {
+          task_id: TASK_ID,
+          moved_from_task_id: "88888888-8888-8888-8888-888888888888",
+          moved_from_awb: "MLU-21789001",
+          moved_from_delivery_date: "2026-05-13",
+          correlation_id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        },
+      }),
+    ]);
+
+    const result = await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+
+    const metadata = result.entries[0].metadata;
+    expect(metadata.moved_from_awb).toBe("MLU-21789001");
+    expect(metadata.moved_from_delivery_date).toBe("2026-05-13");
+    expect(metadata).not.toHaveProperty("moved_from_task_id");
+    expect(metadata).not.toHaveProperty("correlation_id");
+    // move_in carries its AWB inline — no second findTaskById lookup needed.
+    expect(mockFindById).toHaveBeenCalledTimes(1);
+  });
+
   it("getPodPhotoSourceUrl — gate, bounds, and raw stored URL (Day-53 POD proxy)", async () => {
     // The proxy route resolves the RAW stored pre-signed URL server-side;
     // the browser only ever sees the same-origin proxy path.

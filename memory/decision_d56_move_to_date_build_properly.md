@@ -36,8 +36,26 @@ PR: **fresh superseding PR** off `main` (branch `fix/d56-move-to-date-create-sid
 
 ---
 
+## Timeline move-link (same v1.30 lane, extends PR #537)
+
+Operators see the old↔new relationship both directions in the task timeline drawer (brief §3.3.6).
+
+**Persistence shape (architectural decision): audit events, NO schema change.** Two new typed per-task events carry the link:
+- `task.moved_in` — on the NEW task (resourceId = new task id). Metadata: `moved_from_task_id` (internal, stripped), `moved_from_awb` (the original's AWB — **known in-tx**, null if the original was unpushed), `moved_from_delivery_date`, `correlation_id` (stripped). Renders **"Moved from [old date] / replaces AWB [old AWB]"**.
+- `task.moved_out` — on the ORIGINAL/cancelled task (resourceId = original task id). Metadata: `moved_to_task_id` (internal, stripped), `moved_to_delivery_date`, `correlation_id` (stripped). Renders **"Moved to [new date] / see AWB [new AWB]"**.
+
+Both emitted post-commit alongside `subscription.exception.created` (shared `correlation_id`), gated on a created moved task. No tasks-table column, **no migration** — `audit_events.event_type` is plain text and `emit()` validates against the TS catalogue, so new typed events are code-only. The drawer renders via the existing `getTaskHistory` resourceId path; render logic is a pure helper (`src/components/task-timeline/move-link.ts`, unit-tested — no React harness in repo).
+
+**Corrects the prompt's "both AWBs known in-tx":** only the OLD AWB is known at move time. The new task's AWB is assigned by SuiteFleet after the asynchronous push, so it is NOT stored on `task.moved_out`; `getTaskHistory` resolves it at read time from the new task row (`moved_to_task_id` → `external_tracking_number`) and injects the allow-listed `moved_to_awb`. Before SF assigns it, the cancelled-task sub-line shows "AWB pending — not yet sent to SuiteFleet".
+
+**Cancelled-task render caveat (point 4) — resolved, no scope expansion:** the drawer's History section renders unconditionally (not gated on task status), so the SKIPPED/cancelled original shows its `task.moved_out` entry at the same weight as the active task.
+
+Allow-list (`history-metadata.ts`) gains `moved_from_awb` / `moved_from_delivery_date` / `moved_to_awb` / `moved_to_delivery_date`; counterpart task_ids + correlation_id stay stripped (internal). Drawer gate unchanged (`task:view_timeline`); no new permission.
+
+RED-first: move-link helper (5), service emits both directions incl. unpushed-original null AWB (3), getTaskHistory read-time AWB resolution + allow-list survival (3, +2 characterizing pending/inline).
+
 ## Brief
 
-§3.1.6 `target_date_override` bullet amended (move-to-date = cancel original on SF + materialize one-off at target; within-schedule rejected; not a reschedule, not a tail-end fan-out). §9 bump **v1.29 → v1.30**.
+§3.1.6 `target_date_override` bullet amended (move-to-date = cancel original on SF + materialize one-off at target; within-schedule rejected; not a reschedule, not a tail-end fan-out; + timeline move-link both directions). §9 **v1.30** (bumped from v1.29 for the create-side; timeline move-link added additively to the same v1.30 row — no new version).
 
 See [[handoff_d56_move_to_date_rework]] (the executable design this implements).

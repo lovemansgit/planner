@@ -480,6 +480,26 @@ const EVENT_TYPES_DRAFT = {
     metadataNotes: "task_id, completed_via — ui | api | webhook.",
     systemOnly: false,
   },
+  "task.moved_in": {
+    id: "task.moved_in",
+    resource: "task",
+    action: "moved_in",
+    description:
+      "D56 / Phase-5. The NEW task created by a move-to-date override — the chosen-date replacement for a cancelled original. Emitted on the new task (resourceId = new task id) so its timeline drawer can render 'Moved from [old delivery_date] / replaces AWB [old AWB]'. Paired with task.moved_out (on the original) and subscription.exception.created by a shared correlation_id. AWBs are operator references, not PII.",
+    metadataNotes:
+      "task_id (new task uuid), moved_from_task_id (original task uuid — internal, stripped from the drawer payload), moved_from_awb (string|null — the original's external tracking number; null when the original was unpushed), moved_from_delivery_date (YYYY-MM-DD — the original delivery date), correlation_id (uuid — shared; stripped from the drawer payload).",
+    systemOnly: false,
+  },
+  "task.moved_out": {
+    id: "task.moved_out",
+    resource: "task",
+    action: "moved_out",
+    description:
+      "D56 / Phase-5. The ORIGINAL (cancelled) task of a move-to-date override. Emitted on the original task (resourceId = original task id) so its timeline drawer can render 'Moved to [new delivery_date] / see AWB [new AWB]'. The new task's AWB is NOT known at move time (SuiteFleet assigns it after the asynchronous push) — getTaskHistory resolves it at read time from the new task row (moved_to_awb); before then the drawer shows an AWB-pending sub-line. Paired with task.moved_in (on the new task) and subscription.exception.created by a shared correlation_id.",
+    metadataNotes:
+      "task_id (original task uuid), moved_to_task_id (new task uuid — internal, stripped from the drawer payload; getTaskHistory uses it to resolve the new AWB), moved_to_delivery_date (YYYY-MM-DD — the chosen target date), correlation_id (uuid — shared; stripped). moved_to_awb (string) is NOT stored on the event — it is injected by getTaskHistory at read time from the new task's current external_tracking_number.",
+    systemOnly: false,
+  },
   "task.bulk_created": {
     id: "task.bulk_created",
     resource: "task",

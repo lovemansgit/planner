@@ -2009,20 +2009,46 @@ export async function getTaskHistory(
       }
     }
 
-    const entries: TaskHistoryEntry[] = page.map((event) => ({
-      id: event.id,
-      occurredAt: event.occurredAt,
-      eventType: event.eventType,
-      actorKind: event.actorKind,
-      actorId: event.actorId,
-      actorLabel: actorLabelFor(event, userNames),
-      // Day-53 PM hardening (followup_r8_server_side_metadata_strip.md,
-      // Love-ruled UAT-blocking): the R8 allow-list is applied HERE so
-      // hidden fields (last_error, correlation/idempotency plumbing,
-      // internal UUIDs) never leave the server. The drawer re-filters on
-      // the same shared set as belt-and-braces.
-      metadata: filterTaskHistoryMetadata(event.metadata),
-    }));
+    // D56 / Phase-5 — move-to-date timeline link. The task.moved_out event (on
+    // the cancelled original) cannot store the new task's AWB: SuiteFleet
+    // assigns it only after the asynchronous push, well after the move is
+    // recorded. Resolve it HERE, at read time, from the new task's current
+    // row (moved_to_task_id → external_tracking_number). When the new task
+    // hasn't been pushed yet the AWB is absent and the drawer shows an
+    // AWB-pending sub-line. The internal moved_to_task_id is stripped by the
+    // allow-list below; only the resolved moved_to_awb survives.
+    const resolvedMovedToAwb = new Map<string, string>();
+    for (const event of page) {
+      if (event.eventType !== "task.moved_out") continue;
+      const newTaskId = event.metadata["moved_to_task_id"];
+      if (typeof newTaskId !== "string") continue;
+      const newTask = await findTaskById(tx, newTaskId as Uuid);
+      if (newTask?.externalTrackingNumber) {
+        resolvedMovedToAwb.set(event.id, newTask.externalTrackingNumber);
+      }
+    }
+
+    const entries: TaskHistoryEntry[] = page.map((event) => {
+      const movedToAwb = resolvedMovedToAwb.get(event.id);
+      const rawMetadata =
+        movedToAwb !== undefined
+          ? { ...event.metadata, moved_to_awb: movedToAwb }
+          : event.metadata;
+      return {
+        id: event.id,
+        occurredAt: event.occurredAt,
+        eventType: event.eventType,
+        actorKind: event.actorKind,
+        actorId: event.actorId,
+        actorLabel: actorLabelFor(event, userNames),
+        // Day-53 PM hardening (followup_r8_server_side_metadata_strip.md,
+        // Love-ruled UAT-blocking): the R8 allow-list is applied HERE so
+        // hidden fields (last_error, correlation/idempotency plumbing,
+        // internal UUIDs) never leave the server. The drawer re-filters on
+        // the same shared set as belt-and-braces.
+        metadata: filterTaskHistoryMetadata(rawMetadata),
+      };
+    });
 
     const last = entries[entries.length - 1];
     return {

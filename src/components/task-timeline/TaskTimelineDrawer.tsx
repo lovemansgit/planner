@@ -36,6 +36,7 @@ import {
   getTaskTimelineAction,
   type GetTaskTimelineActionResult,
 } from "./actions";
+import { moveLinkFor } from "./move-link";
 import { isAwaitingPush, TASK_AWAITING_PUSH_BANNER } from "./partial-state";
 import type { AuditEventCursor } from "@/modules/audit";
 import type { TaskHistoryEntry } from "@/modules/tasks";
@@ -286,6 +287,10 @@ const HISTORY_EVENT_LABELS: Readonly<Record<string, string>> = {
   "subscription.pause_cancels_pushed": "Pause cancellations sent to SuiteFleet",
   "subscription.end_date.extended": "Subscription extended",
   "subscription.address_override.applied": "Address override applied",
+  // D56 move-to-date — fallback labels; the move-link headline (moveLinkFor)
+  // takes precedence when the counterpart date metadata is present.
+  "task.moved_in": "Delivery moved here",
+  "task.moved_out": "Delivery moved",
 };
 
 const EXCEPTION_TYPE_LABELS: Readonly<Record<string, string>> = {
@@ -428,6 +433,9 @@ function HistorySection({
                 const metadataPairs = Object.entries(entry.metadata).filter(
                   ([key]) => METADATA_ALLOW_LIST.has(key),
                 );
+                // D56 move-to-date link: friendly date headline + AWB sub-line,
+                // rendered both directions (Moved from… / Moved to…).
+                const moveLink = moveLinkFor(entry);
                 return (
                   <li key={entry.id} className="border-l border-stone-200 pl-4">
                     <button
@@ -437,8 +445,13 @@ function HistorySection({
                       className="w-full text-left"
                     >
                       <p className="font-display text-sm text-navy">
-                        {historyEventLabel(entry)}
+                        {moveLink ? moveLink.headline : historyEventLabel(entry)}
                       </p>
+                      {moveLink?.subline ? (
+                        <p className="mt-0.5 text-xs text-[color:var(--color-text-secondary)]">
+                          {moveLink.subline}
+                        </p>
+                      ) : null}
                       <p className="mt-0.5 text-xs tabular-nums text-[color:var(--color-text-secondary)]">
                         {formatTimestamp(entry.occurredAt)}
                       </p>

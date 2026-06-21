@@ -1229,6 +1229,89 @@ describe("addSubscriptionException — move-to-date create-side (D56)", () => {
     expect(mockMaterializeOneOff).toHaveBeenCalledTimes(1);
   });
 
+  it("emits task.moved_in on the new task carrying the original AWB + original date (timeline link)", async () => {
+    setupMoveToDate({ skippedAwb: PUSHED_AWB });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    const movedIn = mockEmit.mock.calls
+      .map((c) => c[0] as { eventType: string; resourceType: string; resourceId: string; metadata: Record<string, unknown> })
+      .find((e) => e.eventType === "task.moved_in");
+    expect(movedIn).toBeDefined();
+    expect(movedIn?.resourceType).toBe("task");
+    expect(movedIn?.resourceId).toBe(MOVED_TASK_ID);
+    expect(movedIn?.metadata).toEqual(
+      expect.objectContaining({
+        task_id: MOVED_TASK_ID,
+        moved_from_task_id: ORIGINAL_TASK_ID,
+        moved_from_awb: PUSHED_AWB,
+        moved_from_delivery_date: FUTURE_SKIP_DATE,
+      }),
+    );
+  });
+
+  it("emits task.moved_out on the original task pointing to the new task + target date (timeline link)", async () => {
+    setupMoveToDate({ skippedAwb: PUSHED_AWB });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    const movedOut = mockEmit.mock.calls
+      .map((c) => c[0] as { eventType: string; resourceType: string; resourceId: string; metadata: Record<string, unknown> })
+      .find((e) => e.eventType === "task.moved_out");
+    expect(movedOut).toBeDefined();
+    expect(movedOut?.resourceType).toBe("task");
+    expect(movedOut?.resourceId).toBe(ORIGINAL_TASK_ID);
+    expect(movedOut?.metadata).toEqual(
+      expect.objectContaining({
+        task_id: ORIGINAL_TASK_ID,
+        moved_to_task_id: MOVED_TASK_ID,
+        moved_to_delivery_date: BEYOND_END_TARGET,
+      }),
+    );
+    // The new AWB is NOT known at move time — never stored on the event.
+    expect(movedOut?.metadata).not.toHaveProperty("moved_to_awb");
+  });
+
+  it("unpushed original: task.moved_in carries moved_from_awb=null (no AWB to reference)", async () => {
+    setupMoveToDate({ skippedAwb: null });
+    mockMaterializeOneOff.mockResolvedValueOnce({
+      insertedTaskId: MOVED_TASK_ID,
+      addressResolutionFailed: false,
+    });
+
+    await addSubscriptionException(
+      ctxWith(["subscription:override_skip_rules"]),
+      SUBSCRIPTION_ID,
+      { type: "skip", date: FUTURE_SKIP_DATE, idempotencyKey: IDEMPOTENCY_KEY, targetDateOverride: BEYOND_END_TARGET },
+      { now: NOW },
+    );
+
+    const movedIn = mockEmit.mock.calls
+      .map((c) => c[0] as { eventType: string; metadata: Record<string, unknown> })
+      .find((e) => e.eventType === "task.moved_in");
+    expect(movedIn?.metadata).toEqual(
+      expect.objectContaining({ moved_from_awb: null, moved_from_delivery_date: FUTURE_SKIP_DATE }),
+    );
+  });
+
   it("unpushed original (no AWB): no SF cancel, but the moved task is still created and pushed", async () => {
     setupMoveToDate({ skippedAwb: null });
     mockMaterializeOneOff.mockResolvedValueOnce({
