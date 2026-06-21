@@ -96,12 +96,15 @@ import {
 } from "../failed-pushes";
 import {
   type LastMileAdapter,
-  type DeliveryAddress,
   type TaskCreateRequest,
 } from "../integration";
 import { SuiteFleetAwbExistsError } from "../integration";
 import { markTaskPushed } from "../tasks/repository";
-import type { Task } from "../tasks/types";
+import {
+  buildTaskCreateRequest,
+  type ConsigneePushSnapshot,
+  type CronTaskCreateRequest,
+} from "./build-create-request";
 
 import { withServiceRole } from "../../shared/db";
 import { CredentialError, ForbiddenError, ValidationError } from "../../shared/errors";
@@ -130,16 +133,6 @@ interface TenantPushConfig {
   readonly suitefleetCustomerCode: string | null;
 }
 
-interface ConsigneePushSnapshot {
-  readonly id: Uuid;
-  readonly name: string;
-  readonly phone: string;
-  readonly email: string | null;
-  readonly addressLine: string;
-  readonly emirateOrRegion: string;
-  readonly district: string;
-}
-
 type TenantConfigRow = {
   suitefleet_customer_code: string | null;
 } & Record<string, unknown>;
@@ -152,6 +145,7 @@ type ConsigneeRow = {
   address_line: string;
   emirate_or_region: string;
   district: string;
+  delivery_notes: string | null;
 } & Record<string, unknown>;
 
 // -----------------------------------------------------------------------------
@@ -245,67 +239,6 @@ function classifyReconcileError(awb: string, err: unknown): {
     httpStatus: inner.httpStatus,
   };
 }
-
-/**
- * Cron-path TaskCreateRequest variant that omits shipFrom. SF
- * auto-populates shipFrom from the merchant master when the create
- * payload omits it entirely; the cron path deliberately doesn't
- * construct a placeholder. See header `shipFrom posture` block.
- */
-type CronTaskCreateRequest = Omit<TaskCreateRequest, "shipFrom">;
-
-/**
- * Map a Task + ConsigneeSnapshot + tenant customer_code into the
- * internal-language `TaskCreateRequest` the adapter expects (minus
- * shipFrom — see CronTaskCreateRequest above).
- *
- * Locked defaults (per Aqib Group-1):
- *   - countryCode = 'AE' (UAE pilot)
- *   - paymentMethod = 'PrePaid' (top-level, not nested — D8-3 fix)
- *   - itemQuantity = 1 (single bag per meal-plan delivery)
- *   - codAmount = 0, declaredValue = 0 (prepaid)
- *   - city = consignee.emirate_or_region (one-string-fits-both for
- *     UAE pilot per option-1 lean in the C-3 deferred memo)
- *   - shipFrom OMITTED — SF auto-populates from merchant master
- */
-function buildTaskCreateRequest(
-  tenantId: Uuid,
-  task: Task,
-  consignee: ConsigneePushSnapshot,
-): CronTaskCreateRequest {
-  const consigneeAddress: DeliveryAddress = {
-    addressLine1: consignee.addressLine,
-    city: consignee.emirateOrRegion,
-    district: consignee.district,
-    countryCode: "AE",
-  };
-  return {
-    tenantId,
-    customerOrderNumber: task.customerOrderNumber,
-    referenceNumber: task.referenceNumber ?? undefined,
-    kind: task.taskKind,
-    consignee: {
-      name: consignee.name,
-      contactPhone: consignee.phone,
-      address: consigneeAddress,
-    },
-    window: {
-      date: task.deliveryDate,
-      startTime: task.deliveryStartTime,
-      endTime: task.deliveryEndTime,
-    },
-    paymentMethod: "PrePaid",
-    codAmount: 0,
-    declaredValue: 0,
-    weightKg: task.weightKg !== null ? Number(task.weightKg) : 0,
-    itemQuantity: 1,
-    notes: task.notes ?? undefined,
-    signatureRequired: task.signatureRequired,
-    smsNotifications: task.smsNotifications,
-    deliverToCustomerOnly: task.deliverToCustomerOnly,
-  };
-}
-
 
 // =============================================================================
 // pushSingleTask — Day 8 / D8-5
@@ -506,7 +439,7 @@ export async function pushSingleTask(
     `task-push:single load_consignee for task ${task.id}`,
     async (tx) => {
       const rows = await tx.execute<ConsigneeRow>(sqlTag`
-        SELECT id, name, phone, email, address_line, emirate_or_region, district
+        SELECT id, name, phone, email, address_line, emirate_or_region, district, delivery_notes
         FROM consignees
         WHERE id = ${task.consigneeId}
       `);
@@ -524,6 +457,7 @@ export async function pushSingleTask(
         addressLine: row.address_line,
         emirateOrRegion: row.emirate_or_region,
         district: row.district,
+        deliveryNotes: row.delivery_notes,
       } satisfies ConsigneePushSnapshot;
     },
   );
