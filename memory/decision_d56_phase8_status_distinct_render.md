@@ -31,7 +31,7 @@ This is a **plan amendment only** — still no code, no migration created, no re
 
 ## Blast radius (plan-counted, not touched)
 
-9 human-facing render surfaces + 3 shared maps (`tasks/status.ts`, `StatusIcon.tsx`, `DayDisplayStatus.ts`). 6 new icons (`PickupIcon`, `DcIcon`, `HubTransferIcon`, `OutForDeliveryIcon`, `ReturnIcon` outline+solid, `RescheduleIcon`, `RetryIcon`). `/tasks` filter stays coarse-7; rows render fine-14.
+9 human-facing render surfaces + 3 shared maps (`tasks/status.ts`, `StatusIcon.tsx`, `DayDisplayStatus.ts`). 6 new icons (`PickupIcon`, `DcIcon`, `HubTransferIcon`, `OutForDeliveryIcon`, `ReturnIcon` outline+solid, `RescheduleIcon`, `RetryIcon`). Operators filter by all 14 fine states via a dropdown on **both `/tasks` AND the calendar** (OQ-3 overruled); rows render fine-14.
 
 ## Brief impact
 
