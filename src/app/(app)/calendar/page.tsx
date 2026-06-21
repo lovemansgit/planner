@@ -51,6 +51,7 @@ import {
   type CalendarTopMerchantToday,
 } from "@/modules/calendar";
 import { computeTodayInDubai } from "@/modules/task-materialization/dubai-date";
+import { parseCourierStatusParam } from "@/app/(app)/tasks/status";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
@@ -149,7 +150,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     q: params.q ?? "",
     crm: params.crm ?? "",
     district: params.district ?? "",
-    status: params.status ?? "",
+    // D56 Lane 4 (E1) — `?status=` is the FINE courier filter. Validate it so a
+    // stale coarse bookmark (e.g. ON_HOLD/SKIPPED) degrades to "All" rather than
+    // matching nothing, mirroring /tasks.
+    status: parseCourierStatusParam(params.status) ?? "",
   };
   const filters = toFilters(filterValues);
 
@@ -252,7 +256,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             initialValues={filterValues}
             crmOptions={filterOptions.crmStates.map((s) => ({ value: s, label: s }))}
             districtOptions={filterOptions.districts.map((d) => ({ value: d, label: d }))}
-            statusOptions={filterOptions.statuses.map((s) => ({ value: s, label: s }))}
           />
         ) : null}
 

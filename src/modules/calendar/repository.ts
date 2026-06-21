@@ -36,7 +36,6 @@ import type {
 } from "./types";
 import { COURIER_STATUS_VALUES, type CourierStatus } from "@/modules/integration/types";
 
-import type { TaskInternalStatus } from "../tasks/types";
 import type { ConsigneeCrmState } from "../consignees/types";
 
 // D56 Phase 8 / Lane 5 — narrow a raw `tasks.courier_status` text value to the
@@ -68,8 +67,11 @@ function buildFilterClause(tenantId: Uuid, filters: CalendarFilters): SQL {
   const districtClause = filters.district
     ? sqlTag`c.district = ${filters.district}`
     : sqlTag`TRUE`;
+  // D56 Phase 8 / Lane 4 (Love's E1 ruling) — the `?status=` filter matches the
+  // FINE `tasks.courier_status` (single source of truth, as on /tasks), NOT the
+  // coarse `internal_status`. NULL-courier rows never match a fine filter.
   const statusClause = filters.status
-    ? sqlTag`t.internal_status = ${filters.status}`
+    ? sqlTag`t.courier_status = ${filters.status}`
     : sqlTag`TRUE`;
   return sqlTag`
     t.tenant_id = ${tenantId}
@@ -494,25 +496,10 @@ export async function listDistinctCrmStates(
     .filter((value): value is ConsigneeCrmState => typeof value === "string" && value.length > 0);
 }
 
-/**
- * SELECT DISTINCT tasks.internal_status for the tenant, used to
- * populate the status filter dropdown.
- */
-export async function listDistinctTaskStatuses(
-  tx: DbTx,
-  tenantId: Uuid,
-): Promise<readonly TaskInternalStatus[]> {
-  const rows = await tx.execute<DistinctStringRow>(sqlTag`
-    SELECT DISTINCT internal_status AS value
-    FROM tasks
-    WHERE tenant_id = ${tenantId}
-      AND internal_status IS NOT NULL
-    ORDER BY value ASC
-  `);
-  return rows
-    .map((row) => row.value)
-    .filter((value): value is TaskInternalStatus => typeof value === "string" && value.length > 0);
-}
+// D56 Phase 8 / Lane 4 (E1) — listDistinctTaskStatuses retired: the `?status=`
+// filter is the FINE 14-state courier vocabulary (static COURIER_STATUS_FILTER_OPTIONS
+// in tasks/status.ts), so no per-tenant DISTINCT of the coarse internal_status
+// is needed.
 
 // -----------------------------------------------------------------------------
 // Day-cell assembly helper

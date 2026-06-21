@@ -35,6 +35,13 @@ export interface CalendarFilters {
   readonly crm?: string;
   /** Exact match against consignees.district. */
   readonly district?: string;
-  /** Exact match against tasks.internal_status. */
+  /**
+   * D56 Phase 8 / Lane 4 (Love's E1 ruling) — exact match against the FINE
+   * `tasks.courier_status` (the 14-state vocabulary), NOT the coarse
+   * `internal_status`. Single source of truth: `?status=` carries the fine
+   * filter on `/calendar` exactly as on `/tasks`. NULL-courier rows never
+   * match a fine filter (appear only under "All"). A stale coarse value is
+   * dropped to undefined ("All") at the page boundary via parseCourierStatusParam.
+   */
   readonly status?: string;
 }

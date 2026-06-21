@@ -21,7 +21,6 @@ import type { Uuid } from "@/shared/types";
 
 import { requirePermission } from "../identity";
 import type { ConsigneeCrmState } from "../consignees/types";
-import type { TaskInternalStatus } from "../tasks/types";
 
 import {
   buildWeekDays,
@@ -30,7 +29,6 @@ import {
   countTasksGroupedByDay,
   listDistinctCrmStates,
   listDistinctDistricts,
-  listDistinctTaskStatuses,
   listPerMerchantBreakdown,
   listTasksForDayAcrossConsignees,
   listTopMerchantsTodayWithTaskCount,
@@ -246,12 +244,17 @@ export async function getPerMerchantBreakdown(
 export interface CalendarFilterOptions {
   readonly districts: readonly string[];
   readonly crmStates: readonly ConsigneeCrmState[];
-  readonly statuses: readonly TaskInternalStatus[];
 }
 
 /**
  * Distinct-value lookups feeding the CalendarFilterBar dropdowns.
  * Single round-trip per dimension — parallel-fetched.
+ *
+ * D56 Phase 8 / Lane 4 (Love's E1 ruling) — the status dimension is retired
+ * here: the `?status=` filter now carries the FINE courier vocabulary, whose
+ * options are the static 14-state `COURIER_STATUS_FILTER_OPTIONS` (single
+ * source of truth in tasks/status.ts), not a per-tenant DISTINCT of the coarse
+ * `internal_status`. So no `statuses` round-trip is needed.
  */
 export async function getCalendarFilterOptions(
   ctx: RequestContext,
@@ -259,11 +262,10 @@ export async function getCalendarFilterOptions(
   requirePermission(ctx, "task:read");
   assertTenantScoped(ctx, "calendar:filter-options");
   return withTenant(ctx.tenantId, async (tx) => {
-    const [districts, crmStates, statuses] = await Promise.all([
+    const [districts, crmStates] = await Promise.all([
       listDistinctDistricts(tx, ctx.tenantId),
       listDistinctCrmStates(tx, ctx.tenantId),
-      listDistinctTaskStatuses(tx, ctx.tenantId),
     ]);
-    return { districts, crmStates, statuses };
+    return { districts, crmStates };
   });
 }
