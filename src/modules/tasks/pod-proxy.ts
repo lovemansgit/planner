@@ -31,6 +31,21 @@ export function podProxyPhotoPaths(
   return photos.map((_, index) => `/api/tasks/${taskId}/pod/${index}`);
 }
 
+/**
+ * Cross-tenant sibling for the Transcorp-admin /admin/tasks surface. Emits the
+ * admin proxy path, which is gated on `task:read_all` server-side (the operator
+ * `/api/tasks/...` route is single-tenant and 404s for other merchants — see
+ * memory/followup_admin_pod_proxy_cross_tenant.md). Null/empty pass through
+ * unchanged, preserving the pod-state (muted) contract.
+ */
+export function adminPodProxyPhotoPaths(
+  taskId: string,
+  photos: readonly string[] | null,
+): readonly string[] | null {
+  if (photos === null) return null;
+  return photos.map((_, index) => `/api/admin/tasks/${taskId}/pod/${index}`);
+}
+
 export type PodUpstreamClass = "ok" | "expired" | "upstream_error";
 
 /**
