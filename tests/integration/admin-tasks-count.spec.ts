@@ -11,7 +11,9 @@
 //
 // Cases pinned:
 //   1. empty filter set returns the full unfiltered count
-//   2. status filter narrows
+//   2. status filter narrows — D56 Lane 5: this is now the FINE courier_status
+//      (the seed carries courier_status alongside internal_status); the count
+//      filters on tasks.courier_status, not the coarse internal_status.
 //   3. merchantSlug narrows
 //   4. dateFrom alone narrows (≥ predicate inclusive)
 //   5. dateTo alone narrows (≤ predicate inclusive)
@@ -72,22 +74,28 @@ describe("Day-24 PM count pin — countAllTasksRows", () => {
            'Addr A', 'Dubai', 'Al Quoz', 'ACTIVE')
       `);
 
+      // D56 Lane 5 — the admin count filters on the FINE courier_status, so the
+      // seed carries it alongside the coarse internal_status. Fine values map to
+      // the coarse buckets the assertions read (CREATED→ORDERED, DELIVERED→
+      // DELIVERED, FAILED→FAILED) so the documented counts hold under the
+      // migrated filter. The archived row is left courier_status NULL (excluded
+      // by the archive predicate regardless).
       await tx.execute(sqlTag`
         INSERT INTO tasks
           (id, tenant_id, consignee_id, customer_order_number,
            delivery_date, delivery_start_time, delivery_end_time,
-           internal_status, external_tracking_number, created_via)
+           internal_status, courier_status, external_tracking_number, created_via)
         VALUES
           (${TASK_MAY01_CREATED}, ${TENANT_LIVE}, ${CONSIGNEE_LIVE}, ${`ATC-${RUN_ID}-1`},
-           '2026-05-01', '08:00', '10:00', 'CREATED', ${AWB_MAY01}, 'manual_admin'),
+           '2026-05-01', '08:00', '10:00', 'CREATED', 'ORDERED', ${AWB_MAY01}, 'manual_admin'),
           (${TASK_MAY10_DELIVERED}, ${TENANT_LIVE}, ${CONSIGNEE_LIVE}, ${`ATC-${RUN_ID}-2`},
-           '2026-05-10', '10:00', '12:00', 'DELIVERED', ${AWB_MAY10}, 'manual_admin'),
+           '2026-05-10', '10:00', '12:00', 'DELIVERED', 'DELIVERED', ${AWB_MAY10}, 'manual_admin'),
           (${TASK_MAY15_FAILED_1}, ${TENANT_LIVE}, ${CONSIGNEE_LIVE}, ${`ATC-${RUN_ID}-3`},
-           '2026-05-15', '09:00', '11:00', 'FAILED', NULL, 'manual_admin'),
+           '2026-05-15', '09:00', '11:00', 'FAILED', 'FAILED', NULL, 'manual_admin'),
           (${TASK_MAY15_FAILED_2}, ${TENANT_LIVE}, ${CONSIGNEE_LIVE}, ${`ATC-${RUN_ID}-4`},
-           '2026-05-15', '14:00', '16:00', 'FAILED', NULL, 'manual_admin'),
+           '2026-05-15', '14:00', '16:00', 'FAILED', 'FAILED', NULL, 'manual_admin'),
           (${TASK_ARCHIVED}, ${TENANT_ARCHIVED}, ${CONSIGNEE_ARCHIVED}, ${`ATC-${RUN_ID}-arch`},
-           '2026-05-15', '09:00', '11:00', 'CREATED', NULL, 'manual_admin')
+           '2026-05-15', '09:00', '11:00', 'CREATED', NULL, NULL, 'manual_admin')
       `);
     });
   });
