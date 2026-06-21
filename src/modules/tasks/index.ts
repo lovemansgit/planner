@@ -56,6 +56,7 @@ export {
   getTask,
   getTaskHistory,
   getPodPhotoSourceUrl,
+  getPodPhotoSourceUrlForAdmin,
   getTasksForSubscription,
   getTaskTimeline,
   listAllTaskIds,
@@ -110,4 +111,4 @@ export {
 export { isTaskDriverBound, isTaskEditable } from "./service";
 
 // Day-53 POD proxy — client-safe path helper (pure, no db import).
-export { podProxyPhotoPaths } from "./pod-proxy";
+export { adminPodProxyPhotoPaths, podProxyPhotoPaths } from "./pod-proxy";

@@ -30,6 +30,25 @@ export async function readTaskPodState(
   return rows[0] ?? null;
 }
 
+/**
+ * SELECT the two POD columns for one task by id ALONE — no tenant filter.
+ * For the cross-tenant Transcorp-admin POD proxy: the caller MUST run this
+ * under `withServiceRole` (RLS bypass) AFTER a `task:read_all` gate. The
+ * single-tenant `readTaskPodState` stays the default for operator paths.
+ */
+export async function readTaskPodStateCrossTenant(
+  tx: DbTx,
+  taskId: Uuid,
+): Promise<TaskPodStateRow | null> {
+  const rows = await tx.execute<TaskPodStateRow>(sqlTag`
+    SELECT id, pod_photos, pod_photo_captures
+    FROM tasks
+    WHERE id = ${taskId}
+    LIMIT 1
+  `);
+  return rows[0] ?? null;
+}
+
 /** Record the full capture-entry array (one write, all-or-nothing). */
 export async function recordPodCaptures(
   tx: DbTx,

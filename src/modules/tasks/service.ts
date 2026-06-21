@@ -2073,6 +2073,39 @@ export async function getPodPhotoSourceUrl(
 }
 
 // =============================================================================
+// getPodPhotoSourceUrlForAdmin — cross-tenant POD proxy (Transcorp admin)
+// =============================================================================
+//
+// Cross-tenant sibling of getPodPhotoSourceUrl for the /admin/tasks surface.
+// The single-tenant proxy (assertTenantScoped + withTenant) cannot serve the
+// admin's cross-tenant view — an admin viewing another merchant's task would
+// be RLS-filtered to NotFound. This variant gates on `task:read_all` (the same
+// boundary listAllTasks trusts) and reads under withServiceRole. findTaskById
+// filters by id alone, so RLS-bypass returns the row regardless of tenant.
+// See memory/followup_admin_pod_proxy_cross_tenant.md.
+export async function getPodPhotoSourceUrlForAdmin(
+  ctx: RequestContext,
+  taskId: Uuid,
+  photoIndex: number,
+): Promise<string> {
+  requirePermission(ctx, "task:read_all");
+
+  return await withServiceRole("transcorp_staff:get_pod_photo_source_url", async (tx) => {
+    const task = await findTaskById(tx, taskId);
+    if (!task) {
+      throw new NotFoundError(`task not found: ${taskId}`);
+    }
+    const url = task.podPhotos?.[photoIndex];
+    if (url === undefined) {
+      throw new NotFoundError(
+        `pod photo not found: task ${taskId} index ${photoIndex}`,
+      );
+    }
+    return url;
+  });
+}
+
+// =============================================================================
 // updateTaskAndPushOutbound — Day 22 / Phase 1 SF outbound
 // =============================================================================
 //

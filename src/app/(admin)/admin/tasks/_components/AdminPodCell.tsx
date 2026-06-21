@@ -16,6 +16,7 @@ import { useState } from "react";
 import { PodIcon } from "@/app/(app)/tasks/_components/PodIcon";
 import { PodLightboxModal } from "@/app/(app)/tasks/_components/PodLightboxModal";
 import { podCellState } from "@/app/(app)/tasks/_components/pod-state";
+import { adminPodProxyPhotoPaths } from "@/modules/tasks/pod-proxy";
 import type { Task } from "@/modules/tasks/types";
 
 interface AdminPodCellProps {
@@ -39,7 +40,10 @@ export function AdminPodCell({ task }: AdminPodCellProps) {
     );
   }
 
-  const photos = task.podPhotos ?? [];
+  // Route through the cross-tenant admin POD proxy (task:read_all gated),
+  // not the raw S3 URLs — those break on browser policy + after the 7-day
+  // signed-URL TTL. Plan #532 §Phase-4 / A3.
+  const photos = adminPodProxyPhotoPaths(task.id, task.podPhotos) ?? [];
   return (
     <>
       <button

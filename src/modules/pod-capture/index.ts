@@ -5,6 +5,7 @@ export {
   capturePodPhotosForTask,
   classifyFreeTierUsage,
   getCapturedPodPhoto,
+  getCapturedPodPhotoForAdmin,
   type CapturePodDeps,
   type FreeTierUsageClass,
 } from "./service";

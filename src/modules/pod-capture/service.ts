@@ -20,6 +20,7 @@ import { requirePermission } from "../identity";
 
 import {
   readTaskPodState,
+  readTaskPodStateCrossTenant,
   recordPodCaptures,
   sumCapturedPodBytes,
 } from "./repository";
@@ -224,6 +225,45 @@ export async function getCapturedPodPhoto(
       operation: "get_captured_pod_photo",
       error_code: "object_missing_for_entry",
       tenant_id: tenantId,
+      task_id: taskId,
+      photo_index: photoIndex,
+      path: entry.path,
+    });
+    return null;
+  }
+  return { bytes: object.bytes, contentType: entry.content_type || object.contentType };
+}
+
+/**
+ * Cross-tenant read leg for the Transcorp-admin POD proxy
+ * (/api/admin/tasks/[id]/pod/[index]). Same shape as getCapturedPodPhoto but
+ * gated on `task:read_all` (the same boundary `listAllTasks` trusts for
+ * cross-tenant task data) and reads under `withServiceRole` so an admin can
+ * view any merchant's captured POD. No `assertTenantScoped` — admins are
+ * deliberately cross-tenant. See memory/followup_admin_pod_proxy_cross_tenant.md.
+ */
+export async function getCapturedPodPhotoForAdmin(
+  ctx: RequestContext,
+  taskId: Uuid,
+  photoIndex: number,
+  deps: { readonly store: PodObjectStore },
+): Promise<{ bytes: ArrayBuffer; contentType: string } | null> {
+  requirePermission(ctx, "task:read_all");
+
+  const state = await withServiceRole(
+    "transcorp_staff:get_captured_pod_photo",
+    async (tx) => readTaskPodStateCrossTenant(tx, taskId),
+  );
+  const entry = state?.pod_photo_captures?.[photoIndex];
+  if (!entry) return null;
+
+  const object = await deps.store.get(entry.path);
+  if (object === null) {
+    // Recorded entry but missing object — storage drift. Loud signal;
+    // the route falls back to the vendor URL (may still be in TTL).
+    log.warn({
+      operation: "get_captured_pod_photo_admin",
+      error_code: "object_missing_for_entry",
       task_id: taskId,
       photo_index: photoIndex,
       path: entry.path,

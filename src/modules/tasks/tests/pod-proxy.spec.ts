@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adminPodProxyPhotoPaths,
   classifyPodUpstreamResponse,
   podProxyPhotoPaths,
 } from "../pod-proxy";
@@ -31,6 +32,28 @@ describe("podProxyPhotoPaths", () => {
 
   it("returns an empty array for an empty array (treated as no POD by the surfacing layer)", () => {
     expect(podProxyPhotoPaths(TASK_ID, [])).toEqual([]);
+  });
+});
+
+describe("adminPodProxyPhotoPaths", () => {
+  it("maps each photo to the CROSS-TENANT admin proxy path (task:read_all gated server-side)", () => {
+    expect(
+      adminPodProxyPhotoPaths(TASK_ID, ["https://s3.example/a.jpg?sig=1", "https://s3.example/b.jpg?sig=2"]),
+    ).toEqual([
+      `/api/admin/tasks/${TASK_ID}/pod/0`,
+      `/api/admin/tasks/${TASK_ID}/pod/1`,
+    ]);
+  });
+
+  it("targets /api/admin/... NOT the single-tenant /api/tasks/... operator route", () => {
+    const [first] = adminPodProxyPhotoPaths(TASK_ID, ["https://s3.example/a.jpg"]) ?? [];
+    expect(first).toBe(`/api/admin/tasks/${TASK_ID}/pod/0`);
+    expect(first).not.toContain("/api/tasks/");
+  });
+
+  it("preserves the null/empty pod-state contract", () => {
+    expect(adminPodProxyPhotoPaths(TASK_ID, null)).toBeNull();
+    expect(adminPodProxyPhotoPaths(TASK_ID, [])).toEqual([]);
   });
 });
 

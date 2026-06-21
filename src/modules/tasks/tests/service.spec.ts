@@ -113,6 +113,7 @@ import {
   getTask,
   getTaskHistory,
   getPodPhotoSourceUrl,
+  getPodPhotoSourceUrlForAdmin,
   getTasksForSubscription,
   getTaskTimeline,
   listAllTaskIds,
@@ -1963,6 +1964,44 @@ describe("getTaskHistory — Day-52 / R8", () => {
     await expect(
       getPodPhotoSourceUrl(userCtx(["task:read"]), TASK_ID as never, 1),
     ).resolves.toBe(STORED[1]);
+  });
+
+  it("getPodPhotoSourceUrlForAdmin — task:read_all gate, cross-tenant (no tenant scope), raw URL", async () => {
+    const STORED = [
+      "https://s3.eu-central-1.amazonaws.com/sf-bucket/a.jpg?X-Amz-Signature=x",
+      "https://s3.eu-central-1.amazonaws.com/sf-bucket/b.jpg?X-Amz-Signature=y",
+    ];
+
+    // No permission at all → denied.
+    await expect(
+      getPodPhotoSourceUrlForAdmin(userCtx([]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+
+    // A tenant operator with only task:read (NOT task:read_all) → denied.
+    await expect(
+      getPodPhotoSourceUrlForAdmin(userCtx(["task:read"]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+
+    // task not found (under withServiceRole) → NotFound.
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getPodPhotoSourceUrlForAdmin(userCtx(["task:read_all"]), TASK_ID as never, 0),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    // index out of bounds → NotFound.
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: STORED }));
+    await expect(
+      getPodPhotoSourceUrlForAdmin(userCtx(["task:read_all"]), TASK_ID as never, 5),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    // Happy path — resolves the raw URL cross-tenant. `tenantId: null` proves
+    // there is NO assertTenantScoped requirement (admins are cross-tenant) and
+    // the read runs under withServiceRole, not withTenant.
+    mockFindById.mockResolvedValueOnce(taskFixture({ podPhotos: STORED }));
+    await expect(
+      getPodPhotoSourceUrlForAdmin(userCtx(["task:read_all"], null), TASK_ID as never, 1),
+    ).resolves.toBe(STORED[1]);
+    expect(mockWithServiceRole).toHaveBeenCalled();
   });
 
   it("threads the before-cursor into the task-event query", async () => {
