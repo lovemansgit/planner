@@ -8,23 +8,29 @@
 //   - Consignee name (link to /consignees/[id]?tab=calendar&week=…)
 //   - HIGH_RISK marker on the consignee name when applicable
 //   - District
-//   - Task internal-status pill
+//   - Task delivery-status pill (FINE courier_status)
 //   - AWB (external_tracking_number) when present
 //
 // Empty state: hairline-border panel with a sentence-case explainer
 // pointing the operator back at the week / month views.
 //
-// Status pill palette inlined (STATUS_VISUALS). The /tasks list page
-// has its own `TASK_STATUS_FILTERS` palette but cross-route imports
-// from app routes are a code smell; tonight's surface lives entirely
-// in /calendar, so the visual map ships here. If a second consumer
-// materialises, lift to a shared primitive.
+// D56 Phase 8 / Lane 5 (brief v1.31 §3.1.10 + §3.3.11) — the status pill
+// now renders the FINE SuiteFleet courier state via the shared
+// `resolveCourierDisplay` + `StatusIcon` (the single source of truth Lane 3
+// established), falling back to the coarse internal status when courier_status
+// is NULL. The previously-inlined STATUS_VISUALS map (which only knew the
+// coarse 7) is retired — this is the "second consumer" the original note
+// anticipated, so the lift-to-shared-primitive happened.
 //
-// Pure-logic exports (`formatDeliveryWindow`, `getStatusVisuals`,
-// `getDayHeaderLabel`) covered by spec per the codebase's
-// no-render-test convention.
+// Pure-logic exports (`formatDeliveryWindow`, `getDayHeaderLabel`,
+// `buildConsigneeLink`) covered by spec per the codebase's no-render-test
+// convention.
 
 import Link from "next/link";
+
+import { StatusIcon } from "@/app/(app)/tasks/_components/StatusIcon";
+import { resolveCourierDisplay } from "@/app/(app)/tasks/status";
+import type { TaskInternalStatus } from "@/modules/tasks/types";
 
 import type { CalendarDayTaskRow } from "../_types";
 
@@ -33,51 +39,6 @@ export interface ConsolidatedDayViewProps {
   readonly date: string;
   /** Tasks ordered by delivery-window-start ASC, then consignee name. */
   readonly tasks: readonly CalendarDayTaskRow[];
-}
-
-interface StatusVisual {
-  readonly label: string;
-  readonly classes: string;
-}
-
-const STATUS_VISUALS: Readonly<Record<string, StatusVisual>> = {
-  CREATED: {
-    label: "Created",
-    classes: "bg-stone-200 text-[color:var(--color-text-secondary)]",
-  },
-  ASSIGNED: {
-    label: "Assigned",
-    classes: "bg-amber/15 text-amber",
-  },
-  IN_TRANSIT: {
-    label: "In transit",
-    classes: "bg-amber/20 text-amber",
-  },
-  DELIVERED: {
-    label: "Delivered",
-    classes: "bg-green/15 text-green",
-  },
-  FAILED: {
-    label: "Failed",
-    classes: "bg-red/15 text-red",
-  },
-  CANCELED: {
-    label: "Cancelled",
-    classes: "bg-stone-200 text-[color:var(--color-text-tertiary)]",
-  },
-  ON_HOLD: {
-    label: "On hold",
-    classes: "bg-stone-200 text-[color:var(--color-text-secondary)]",
-  },
-};
-
-const STATUS_FALLBACK: StatusVisual = {
-  label: "Unknown",
-  classes: "bg-stone-200 text-[color:var(--color-text-tertiary)]",
-};
-
-export function getStatusVisuals(status: string): StatusVisual {
-  return STATUS_VISUALS[status] ?? STATUS_FALLBACK;
 }
 
 /**
@@ -165,7 +126,13 @@ interface DayTaskRowProps {
 }
 
 function DayTaskRow({ task, date }: DayTaskRowProps) {
-  const visual = getStatusVisuals(task.status);
+  // D56 Lane 5 — fine courier_status pill (label + family colour + glyph),
+  // NULL-courier rows fall back to the coarse internal status. `task.status` is
+  // the coarse internal_status (DB CHECK guarantees the 8-value set).
+  const display = resolveCourierDisplay(
+    task.courierStatus,
+    task.status as TaskInternalStatus,
+  );
   const isHighRisk = task.crmState === "HIGH_RISK";
   const href = buildConsigneeLink(task.consigneeId, date);
   return (
@@ -201,9 +168,10 @@ function DayTaskRow({ task, date }: DayTaskRowProps) {
         </p>
       </div>
       <span
-        className={`shrink-0 rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${visual.classes}`}
+        className={`inline-flex shrink-0 items-center gap-1.5 rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
       >
-        {visual.label}
+        <StatusIcon courierStatus={task.courierStatus} status={task.status as TaskInternalStatus} />
+        {display.label}
       </span>
       <p className="hidden w-32 shrink-0 text-right text-xs tabular-nums text-[color:var(--color-text-tertiary)] sm:block">
         {task.externalTrackingNumber ?? "—"}

@@ -7,8 +7,10 @@
 //
 // Filters:
 //   - ?merchant=<slug>  — MerchantFilterDropdown shared with consignees + subs
-//   - ?status=<TaskInternalStatus>  — operator-side filter pills, navigated
-//                                     to /admin/tasks (locally re-rendered)
+//   - ?status=<CourierStatus>  — D56 Lane 5: the FINE courier-status dropdown
+//                                (<CourierStatusFilter>, shared with /tasks).
+//                                Migrated off the legacy coarse pill bar; stale
+//                                coarse bookmarks degrade to "All".
 //   - ?page=N + ?perPage=N — operator-side pagination parsers
 //
 // Pagination v1.5 limitation: backend ships listAllTasks with offset+
@@ -29,14 +31,15 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { CourierStatusFilter } from "@/app/(app)/tasks/_components/CourierStatusFilter";
 import { StatusIcon } from "@/app/(app)/tasks/_components/StatusIcon";
 import {
   ALLOWED_PAGE_SIZES,
   PAGE_SIZE_DEFAULT,
-  TASK_STATUS_FILTERS,
+  parseCourierStatusParam,
   parsePageParam,
   parsePerPageParam,
-  parseStatusParam,
+  resolveCourierDisplay,
 } from "@/app/(app)/tasks/status";
 import { parseAwbsParam } from "@/components/asset-reports/report-helpers";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
@@ -102,7 +105,7 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
   const requestId = randomUUID();
   const params = await searchParams;
   const merchantSlug = typeof params.merchant === "string" && params.merchant.length > 0 ? params.merchant : undefined;
-  const status = parseStatusParam(params.status);
+  const status = parseCourierStatusParam(params.status);
   const page = parsePageParam(params.page);
   const perPage = parsePerPageParam(params.perPage);
   const offset = (page - 1) * perPage;
@@ -194,22 +197,18 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           label="Search tasks by AWB, consignee, or merchant"
         />
 
-        <div className="mb-8 flex flex-wrap items-end gap-6">
+        {/* D56 Lane 5 — the coarse status pill bar retired in favour of the
+            shared fine-14 <CourierStatusFilter> dropdown (URL state on the same
+            ?status= param, single-select; matches /tasks). It sits inline with
+            the merchant + page-size controls. */}
+        <div className="mb-8 flex flex-wrap items-center gap-6">
           <MerchantFilterDropdown
             merchants={dropdownMerchants}
             currentSlug={merchantSlug ?? null}
           />
+          <CourierStatusFilter />
           <AdminPageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} />
         </div>
-
-        <StatusFilterBar
-          activeStatus={status}
-          merchantSlug={merchantSlug}
-          perPage={perPage}
-          q={q}
-          dateFrom={parsedFrom}
-          dateTo={parsedTo}
-        />
 
         {rows.length === 0 ? <EmptyState filtered={status !== undefined || merchantSlug !== undefined || q !== undefined} /> : <AdminTasksTable rows={rows} />}
 
@@ -225,61 +224,6 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
         />
       </div>
     </main>
-  );
-}
-
-function StatusFilterBar({
-  activeStatus,
-  merchantSlug,
-  perPage,
-  q,
-  dateFrom,
-  dateTo,
-}: {
-  readonly activeStatus: string | undefined;
-  readonly merchantSlug: string | undefined;
-  readonly perPage: number;
-  readonly q: string | undefined;
-  readonly dateFrom: string;
-  readonly dateTo: string;
-}) {
-  return (
-    <nav aria-label="Status filter" className="mb-8 flex flex-wrap items-center gap-2">
-      <FilterPill
-        href={buildAdminTasksHref({ merchantSlug, perPage, status: undefined, q, dateFrom, dateTo })}
-        active={activeStatus === undefined}
-        label="All"
-      />
-      {TASK_STATUS_FILTERS.map((s) => (
-        <FilterPill
-          key={s.value}
-          href={buildAdminTasksHref({ merchantSlug, perPage, status: s.value, q, dateFrom, dateTo })}
-          active={activeStatus === s.value}
-          label={s.label}
-        />
-      ))}
-    </nav>
-  );
-}
-
-function FilterPill({
-  href,
-  active,
-  label,
-}: {
-  readonly href: string;
-  readonly active: boolean;
-  readonly label: string;
-}) {
-  const base =
-    "inline-flex items-center px-4 py-2 text-xs uppercase tracking-[0.15em] transition-opacity";
-  const variant = active
-    ? "border-2 border-green text-navy"
-    : "border border-[color:var(--color-border-default)] text-[color:var(--color-text-secondary)] hover:border-[color:var(--color-border-strong)] hover:text-navy";
-  return (
-    <Link href={href} className={`${base} ${variant}`} aria-current={active ? "true" : undefined}>
-      {label}
-    </Link>
   );
 }
 
@@ -338,7 +282,9 @@ function AdminTasksTable({ rows }: { rows: readonly AdminTaskRow[] }) {
 }
 
 function Row({ row }: { row: AdminTaskRow }) {
-  const filter = TASK_STATUS_FILTERS.find((f) => f.value === row.task.internalStatus);
+  // D56 Lane 5 — render the FINE courier_status (label + family colour + glyph),
+  // falling back to the coarse internal_status when it is NULL (mirrors /tasks).
+  const display = resolveCourierDisplay(row.task.courierStatus, row.task.internalStatus);
   return (
     <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
       <Td>
@@ -349,10 +295,10 @@ function Row({ row }: { row: AdminTaskRow }) {
       </Td>
       <Td>
         <span
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${filter?.pillClass ?? ""}`}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
         >
-          <StatusIcon status={row.task.internalStatus} />
-          {filter?.label ?? row.task.internalStatus}
+          <StatusIcon courierStatus={row.task.courierStatus} status={row.task.internalStatus} />
+          {display.label}
         </span>
       </Td>
       <Td className="font-mono text-xs tabular-nums">{row.task.customerOrderNumber}</Td>

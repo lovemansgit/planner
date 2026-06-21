@@ -822,7 +822,15 @@ export interface ListAllTasksFilters {
   readonly merchantSlug?: string;
   readonly limit?: number;
   readonly offset?: number;
-  readonly status?: TaskInternalStatus;
+  /**
+   * D56 Phase 8 / Lane 5 — the cross-tenant /admin/tasks filter migrated to
+   * the FINE `courier_status` (matches the operator /tasks filter; Love ruling:
+   * ?status= carries the 14-state vocabulary). Matches on `tasks.courier_status`;
+   * NULL-courier rows (pre-backfill / Planner-only) only surface under the
+   * no-filter "All" view. The coarse `internal_status` is no longer a filter
+   * axis on any surface.
+   */
+  readonly status?: CourierStatus;
   readonly searchTerm?: string;
   /**
    * Day-24 PM: inclusive `delivery_date` lower bound (YYYY-MM-DD). When
@@ -881,8 +889,9 @@ export async function listAllTasksRows(
 > {
   const limit = Math.min(filters.limit ?? 50, 500);
   const offset = filters.offset ?? 0;
+  // D56 Lane 5 — fine courier_status filter (NULL-courier rows are "All"-only).
   const statusFilter = filters.status
-    ? sqlTag`AND t.internal_status = ${filters.status}`
+    ? sqlTag`AND t.courier_status = ${filters.status}`
     : sqlTag``;
   const merchantFilter =
     filters.merchantSlug !== undefined
@@ -978,8 +987,9 @@ export async function countAllTasksRows(
   tx: DbTx,
   filters: Omit<ListAllTasksFilters, "limit" | "offset"> = {},
 ): Promise<number> {
+  // D56 Lane 5 — fine courier_status filter (mirrors listAllTasksRows).
   const statusFilter = filters.status
-    ? sqlTag`AND t.internal_status = ${filters.status}`
+    ? sqlTag`AND t.courier_status = ${filters.status}`
     : sqlTag``;
   const merchantFilter =
     filters.merchantSlug !== undefined

@@ -34,8 +34,18 @@ import type {
   CalendarPerMerchantBreakdownRow,
   CalendarTopMerchantToday,
 } from "./types";
+import { COURIER_STATUS_VALUES, type CourierStatus } from "@/modules/integration/types";
+
 import type { TaskInternalStatus } from "../tasks/types";
 import type { ConsigneeCrmState } from "../consignees/types";
+
+// D56 Phase 8 / Lane 5 — narrow a raw `tasks.courier_status` text value to the
+// CourierStatus union for the day-view render. Unknown / NULL → null (the
+// coarse `status` fallback handles the render). Mirrors the tasks-repo mapper.
+const COURIER_STATUS_SET: ReadonlySet<string> = new Set(COURIER_STATUS_VALUES);
+function toCourierStatus(value: string | null): CourierStatus | null {
+  return value !== null && COURIER_STATUS_SET.has(value) ? (value as CourierStatus) : null;
+}
 
 // -----------------------------------------------------------------------------
 // Filter helpers
@@ -135,6 +145,7 @@ type DayTaskRow = {
   district: string | null;
   crm_state: string;
   internal_status: string;
+  courier_status: string | null;
   delivery_start_time: string;
   delivery_end_time: string;
   external_tracking_number: string | null;
@@ -163,6 +174,7 @@ export async function listTasksForDayAcrossConsignees(
       c.district,
       c.crm_state,
       t.internal_status,
+      t.courier_status,
       t.delivery_start_time,
       t.delivery_end_time,
       t.external_tracking_number,
@@ -180,6 +192,7 @@ export async function listTasksForDayAcrossConsignees(
     district: row.district,
     crmState: row.crm_state,
     status: row.internal_status,
+    courierStatus: toCourierStatus(row.courier_status),
     // Domain field names stay window-* per CalendarDayTaskRow contract;
     // the SQL source columns are the per-task `delivery_{start,end}_time`
     // on the `tasks` table (0006_task.sql). Conflating them with the

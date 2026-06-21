@@ -15,6 +15,8 @@
 
 import Link from "next/link";
 
+import { StatusIcon } from "@/app/(app)/tasks/_components/StatusIcon";
+import { resolveCourierDisplay } from "@/app/(app)/tasks/status";
 import type { Task } from "@/modules/tasks";
 
 interface SubscriptionTasksListProps {
@@ -71,7 +73,7 @@ export function SubscriptionTasksList({
                 {t.deliveryStartTime.slice(0, 5)} – {t.deliveryEndTime.slice(0, 5)}
               </Td>
               <Td>
-                <StatusBadge status={t.internalStatus} />
+                <StatusCell task={t} />
               </Td>
               <Td className="font-mono text-xs">
                 {t.externalTrackingNumber !== null ? (
@@ -127,33 +129,18 @@ function Td({
   return <td className={`py-3 align-middle ${className}`}>{children}</td>;
 }
 
-type Status = Task["internalStatus"];
-
-function StatusBadge({ status }: { readonly status: Status }) {
-  switch (status) {
-    case "CREATED":
-      return tone("text-[color:var(--color-text-secondary)]", "Created");
-    case "ASSIGNED":
-      return tone("text-navy", "Assigned");
-    case "IN_TRANSIT":
-      return tone("text-amber", "In transit");
-    case "DELIVERED":
-      return tone("text-green font-medium", "Delivered");
-    case "FAILED":
-      return tone("text-red font-medium", "Failed");
-    case "CANCELED":
-      return tone("text-[color:var(--color-text-tertiary)]", "Cancelled");
-    case "ON_HOLD":
-      return tone("text-amber", "On hold");
-  }
-}
-
-function tone(className: string, label: string) {
+// D56 Phase 8 / Lane 5 — render the FINE courier_status (label + family colour
+// + glyph) via the shared map, falling back to the coarse internal_status when
+// it is NULL. Replaces the local text-only StatusBadge so this surface renders
+// the 14 distinct courier states identically to /tasks + /admin/tasks.
+function StatusCell({ task }: { readonly task: Task }) {
+  const display = resolveCourierDisplay(task.courierStatus, task.internalStatus);
   return (
     <span
-      className={`inline-flex items-center text-xs font-medium uppercase tracking-[0.14em] ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
     >
-      {label}
+      <StatusIcon courierStatus={task.courierStatus} status={task.internalStatus} />
+      {display.label}
     </span>
   );
 }

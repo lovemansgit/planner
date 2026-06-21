@@ -1385,6 +1385,37 @@ describe("getTaskTimeline — Day-22 / PR-B", () => {
     await getTaskTimeline(userCtx(["task:view_timeline"]), TASK_ID as never);
     expect(mockEmit).not.toHaveBeenCalled();
   });
+
+  it("exposes the task row's current fine + coarse status for the drawer pill (D56 Lane 5)", async () => {
+    // The drawer renders the current state via resolveCourierDisplay, which
+    // needs both the fine courier_status (when present) and the coarse
+    // internal_status fallback — read off the task already fetched here.
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({
+        externalTrackingNumber: null,
+        internalStatus: "IN_TRANSIT",
+        courierStatus: "OUT_FOR_DELIVERY",
+      }),
+    );
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+    expect(result.currentInternalStatus).toBe("IN_TRANSIT");
+    expect(result.currentCourierStatus).toBe("OUT_FOR_DELIVERY");
+  });
+
+  it("reports a NULL current courier status as null (no SF detail / Planner-only)", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ externalTrackingNumber: null, internalStatus: "CREATED" }),
+    );
+    const result = await getTaskTimeline(
+      userCtx(["task:view_timeline"]),
+      TASK_ID as never,
+    );
+    expect(result.currentInternalStatus).toBe("CREATED");
+    expect(result.currentCourierStatus).toBeNull();
+  });
 });
 
 describe("bulkCancelTasks — transactional cancel + fan-out enqueue", () => {
