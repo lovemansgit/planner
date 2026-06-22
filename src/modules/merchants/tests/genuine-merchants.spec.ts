@@ -20,8 +20,10 @@ import {
   isGenuineMerchant,
 } from "../genuine-merchants";
 
-// The six genuine merchants confirmed by the 20 Jun 2026 read-only
-// diagnosis (all six were `active` in production at diagnosis time).
+// The eight genuine merchants: the six confirmed by the 20 Jun 2026
+// read-only diagnosis (all `active` in production at diagnosis time)
+// plus `demo-bistro` / `demo-bistro1`, ruled genuine by Love on
+// 22 Jun 2026 (Item 1 — eight genuine merchants).
 const GENUINE = [
   "meal-plan-scheduler",
   "dr-nutrition",
@@ -29,6 +31,8 @@ const GENUINE = [
   "transcorp",
   "hem",
   "mlp",
+  "demo-bistro",
+  "demo-bistro1",
 ];
 
 // Real automated-test slugs sampled from the production diagnosis —
@@ -41,13 +45,13 @@ const TEST_SLUGS = [
 ];
 
 describe("isGenuineMerchant (F8 default-view contract)", () => {
-  it("shows all six genuine merchants (active)", () => {
+  it("shows all eight genuine merchants (active)", () => {
     for (const slug of GENUINE) {
       expect(isGenuineMerchant({ slug, status: "active" })).toBe(true);
     }
   });
 
-  it("exports exactly the six genuine slugs as the allowlist safety net", () => {
+  it("exports exactly the eight genuine slugs as the allowlist safety net", () => {
     expect([...GENUINE_MERCHANT_SLUGS].sort()).toEqual([...GENUINE].sort());
   });
 

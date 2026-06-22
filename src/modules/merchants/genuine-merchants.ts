@@ -28,12 +28,15 @@ import { sql as sqlTag, type SQL } from "drizzle-orm";
 import type { TenantStatus } from "./types";
 
 /**
- * Allowlist safety net — these six slugs ALWAYS appear in the default
+ * Allowlist safety net — these eight slugs ALWAYS appear in the default
  * view regardless of status or slug shape, so a real merchant can never
  * be hidden by the heuristic. Confirmed genuine by the 20 Jun 2026
- * production diagnosis. (`transcorp` is the internal Transcorp home
- * tenant; `hem`/`mlp` are real UAT production merchants; the other
- * three are the canonical demo merchants preserved by migration 0021.)
+ * production diagnosis and Love's 22 Jun 2026 ruling (eight genuine
+ * merchants). (`transcorp` is the internal Transcorp home tenant;
+ * `hem`/`mlp` are real UAT production merchants; `meal-plan-scheduler`/
+ * `dr-nutrition`/`fresh-butchers` are the canonical demo merchants
+ * preserved by migration 0021; `demo-bistro`/`demo-bistro1` are the
+ * Demo Bistro demo tenants, ruled genuine 22 Jun 2026.)
  */
 export const GENUINE_MERCHANT_SLUGS: readonly string[] = [
   "meal-plan-scheduler",
@@ -42,6 +45,8 @@ export const GENUINE_MERCHANT_SLUGS: readonly string[] = [
   "transcorp",
   "hem",
   "mlp",
+  "demo-bistro",
+  "demo-bistro1",
 ];
 
 /**
