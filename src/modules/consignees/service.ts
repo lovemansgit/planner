@@ -382,6 +382,24 @@ export async function countAllConsignees(
 }
 
 /**
+ * Item 3 (22 Jun 2026) — cross-tenant single-consignee fetch for the
+ * /admin/consignees/[id] detail view. Mirrors merchants `getMerchantById`:
+ * gates `consignee:read_all` and reads inside `withServiceRole` (RLS
+ * bypassed — the admin surface is cross-tenant by definition). Returns
+ * null when no row matches. The detail page applies the genuine-tenant
+ * gate (Item 1) by resolving the owning merchant separately.
+ */
+export async function getAdminConsigneeById(
+  ctx: RequestContext,
+  id: Uuid,
+): Promise<Consignee | null> {
+  requirePermission(ctx, "consignee:read_all");
+  return withServiceRole("transcorp_staff:get_consignee", (tx) =>
+    findConsigneeById(tx, id),
+  );
+}
+
+/**
  * Day-24 PM — tenant-scoped COUNT of consignees. Powers the hero
  * count card on tenant `/consignees`.
  */

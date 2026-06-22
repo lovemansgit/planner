@@ -285,31 +285,50 @@ function Row({ row }: { row: AdminTaskRow }) {
   // D56 Lane 5 — render the FINE courier_status (label + family colour + glyph),
   // falling back to the coarse internal_status when it is NULL (mirrors /tasks).
   const display = resolveCourierDisplay(row.task.courierStatus, row.task.internalStatus);
+  // Item 3: row → task detail; the POD cell keeps its own lightbox
+  // behaviour (no Link wrap there).
+  const detailHref = `/admin/tasks/${row.task.id}`;
   return (
-    <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
+    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
       <Td>
-        <span className="font-medium text-navy">{row.merchant.name}</span>
-        <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
-          {row.merchant.slug}
-        </span>
+        <Link href={detailHref} className="block">
+          <span className="font-medium text-navy">{row.merchant.name}</span>
+          <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
+            {row.merchant.slug}
+          </span>
+        </Link>
       </Td>
       <Td>
-        <span
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
-        >
-          <StatusIcon courierStatus={row.task.courierStatus} status={row.task.internalStatus} />
-          {display.label}
-        </span>
-      </Td>
-      <Td className="font-mono text-xs tabular-nums">{row.task.customerOrderNumber}</Td>
-      <Td className="tabular-nums">{row.task.deliveryDate}</Td>
-      <Td className="tabular-nums">
-        {row.task.deliveryStartTime.slice(0, 5)} – {row.task.deliveryEndTime.slice(0, 5)}
+        <Link href={detailHref} className="block">
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
+          >
+            <StatusIcon courierStatus={row.task.courierStatus} status={row.task.internalStatus} />
+            {display.label}
+          </span>
+        </Link>
       </Td>
       <Td className="font-mono text-xs tabular-nums">
-        {row.task.externalTrackingNumber ?? (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        )}
+        <Link href={detailHref} className="block">
+          {row.task.customerOrderNumber}
+        </Link>
+      </Td>
+      <Td className="tabular-nums">
+        <Link href={detailHref} className="block">
+          {row.task.deliveryDate}
+        </Link>
+      </Td>
+      <Td className="tabular-nums">
+        <Link href={detailHref} className="block">
+          {row.task.deliveryStartTime.slice(0, 5)} – {row.task.deliveryEndTime.slice(0, 5)}
+        </Link>
+      </Td>
+      <Td className="font-mono text-xs tabular-nums">
+        <Link href={detailHref} className="block">
+          {row.task.externalTrackingNumber ?? (
+            <span className="text-[color:var(--color-text-tertiary)]">—</span>
+          )}
+        </Link>
       </Td>
       <Td>
         <AdminPodCell task={row.task} />

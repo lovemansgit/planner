@@ -877,6 +877,21 @@ export async function listAllTasks(
 }
 
 /**
+ * Item 3 (22 Jun 2026) — cross-tenant single-task fetch for the
+ * /admin/tasks/[id] detail view. Gates `task:read_all` and reads inside
+ * `withServiceRole`. `findTaskById` loads the task's packages. Returns
+ * null when no row matches. The detail page applies the genuine-tenant
+ * gate (Item 1) by resolving the owning merchant separately.
+ */
+export async function getAdminTaskById(
+  ctx: RequestContext,
+  id: Uuid,
+): Promise<Task | null> {
+  requirePermission(ctx, "task:read_all");
+  return withServiceRole("transcorp_staff:get_task", (tx) => findTaskById(tx, id));
+}
+
+/**
  * Day 17 / Session A — list tasks for a single consignee within a
  * date range. Powers the consignee detail-page Calendar tab (Week
  * view) per brief §3.3.3. Read-only; no audit emit (R-4).
