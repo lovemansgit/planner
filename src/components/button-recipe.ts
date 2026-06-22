@@ -49,8 +49,10 @@ export function buttonClass(
 /* =====================================================================
  * Direction B ("Dispatch") button recipe — Phase 9 Step 3.2.
  *
- * The single button treatment Love picked (PR #568). Authoritative values:
- * memory/plans/day-57-phase9-visual-directions/direction-b-dispatch.html.
+ * Direction B is the skin Love selected for the Phase 9 rebuild (recorded in
+ * the build dispatch; explored in PR #568). Authoritative values come from that
+ * exploration's mockup: memory/plans/day-57-phase9-visual-directions/
+ * direction-b-dispatch.html (on the #568 branch — merge #568 to land it on main).
  * Sentence-case (D2), green primary (D1), label never wraps, only the
  * primary action lifts (round-0 cut), green focus ring (a11y floor).
  *

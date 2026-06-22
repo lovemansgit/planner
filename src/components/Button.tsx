@@ -82,7 +82,10 @@ function composeClasses(variant: Variant, size: BButtonSize, tone: ButtonTone, c
 
 export function Button(props: ButtonProps) {
   const {
-    variant = "primary",
+    // Default stays the legacy "outline" so the not-yet-migrated failed-pushes
+    // screen (whose 4 no-variant <Button>s rely on this default) renders
+    // byte-for-byte unchanged. New callers pass an explicit Direction-B variant.
+    variant = "outline",
     size = "md",
     tone = "strong",
     className = "",
