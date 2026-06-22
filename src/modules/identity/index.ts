@@ -22,6 +22,8 @@ export {
   type BuiltInRoleSlug,
 } from "./roles";
 
+export { roleLabel } from "./role-label";
+
 export { requirePermission } from "./require-permission";
 
 export { assertCanRemoveAssignments } from "./tenant-admin-invariant";
