@@ -25,7 +25,7 @@ import { CourierStatusFilter } from "@/app/(app)/tasks/_components/CourierStatus
 import type { CourierStatus } from "@/modules/integration";
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
-import type { Task } from "@/modules/tasks/types";
+import type { Task, TaskStatusFilter } from "@/modules/tasks/types";
 
 import {
   addDays,
@@ -85,7 +85,7 @@ export interface CalendarMonthViewProps {
    * fine state (mirrors /tasks); when set, the no-task skip markers are
    * suppressed (a skipped day has no delivery of the filtered status).
    */
-  readonly courierStatusFilter?: CourierStatus | null;
+  readonly courierStatusFilter?: TaskStatusFilter | null;
 }
 
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;

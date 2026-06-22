@@ -135,10 +135,10 @@ describe("projectDayDisplayStatus — NULL courier_status falls back to the coar
     expect(courierLabel(projectDayDisplayStatus(task("ASSIGNED", null), [], ANY_DATE))).toBe("Assigned");
   });
 
-  it("coarse ON_HOLD (NULL courier) renders 'On hold', not 'Scheduled'", () => {
+  it("coarse ON_HOLD (NULL courier) renders label-neutral '—' (D57 Item C), not a status word", () => {
     const label = courierLabel(projectDayDisplayStatus(task("ON_HOLD", null), [], ANY_DATE));
-    expect(label).toBe("On hold");
-    expect(label).not.toBe("Scheduled");
+    expect(label).toBe("—");
+    expect(label).not.toMatch(/hold|scheduled|retry|awaiting/i);
   });
 
   it("the three previously-folded coarse states are now three distinct labels", () => {

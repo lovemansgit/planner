@@ -594,6 +594,28 @@ describe("admin status filter — render alignment (D57)", () => {
     expect(sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=/i);
     expect(params.filter((p) => p === "OUT_FOR_DELIVERY")).toHaveLength(2);
   });
+
+  // D57 Item B/C — vocabulary widening + ON_HOLD suppression on the shared helper.
+  it("CREATED (coarse-only) matches via the fallback branch (Item B — selectable)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { status: "CREATED" });
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/t\.courier_status\s*=\s*\$\d+/i);
+    expect(sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=\s*\$\d+/i);
+    expect(params.filter((p) => p === "CREATED")).toHaveLength(2);
+  });
+
+  it("ON_HOLD is suppressed: predicate matches nothing, NO coarse internal_status branch (Item C)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { status: "ON_HOLD" });
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    // Only the never-true `courier_status = 'ON_HOLD'` literal — ON_HOLD legacy
+    // rows (NULL courier, internal_status='ON_HOLD') must NOT be matched, so the
+    // coarse fallback is deliberately absent for ON_HOLD.
+    expect(sql).toMatch(/t\.courier_status\s*=\s*'ON_HOLD'/i);
+    expect(sql).not.toMatch(/internal_status\s*=/i);
+    expect(params).not.toContain("ON_HOLD"); // it's a SQL literal, not a bound param
+  });
 });
 
 // ---------------------------------------------------------------------------

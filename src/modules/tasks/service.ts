@@ -156,6 +156,7 @@ import type {
   Task,
   TaskInternalStatus,
   TaskListRow,
+  TaskStatusFilter,
   UpdateTaskPatch,
 } from "./types";
 
@@ -959,8 +960,8 @@ export async function getConsigneeTaskCountByDayBucket(
 export async function countTasks(
   ctx: RequestContext,
   opts: {
-    // D56 Lane 3 — fine courier_status filter (mirrors ListTasksOpts.status).
-    readonly status?: CourierStatus;
+    // D57 Item B — render-aligned filter vocabulary (mirrors ListTasksOpts.status).
+    readonly status?: TaskStatusFilter;
     readonly searchTerm?: string;
     readonly dateFrom?: string;
     readonly dateTo?: string;
@@ -1017,7 +1018,7 @@ export async function countAllTasks(
  */
 export async function listAllTaskIds(
   ctx: RequestContext,
-  opts: { readonly status?: CourierStatus } = {},
+  opts: { readonly status?: TaskStatusFilter } = {},
 ): Promise<readonly Uuid[]> {
   requirePermission(ctx, "task:read");
   assertTenantScoped(ctx, "task:read");

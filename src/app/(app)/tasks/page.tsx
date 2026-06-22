@@ -43,6 +43,7 @@ import {
   listTasks,
   PRINT_LABELS_MAX_TASKS_PER_REQUEST,
   type TaskListRow,
+  type TaskStatusFilter,
 } from "@/modules/tasks";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
@@ -61,10 +62,9 @@ function normaliseDateRange(from: string, to: string): { from: string; to: strin
 import { PageSizeDropdown } from "./page-size-dropdown";
 import { TasksClient } from "./client";
 import { CourierStatusFilter } from "./_components/CourierStatusFilter";
-import type { CourierStatus } from "@/modules/integration";
 import {
   ALLOWED_PAGE_SIZES,
-  COURIER_STATUS_DISPLAY,
+  COURIER_STATUS_FILTER_OPTIONS,
   PAGE_SIZE_DEFAULT,
   parseCourierStatusParam,
   parsePageParam,
@@ -216,8 +216,12 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
 // D56 Lane 3 — the hero count band reacts to the fine courier_status filter.
 // Uses the shared display label (e.g. "Out for delivery") rather than
 // lower-casing the raw SCREAMING_SNAKE value.
-function buildCountLabel(status: CourierStatus | undefined, query: string): string {
-  const statusLabel = status ? COURIER_STATUS_DISPLAY[status].label.toLowerCase() : "";
+function buildCountLabel(status: TaskStatusFilter | undefined, query: string): string {
+  // D57 Item B — label from the filter-options set so CREATED/SKIPPED resolve
+  // too (the fine-only COURIER_STATUS_DISPLAY map has no entry for them).
+  const statusLabel = status
+    ? (COURIER_STATUS_FILTER_OPTIONS.find((o) => o.value === status)?.label ?? status).toLowerCase()
+    : "";
   if (query.length > 0 && status) {
     return `${statusLabel} matching "${query}"`;
   }

@@ -210,16 +210,22 @@ describe("COURIER_STATUS_DISPLAY catalogue", () => {
 });
 
 describe("COURIER_STATUS_FILTER_OPTIONS", () => {
-  it("lists all 14 fine states in canonical order (the dropdown adds 'All')", () => {
+  it("lists the 14 fine states then CREATED + SKIPPED; ON_HOLD is excluded (D57 Item B)", () => {
     expect(COURIER_STATUS_FILTER_OPTIONS.map((o) => o.value)).toEqual([
       ...COURIER_STATUS_VALUES,
+      "CREATED",
+      "SKIPPED",
     ]);
+    // No "On hold" option (and no invented "Retry"/"Awaiting").
+    expect(COURIER_STATUS_FILTER_OPTIONS.map((o) => o.value)).not.toContain("ON_HOLD");
   });
 
-  it("labels each option from the shared display map", () => {
-    for (const opt of COURIER_STATUS_FILTER_OPTIONS) {
-      expect(opt.label).toBe(COURIER_STATUS_DISPLAY[opt.value].label);
-    }
+  it("derives fine labels from the display map; CREATED/SKIPPED get plain labels", () => {
+    const byValue = new Map(COURIER_STATUS_FILTER_OPTIONS.map((o) => [o.value, o.label]));
+    expect(byValue.get("DELIVERED")).toBe(COURIER_STATUS_DISPLAY.DELIVERED.label);
+    expect(byValue.get("OUT_FOR_DELIVERY")).toBe(COURIER_STATUS_DISPLAY.OUT_FOR_DELIVERY.label);
+    expect(byValue.get("CREATED")).toBe("Created");
+    expect(byValue.get("SKIPPED")).toBe("Skipped");
   });
 });
 
@@ -230,11 +236,16 @@ describe("parseCourierStatusParam", () => {
     }
   });
 
-  it("drops old coarse-only values to no-filter (graceful bookmark degrade)", () => {
-    // CREATED → fine is ORDERED; ON_HOLD / SKIPPED have no fine spelling.
-    expect(parseCourierStatusParam("CREATED")).toBeUndefined();
-    expect(parseCourierStatusParam("ON_HOLD")).toBeUndefined();
-    expect(parseCourierStatusParam("SKIPPED")).toBeUndefined();
+  it("accepts the coarse-only states with real rows (CREATED, SKIPPED) — D57 Item B", () => {
+    expect(parseCourierStatusParam("CREATED")).toBe("CREATED");
+    expect(parseCourierStatusParam("SKIPPED")).toBe("SKIPPED");
+  });
+
+  it("recognises ON_HOLD so a hand-typed filter returns nothing (not All) — D57 Item C", () => {
+    // ON_HOLD is a valid filter value (the predicate matches no row) even though
+    // it is NOT a dropdown option — a legacy ?status=ON_HOLD must filter to 0,
+    // not silently degrade to the All view (which undefined would cause).
+    expect(parseCourierStatusParam("ON_HOLD")).toBe("ON_HOLD");
   });
 
   it("returns undefined for unknown / mis-cased / empty / missing / array params", () => {
@@ -284,6 +295,14 @@ describe("resolveCourierDisplay", () => {
     expect(resolveCourierDisplay(null, "SKIPPED").iconKey).toBeNull();
   });
 
+  it("renders ON_HOLD legacy rows label-neutral — no status word (D57 Item C)", () => {
+    const onHold = resolveCourierDisplay(null, "ON_HOLD");
+    expect(onHold.label).toBe("—");
+    // No "On hold" word, no invented "Retry"/"Awaiting" — minimal honest pill.
+    expect(onHold.label).not.toMatch(/hold|retry|awaiting/i);
+    expect(onHold.iconKey).toBeNull();
+  });
+
   it("coarse fallback preserves the legacy per-status render (no regression)", () => {
     // The legacy coarse pill catalogue (retired TASK_STATUS_FILTERS) pinned
     // verbatim so the NULL-courier fallback can't silently drift. SKIPPED is
@@ -295,7 +314,7 @@ describe("resolveCourierDisplay", () => {
       { value: "DELIVERED", label: "Delivered", pillClass: "bg-green/15 text-green" },
       { value: "FAILED", label: "Failed", pillClass: "bg-red/15 text-red" },
       { value: "CANCELED", label: "Cancelled", pillClass: "bg-[color:var(--color-text-tertiary)]/20 text-[color:var(--color-text-tertiary)]" },
-      { value: "ON_HOLD", label: "On hold", pillClass: "bg-[color:var(--color-text-secondary)]/20 text-[color:var(--color-text-secondary)]" },
+      { value: "ON_HOLD", label: "—", pillClass: "bg-stone-200/60 text-stone-600" },
     ];
     for (const f of legacy) {
       const resolved = resolveCourierDisplay(null, f.value);
