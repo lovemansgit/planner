@@ -23,6 +23,7 @@ import {
   NoTenantConfiguredError,
   UnauthorizedError,
 } from "@/shared/errors";
+import { formatPhone } from "@/shared/humanize";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
 
@@ -92,7 +93,7 @@ export default async function AdminConsigneeDetailPage({
 
         <Section title="Identity">
           <FieldRow label="Name" value={consignee.name} />
-          <FieldRow label="Phone" value={consignee.phone} mono />
+          <FieldRow label="Phone" value={formatPhone(consignee.phone)} mono />
           <FieldRow label="Email" value={consignee.email} />
           <FieldRow label="Merchant reference" value={consignee.externalRef} mono />
         </Section>

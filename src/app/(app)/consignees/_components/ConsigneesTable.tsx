@@ -9,6 +9,7 @@
 import Link from "next/link";
 
 import type { Consignee } from "@/modules/consignees";
+import { formatPhone } from "@/shared/humanize";
 
 import { CrmStateBadge } from "../[id]/_components/CrmStateBadge";
 
@@ -60,7 +61,7 @@ export function ConsigneesTable({ rows, query }: Props) {
                 {c.taskCount === 0 ? <NoTasksBadge /> : null}
               </div>
             </Td>
-            <Td className="tabular-nums">{c.phone}</Td>
+            <Td className="tabular-nums">{formatPhone(c.phone)}</Td>
             <Td>{c.emirateOrRegion}</Td>
             <Td>
               <CrmStateBadge state={c.crmState} />

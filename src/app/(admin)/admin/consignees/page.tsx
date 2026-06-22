@@ -43,6 +43,7 @@ import {
   NoTenantConfiguredError,
   UnauthorizedError,
 } from "@/shared/errors";
+import { formatPhone } from "@/shared/humanize";
 import { buildRequestContext } from "@/shared/request-context";
 
 import { AdminPageSizeDropdown } from "../../_components/AdminPageSizeDropdown";
@@ -202,7 +203,7 @@ function Row({ row }: { row: AdminConsigneeRow }) {
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
         <Link href={detailHref} className="block">
-          {row.consignee.phone}
+          {formatPhone(row.consignee.phone)}
         </Link>
       </Td>
       <Td className="text-[color:var(--color-text-secondary)]">

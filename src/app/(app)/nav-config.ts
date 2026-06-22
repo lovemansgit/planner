@@ -101,12 +101,12 @@ export const LANDING_CARDS: readonly LandingCard[] = [
   {
     label: "Onboard new consignee",
     path: "/consignees/new",
-    description: "Start a new merchant subscriber with one wizard.",
+    description: "Add a new consignee with one guided wizard.",
     permission: "consignee:create",
     extraPermissions: ["subscription:create"],
   },
   {
-    label: "Subscriber base",
+    label: "All consignees",
     path: "/consignees",
     description: "Search and manage all consignees.",
     permission: "consignee:read",
