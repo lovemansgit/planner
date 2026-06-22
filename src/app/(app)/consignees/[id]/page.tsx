@@ -57,6 +57,7 @@ import { listFailedPushTaskIdsForTenant } from "@/modules/failed-pushes";
 
 import { Toast } from "@/components/Toast";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
+import { formatPhone } from "@/shared/humanize";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
 import type { Uuid } from "@/shared/types";
@@ -359,7 +360,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
                 {consignee.name}
               </h1>
               <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-[color:var(--color-text-secondary)]">
-                <span className="tabular-nums">{consignee.phone}</span>
+                <span className="tabular-nums">{formatPhone(consignee.phone)}</span>
                 {consignee.email ? (
                   <>
                     <span className="text-[color:var(--color-text-tertiary)]">·</span>
@@ -597,7 +598,7 @@ function OverviewTab({
           </div>
           <div>
             <dt className="text-[color:var(--color-text-secondary)]">Phone</dt>
-            <dd className="mt-0.5 tabular-nums text-navy">{consignee.phone}</dd>
+            <dd className="mt-0.5 tabular-nums text-navy">{formatPhone(consignee.phone)}</dd>
           </div>
           {consignee.email ? (
             <div>

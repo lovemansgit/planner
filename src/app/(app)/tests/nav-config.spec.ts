@@ -91,14 +91,14 @@ describe("isActiveNavPath", () => {
 
 describe("visibleLandingCards", () => {
   // Day-22 §3.3.9 — completed brief 5-card workflow shortcut surface.
-  // Order is Onboard → Subscriber base → Today's deliveries →
+  // Order is Onboard → All consignees → Today's deliveries →
   // Today's tasks → Failed pushes (primary workflows top, monitoring
   // surfaces bottom).
 
   it("Tenant Admin sees all 5 cards", () => {
     expect(visibleLandingCards(TENANT_ADMIN).map((c) => c.label)).toEqual([
       "Onboard new consignee",
-      "Subscriber base",
+      "All consignees",
       "Today's deliveries",
       "Today's tasks",
       "Failed pushes",
@@ -108,7 +108,7 @@ describe("visibleLandingCards", () => {
   it("Ops Manager sees 4 cards (Failed pushes hidden)", () => {
     expect(visibleLandingCards(OPS_MANAGER).map((c) => c.label)).toEqual([
       "Onboard new consignee",
-      "Subscriber base",
+      "All consignees",
       "Today's deliveries",
       "Today's tasks",
     ]);
@@ -118,7 +118,7 @@ describe("visibleLandingCards", () => {
     // CS Agent holds consignee:read + task:read but NOT consignee:create
     // or subscription:create — Onboard card hides via extraPermissions.
     expect(visibleLandingCards(CS_AGENT).map((c) => c.label)).toEqual([
-      "Subscriber base",
+      "All consignees",
       "Today's deliveries",
       "Today's tasks",
     ]);

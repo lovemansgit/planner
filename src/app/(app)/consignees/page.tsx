@@ -1,4 +1,4 @@
-// /consignees — operator subscriber-base list.
+// /consignees — operator consignee list.
 //
 // Server component. Fetches via listConsignees through
 // buildRequestContext. Full chain:
@@ -82,7 +82,7 @@ export default async function ConsigneesPage({ searchParams }: ConsigneesPagePro
             </p>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">Consignees</h1>
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              Subscriber base. Onboard new consignees from here.
+              Everyone you deliver to. Onboard new consignees from here.
             </p>
           </div>
           {canOnboard ? (
