@@ -5,8 +5,11 @@ with a real caught bug, a real revision round, a real park with verdict +
 desktop push + email, a live Action auto-merge by the bot, SHA-pinning
 verified. The manual relay is retired.
 
-The operating procedure for the terminal builder + reviewer pair. Discipline
-source of truth: `memory/decision_workflow_autonomy_single_checkin.md` (see its
+The operating procedure for the terminal builder + reviewer pair. Governing
+operating model: `memory/BUILD-METHODOLOGY.md` (the Three-Role Build Methodology
+— read at bootstrap; this runbook is its planner Shape-3 implementation; the §2
+floors there are drift-exempt). Discipline source of truth:
+`memory/decision_workflow_autonomy_single_checkin.md` (see its
 §9 Day-52 PM amendment for the ruled autonomy model). Ruled design:
 `memory/design_shape3_orchestration_surface.md` @ `f2226af` + Love's Fork 1–6
 rulings (Day-52). Built deliberately NARROWER than the memo grants:
