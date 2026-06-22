@@ -137,6 +137,18 @@ export async function listAuditEventsForResource(
 export interface ListAuditEventsForSubscriptionParams {
   readonly subscriptionId: string;
   readonly limit: number;
+  /**
+   * Cross-tenant-safe scope. When set, the read is constrained with an
+   * explicit `AND tenant_id = ${tenantId}`. This is REQUIRED when the
+   * caller's tx runs under `withServiceRole` (RLS bypassed): the
+   * `metadata->>'subscription_id'` filter is NOT a tenant fence on its
+   * own — a crafted or colliding `subscription_id` in another tenant's
+   * metadata would otherwise match and leak. Omit it on RLS-scoped
+   * (`withTenant`) reads, where `app.current_tenant_id` already fences
+   * the scan. (Floor-5: do not rely on subscription_id uniqueness as the
+   * sole cross-tenant fence — Love-ruled 22 Jun 2026.)
+   */
+  readonly tenantId?: string;
 }
 
 /**
@@ -166,10 +178,19 @@ export async function listAuditEventsForSubscription(
   tx: DbTx,
   params: ListAuditEventsForSubscriptionParams,
 ): Promise<readonly AuditEventRecord[]> {
+  // Floor-5 cross-tenant fence: under withServiceRole the
+  // subscription_id filter alone is not tenant-scoped. When the caller
+  // supplies tenantId, constrain explicitly; RLS-scoped callers omit it.
+  const tenantScope =
+    params.tenantId !== undefined
+      ? sqlTag`AND tenant_id = ${params.tenantId}`
+      : sqlTag``;
+
   const rows = await tx.execute<AuditEventRow>(sqlTag`
     SELECT ${SELECT_COLUMNS}
     FROM audit_events
     WHERE metadata->>'subscription_id' = ${params.subscriptionId}
+      ${tenantScope}
     ORDER BY occurred_at DESC, id DESC
     LIMIT ${params.limit}
   `);

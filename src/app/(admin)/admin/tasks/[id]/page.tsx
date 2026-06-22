@@ -5,12 +5,12 @@
 // merchant — the merchant lookup is also Item 1's genuine-tenant gate
 // (a task under a test tenant 404s). Read-only fields view.
 //
-// FOLLOW-UP (flagged in the PR, not built here): embedding the rich
-// SF webhook TaskTimelineDrawer on this admin page. It is a client
-// drawer whose lazy timeline/history server actions are written for the
-// tenant-scoped operator context; wiring it cross-tenant needs its own
-// verification + reviewer pass. The fields view below is the read-only
-// detail Love asked for.
+// Timeline drawer (Love-ruled 22 Jun 2026): the rich SF webhook
+// TaskTimelineDrawer is embedded here via AdminTaskTimeline, which
+// injects the CROSS-TENANT admin actions (getAdminTask*Action — gate
+// `task:read_all`, withServiceRole, resolve the task's own tenant). The
+// subscription-event family read is explicitly fenced to the task's
+// tenant (Floor-5) so the cross-tenant read cannot leak.
 
 import { randomUUID } from "node:crypto";
 
@@ -30,6 +30,8 @@ import {
 } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
+
+import { AdminTaskTimeline } from "./_components/AdminTaskTimeline";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -92,9 +94,17 @@ export default async function AdminTaskDetailPage({ params }: AdminTaskDetailPag
               </span>
             </p>
           </div>
-          <span className="inline-flex shrink-0 items-center bg-[color:var(--color-tint-navy-subtle)] px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy">
-            {task.courierStatus ?? task.internalStatus}
-          </span>
+          <div className="flex shrink-0 flex-col items-end gap-3">
+            <span className="inline-flex items-center bg-[color:var(--color-tint-navy-subtle)] px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy">
+              {task.courierStatus ?? task.internalStatus}
+            </span>
+            <AdminTaskTimeline
+              consigneeId={task.consigneeId}
+              taskId={task.id}
+              deliveryDate={task.deliveryDate}
+              awb={task.externalTrackingNumber}
+            />
+          </div>
         </header>
 
         <Section title="Delivery">
