@@ -42,3 +42,30 @@ This is a **plan amendment only** — still no code, no migration created, no re
 [[followup_migration_drift_check]] (0035 applied at PR-prep) · [[followup_internal_task_status_lossiness]] (the FAILED-bucket lossiness this partially addresses) · plan: `memory/plans/day-56-phase-8-status-distinct-render.md`.
 
 **Open questions:** 8, each with one recommendation — see plan §11. Love can answer "all recommendations."
+
+---
+
+## Day-57 amendments (append-only — Love-ruled)
+
+These supersede specific D56 dispositions above. Per the append-only convention,
+the original entries stand as the record of what was decided then; the
+supersession lives here.
+
+- **Supersedes OQ-3 — Day-57.** The operator + admin status filter is widened
+  from the 14 fine courier states to **16**: it adds the coarse-only states with
+  real rows that have no fine spelling — **CREATED ("Created")** and **SKIPPED
+  ("Skipped")**. **ON_HOLD is excluded from the dropdown**, and its coarse render
+  label is **neutralised to "—"** (no "On hold" word, no invented "Retry"/
+  "Awaiting" word); ON_HOLD remains a recognised filter value that matches no row
+  (legacy ON_HOLD rows are All-only). Filter is render-aligned via the shared
+  `buildCourierStatusFilter`. Filter/render only; no migration. Love-ruled.
+  (Lands via PR #559.)
+
+- **Supersedes OQ-5 — Day-57.** The OQ-5 "calendar forward-only" rule (NULL-courier
+  rows All-only on the consignee-detail calendar) is **aligned** to the widened
+  16-state vocabulary: the consignee-detail calendar filter now matches
+  CREATED/SKIPPED (and the NULL-courier coarse-fallback rows) the same way the
+  /tasks + /admin/tasks filters do, rather than returning 0. Filter only; no
+  migration. Love-ruled. (Placement: fast-follow PR — the consignee-calendar
+  client filter `filterTasksByCourierStatus` moves from fine-only to the shared
+  render-aligned predicate.)
