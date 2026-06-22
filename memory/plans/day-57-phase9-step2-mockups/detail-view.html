@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phase 9 · Step 2 mockup — DetailView</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Mulish:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --navy:#252d60; --green:#3e7c4b; --paper:#faf8f4; --ivory:#f2eee6;
+    --stone-200:#d3cec2; --stone-600:#4e4a42; --ink:#141414;
+    --green-bg:#e3efe5; --border:rgba(37,45,96,.12); --border-strong:rgba(37,45,96,.22);
+    --tint:rgba(37,45,96,.025); --t2:rgba(37,45,96,.62); --t3:rgba(37,45,96,.45);
+    --display:'Manrope',system-ui,sans-serif; --body:'Mulish',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--body);background:var(--paper);color:var(--ink);padding:40px 24px;font-size:15px;line-height:1.5}
+  .wrap{max-width:1200px;margin:0 auto}            /* one PageShell width (Gap E / D3) */
+  .legend{font-size:12px;color:var(--t2);background:var(--ivory);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:26px}
+  .legend b{color:var(--green)}
+  .back{font-size:12px;color:var(--t3);text-decoration:none;font-weight:600}
+  .eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--t3);font-weight:600;font-family:var(--display);margin-top:14px}
+  /* DetailHeader */
+  .dhead{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding-bottom:20px;border-bottom:1px solid var(--border-strong);margin-bottom:8px}
+  h1{font-family:var(--display);font-weight:700;font-size:32px;letter-spacing:-.015em;color:var(--navy);margin:2px 0 6px}
+  .contact{color:var(--t2);font-size:14px}
+  .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--display);font-size:12px;font-weight:600;padding:3px 11px;border-radius:999px;background:var(--green-bg);color:#2c5d39}
+  .pill::before{content:"";width:6px;height:6px;border-radius:999px;background:currentColor;opacity:.85}
+  .btn{font-family:var(--display);font-weight:600;font-size:13px;height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--border-strong);background:transparent;color:var(--navy);white-space:nowrap;cursor:pointer}
+  .btn-primary{background:var(--green);color:#fff;border-color:var(--green)}
+  /* tabs (merchant detail keeps these; admin can opt out) */
+  .tabs{display:flex;gap:22px;border-bottom:1px solid var(--border);margin:18px 0 26px}
+  .tab{font-family:var(--display);font-size:14px;font-weight:600;color:var(--t3);padding:0 0 12px;cursor:pointer}
+  .tab.on{color:var(--navy);box-shadow:inset 0 -2px 0 var(--green)}
+  /* Sections + two-column FieldRow grid (Gap D / D3) */
+  .section{margin-bottom:30px}
+  .sectlabel{font-family:var(--display);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:700;margin-bottom:14px}
+  .fields{display:grid;grid-template-columns:1fr 1fr;gap:18px 60px}      /* fills the width, not a stranded 560px */
+  .field{display:flex;flex-direction:column;gap:3px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+  .field .label{font-size:13px;color:var(--t3);font-weight:600}          /* sentence case (D2) */
+  .field .value{font-size:15px;color:var(--ink)}
+  .field .value.navy{color:var(--navy);font-weight:600}
+  .empty{font-size:14px;color:var(--t3);font-style:italic}              /* inline EmptyState, not a bare "—" */
+  .full{grid-column:1 / -1}
+  .small{font-size:12px;color:var(--t3);margin-top:20px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="legend">Mockup · <b>DetailView</b> (Gap D) — one template for <b>admin and merchant</b>: two-column fill (D3), sentence-case labels (D2), shared <b>FieldRow</b>, inline empty states, one header with StatusBadge + buttons. Kills the stranded ~560px column and the recurring "Auth method" indent bug.</div>
+
+  <a class="back" href="#">← Consignees</a>
+  <div class="eyebrow">Transcorp · Consignee</div>
+
+  <div class="dhead">
+    <div>
+      <h1>Zoro</h1>
+      <div class="contact">+971 50 333 3333 · zoro@example.com · Dubai</div>
+    </div>
+    <div class="actions">
+      <span class="pill">Active</span>
+      <button class="btn">Change state</button>
+      <button class="btn">Edit</button>
+      <button class="btn btn-primary">+ New subscription</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab on">Overview</div><div class="tab">Subscription</div><div class="tab">Calendar</div><div class="tab">History</div>
+  </div>
+
+  <div class="section">
+    <div class="sectlabel">Contact</div>
+    <div class="fields">
+      <div class="field"><span class="label">Name</span><span class="value navy">Zoro</span></div>
+      <div class="field"><span class="label">Phone</span><span class="value">+971 50 333 3333</span></div>
+      <div class="field"><span class="label">Email</span><span class="value">zoro@example.com</span></div>
+      <div class="field"><span class="label">Merchant reference</span><span class="empty">Not set</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="sectlabel">Address</div>
+    <div class="fields">
+      <div class="field full"><span class="label">Address line</span><span class="value">Villa 2222, Tecom</span></div>
+      <div class="field"><span class="label">District</span><span class="value">Tecom</span></div>
+      <div class="field"><span class="label">Emirate</span><span class="value">Dubai</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="sectlabel">Notes</div>
+    <div class="fields">
+      <div class="field full"><span class="label">Delivery notes</span><span class="value">Always leave at door and complete the empty bags.</span></div>
+      <div class="field"><span class="label">Internal notes</span><span class="empty">Not set</span></div>
+      <div class="field"><span class="label">Created</span><span class="value">20 Jun 2026</span></div>
+    </div>
+  </div>
+
+  <p class="small">Fixes from the audit: A2/A21 "Auth method" indent bug (every value renders through one FieldRow) · admin-vs-merchant detail divergence → one template · stranded ~560px column → two-column fill · raw E.164 phone → formatted · bare "—" → inline "Not set" · uppercase labels → sentence case.</p>
+</div>
+</body>
+</html>

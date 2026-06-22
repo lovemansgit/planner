@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phase 9 · Step 2 mockup — StatusBadge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Mulish:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --navy:#252d60; --green:#3e7c4b; --paper:#faf8f4; --ivory:#f2eee6;
+    --stone-200:#d3cec2; --stone-600:#4e4a42; --ink:#141414;
+    --amber:#e8a33c; --amber-bg:#fbe4bd; --amber-deep:#8e5a14;
+    --red:#d93a2b; --red-bg:#fbe3e0; --green-bg:#e3efe5; --navy-bg:#e6e8f1; --stone-bg:#eceae4;
+    --border:rgba(37,45,96,.12); --t2:rgba(37,45,96,.62); --t3:rgba(37,45,96,.45);
+    --display:'Manrope',system-ui,sans-serif; --body:'Mulish',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--body);background:var(--paper);color:var(--ink);padding:40px 24px;font-size:15px}
+  .wrap{max-width:980px;margin:0 auto}
+  .legend{font-size:12px;color:var(--t2);background:var(--ivory);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:30px}
+  .legend b{color:var(--green)}
+  h1{font-family:var(--display);font-weight:700;font-size:28px;color:var(--navy);letter-spacing:-.01em;margin-bottom:4px}
+  .sub{color:var(--t2);margin-bottom:30px}
+  h2{font-family:var(--display);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);font-weight:700;margin:30px 0 12px}
+  .grid{display:grid;grid-template-columns:120px 1fr;gap:14px 24px;align-items:center;background:var(--ivory);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+  .dom{font-family:var(--display);font-weight:600;font-size:13px;color:var(--navy)}
+  .row{display:flex;flex-wrap:wrap;gap:8px}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--display);font-size:12px;font-weight:600;padding:3px 11px;border-radius:999px;line-height:1.4}
+  .pill::before{content:"";width:6px;height:6px;border-radius:999px;background:currentColor;opacity:.85}
+  .active{background:var(--green-bg);color:#2c5d39}
+  .created{background:var(--navy-bg);color:#2f3870}
+  .attention{background:var(--amber-bg);color:var(--amber-deep)}
+  .failed{background:var(--red-bg);color:#a12a1f}
+  .neutral{background:var(--stone-bg);color:var(--stone-600)}
+  .tone-tip{font-size:12px;color:var(--t3);margin-top:8px}
+  /* current-state contrast block */
+  .before{border:1px solid var(--border);border-radius:10px;padding:18px 20px;background:#fff}
+  .before .item{display:flex;align-items:center;gap:14px;padding:8px 0;border-bottom:1px solid var(--border)}
+  .before .item:last-child{border-bottom:0}
+  .before .what{font-size:12px;color:var(--t2);width:230px}
+  .legacy-pillpale{background:#eaf3ec;color:#7fae8b;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;padding:3px 9px;border-radius:6px}
+  .legacy-strike{border:1px solid var(--stone-200);color:var(--stone-600);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;padding:3px 9px;border-radius:6px;text-decoration:line-through}
+  .legacy-dot{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:#2c5d39}
+  .legacy-dot::before{content:"●  ";color:#2c5d39}
+  .legacy-bare{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.1em;color:var(--t3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="legend">Mockup · <b>StatusBadge</b> (Gap B) — one pill family maps every status to a fixed tone + humanised label, replacing today's four different styles. Built on the existing <code>Badge</code> shell. <b>Task statuses excluded</b> — the fast-follow lane owns those.</div>
+  <h1>One status, one rendering</h1>
+  <div class="sub">A <b>StatusBadge</b> takes the raw status + its domain and owns the colour, the label, and the shape. Callers never pick a colour again.</div>
+
+  <h2>Proposed — one family across domains</h2>
+  <div class="grid">
+    <div class="dom">Subscription</div>
+    <div class="row"><span class="pill active">Active</span><span class="pill attention">Paused</span><span class="pill neutral">Ended</span></div>
+    <div class="dom">CRM state</div>
+    <div class="row"><span class="pill active">Active</span><span class="pill attention">At risk</span><span class="pill neutral">Churned</span></div>
+    <div class="dom">Delivery push</div>
+    <div class="row"><span class="pill attention">Unresolved</span><span class="pill active">Resolved</span></div>
+    <div class="dom">Task<br><span style="font-weight:400;font-size:11px;color:var(--t3)">(fast-follow lane)</span></div>
+    <div class="row" style="opacity:.55"><span class="pill created">Created</span><span class="pill active">Assigned</span><span class="pill active">Delivered</span><span class="pill neutral">Skipped</span><span class="pill failed">Cancelled</span><span class="pill failed">Failed</span></div>
+  </div>
+  <div class="tone-tip">Tones from brand tokens — <b>green</b> healthy · <b>navy</b> new/created · <b>amber</b> attention/paused · <b>red</b> failed/cancelled · <b>stone</b> ended/neutral.<br>The task row is illustrative of <em>tone logic only</em> — the fast-follow lane sets the final task-status map.</div>
+
+  <h2>Today — the four styles this replaces</h2>
+  <div class="before">
+    <div class="item"><div class="what">Merchants / CRM (pale low-contrast pill)</div><span class="legacy-pillpale">Active</span></div>
+    <div class="item"><div class="what">Consignees "Churned" (outline + strikethrough)</div><span class="legacy-strike">Churned</span></div>
+    <div class="item"><div class="what">Subscriptions (coloured dot + text)</div><span class="legacy-dot">Active</span></div>
+    <div class="item"><div class="what">Task "Skipped" / "Cancelled" (bare grey text, no badge)</div><span class="legacy-bare">Skipped</span></div>
+  </div>
+  <div class="tone-tip">Same four concepts, four constructions — and on the task detail a status renders as a pill <em>and</em> as plain text on one page. The map above makes it one.</div>
+</div>
+</body>
+</html>
