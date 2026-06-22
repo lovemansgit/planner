@@ -225,11 +225,10 @@ describe("computeTranscorpAdminMetrics", () => {
     });
   });
 
-  it("emits no tenant-scoped WHERE predicate (cross-tenant aggregate)", async () => {
+  it("fences every counter to genuine merchants (Item 1 — no test-tenant inflation)", async () => {
     const tx = makeStubTx([[]]);
     await computeTranscorpAdminMetrics(tx, TODAY);
     const { sql, params } = compile(tx.execute.mock.calls[0][0]);
-    expect(sql).not.toMatch(/tenant_id\s*=/);
     expect(sql).toMatch(/FROM tenants/);
     expect(sql).toMatch(/status = 'active'/);
     expect(sql).toMatch(/internal_status = 'DELIVERED'/);
@@ -237,6 +236,16 @@ describe("computeTranscorpAdminMetrics", () => {
     expect(sql).toMatch(/internal_status = 'FAILED'/);
     expect(sql).toMatch(/INTERVAL '7 days'/);
     expect(params).toContain(TODAY);
+    // The genuine-tenant fence (buildGenuineTenantsFilter) is applied to the
+    // merchants count AND to each task counter (joined to tenants). The fence
+    // markers — allowlist `slug IN (...)`, the `slug !~ <8-hex>` test pattern,
+    // and the canonical params — must be present.
+    expect(sql).toMatch(/slug\s+in\s*\(/i);
+    expect(sql).toMatch(/slug\s*!~/i);
+    expect(params).toContain("[0-9a-f]{8}");
+    expect(params).toContain("transcorp");
+    // Each task counter joins tenants so the fence reaches the task rows.
+    expect(sql).toMatch(/JOIN tenants ten ON ten\.id = tk\.tenant_id/i);
   });
 
   it("coerces bigint strings to numbers", async () => {
@@ -285,11 +294,15 @@ describe("listTopMerchantsTodayWithTaskCount", () => {
     expect(sql).toMatch(/JOIN tenants/);
     expect(sql).toMatch(/tasks\.delivery_date = /);
     expect(sql).toMatch(/t\.status = 'active'/);
+    // Item 1 fence — the leaderboard excludes automated-test tenants.
+    expect(sql).toMatch(/t\.slug\s+in\s*\(/i);
+    expect(sql).toMatch(/t\.slug\s*!~/i);
     expect(sql).toMatch(/GROUP BY t\.id, t\.name, t\.slug/);
     expect(sql).toMatch(/ORDER BY task_count DESC/);
     expect(sql).toMatch(/LIMIT /);
     expect(params).toContain(TODAY);
     expect(params).toContain(10);
+    expect(params).toContain("transcorp");
   });
 
   it("clamps limit to [1, 100]", async () => {
@@ -350,9 +363,13 @@ describe("listPerMerchantBreakdown", () => {
   it("LEFT JOINs tasks on tenant_id (zero-task merchants still appear)", async () => {
     const tx = makeStubTx([[]]);
     await listPerMerchantBreakdown(tx, TODAY);
-    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
     expect(sql).toMatch(/FROM tenants t\s*LEFT JOIN tasks/);
     expect(sql).toMatch(/t\.status = 'active'/);
+    // Item 1 fence — per-merchant breakdown excludes automated-test tenants.
+    expect(sql).toMatch(/t\.slug\s+in\s*\(/i);
+    expect(sql).toMatch(/t\.slug\s*!~/i);
+    expect(params).toContain("transcorp");
     expect(sql).toMatch(/ORDER BY t\.name ASC/);
   });
 
