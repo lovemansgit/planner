@@ -12,6 +12,8 @@
 import Link from "next/link";
 import { useActionState } from "react";
 
+import { Button } from "@/components/Button";
+
 import {
   updateUserAction,
   type UpdateUserActionResult,
@@ -100,13 +102,9 @@ export function UserEditForm({
         >
           ← Cancel
         </Link>
-        <button
-          type="submit"
-          disabled={pending}
-          className="inline-flex items-center rounded-sm border border-navy bg-navy px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" variant="primary" disabled={pending}>
           {pending ? "Saving…" : "Save changes"}
-        </button>
+        </Button>
       </div>
     </form>
   );
