@@ -11,6 +11,8 @@
 
 import { useActionState } from "react";
 
+import { Button } from "@/components/Button";
+
 import {
   enableUserAction,
   type UserStatusActionResult,
@@ -37,13 +39,9 @@ export function UserEnableButton({ userId }: UserEnableButtonProps) {
 
   return (
     <form action={formAction} className="inline-flex flex-col items-end gap-1">
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex items-center justify-center rounded-sm border border-stone-200 bg-paper px-3 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-navy transition-colors duration-[120ms] ease-out hover:border-navy hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
-      >
+      <Button type="submit" variant="secondary" size="sm" disabled={pending}>
         {pending ? "Enabling…" : "Enable"}
-      </button>
+      </Button>
       {errorMessage ? (
         <span
           role="alert"

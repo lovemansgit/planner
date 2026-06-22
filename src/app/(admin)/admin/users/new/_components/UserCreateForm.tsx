@@ -20,6 +20,8 @@
 import Link from "next/link";
 import { useActionState, useMemo, useState } from "react";
 
+import { Button } from "@/components/Button";
+
 import {
   createUserAction,
   type CreateUserActionResult,
@@ -177,13 +179,9 @@ export function UserCreateForm({
         >
           ← Cancel
         </Link>
-        <button
-          type="submit"
-          disabled={pending || tenantOptions.length === 0}
-          className="inline-flex items-center rounded-sm border border-navy bg-navy px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" variant="primary" disabled={pending || tenantOptions.length === 0}>
           {pending ? "Creating…" : "Create user"}
-        </button>
+        </Button>
       </div>
     </form>
   );
