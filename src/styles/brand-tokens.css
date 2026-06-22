@@ -132,6 +132,25 @@
   --shadow-b-rest: 0 1px 2px rgba(37, 45, 96, 0.12);      /* primary at rest */
   --shadow-b-lift: 0 3px 10px -3px rgba(62, 124, 75, 0.55); /* primary on hover — the lift */
 
+  /* StatusBadge status-tone map (Phase 9 · Step 3.3, #558 Gap B).
+   * Soft fill + ink per locked tone; values from the B+ mockup
+   * (memory/plans/day-58-phase9-direction-b-plus/direction-b-plus.html):
+   *   green = healthy/active · amber = paused/attention · red = failed/at-risk ·
+   *   stone = ended/neutral · navy = created/new.
+   * Referenced directly via [color:var(--…)] (no Tailwind opacity), so no
+   * -rgb channel companions are needed. The base navy/green/amber/red brand
+   * hexes are unchanged — these are derived soft surfaces, not a re-palette. */
+  --color-status-active-bg: #e8f0e9;
+  --color-status-active-ink: #2c5d39;
+  --color-status-paused-bg: #f7ead0;
+  --color-status-paused-ink: #7c5210;
+  --color-status-risk-bg: #f8e3df;
+  --color-status-risk-ink: #9a2b1e;
+  --color-status-ended-bg: #edece5;
+  --color-status-ended-ink: #5a564c;
+  --color-status-new-bg: #e6e8f1;
+  --color-status-new-ink: #2b3266;
+
   /* Type scale tokens (brief v1.4 §3.3.11). Values are size / line-height pairs in rem; weight + tracking declared in component CSS or Tailwind utility classes. */
   --text-display-xl-size: 6rem;     /* 96px (lower bound; mobile/tablet — desktop scales up to 128px via fluid utility) */
   --text-display-xl-line: 0.95;
