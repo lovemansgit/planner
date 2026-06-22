@@ -80,6 +80,18 @@ export function gutterThClass(): string {
   return "w-1 p-0 border-b border-[color:var(--color-border-strong)]";
 }
 
+// Static per-tone classes — NOT a dynamic `bg-[…${tone}…]` template. Tailwind
+// scans source for literal class names at build time; an interpolated class
+// emits an unparseable rule (the `$` breaks CSS). Mirror the TONE record in
+// status-badge-recipe.ts so every full class name exists literally in source.
+const LED: Record<StatusTone, string> = {
+  active: "bg-[color:var(--color-led-active)]",
+  paused: "bg-[color:var(--color-led-paused)]",
+  risk: "bg-[color:var(--color-led-risk)]",
+  ended: "bg-[color:var(--color-led-ended)]",
+  new: "bg-[color:var(--color-led-new)]",
+};
+
 export function gutterTdClass(tone: StatusTone): string {
-  return `w-1 p-0 bg-[color:var(--color-led-${tone})]`;
+  return `w-1 p-0 ${LED[tone]}`;
 }
