@@ -46,6 +46,8 @@ import {
   enableAuthUser as defaultEnableAuthUser,
   resetAuthUserPassword as defaultResetAuthUserPassword,
 } from "./auth-admin";
+import { buildGenuineTenantsFilter } from "../merchants/genuine-merchants";
+
 import { requirePermission } from "./require-permission";
 import { ROLES, type BuiltInRoleSlug } from "./roles";
 import { assertCanRemoveAssignments } from "./tenant-admin-invariant";
@@ -484,12 +486,14 @@ export interface ListAllUsersOpts {
 }
 
 /**
- * Cross-tenant list of users for the /admin/users surface. Filters
- * out archived tenants in line with the Day-24 admin-list archive
- * filter. ILIKE on email when `searchTerm` is non-empty. Joined with
- * roles via a LATERAL aggregate so each row carries every role slug
- * the user holds across their tenant (always 1 in v1.5, but the
- * shape generalises).
+ * Cross-tenant list of users for the /admin/users surface. Item 1
+ * (22 Jun 2026): gated by the shared genuine-tenant predicate
+ * (buildGenuineTenantsFilter) so users belonging to system-generated
+ * test tenants are NEVER visible here — subsumes the Day-24 archived
+ * hide and adds the 8-hex test-tenant exclusion. ILIKE on email when
+ * `searchTerm` is non-empty. Joined with roles via a LATERAL aggregate
+ * so each row carries every role slug the user holds across their tenant
+ * (always 1 in v1.5, but the shape generalises).
  *
  * Permission gate: `merchant:read_all` (Transcorp-only surface).
  * Cross-tenant by definition.
@@ -539,7 +543,8 @@ export async function listAllUsers(
         ) AS role_slugs
       FROM users u
       JOIN tenants t ON t.id = u.tenant_id
-      WHERE t.status != 'archived'
+      WHERE 1 = 1
+        ${buildGenuineTenantsFilter("t")}
         ${searchFilter}
       ORDER BY u.created_at DESC
       LIMIT ${limit} OFFSET ${offset}

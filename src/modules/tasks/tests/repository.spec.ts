@@ -580,15 +580,27 @@ describe("listTasksBySubscription", () => {
   });
 });
 
-describe("listAllTasksRows — archive filter", () => {
-  // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
-  // belonging to archived tenants so the bulk CI-leak archive doesn't
-  // leak rows through /admin/tasks at demo time.
-  it("includes the ten.status != 'archived' predicate", async () => {
+describe("listAllTasksRows — genuine-tenant filter (Item 1)", () => {
+  // Love's ruling (22 Jun 2026): test merchants and their tasks must
+  // NEVER be visible in admin. The shared genuine-tenant predicate
+  // (buildGenuineTenantsFilter) now gates this cross-tenant SELECT —
+  // subsuming the Day-24 archived hide and adding the test-tenant exclude.
+  it("applies the shared genuine-tenant predicate over the ten alias", async () => {
     const tx = makeStubTx([[]]);
     await listAllTasksRows(tx);
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    expect(captured.sql).toMatch(/ten\.slug\s+in\s*\(/i);
+    expect(captured.sql).toMatch(/ten\.status\s+in\s*\(/i);
+    expect(captured.sql).toMatch(/ten\.slug\s*!~\s*\$\d+/i);
+    expect(captured.params).toContain("[0-9a-f]{8}");
+    expect(captured.params).toContain("transcorp");
+  });
+
+  it("no longer emits the bare ten.status != 'archived' clause (subsumed)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx);
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).not.toMatch(/ten\.status\s*!=\s*'archived'/i);
   });
 });
 
@@ -649,7 +661,9 @@ describe("countAllTasksRows (Day-24 PM)", () => {
     expect(captured.sql).toMatch(/FROM tasks t/i);
     expect(captured.sql).toMatch(/JOIN tenants ten/i);
     expect(captured.sql).toMatch(/LEFT JOIN consignees c/i);
-    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    // Item 1: same shared genuine-tenant predicate as listAllTasksRows.
+    expect(captured.sql).toMatch(/ten\.slug\s*!~\s*\$\d+/i);
+    expect(captured.sql).not.toMatch(/ten\.status\s*!=\s*'archived'/i);
     expect(captured.sql).not.toMatch(/ORDER BY/i);
     expect(captured.sql).not.toMatch(/LIMIT/i);
   });

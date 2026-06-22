@@ -47,6 +47,7 @@ import type { DbTx } from "@/shared/db";
 import { ConflictError, NotFoundError } from "@/shared/errors";
 import type { IsoTimestamp, Uuid } from "@/shared/types";
 
+import { buildGenuineTenantsFilter } from "../merchants/genuine-merchants";
 import type { TenantStatus } from "../merchants/types";
 
 import type {
@@ -358,7 +359,7 @@ export async function listAllSubscriptionsRows(
     FROM subscriptions s
     JOIN tenants ten ON ten.id = s.tenant_id
     WHERE 1 = 1
-      AND ten.status != 'archived'
+      ${buildGenuineTenantsFilter("ten")}
       ${merchantFilter}
     ORDER BY s.created_at DESC, s.id DESC
     LIMIT ${limit} OFFSET ${offset}

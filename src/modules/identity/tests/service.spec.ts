@@ -5,17 +5,20 @@
 // invariant precheck, mutation, post-commit audit — without standing
 // up real Postgres or audit infra.
 
+import { type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../shared/db", () => ({
   withTenant: vi.fn(),
+  withServiceRole: vi.fn(),
 }));
 
 vi.mock("../../audit", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { withTenant } from "../../../shared/db";
+import { withServiceRole, withTenant } from "../../../shared/db";
 import {
   ConflictError,
   ForbiddenError,
@@ -26,10 +29,17 @@ import type { RequestContext } from "../../../shared/tenant-context";
 import type { Permission } from "../../../shared/types";
 
 import { emit } from "../../audit";
-import { deleteRoleAssignment, deleteUser } from "../service";
+import { deleteRoleAssignment, deleteUser, listAllUsers } from "../service";
 
 const mockWithTenant = vi.mocked(withTenant);
+const mockWithServiceRole = vi.mocked(withServiceRole);
 const mockEmit = vi.mocked(emit);
+
+const dialect = new PgDialect();
+function compileSql(query: unknown): { sql: string; params: unknown[] } {
+  const compiled = dialect.sqlToQuery(query as SQL);
+  return { sql: compiled.sql, params: compiled.params };
+}
 
 const TENANT_ID = "00000000-0000-0000-0000-00000000000a";
 const ACTOR_USER_ID = "00000000-0000-0000-0000-00000000aaaa";
@@ -55,6 +65,7 @@ function userCtx(
 
 beforeEach(() => {
   mockWithTenant.mockReset();
+  mockWithServiceRole.mockReset();
   mockEmit.mockReset();
   mockEmit.mockResolvedValue(undefined);
 });
@@ -251,5 +262,50 @@ describe("deleteUser", () => {
 
     await expect(deleteUser(ctx, TARGET_USER_ID)).resolves.toBeUndefined();
     expect(mockEmit).toHaveBeenCalledOnce();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// listAllUsers — genuine-tenant filter (Item 1, 22 Jun 2026)
+// -----------------------------------------------------------------------------
+// Love's ruling: users belonging to system-generated test tenants must
+// NEVER be visible on the admin /admin/users surface. The shared
+// genuine-tenant predicate (merchants/genuine-merchants.ts) now gates the
+// cross-tenant user list — subsuming the prior `t.status != 'archived'`
+// hide and adding the 8-hex test-tenant exclusion. No DB: the captured
+// tagged template is compiled to its bound `$N` form via PgDialect.
+
+describe("listAllUsers — genuine-tenant filter (Item 1)", () => {
+  function captureListAllUsersQuery() {
+    const executed: unknown[] = [];
+    const tx = {
+      execute: vi.fn(async (q: unknown) => {
+        executed.push(q);
+        return [];
+      }),
+    };
+    mockWithServiceRole.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (async (_label: string, fn: (t: any) => unknown) => fn(tx)) as any,
+    );
+    return executed;
+  }
+
+  it("applies the shared genuine-tenant predicate over the t alias", async () => {
+    const executed = captureListAllUsersQuery();
+    await listAllUsers(userCtx(["merchant:read_all"]), {});
+    const { sql, params } = compileSql(executed[0]);
+    expect(sql).toMatch(/t\.slug\s+in\s*\(/i);
+    expect(sql).toMatch(/t\.status\s+in\s*\(/i);
+    expect(sql).toMatch(/t\.slug\s*!~\s*\$\d+/i);
+    expect(params).toContain("[0-9a-f]{8}");
+    expect(params).toContain("transcorp");
+  });
+
+  it("no longer emits the bare t.status != 'archived' clause (subsumed)", async () => {
+    const executed = captureListAllUsersQuery();
+    await listAllUsers(userCtx(["merchant:read_all"]), {});
+    const { sql } = compileSql(executed[0]);
+    expect(sql).not.toMatch(/t\.status\s*!=\s*'archived'/i);
   });
 });

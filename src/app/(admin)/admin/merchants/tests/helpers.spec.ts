@@ -665,28 +665,21 @@ describe("merchantEffectiveAuthMethod", () => {
 // F8 (20 Jun 2026) — merchant-list default-view / "show all" toggle selection.
 // -----------------------------------------------------------------------------
 describe("selectMerchantListFilters", () => {
-  it("default view (showAll=false) requests the genuine-only filter", () => {
-    expect(selectMerchantListFilters({ showAll: false })).toEqual({
+  // Item 1 (22 Jun 2026) — Love's ruling: test tenants are NEVER visible,
+  // "not even at the click of a button". The "Show all (incl. test
+  // tenants)" toggle is removed; this helper now unconditionally requests
+  // the genuine-only filter. There is no escape hatch.
+  it("always requests the genuine-only filter (no show-all option)", () => {
+    expect(selectMerchantListFilters({})).toEqual({
       searchTerm: undefined,
       excludeTestTenants: true,
     });
   });
 
-  it("show-all view surfaces every merchant including archived + test tenants", () => {
-    expect(selectMerchantListFilters({ showAll: true })).toEqual({
-      searchTerm: undefined,
-      excludeArchived: false,
-    });
-  });
-
-  it("threads the search term through both views", () => {
-    expect(selectMerchantListFilters({ showAll: false, searchTerm: "demo" })).toEqual({
+  it("threads the search term through while keeping the genuine-only filter", () => {
+    expect(selectMerchantListFilters({ searchTerm: "demo" })).toEqual({
       searchTerm: "demo",
       excludeTestTenants: true,
-    });
-    expect(selectMerchantListFilters({ showAll: true, searchTerm: "demo" })).toEqual({
-      searchTerm: "demo",
-      excludeArchived: false,
     });
   });
 });

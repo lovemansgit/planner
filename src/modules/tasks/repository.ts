@@ -50,6 +50,7 @@ import type { CourierStatus } from "@/modules/integration";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
+import { buildGenuineTenantsFilter } from "../merchants/genuine-merchants";
 import type { TenantStatus } from "../merchants/types";
 
 import type {
@@ -913,7 +914,7 @@ export async function listAllTasksRows(
     JOIN tenants ten ON ten.id = t.tenant_id
     LEFT JOIN consignees c ON c.id = t.consignee_id
     WHERE 1 = 1
-      AND ten.status != 'archived'
+      ${buildGenuineTenantsFilter("ten")}
       ${statusFilter}
       ${merchantFilter}
       ${searchFilter}
@@ -1006,7 +1007,7 @@ export async function countAllTasksRows(
     JOIN tenants ten ON ten.id = t.tenant_id
     LEFT JOIN consignees c ON c.id = t.consignee_id
     WHERE 1 = 1
-      AND ten.status != 'archived'
+      ${buildGenuineTenantsFilter("ten")}
       ${statusFilter}
       ${merchantFilter}
       ${searchFilter}

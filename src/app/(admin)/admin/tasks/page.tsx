@@ -128,7 +128,9 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
     const ctx = await buildRequestContext("/admin/tasks", requestId);
     [rows, merchants, totalCount] = await Promise.all([
       listAllTasks(ctx, { merchantSlug, status, limit: perPage, offset, searchTerm: q, dateFrom, dateTo, awbs: hasAwbsFilter ? awbs : undefined }),
-      listMerchants(ctx),
+      // Item 1: merchant-filter dropdown lists genuine merchants only —
+      // automated-test tenants are never offered as a filter option.
+      listMerchants(ctx, { excludeTestTenants: true }),
       countAllTasks(ctx, { merchantSlug, status, searchTerm: q, dateFrom, dateTo, awbs: hasAwbsFilter ? awbs : undefined }),
     ]);
   } catch (err) {

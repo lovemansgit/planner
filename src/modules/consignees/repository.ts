@@ -39,6 +39,7 @@ import { sql as sqlTag, type SQL } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
+import { buildGenuineTenantsFilter } from "../merchants/genuine-merchants";
 import type { TenantStatus } from "../merchants/types";
 
 import type {
@@ -329,7 +330,7 @@ export async function listAllConsigneesRows(
     FROM consignees c
     JOIN tenants ten ON ten.id = c.tenant_id
     WHERE 1 = 1
-      AND ten.status != 'archived'
+      ${buildGenuineTenantsFilter("ten")}
       ${merchantFilter}
       ${searchFilter}
     ORDER BY c.created_at DESC
@@ -381,7 +382,7 @@ export async function countAllConsigneesRows(
     FROM consignees c
     JOIN tenants ten ON ten.id = c.tenant_id
     WHERE 1 = 1
-      AND ten.status != 'archived'
+      ${buildGenuineTenantsFilter("ten")}
       ${merchantFilter}
       ${searchFilter}
   `);

@@ -183,7 +183,12 @@ function parseQueryFilters(req: Request): ListMerchantsFilters {
   const url = new URL(req.url);
   const rawStatus = url.searchParams.get("status");
   if (rawStatus === null || rawStatus === "") {
-    return {};
+    // Item 1 (22 Jun 2026) — Love's "nowhere" ruling reaches this admin
+    // endpoint too: the unfiltered list defaults to the genuine-only
+    // view so automated-test tenants are never returned. An explicit
+    // ?status= remains the deliberate forensic escape (precedence:
+    // explicit status wins over excludeTestTenants in the service).
+    return { excludeTestTenants: true };
   }
   const parsed = TenantStatusEnum.safeParse(rawStatus);
   if (!parsed.success) {

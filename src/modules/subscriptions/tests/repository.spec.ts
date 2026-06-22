@@ -630,15 +630,27 @@ describe("endSubscription", () => {
   });
 });
 
-describe("listAllSubscriptionsRows — archive filter", () => {
-  // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
-  // belonging to archived tenants so the bulk CI-leak archive doesn't
-  // leak rows through /admin/subscriptions at demo time.
-  it("includes the ten.status != 'archived' predicate", async () => {
+describe("listAllSubscriptionsRows — genuine-tenant filter (Item 1)", () => {
+  // Love's ruling (22 Jun 2026): test merchants and their subscriptions
+  // must NEVER be visible in admin. The shared genuine-tenant predicate
+  // (buildGenuineTenantsFilter) now gates this cross-tenant SELECT —
+  // subsuming the Day-24 archived hide and adding the test-tenant exclude.
+  it("applies the shared genuine-tenant predicate over the ten alias", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllSubscriptionsRows(tx, {});
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/ten\.slug\s+in\s*\(/i);
+    expect(sql).toMatch(/ten\.status\s+in\s*\(/i);
+    expect(sql).toMatch(/ten\.slug\s*!~\s*\$\d+/i);
+    expect(params).toContain("[0-9a-f]{8}");
+    expect(params).toContain("transcorp");
+  });
+
+  it("no longer emits the bare ten.status != 'archived' clause (subsumed)", async () => {
     const tx = makeStubTx([[]]);
     await listAllSubscriptionsRows(tx, {});
     const { sql } = compile(tx.execute.mock.calls[0][0]);
-    expect(sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    expect(sql).not.toMatch(/ten\.status\s*!=\s*'archived'/i);
   });
 
   // F-2 (memory/triage_five_races_findings.md §F-2): this is THE

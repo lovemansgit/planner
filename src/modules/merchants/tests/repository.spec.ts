@@ -453,7 +453,7 @@ describe("listMerchants", () => {
   // ---------------------------------------------------------------------------
   // F8 (20 Jun 2026) — excludeTestTenants genuine default-view filter.
   // Asserts the SQL surface that hides ~1,825 automated-test tenants while
-  // always surfacing the six genuine merchants (allowlist safety net). The
+  // always surfacing the eight genuine merchants (allowlist safety net). The
   // behavioural truth of the predicate is proven in genuine-merchants.spec.ts;
   // these assert the query is built from that same contract.
   // ---------------------------------------------------------------------------
@@ -465,6 +465,8 @@ describe("listMerchants", () => {
       "transcorp",
       "hem",
       "mlp",
+      "demo-bistro",
+      "demo-bistro1",
     ];
 
     it("composes allowlist OR (non-archived status AND slug !~ hex-test-pattern)", async () => {
@@ -476,7 +478,7 @@ describe("listMerchants", () => {
       expect(captured.sql).toMatch(/slug\s*!~\s*\$\d+/i);
       expect(captured.params).toContain("[0-9a-f]{8}");
 
-      // Allowlist IN clause carries all six genuine slugs as params.
+      // Allowlist IN clause carries all eight genuine slugs as params.
       expect(captured.sql).toMatch(/slug\s+in\s*\(/i);
       for (const slug of GENUINE) {
         expect(captured.params).toContain(slug);

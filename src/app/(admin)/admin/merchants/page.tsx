@@ -45,7 +45,6 @@ export const revalidate = 0;
 interface MerchantsAdminPageProps {
   readonly searchParams: Promise<{
     readonly q?: string;
-    readonly view?: string;
   }>;
 }
 
@@ -55,14 +54,14 @@ export default async function MerchantsAdminPage({
   const requestId = randomUUID();
   const params = await searchParams;
   const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
-  // F8: default view hides automated-test tenants; ?view=all is the
-  // one-click reversible "show all" toggle.
-  const showAll = params.view === "all";
 
   let merchants: readonly Merchant[];
   try {
     const ctx = await buildRequestContext("/admin/merchants", requestId);
-    merchants = await listMerchants(ctx, selectMerchantListFilters({ searchTerm: q, showAll }));
+    // Item 1: genuine-only view, always. Automated-test tenants are
+    // never surfaced here — the "Show all" toggle was removed per Love's
+    // "never visible, not even at the click of a button" ruling.
+    merchants = await listMerchants(ctx, selectMerchantListFilters({ searchTerm: q }));
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/admin/merchants"));
@@ -79,14 +78,7 @@ export default async function MerchantsAdminPage({
     throw err;
   }
 
-  // F8 toggle: flip the view while preserving the active search term.
-  const toggleParams = new URLSearchParams();
-  if (q !== undefined) toggleParams.set("q", q);
-  if (!showAll) toggleParams.set("view", "all");
-  const toggleQuery = toggleParams.toString();
-  const toggleHref = `/admin/merchants${toggleQuery ? `?${toggleQuery}` : ""}`;
-  const countLabel =
-    q !== undefined ? "Matching merchants" : showAll ? "All merchants" : "Genuine merchants";
+  const countLabel = q !== undefined ? "Matching merchants" : "Genuine merchants";
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
@@ -99,8 +91,8 @@ export default async function MerchantsAdminPage({
             <h1 className="mt-3 text-4xl font-semibold tracking-tight">Merchants</h1>
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
               Genuine merchants on the platform. Automated-test tenants and archived rows are
-              hidden by default — use “Show all” to include them. Activate provisioning merchants
-              when ready; deactivate live merchants to stop new task generation.
+              never shown. Activate provisioning merchants when ready; deactivate live merchants
+              to stop new task generation.
             </p>
           </div>
           <Link
@@ -119,12 +111,6 @@ export default async function MerchantsAdminPage({
             <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
               {countLabel}
             </p>
-            <Link
-              href={toggleHref}
-              className="text-[11px] font-medium uppercase tracking-[0.1em] text-navy underline decoration-[color:var(--color-border-strong)] underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
-            >
-              {showAll ? "Show genuine merchants only" : "Show all (incl. test tenants)"}
-            </Link>
           </div>
         </section>
 
@@ -134,7 +120,7 @@ export default async function MerchantsAdminPage({
         />
 
         {merchants.length === 0 ? (
-          <EmptyState filtered={q !== undefined} showAll={showAll} />
+          <EmptyState filtered={q !== undefined} />
         ) : (
           <MerchantsTable rows={merchants} />
         )}
@@ -237,23 +223,13 @@ function Td({ children, className = "" }: { children: React.ReactNode; className
   return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
-function EmptyState({
-  filtered,
-  showAll,
-}: {
-  readonly filtered: boolean;
-  readonly showAll: boolean;
-}) {
+function EmptyState({ filtered }: { readonly filtered: boolean }) {
   const headline = filtered
     ? "No merchants match the search."
-    : showAll
-      ? "No merchants yet."
-      : "No genuine merchants to show.";
+    : "No genuine merchants to show.";
   const detail = filtered
     ? "Clear the search to see all merchants."
-    : showAll
-      ? "Create your first merchant to get started."
-      : "Automated-test tenants and archived merchants are hidden by default — choose “Show all” to include them.";
+    : "Create your first merchant to get started.";
   return (
     <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
       <p className="text-base text-navy">{headline}</p>
