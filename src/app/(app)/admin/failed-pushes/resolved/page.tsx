@@ -14,7 +14,7 @@
 // work-queue page this extends (resolution notes + failure context
 // stay away from read-but-not-retry roles per the Day-30 perm split).
 //
-// Brand language matches the work-queue page: Operations · DLQ
+// Brand language matches the work-queue page: Operations · SuiteFleet
 // eyebrow, hero numeral, hairline borders, sentence case, no shadows.
 
 import { randomUUID } from "node:crypto";
@@ -55,7 +55,7 @@ export default async function ResolvedFailedPushesPage() {
       <div className="mx-auto max-w-6xl px-12 py-16">
         <header className="mb-16">
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Operations · DLQ
+            Operations · SuiteFleet
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">Resolved pushes</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
@@ -163,7 +163,7 @@ function SystemNotInitialised() {
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-2xl px-12 py-32 text-center">
         <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-          Operations · DLQ
+          Operations · SuiteFleet
         </p>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">System not yet initialised</h1>
         <p className="mt-6 text-sm text-[color:var(--color-text-secondary)]">

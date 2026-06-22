@@ -112,8 +112,7 @@ export default async function WebhookConfigPage() {
               <span className="font-semibold">Tier 2 (opt-in).</span> If your SuiteFleet portal
               has Client ID / Secret configured AND those credentials are seeded in the planner,
               the receiver also verifies header credentials via timing-safe comparison.
-              Coming soon: credential management. Contact operations to enable Tier-2 verification
-              today.
+              Contact operations to enable Tier-2 verification today.
             </p>
             <p className="text-[color:var(--color-text-secondary)]">
               Receiver activity for this tenant is shown below.
@@ -134,8 +133,8 @@ export default async function WebhookConfigPage() {
         </section>
 
         <p className="mt-12 text-xs text-[color:var(--color-text-tertiary)]">
-          Other receiver metrics (last received-at, success counts, error reasons) require
-          receiver-side persistence and are deferred to a future commit.
+          Other receiver metrics — last received time, success counts, error reasons — aren&apos;t
+          available yet.
         </p>
       </div>
     </main>
@@ -182,8 +181,7 @@ function Tier2NotConfiguredPanel() {
       </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
         To enable Tier-2: configure Client ID / Secret in your SuiteFleet portal AND contact
-        operations to seed the same values in the planner. (Self-serve credential management
-        coming soon.)
+        operations to seed the same values in the planner. (Self-serve setup coming soon.)
       </p>
     </div>
   );

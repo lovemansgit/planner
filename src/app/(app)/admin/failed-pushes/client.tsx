@@ -367,9 +367,9 @@ function humanizeOutcome(outcome: SinglePushOutcome): string {
     case "awb_reconciled":
       return `Reconciled via AWB (${outcome.externalId})`;
     case "awb_exists":
-      return `AWB exists; reconcile failed — back to DLQ`;
+      return `AWB exists; reconcile failed — back to the failed queue`;
     case "failed_to_dlq":
-      return `Failed (${outcome.failureReason}) — back to DLQ`;
+      return `Failed (${outcome.failureReason}) — back to the failed queue`;
     case "skipped_district":
       return `Skipped — consignee district sentinel`;
     case "tenant_skipped":
@@ -383,7 +383,7 @@ function humanizeOutcome(outcome: SinglePushOutcome): string {
     case "not_pushable_status":
       // R-E r1 — the dead-row guard: a CANCELED/SKIPPED/terminal task
       // is correctly NOT re-pushed (churn hard-stop containment).
-      return `Not pushable — task is ${outcome.internalStatus}; dead rows stay dead`;
+      return `Not pushable — task is ${outcome.internalStatus} and won't be resent`;
   }
 }
 
