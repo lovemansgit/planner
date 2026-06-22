@@ -64,6 +64,7 @@ import type {
   TaskOutboundSyncState,
   TaskPackage,
   TaskPackageStatus,
+  TaskStatusFilter,
   UpdateTaskPatch,
 } from "./types";
 
@@ -628,7 +629,7 @@ export interface ListTasksOpts {
    * Planner-only) only surface under the no-filter "All" view. The coarse
    * `internal_status` filter lives on in the admin list path (Lane 5).
    */
-  readonly status?: CourierStatus;
+  readonly status?: TaskStatusFilter;
   /**
    * Optional case-insensitive substring match against the AWB
    * (`external_tracking_number`), the operator-set `customer_order_number`,
@@ -831,7 +832,7 @@ export interface ListAllTasksFilters {
    * no-filter "All" view. The coarse `internal_status` is no longer a filter
    * axis on any surface.
    */
-  readonly status?: CourierStatus;
+  readonly status?: TaskStatusFilter;
   readonly searchTerm?: string;
   /**
    * Day-24 PM: inclusive `delivery_date` lower bound (YYYY-MM-DD). When
@@ -948,11 +949,21 @@ export async function listAllTasksRows(
  * Fine-only values (OUT_FOR_DELIVERY, PICKED_UP, …) never appear in the 8-value
  * `internal_status` domain, so the fallback branch is inert for them — no false
  * positives. Once `courier_status` is populated the fine clause is authoritative
- * (the fallback only applies while it is NULL). Shared by the admin list + count
- * so the two never diverge.
+ * (the fallback only applies while it is NULL). Shared by the admin + operator
+ * list + count so they never diverge.
+ *
+ * D57 Item C — ON_HOLD is the SINGLE exception to the coarse fallback. CREATED
+ * and SKIPPED still match their NULL-courier rows via the fallback, but a legacy
+ * ON_HOLD row (NULL courier_status, internal_status='ON_HOLD') must match NO
+ * specific filter — it is All-only and renders label-neutral. ON_HOLD is a
+ * recognised filter value (so `?status=ON_HOLD` filters, not degrades to All),
+ * but its predicate matches nothing: `courier_status = 'ON_HOLD'` is never true
+ * (ON_HOLD is not a fine state; the CHECK forbids it), and the coarse fallback
+ * is suppressed.
  */
-function buildCourierStatusFilter(status: CourierStatus | undefined) {
+function buildCourierStatusFilter(status: TaskStatusFilter | undefined) {
   if (!status) return sqlTag``;
+  if (status === "ON_HOLD") return sqlTag`AND t.courier_status = 'ON_HOLD'`;
   return sqlTag`AND (t.courier_status = ${status} OR (t.courier_status IS NULL AND t.internal_status = ${status}))`;
 }
 
@@ -1057,7 +1068,7 @@ export async function countAllTasksRows(
 export async function listAllTaskIdsByTenant(
   tx: DbTx,
   tenantId: Uuid,
-  opts: { readonly status?: CourierStatus } = {},
+  opts: { readonly status?: TaskStatusFilter } = {},
 ): Promise<readonly Uuid[]> {
   const { status } = opts;
   // D56 Lane 3 — fine courier_status filter (matches listTasksByTenant).
@@ -1143,7 +1154,7 @@ export async function countTasksByTenant(
   tenantId: Uuid,
   opts: {
     // D56 Lane 3 — fine courier_status filter (mirrors ListTasksOpts.status).
-    readonly status?: CourierStatus;
+    readonly status?: TaskStatusFilter;
     readonly searchTerm?: string;
     readonly dateFrom?: string;
     readonly dateTo?: string;

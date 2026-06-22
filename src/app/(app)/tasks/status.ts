@@ -26,7 +26,7 @@
 // printing is React state at the client-component layer (see ./client).
 
 import type { CourierStatus } from "@/modules/integration";
-import type { TaskInternalStatus } from "@/modules/tasks";
+import type { TaskInternalStatus, TaskStatusFilter } from "@/modules/tasks";
 
 // =============================================================================
 // D56 Phase 8 / Lane 3 — fine courier_status render contract
@@ -128,9 +128,13 @@ const COARSE_STATUS_DISPLAY: Record<TaskInternalStatus, CourierStatusDisplay> = 
     pillClass: "bg-[color:var(--color-text-tertiary)]/20 text-[color:var(--color-text-tertiary)]",
     iconKey: null,
   },
+  // D57 Item C — legacy ON_HOLD rows (NULL courier_status) are filter-invisible
+  // (All-only) and render LABEL-NEUTRAL: no "On hold" word, no invented
+  // "Retry"/"Awaiting" word — a plain muted neutral pill ("—") is the minimal
+  // honest rendering (there is no courier-reported status to show).
   ON_HOLD: {
-    label: "On hold",
-    pillClass: "bg-[color:var(--color-text-secondary)]/20 text-[color:var(--color-text-secondary)]",
+    label: "—",
+    pillClass: "bg-stone-200/60 text-stone-600",
     iconKey: null,
   },
   SKIPPED: {
@@ -155,37 +159,52 @@ export function resolveCourierDisplay(
 }
 
 export interface CourierStatusFilterOption {
-  readonly value: CourierStatus;
+  readonly value: TaskStatusFilter;
   readonly label: string;
 }
 
 /**
- * The fine-14 dropdown options (the control adds an "All" / no-filter entry).
- * Derived from `COURIER_STATUS_DISPLAY` so labels never drift; order mirrors
- * the canonical enum.
+ * D57 Item B — dropdown options: the 14 fine courier states PLUS the coarse-only
+ * states that have real rows but no fine spelling — CREATED ("Created") and
+ * SKIPPED ("Skipped"). ON_HOLD is deliberately EXCLUDED (no "On hold" option);
+ * there is no "Retry"/"Awaiting" option. The render-aligned predicate matches
+ * CREATED/SKIPPED via the coarse fallback (confirmed in buildCourierStatusFilter).
+ * Fine labels are derived from COURIER_STATUS_DISPLAY so they never drift.
  */
-export const COURIER_STATUS_FILTER_OPTIONS: readonly CourierStatusFilterOption[] = (
-  Object.keys(COURIER_STATUS_DISPLAY) as CourierStatus[]
-).map((value) => ({ value, label: COURIER_STATUS_DISPLAY[value].label }));
-
-const VALID_COURIER_STATUSES: ReadonlySet<string> = new Set(
-  Object.keys(COURIER_STATUS_DISPLAY),
-);
+export const COURIER_STATUS_FILTER_OPTIONS: readonly CourierStatusFilterOption[] = [
+  ...(Object.keys(COURIER_STATUS_DISPLAY) as CourierStatus[]).map((value) => ({
+    value,
+    label: COURIER_STATUS_DISPLAY[value].label,
+  })),
+  { value: "CREATED", label: "Created" },
+  { value: "SKIPPED", label: "Skipped" },
+];
 
 /**
- * Parse the `?status=` query param as a FINE courier_status (D56 Lane 3 — Love
- * ruling: ?status= carries the fine 14-state vocabulary; single filter, single
- * param). Both /tasks AND /admin/tasks (migrated in Lane 5) parse through here.
- * Unknown values — including the retired coarse statuses (CREATED, ON_HOLD,
- * SKIPPED) carried by stale bookmarks — silently degrade to "no filter" (the
- * All view) rather than 4xx-ing the operator.
+ * D57 Item B/C — the recognised `?status=` filter vocabulary: the 14 fine states
+ * + CREATED + SKIPPED + ON_HOLD. ON_HOLD is recognised (not in the dropdown) so
+ * a legacy / hand-typed `?status=ON_HOLD` filters to NOTHING via the predicate's
+ * ON_HOLD suppression, rather than silently degrading to the All view.
+ */
+const VALID_STATUS_FILTERS: ReadonlySet<string> = new Set([
+  ...Object.keys(COURIER_STATUS_DISPLAY),
+  "CREATED",
+  "SKIPPED",
+  "ON_HOLD",
+]);
+
+/**
+ * Parse the `?status=` query param as a TaskStatusFilter. Recognises the fine 14
+ * + CREATED + SKIPPED + ON_HOLD (see VALID_STATUS_FILTERS). Truly unknown values
+ * (typos, retired spellings) still degrade to "no filter" (the All view) rather
+ * than 4xx-ing the operator. Both /tasks and /admin/tasks parse through here.
  */
 export function parseCourierStatusParam(
   raw: string | string[] | undefined,
-): CourierStatus | undefined {
+): TaskStatusFilter | undefined {
   if (typeof raw !== "string") return undefined;
-  if (!VALID_COURIER_STATUSES.has(raw)) return undefined;
-  return raw as CourierStatus;
+  if (!VALID_STATUS_FILTERS.has(raw)) return undefined;
+  return raw as TaskStatusFilter;
 }
 
 /**

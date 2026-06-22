@@ -27,7 +27,7 @@ import {
 } from "@/app/(app)/tasks/status";
 import type { CourierStatus } from "@/modules/integration";
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
-import type { Task } from "@/modules/tasks/types";
+import type { Task, TaskStatusFilter } from "@/modules/tasks/types";
 
 /**
  * Calendar-only display states that are NOT SuiteFleet courier states:
@@ -148,10 +148,17 @@ export const DAY_DISPLAY_VISUALS: Record<DayExceptionStatus, DayDisplayVisual> =
  */
 export function filterTasksByCourierStatus(
   tasks: readonly Task[],
-  courierStatus: CourierStatus | null,
+  status: TaskStatusFilter | null,
 ): readonly Task[] {
-  if (courierStatus === null) return tasks;
-  return tasks.filter((t) => t.courierStatus === courierStatus);
+  if (status === null) return tasks;
+  // D57 — the consignee-detail calendar's client-side filter stays FINE-ONLY:
+  // the OQ-5 ruling (NULL-courier rows are All-only on this surface) is out of
+  // scope for the admin+operator render-alignment lane and is preserved here
+  // unchanged. The param type only widens (TaskStatusFilter) because it shares
+  // the parser; a coarse-only value (CREATED/SKIPPED) simply matches no fine
+  // courier_status here. Aligning this surface supersedes OQ-5 — Love's call
+  // (parked in the PR report).
+  return tasks.filter((t) => t.courierStatus === status);
 }
 
 export interface DayCellVisual {

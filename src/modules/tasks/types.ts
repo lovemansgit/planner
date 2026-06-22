@@ -54,6 +54,19 @@ export type TaskInternalStatus =
   | "SKIPPED";
 
 /**
+ * D57 Item B/C — the set a person can filter /tasks + /admin/tasks by: the 14
+ * fine SuiteFleet courier states PLUS the coarse-only internal statuses that
+ * have real rows but no fine spelling (CREATED, SKIPPED), PLUS ON_HOLD. ON_HOLD
+ * is recognised (so a legacy / hand-typed `?status=ON_HOLD` filters to nothing
+ * rather than silently degrading to the All view) but is deliberately NOT a
+ * dropdown option and never matches a row — its legacy rows are All-only and
+ * render label-neutral. The render-aligned filter predicate
+ * (buildCourierStatusFilter) matches CREATED/SKIPPED via the coarse fallback and
+ * suppresses ON_HOLD.
+ */
+export type TaskStatusFilter = CourierStatus | "CREATED" | "SKIPPED" | "ON_HOLD";
+
+/**
  * 6-value outbound sync state. Mirrors the CHECK constraint on
  * tasks.outbound_sync_state. Originally introduced in 0026 (Day-29
  * §D(2) Phase-1 per plan-PR #302 §6.3 / §3.6 OQ-7 ruling Option A);

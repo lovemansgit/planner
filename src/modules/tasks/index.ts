@@ -38,6 +38,7 @@ export type {
   TaskListRow,
   TaskPackage,
   TaskPackageStatus,
+  TaskStatusFilter,
   UpdateTaskPatch,
 } from "./types";
 
