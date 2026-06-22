@@ -13,6 +13,8 @@
 
 import { useActionState } from "react";
 
+import { Button } from "@/components/Button";
+
 import {
   triggerMaterializationAction,
   type MaterializeActionResult,
@@ -48,13 +50,9 @@ export function MaterializeButton({ subscriptionId }: MaterializeButtonProps) {
 
   return (
     <form action={formAction} className="inline-flex flex-col items-end gap-1">
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex items-center justify-center rounded-sm border border-stone-200 bg-paper px-3 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-navy transition-colors duration-[120ms] ease-out hover:border-navy hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
-      >
+      <Button type="submit" variant="secondary" size="sm" disabled={pending}>
         {pending ? "Materializing…" : "Materialize"}
-      </button>
+      </Button>
       {successMessage ? (
         <span className="max-w-[220px] text-right text-[10px] text-[color:var(--color-text-secondary)]">
           {successMessage}

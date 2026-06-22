@@ -17,6 +17,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
+import { Button } from "@/components/Button";
+
 import { createConsigneeAction, type CreateConsigneeActionResult } from "../_actions";
 
 export function CreateConsigneeForm() {
@@ -175,13 +177,9 @@ export function CreateConsigneeForm() {
           >
             Cancel
           </Link>
-          <button
-            type="submit"
-            disabled={isPending}
-            className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          <Button type="submit" variant="primary" disabled={isPending}>
             {isPending ? "Creating…" : "Create consignee"}
-          </button>
+          </Button>
         </div>
       </form>
     </>
