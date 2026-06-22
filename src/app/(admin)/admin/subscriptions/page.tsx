@@ -10,11 +10,10 @@
 // Cadence column: daysOfWeek (ISO 1-7) → human-readable abbreviated
 // labels via DAY_LABELS — same DAY_LABELS shape as operator side.
 //
-// V1.5 Consignee column simplification: AdminSubscriptionRow shape is
-// { subscription, merchant } — no consignee details JOINed. Renders
-// the consignee_id short (8 chars) like operator /subscriptions does.
-// Phase-1.5.1 follow-up if Transcorp staff demand consignee names
-// inline (would extend the backend AdminSubscriptionRow shape).
+// V1.5.1 (D57): the Consignee column shows the consignee NAME. AdminSubscriptionRow
+// now carries `consigneeName` (listAllSubscriptionsRows JOINs consignees, mirroring
+// the operator listSubscriptionsWithConsignee path) — the raw consignee_id 8-char
+// prefix it rendered before was unreadable to staff.
 //
 // Pagination added per Day-19 PR #213 §3.6 counter-review
 // (UX-FINDING-2). Same v1.5 limitation as /admin/tasks: backend ships
@@ -182,9 +181,9 @@ function Row({ row }: { row: AdminSubscriptionRow }) {
           </span>
         </Link>
       </Td>
-      <Td className="font-mono text-xs tabular-nums text-[color:var(--color-text-secondary)]">
+      <Td className="text-[color:var(--color-text-secondary)]">
         <Link href={detailHref} className="block">
-          {shortId(row.subscription.consigneeId)}
+          {row.consigneeName}
         </Link>
       </Td>
       <Td>
@@ -313,10 +312,6 @@ const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function formatDays(days: readonly number[]): string {
   return days.map((d) => DAY_LABELS[d - 1] ?? `?${d}`).join(", ");
-}
-
-function shortId(uuid: string): string {
-  return uuid.slice(0, 8);
 }
 
 function Th({ children }: { children: React.ReactNode }) {
