@@ -81,7 +81,9 @@ export default async function AdminConsigneesPage({
     const ctx = await buildRequestContext("/admin/consignees", requestId);
     [rows, merchants, totalCount] = await Promise.all([
       listAllConsignees(ctx, { merchantSlug, limit: perPage, offset, searchTerm: q }),
-      listMerchants(ctx),
+      // Item 1: merchant-filter dropdown lists genuine merchants only —
+      // automated-test tenants are never offered as a filter option.
+      listMerchants(ctx, { excludeTestTenants: true }),
       countAllConsignees(ctx, { merchantSlug, searchTerm: q }),
     ]);
   } catch (err) {

@@ -285,15 +285,28 @@ describe("listAllConsigneesRows", () => {
     });
   });
 
-  describe("archive filter", () => {
-    // Day-24 audit ruling: cross-tenant admin SELECTs must hide rows
-    // belonging to archived tenants so the bulk CI-leak archive doesn't
-    // leak rows through /admin/consignees at demo time.
-    it("includes the ten.status != 'archived' predicate", async () => {
+  describe("genuine-tenant filter (Item 1 — hide automated-test tenants)", () => {
+    // Love's ruling (22 Jun 2026): system-generated test merchants and
+    // their consignees must NEVER be visible in admin. The single shared
+    // predicate (buildGenuineTenantsFilter, ./genuine-merchants.ts) now
+    // gates this cross-tenant SELECT — it subsumes the Day-24 archived
+    // hide and adds the 8-hex test-tenant exclusion.
+    it("applies the shared genuine-tenant predicate over the ten alias", async () => {
       const tx = makeStubTx([[]]);
       await listAllConsigneesRows(tx, {});
       const captured = compile(tx.execute.mock.calls[0][0]);
-      expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+      expect(captured.sql).toMatch(/ten\.slug\s+in\s*\(/i);
+      expect(captured.sql).toMatch(/ten\.status\s+in\s*\(/i);
+      expect(captured.sql).toMatch(/ten\.slug\s*!~\s*\$\d+/i);
+      expect(captured.params).toContain("[0-9a-f]{8}");
+      expect(captured.params).toContain("transcorp");
+    });
+
+    it("no longer emits the bare ten.status != 'archived' clause (subsumed)", async () => {
+      const tx = makeStubTx([[]]);
+      await listAllConsigneesRows(tx, {});
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).not.toMatch(/ten\.status\s*!=\s*'archived'/i);
     });
   });
 });
@@ -306,7 +319,9 @@ describe("countAllConsigneesRows (Day-24 PM)", () => {
     expect(captured.sql).toMatch(/SELECT\s+COUNT\(\*\)::int\s+AS\s+count/i);
     expect(captured.sql).toMatch(/FROM consignees c/i);
     expect(captured.sql).toMatch(/JOIN tenants ten/i);
-    expect(captured.sql).toMatch(/ten\.status\s*!=\s*'archived'/i);
+    // Item 1: same shared genuine-tenant predicate as listAllConsigneesRows.
+    expect(captured.sql).toMatch(/ten\.slug\s*!~\s*\$\d+/i);
+    expect(captured.sql).not.toMatch(/ten\.status\s*!=\s*'archived'/i);
     expect(captured.sql).not.toMatch(/ORDER BY/i);
     expect(captured.sql).not.toMatch(/LIMIT/i);
   });

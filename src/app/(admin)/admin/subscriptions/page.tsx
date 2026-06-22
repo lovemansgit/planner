@@ -81,7 +81,9 @@ export default async function AdminSubscriptionsPage({
     const ctx = await buildRequestContext("/admin/subscriptions", requestId);
     [rows, merchants] = await Promise.all([
       listAllSubscriptions(ctx, { merchantSlug, limit: perPage, offset }),
-      listMerchants(ctx),
+      // Item 1: merchant-filter dropdown lists genuine merchants only —
+      // automated-test tenants are never offered as a filter option.
+      listMerchants(ctx, { excludeTestTenants: true }),
     ]);
   } catch (err) {
     if (err instanceof UnauthorizedError) {
