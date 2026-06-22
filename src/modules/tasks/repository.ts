@@ -701,10 +701,12 @@ export async function listTasksByTenant(
   opts: ListTasksOpts = {},
 ): Promise<readonly TaskListRow[]> {
   const { limit, offset = 0, status, searchTerm, dateFrom, dateTo, awbs } = opts;
-  // D56 Lane 3 — fine courier_status filter (NULL-courier rows are "All"-only).
-  const statusFilter = status
-    ? sqlTag`AND t.courier_status = ${status}`
-    : sqlTag``;
+  // D57 Item A — render-aligned status filter, shared with /admin/tasks (#554).
+  // Operator /tasks had the same courier_status-only defect: 100% of rows carry
+  // courier_status NULL, so every specific filter returned 0 while rows rendered
+  // via the coarse internal_status fallback. buildCourierStatusFilter matches
+  // courier_status when present, else the coarse value the row actually carries.
+  const statusFilter = buildCourierStatusFilter(status);
   const searchFilter = buildTaskSearchFilter(searchTerm);
   const dateFromFilter = buildDateFromFilter(dateFrom);
   const dateToFilter = buildDateToFilter(dateTo);
@@ -1060,16 +1062,19 @@ export async function listAllTaskIdsByTenant(
   opts: { readonly status?: CourierStatus } = {},
 ): Promise<readonly Uuid[]> {
   const { status } = opts;
-  // D56 Lane 3 — fine courier_status filter (matches listTasksByTenant).
-  const statusFilter = status
-    ? sqlTag`AND courier_status = ${status}`
-    : sqlTag``;
+  // D57 — route the "select all <status>" id list through the SAME shared
+  // render-aligned predicate as listTasksByTenant + countTasksByTenant. Without
+  // this, select-all matched courier_status only, so on NULL-courier rows it
+  // selected 0 while the visible filtered list showed rows — a list/action
+  // divergence on the label-print path. The tasks table is aliased `t` so the
+  // shared helper's `t.`-qualified predicate composes.
+  const statusFilter = buildCourierStatusFilter(status);
   type Row = { id: string };
   const rows = await tx.execute<Row>(sqlTag`
-    SELECT id FROM tasks
-    WHERE tenant_id = ${tenantId}
+    SELECT t.id FROM tasks t
+    WHERE t.tenant_id = ${tenantId}
       ${statusFilter}
-    ORDER BY created_at DESC
+    ORDER BY t.created_at DESC
   `);
   return rows.map((r) => r.id as Uuid);
 }
@@ -1151,9 +1156,9 @@ export async function countTasksByTenant(
   } = {},
 ): Promise<number> {
   const { status, searchTerm, dateFrom, dateTo, awbs } = opts;
-  const statusFilter = status
-    ? sqlTag`AND t.courier_status = ${status}`
-    : sqlTag``;
+  // D57 Item A — render-aligned status filter; mirrors listTasksByTenant so the
+  // operator count agrees with the rows. See buildCourierStatusFilter (#554).
+  const statusFilter = buildCourierStatusFilter(status);
   const searchFilter = buildTaskSearchFilter(searchTerm);
   const consigneeJoin = needsConsigneeJoin(searchTerm)
     ? sqlTag`LEFT JOIN consignees c ON c.id = t.consignee_id AND c.tenant_id = t.tenant_id`
