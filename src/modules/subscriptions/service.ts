@@ -98,6 +98,9 @@ export interface AdminSubscriptionRow {
     readonly name: string;
     readonly status: TenantStatus;
   };
+  /** V1.5.1 (D57) — consignee display name (JOINed), so admin shows the name
+   *  rather than the raw consignee_id. Mirrors the operator subscriptions list. */
+  readonly consigneeName: string;
 }
 import type {
   CreateSubscriptionInput,

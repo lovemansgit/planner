@@ -667,3 +667,33 @@ describe("listAllSubscriptionsRows — genuine-tenant filter (Item 1)", () => {
     expect(sql).toMatch(/LIMIT .* OFFSET /);
   });
 });
+
+describe("listAllSubscriptionsRows — consignee name (V1.5.1 / D57)", () => {
+  it("JOINs consignees (tenant-correct) and projects c.name AS consignee_name", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllSubscriptionsRows(tx, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(
+      /JOIN consignees c ON c\.id = s\.consignee_id AND c\.tenant_id = s\.tenant_id/i,
+    );
+    expect(sql).toMatch(/c\.name\s+AS consignee_name/i);
+  });
+
+  it("maps the consignee NAME onto each admin row (not the raw consignee_id)", async () => {
+    const tx = makeStubTx([
+      [
+        {
+          ...subRowFixture({ id: "row-1" }),
+          merchant_tenant_id: "ten-1",
+          merchant_slug: "mpl",
+          merchant_name: "Meal Plan Scheduler",
+          merchant_status: "active",
+          consignee_name: "Sarah Khouri",
+        },
+      ],
+    ]);
+    const rows = await listAllSubscriptionsRows(tx, {});
+    expect(rows[0].consigneeName).toBe("Sarah Khouri");
+    expect(rows[0].merchant.slug).toBe("mpl");
+  });
+});

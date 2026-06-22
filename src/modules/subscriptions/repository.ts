@@ -317,6 +317,7 @@ type AdminSubscriptionJoinRow = SubscriptionRow & {
   readonly merchant_slug: string;
   readonly merchant_name: string;
   readonly merchant_status: TenantStatus;
+  readonly consignee_name: string;
 };
 
 /**
@@ -340,6 +341,7 @@ export async function listAllSubscriptionsRows(
       name: string;
       status: TenantStatus;
     };
+    consigneeName: string;
   }[]
 > {
   const limit = Math.min(filters.limit ?? 50, 500);
@@ -349,15 +351,22 @@ export async function listAllSubscriptionsRows(
       ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
       : sqlTag``;
 
+  // V1.5.1 (D57) — JOIN consignees so the admin list shows the consignee NAME,
+  // not the raw consignee_id (mirrors the operator listSubscriptionsWithConsignee
+  // path). The (consignee_id, tenant_id) match keeps the join tenant-correct on
+  // this cross-tenant surface. consignee_id is a NOT NULL FK (ON DELETE RESTRICT),
+  // so an inner JOIN never drops a real subscription row.
   const rows = await tx.execute<AdminSubscriptionJoinRow>(sqlTag`
     SELECT
       s.*,
       ten.id   AS merchant_tenant_id,
       ten.slug AS merchant_slug,
       ten.name AS merchant_name,
-      ten.status AS merchant_status
+      ten.status AS merchant_status,
+      c.name   AS consignee_name
     FROM subscriptions s
     JOIN tenants ten ON ten.id = s.tenant_id
+    JOIN consignees c ON c.id = s.consignee_id AND c.tenant_id = s.tenant_id
     WHERE 1 = 1
       ${buildGenuineTenantsFilter("ten")}
       ${merchantFilter}
@@ -373,6 +382,7 @@ export async function listAllSubscriptionsRows(
       name: row.merchant_name,
       status: row.merchant_status,
     },
+    consigneeName: row.consignee_name,
   }));
 }
 
