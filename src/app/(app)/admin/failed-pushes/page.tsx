@@ -70,12 +70,12 @@ export default async function FailedPushesAdminPage({
       <div className="mx-auto max-w-6xl px-12 py-16">
         <header className="mb-16">
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Operations · DLQ
+            Operations · SuiteFleet
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">Failed pushes</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-            Unresolved task pushes that hit the dead-letter queue. Retry one or many; bulk retry
-            paces at 5 requests per second so SuiteFleet doesn&apos;t get hammered.
+            Deliveries that didn&apos;t reach SuiteFleet. Retry one or many; bulk retry is paced
+            so SuiteFleet isn&apos;t overwhelmed.
           </p>
           <p className="mt-2 text-sm">
             <Link
@@ -114,7 +114,7 @@ function EmptyState({ filtered }: { readonly filtered: boolean }) {
         {filtered ? "No failed pushes match the search." : "No unresolved failed pushes."}
       </p>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        {filtered ? "Clear the search to see all unresolved rows." : "New failures land here automatically when the cron writes a DLQ row."}
+        {filtered ? "Clear the search to see all unresolved rows." : "New failures appear here automatically."}
       </p>
     </div>
   );
@@ -125,7 +125,7 @@ function SystemNotInitialised() {
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-2xl px-12 py-32 text-center">
         <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-          Operations · DLQ
+          Operations · SuiteFleet
         </p>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">System not yet initialised</h1>
         <p className="mt-6 text-sm text-[color:var(--color-text-secondary)]">
