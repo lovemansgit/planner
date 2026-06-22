@@ -36,6 +36,9 @@ import {
 import type { Actor, RequestContext } from "../../shared/tenant-context";
 import type { Uuid } from "../../shared/types";
 
+import { isGenuineMerchant } from "../merchants/genuine-merchants";
+import type { TenantStatus } from "../merchants/types";
+
 import {
   AuthAdminError,
   createOrFetchAuthUser as defaultCreateOrFetchAuthUser,
@@ -882,4 +885,311 @@ async function fetchUserForDisableEnable(userId: Uuid): Promise<{
             : String(row.disabled_at),
     };
   });
+}
+
+// -----------------------------------------------------------------------------
+// Item 2 (22 Jun 2026) — admin user detail + edit write-path
+// -----------------------------------------------------------------------------
+// getUserById powers the /admin/users/[id] detail view; updateUser edits
+// the display name; changeUserRole swaps the user's single role
+// assignment within their tenant (delete-then-create, guarded by the
+// C-21 last-tenant-admin invariant). All three follow the same
+// cross-tenant posture as createUser/disableUser: a Transcorp actor with
+// merchant:read_all may write to any tenant via withServiceRole;
+// same-tenant writes use withTenant. Changing a user's TENANT is NOT in
+// scope — Love ruled (22 Jun 2026) that a user for a different merchant
+// is always a NEW user, never moved; re-homing would re-parent
+// tenant-scoped role assignments and touch the C-21 invariant on two
+// tenants.
+
+/**
+ * Single-user fetch for the admin detail view. Same projection as
+ * listAllUsers, filtered to one id. Permission gate: `merchant:read_all`
+ * (cross-tenant Transcorp surface). Returns null when the user does not
+ * exist OR belongs to an automated-test tenant — Item 1's "test tenants
+ * are never visible" ruling reaches the detail view too, so a raw-id
+ * navigation can't surface a hidden test user.
+ */
+export async function getUserById(
+  ctx: RequestContext,
+  userId: Uuid,
+): Promise<AdminUserRow | null> {
+  requirePermission(ctx, "merchant:read_all");
+  return withServiceRole("transcorp_staff:get_user_by_id", async (tx) => {
+    type Row = {
+      user_id: string;
+      email: string;
+      display_name: string | null;
+      tenant_id: string;
+      tenant_slug: string;
+      tenant_name: string;
+      tenant_status: string;
+      role_slugs: string[] | null;
+      created_at: Date | string;
+      disabled_at: Date | string | null;
+    } & Record<string, unknown>;
+    const rows = await tx.execute<Row>(sqlTag`
+      SELECT
+        u.id           AS user_id,
+        u.email        AS email,
+        u.display_name AS display_name,
+        u.tenant_id    AS tenant_id,
+        t.slug         AS tenant_slug,
+        t.name         AS tenant_name,
+        t.status       AS tenant_status,
+        u.created_at   AS created_at,
+        u.disabled_at  AS disabled_at,
+        COALESCE(
+          (
+            SELECT array_agg(r.slug ORDER BY r.slug ASC)
+            FROM role_assignments ra
+            JOIN roles r ON r.id = ra.role_id
+            WHERE ra.user_id = u.id AND ra.tenant_id = u.tenant_id
+          ),
+          ARRAY[]::text[]
+        ) AS role_slugs
+      FROM users u
+      JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.id = ${userId}
+    `);
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    // Item 1 respect: never surface a user belonging to a test tenant.
+    if (!isGenuineMerchant({ slug: r.tenant_slug, status: r.tenant_status as TenantStatus })) {
+      return null;
+    }
+    return {
+      userId: r.user_id as Uuid,
+      email: r.email,
+      displayName: r.display_name,
+      tenantId: r.tenant_id as Uuid,
+      tenantSlug: r.tenant_slug,
+      tenantName: r.tenant_name,
+      roleSlugs: r.role_slugs ?? [],
+      createdAt:
+        r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+      disabledAt:
+        r.disabled_at === null || r.disabled_at === undefined
+          ? null
+          : r.disabled_at instanceof Date
+            ? r.disabled_at.toISOString()
+            : String(r.disabled_at),
+    };
+  });
+}
+
+export interface UpdateUserInput {
+  readonly userId: Uuid;
+  /** New display name; empty/whitespace normalises to null (clears it). */
+  readonly displayName: string | null;
+}
+
+/**
+ * Edit a user's display name. Permission gate: `user:update`;
+ * cross-tenant writes require `merchant:read_all`. The name trims; an
+ * all-whitespace value clears it to null. Emits `user.updated`.
+ *
+ * Throws ForbiddenError (missing perm / cross-tenant escalation),
+ * NotFoundError (user gone), ValidationError (name too long).
+ */
+export async function updateUser(ctx: RequestContext, input: UpdateUserInput): Promise<void> {
+  requirePermission(ctx, "user:update");
+
+  const target = await fetchUserForDisableEnable(input.userId);
+  if (target === null) {
+    throw new NotFoundError(`user not found: ${input.userId}`);
+  }
+  assertCanWriteToTenant(ctx, target.tenantId);
+
+  const trimmed = input.displayName?.trim() ?? "";
+  if (trimmed.length > 200) {
+    throw new ValidationError("display name must be 200 characters or fewer");
+  }
+  const normalized = trimmed.length > 0 ? trimmed : null;
+
+  const isCrossTenant = ctx.tenantId !== target.tenantId;
+  const writer = async (tx: DbTx) => {
+    const rows = await tx.execute<{ id: string } & Record<string, unknown>>(sqlTag`
+      UPDATE users
+      SET display_name = ${normalized}, updated_at = now()
+      WHERE id = ${input.userId}
+      RETURNING id
+    `);
+    if (rows.length === 0) {
+      throw new NotFoundError(`user not found: ${input.userId}`);
+    }
+  };
+  if (isCrossTenant) {
+    await withServiceRole("transcorp_staff:update_user", writer);
+  } else {
+    await withTenant(target.tenantId, writer);
+  }
+
+  await emit({
+    eventType: "user.updated",
+    actorKind: ctx.actor.kind,
+    actorId: actorIdFor(ctx.actor),
+    tenantId: target.tenantId,
+    resourceType: "user",
+    resourceId: input.userId,
+    metadata: { email: target.email, display_name: normalized },
+    requestId: ctx.requestId,
+  });
+}
+
+export interface ChangeUserRoleInput {
+  readonly userId: Uuid;
+  readonly roleSlug: BuiltInRoleSlug;
+}
+
+interface ChangeUserRoleOutcome {
+  readonly changed: boolean;
+  readonly removed: ReadonlyArray<{ assignmentId: Uuid; roleSlug: string }>;
+  readonly created: { assignmentId: Uuid } | null;
+}
+
+/**
+ * Swap a user's role within their existing tenant. v1 users hold a
+ * single role assignment per tenant, so this deletes any assignment
+ * that isn't the target role and creates the target (idempotent on the
+ * unique constraint). Order is C-21-safe: the last-tenant-admin
+ * invariant is checked (FOR UPDATE) BEFORE the delete, so demoting the
+ * only Tenant Admin throws ConflictError and nothing is mutated.
+ *
+ * Permission gate: `role_assignment:create` AND `role_assignment:delete`;
+ * cross-tenant writes require `merchant:read_all`. Does NOT change the
+ * user's tenant — see the module note.
+ *
+ * Throws ForbiddenError, ValidationError (unknown role), ConflictError
+ * (role not assignable to the tenant, or C-21 violated), NotFoundError.
+ */
+export async function changeUserRole(
+  ctx: RequestContext,
+  input: ChangeUserRoleInput,
+): Promise<void> {
+  requirePermission(ctx, "role_assignment:create");
+  requirePermission(ctx, "role_assignment:delete");
+
+  if (!(input.roleSlug in ROLES)) {
+    throw new ValidationError(`unknown role slug: ${input.roleSlug}`);
+  }
+
+  const target = await fetchUserForDisableEnable(input.userId);
+  if (target === null) {
+    throw new NotFoundError(`user not found: ${input.userId}`);
+  }
+  assertCanWriteToTenant(ctx, target.tenantId);
+  const tenantId = target.tenantId;
+
+  const isCrossTenant = ctx.tenantId !== tenantId;
+  const outcome = isCrossTenant
+    ? await withServiceRole("transcorp_staff:change_user_role", (tx) =>
+        runChangeUserRole(tx, tenantId, input),
+      )
+    : await withTenant(tenantId, (tx) => runChangeUserRole(tx, tenantId, input));
+
+  if (!outcome.changed) return;
+
+  for (const removed of outcome.removed) {
+    await emit({
+      eventType: "role_assignment.deleted",
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId,
+      resourceType: "role_assignment",
+      resourceId: removed.assignmentId,
+      metadata: { role_slug: removed.roleSlug, target_user_id: input.userId },
+      requestId: ctx.requestId,
+    });
+  }
+  if (outcome.created) {
+    await emit({
+      eventType: "role_assignment.created",
+      actorKind: ctx.actor.kind,
+      actorId: actorIdFor(ctx.actor),
+      tenantId,
+      resourceType: "role_assignment",
+      resourceId: outcome.created.assignmentId,
+      metadata: { role_slug: input.roleSlug, target_user_id: input.userId },
+      requestId: ctx.requestId,
+    });
+  }
+}
+
+async function runChangeUserRole(
+  tx: DbTx,
+  tenantId: Uuid,
+  input: ChangeUserRoleInput,
+): Promise<ChangeUserRoleOutcome> {
+  // 1. Resolve the tenant + validate the role is assignable to it.
+  type TenantSlugRow = { slug: string } & Record<string, unknown>;
+  const tenantRows = await tx.execute<TenantSlugRow>(sqlTag`
+    SELECT slug FROM tenants WHERE id = ${tenantId}
+  `);
+  if (tenantRows.length === 0) {
+    throw new NotFoundError(`tenant not found: ${tenantId}`);
+  }
+  const tenantSlug = tenantRows[0].slug;
+  const allowedRoles =
+    tenantSlug === "transcorp" ? TRANSCORP_TENANT_ROLES : MERCHANT_TENANT_ROLES;
+  if (!allowedRoles.includes(input.roleSlug)) {
+    throw new ConflictError(
+      `role '${input.roleSlug}' is not assignable to tenant '${tenantSlug}'`,
+    );
+  }
+
+  // 2. Resolve the global role row for the target slug.
+  type RoleIdRow = { id: string } & Record<string, unknown>;
+  const roleRows = await tx.execute<RoleIdRow>(sqlTag`
+    SELECT id FROM roles WHERE slug = ${input.roleSlug} AND tenant_id IS NULL LIMIT 1
+  `);
+  if (roleRows.length === 0) {
+    throw new ValidationError(
+      `role slug '${input.roleSlug}' has no global role row — onboarding script must seed it`,
+    );
+  }
+  const roleId = roleRows[0].id;
+
+  // 3. Current assignments for (user, tenant).
+  type CurrentRow = { id: string; slug: string } & Record<string, unknown>;
+  const current = await tx.execute<CurrentRow>(sqlTag`
+    SELECT ra.id AS id, r.slug AS slug
+    FROM role_assignments ra
+    JOIN roles r ON r.id = ra.role_id
+    WHERE ra.user_id = ${input.userId} AND ra.tenant_id = ${tenantId}
+  `);
+  const alreadyHasTarget = current.some((a) => a.slug === input.roleSlug);
+  const removals = current.filter((a) => a.slug !== input.roleSlug);
+  if (alreadyHasTarget && removals.length === 0) {
+    return { changed: false, removed: [], created: null };
+  }
+
+  // 4. C-21 guard BEFORE any delete (FOR UPDATE inside the helper).
+  await assertCanRemoveAssignments(
+    tx,
+    tenantId,
+    removals.map((a) => a.id as Uuid),
+  );
+
+  // 5. Create the target assignment (idempotent), then delete the rest.
+  type AssignmentIdRow = { id: string } & Record<string, unknown>;
+  const inserted = await tx.execute<AssignmentIdRow>(sqlTag`
+    INSERT INTO role_assignments (user_id, role_id, tenant_id)
+    VALUES (${input.userId}, ${roleId}, ${tenantId})
+    ON CONFLICT (user_id, role_id, tenant_id) DO UPDATE
+      SET assigned_at = role_assignments.assigned_at
+    RETURNING id
+  `);
+  if (removals.length > 0) {
+    await tx.execute(sqlTag`
+      DELETE FROM role_assignments
+      WHERE id = ANY(${"{" + removals.map((a) => a.id).join(",") + "}"}::uuid[])
+    `);
+  }
+
+  return {
+    changed: true,
+    removed: removals.map((a) => ({ assignmentId: a.id as Uuid, roleSlug: a.slug })),
+    created: { assignmentId: inserted[0].id as Uuid },
+  };
 }

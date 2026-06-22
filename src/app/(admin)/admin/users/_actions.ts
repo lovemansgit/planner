@@ -55,6 +55,8 @@ export async function disableUserAction(
     const ctx = await buildRequestContext("/admin/users", requestId);
     await disableUser(ctx, { userId: userId as Uuid, reason });
     revalidatePath("/admin/users", "page");
+    // Item 2: the per-user detail view shows the same status badge.
+    revalidatePath(`/admin/users/${userId}`, "page");
     return { kind: "disabled", userId };
   } catch (err) {
     return mapError(err);
@@ -76,6 +78,8 @@ export async function enableUserAction(
     const ctx = await buildRequestContext("/admin/users", requestId);
     await enableUser(ctx, { userId: userId as Uuid });
     revalidatePath("/admin/users", "page");
+    // Item 2: the per-user detail view shows the same status badge.
+    revalidatePath(`/admin/users/${userId}`, "page");
     return { kind: "enabled", userId };
   } catch (err) {
     return mapError(err);
