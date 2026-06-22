@@ -264,7 +264,7 @@ export function AdHocTaskDialog({
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-6 right-6 z-50 max-w-sm rounded-sm border border-stone-200 bg-paper px-4 py-3 text-sm text-navy shadow-sm"
+          className="fixed bottom-6 right-6 z-50 max-w-sm rounded-sm border border-stone-200 bg-paper px-4 py-3 text-sm text-navy"
         >
           {toast}
         </div>

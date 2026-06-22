@@ -149,7 +149,7 @@ function SubscriptionsTable({ rows }: { rows: readonly SubscriptionWithConsignee
             <Td>
               <Link
                 href={`/subscriptions/${s.id}`}
-                className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+                className="text-navy underline decoration-[color:var(--color-border-strong)] underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
               >
                 {consigneeName}
               </Link>
@@ -175,7 +175,7 @@ function Th({ children }: { children: React.ReactNode }) {
 }
 
 function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-5 align-top ${className}`}>{children}</td>;
+  return <td className={`py-4 align-top ${className}`}>{children}</td>;
 }
 
 function StatusBadge({ status }: { status: Subscription["status"] }) {

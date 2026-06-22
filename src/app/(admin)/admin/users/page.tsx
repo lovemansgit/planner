@@ -107,7 +107,7 @@ export default async function AdminUsersPage({ searchParams }: AdminUsersPagePro
           </div>
           <Link
             href="/admin/users/new"
-            className="inline-flex items-center rounded-sm border border-navy bg-navy px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90"
+            className="inline-flex items-center rounded-sm border border-navy bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
           >
             + New user
           </Link>

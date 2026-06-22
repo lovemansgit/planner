@@ -181,7 +181,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
               Showing {awbs.length} AWB{awbs.length === 1 ? "" : "s"} from a report
               drill-down{dateFrom === undefined ? " (all dates)" : ""}.
             </span>
-            <Link href="/tasks" className="underline underline-offset-4 hover:text-[color:var(--color-accent)]">
+            <Link href="/tasks" className="underline underline-offset-4 hover:text-navy">
               Clear filter
             </Link>
           </div>

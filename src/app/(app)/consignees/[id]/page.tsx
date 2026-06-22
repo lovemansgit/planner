@@ -499,9 +499,12 @@ function Tabs({ activeTab, consigneeId }: { activeTab: TabName; consigneeId: str
             href={href}
             aria-current={active ? "page" : undefined}
             className={
+              // Idle reserves the same transparent 2px underline so the tab
+              // baseline never shifts between states (only border colour +
+              // weight change). Focus ring added for keyboard parity. D56 S1.
               active
-                ? "border-b-2 border-green pb-3 text-sm font-medium text-navy"
-                : "pb-3 text-sm text-[color:var(--color-text-secondary)] hover:text-navy"
+                ? "rounded-sm border-b-2 border-green pb-3 text-sm font-medium text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
+                : "rounded-sm border-b-2 border-transparent pb-3 text-sm text-[color:var(--color-text-secondary)] transition-colors duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:text-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
             }
           >
             {item.label}

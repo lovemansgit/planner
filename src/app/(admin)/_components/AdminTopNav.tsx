@@ -36,8 +36,14 @@ export interface AdminTopNavProps {
   readonly userIdentity: UserIdentity | null;
 }
 
-const LINK_ACTIVE = "border-b-2 border-green pb-1 text-sm font-medium text-navy";
-const LINK_IDLE = "text-sm text-[color:var(--color-text-secondary)] hover:text-navy";
+// D56 S1 — shared tab geometry. Both states reserve a 2px underline + pb-1 so
+// the text baseline / underline never shift between active and idle (only the
+// border colour + weight change). Focus-ring + transition brought to parity with
+// the operator nav (a11y: admin links previously had no focus-visible ring).
+const LINK_FOCUS =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary";
+const LINK_ACTIVE = `rounded-sm border-b-2 border-green pb-1 text-sm font-medium text-navy ${LINK_FOCUS}`;
+const LINK_IDLE = `rounded-sm border-b-2 border-transparent pb-1 text-sm text-[color:var(--color-text-secondary)] transition-colors duration-[120ms] ease-out hover:text-navy focus-visible:text-navy ${LINK_FOCUS}`;
 
 export function AdminTopNav({ items, userIdentity }: AdminTopNavProps) {
   const pathname = usePathname() ?? "/";

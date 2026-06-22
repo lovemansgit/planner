@@ -59,7 +59,7 @@ export function InventoryView({
                 {byDate.map((row) => (
                   <tr
                     key={row.deliveryDate}
-                    className="border-b border-[color:var(--color-border-subtle)] last:border-b-0"
+                    className="border-b border-[color:var(--color-border-default)] last:border-b-0"
                   >
                     <td className={`${TD} font-medium`}>{row.deliveryDate}</td>
                     <CountCell

@@ -72,9 +72,13 @@ export function TopNav({ permissions, userIdentity, assetTrackingEnabled }: TopN
                   href={item.path}
                   aria-current={active ? "page" : undefined}
                   className={
+                    // Idle reserves the same 2px underline (transparent) + pb-1
+                    // as the active state so the text baseline and underline sit
+                    // identically across tabs — only the border colour + weight
+                    // change between states (no vertical jump). D56 S1 alignment.
                     active
                       ? "rounded-sm border-b-2 border-green pb-1 text-sm font-medium text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
-                      : "rounded-sm text-sm text-[color:var(--color-text-secondary)] transition-colors duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:text-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
+                      : "rounded-sm border-b-2 border-transparent pb-1 text-sm text-[color:var(--color-text-secondary)] transition-colors duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:text-navy focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
                   }
                 >
                   {item.label}

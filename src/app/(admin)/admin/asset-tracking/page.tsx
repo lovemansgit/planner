@@ -175,7 +175,7 @@ function MerchantRows({ group }: { readonly group: MerchantGroup }) {
   const extra = { merchant: group.merchantSlug };
   return (
     <>
-      <tr className="border-b border-[color:var(--color-border-subtle)] bg-[color:var(--color-tint-navy-subtle)]">
+      <tr className="border-b border-[color:var(--color-border-default)] bg-[color:var(--color-tint-navy-subtle)]">
         <td className={`${TD} font-semibold`}>
           {/* Per-merchant refresh — gives Transcorp staff a pull control on
               the all-merchants view (walk finding: admin had none). Scoped
@@ -218,7 +218,7 @@ function MerchantRows({ group }: { readonly group: MerchantGroup }) {
       {group.dates.map((row) => (
         <tr
           key={`${group.merchantSlug}-${row.deliveryDate}`}
-          className="border-b border-[color:var(--color-border-subtle)] last:border-b-0"
+          className="border-b border-[color:var(--color-border-default)] last:border-b-0"
         >
           <td className={`${TD} pl-12 text-[color:var(--color-text-secondary)]`}>{row.deliveryDate}</td>
           <CountCell value={row.allocatedAssets} href={awbsHref("/admin/asset-tracking/log", row.awbs)} />
