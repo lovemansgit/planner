@@ -26,7 +26,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { withServiceRole } from "../../src/shared/db";
-import { listTasksByTenant, countTasksByTenant } from "../../src/modules/tasks/repository";
+import {
+  listTasksByTenant,
+  countTasksByTenant,
+  listAllTaskIdsByTenant,
+} from "../../src/modules/tasks/repository";
 import type { CourierStatus } from "../../src/modules/integration";
 import type { Uuid } from "../../src/shared/types";
 
@@ -93,5 +97,20 @@ describe("D57 Item A — operator /tasks status filter (render-aligned, real DB)
   it("unfiltered (All) returns every seeded row", async () => {
     expect((await list(undefined)).length).toBe(TOTAL);
     expect(await count(undefined)).toBe(TOTAL);
+  });
+
+  // D57 incomplete-parity fix — "select all <status>" (the label-print id list)
+  // must return the SAME ids the visible filtered list shows. Pre-fix this path
+  // matched courier_status only → selected 0 on NULL-courier rows while the list
+  // showed rows (list/action divergence). Non-zero + set-equal under the fix.
+  it("select-all id set EQUALS the visible list under a coarse-fallback status (DELIVERED)", async () => {
+    const visibleIds = (await list("DELIVERED")).map((t) => t.id).sort();
+    const selectAllIds = [
+      ...(await withServiceRole("ostf ids", (tx) =>
+        listAllTaskIdsByTenant(tx, TENANT as Uuid, { status: "DELIVERED" }),
+      )),
+    ].sort();
+    expect(selectAllIds.length).toBe(COARSE.DELIVERED); // non-zero on NULL-courier rows
+    expect(selectAllIds).toEqual(visibleIds);
   });
 });

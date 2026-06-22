@@ -823,12 +823,12 @@ describe("listAllTaskIdsByTenant", () => {
     expect(result).toEqual([]);
   });
 
-  it("issues SELECT id FROM tasks with the defence-in-depth tenant_id predicate", async () => {
+  it("issues SELECT t.id FROM tasks t with the defence-in-depth tenant_id predicate", async () => {
     const tx = makeStubTx([[]]);
     await listAllTaskIdsByTenant(tx, TENANT_ID);
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/SELECT\s+id\s+FROM\s+tasks/i);
-    expect(captured.sql).toMatch(/tenant_id\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/SELECT\s+t\.id\s+FROM\s+tasks\s+t/i);
+    expect(captured.sql).toMatch(/t\.tenant_id\s*=\s*\$/i);
     expect(captured.params).toContain(TENANT_ID);
   });
 
@@ -840,20 +840,24 @@ describe("listAllTaskIdsByTenant", () => {
     expect(captured.sql).not.toMatch(/json_agg/i);
   });
 
-  it("appends the status filter when provided", async () => {
-    // D56 Lane 3 — the across-pages select filters on the FINE courier_status.
+  it("filters via the SHARED render-aligned predicate, matching listTasksByTenant (D57 select-all parity)", async () => {
+    // D57 — select-all must match the SAME rows the visible list shows. The
+    // render-aligned predicate (courier_status OR coarse internal_status
+    // fallback) is what makes "select all DELIVERED" non-zero on NULL-courier
+    // rows, instead of the old courier_status-only filter that selected 0.
     const tx = makeStubTx([[]]);
-    await listAllTaskIdsByTenant(tx, TENANT_ID, { status: "OUT_FOR_DELIVERY" });
+    await listAllTaskIdsByTenant(tx, TENANT_ID, { status: "DELIVERED" });
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/courier_status\s*=\s*\$/i);
-    expect(captured.params).toContain("OUT_FOR_DELIVERY");
+    expect(captured.sql).toMatch(/t\.courier_status\s*=\s*\$/i);
+    expect(captured.sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=\s*\$/i);
+    expect(captured.params.filter((p) => p === "DELIVERED")).toHaveLength(2);
   });
 
   it("orders by created_at DESC to match listTasksByTenant", async () => {
     const tx = makeStubTx([[]]);
     await listAllTaskIdsByTenant(tx, TENANT_ID);
     const captured = compile(tx.execute.mock.calls[0][0]);
-    expect(captured.sql).toMatch(/ORDER\s+BY\s+created_at\s+DESC/i);
+    expect(captured.sql).toMatch(/ORDER\s+BY\s+t\.created_at\s+DESC/i);
   });
 });
 

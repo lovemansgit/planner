@@ -1062,16 +1062,19 @@ export async function listAllTaskIdsByTenant(
   opts: { readonly status?: CourierStatus } = {},
 ): Promise<readonly Uuid[]> {
   const { status } = opts;
-  // D56 Lane 3 — fine courier_status filter (matches listTasksByTenant).
-  const statusFilter = status
-    ? sqlTag`AND courier_status = ${status}`
-    : sqlTag``;
+  // D57 — route the "select all <status>" id list through the SAME shared
+  // render-aligned predicate as listTasksByTenant + countTasksByTenant. Without
+  // this, select-all matched courier_status only, so on NULL-courier rows it
+  // selected 0 while the visible filtered list showed rows — a list/action
+  // divergence on the label-print path. The tasks table is aliased `t` so the
+  // shared helper's `t.`-qualified predicate composes.
+  const statusFilter = buildCourierStatusFilter(status);
   type Row = { id: string };
   const rows = await tx.execute<Row>(sqlTag`
-    SELECT id FROM tasks
-    WHERE tenant_id = ${tenantId}
+    SELECT t.id FROM tasks t
+    WHERE t.tenant_id = ${tenantId}
       ${statusFilter}
-    ORDER BY created_at DESC
+    ORDER BY t.created_at DESC
   `);
   return rows.map((r) => r.id as Uuid);
 }
