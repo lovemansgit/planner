@@ -897,8 +897,10 @@ async function fetchUserForDisableEnable(userId: Uuid): Promise<{
 // cross-tenant posture as createUser/disableUser: a Transcorp actor with
 // merchant:read_all may write to any tenant via withServiceRole;
 // same-tenant writes use withTenant. Changing a user's TENANT is NOT in
-// scope — re-homing a user re-parents tenant-scoped role assignments and
-// touches the C-21 invariant on two tenants; flagged for a follow-up.
+// scope — Love ruled (22 Jun 2026) that a user for a different merchant
+// is always a NEW user, never moved; re-homing would re-parent
+// tenant-scoped role assignments and touch the C-21 invariant on two
+// tenants.
 
 /**
  * Single-user fetch for the admin detail view. Same projection as

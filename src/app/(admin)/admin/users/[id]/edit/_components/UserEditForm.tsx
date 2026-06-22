@@ -57,7 +57,7 @@ export function UserEditForm({
       <ReadOnlyField
         label="Tenant"
         value={`${tenantName} (${tenantSlug})`}
-        helper="Moving a user to another tenant isn't supported here — it re-parents their role assignments. Flagged for a follow-up."
+        helper="A user belongs to one merchant. To put someone under a different merchant, create a new user there — moving an existing user between merchants isn't supported."
       />
 
       <Field label="Full name" htmlFor="user-display-name">

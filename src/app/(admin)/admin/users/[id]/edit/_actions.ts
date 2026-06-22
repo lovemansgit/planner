@@ -10,9 +10,11 @@
 // the typed error surfaces inline. Mirrors the create action's
 // two-write-one-submit posture.
 //
-// Tenant is intentionally NOT editable here — re-homing a user across
-// tenants re-parents tenant-scoped role assignments and touches the
-// C-21 invariant on two tenants; flagged as a separate follow-up.
+// Tenant is intentionally NOT editable here. Love ruled (22 Jun 2026)
+// that re-homing a user across merchants is OUT OF SCOPE — a user for a
+// different merchant is always a NEW user, never moved (moving would
+// re-parent tenant-scoped role assignments and touch the C-21 invariant
+// on two tenants). The UI directs the operator to create a new user.
 
 "use server";
 
