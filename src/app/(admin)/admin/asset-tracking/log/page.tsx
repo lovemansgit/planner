@@ -82,7 +82,7 @@ export default async function AssetLogPage({ searchParams }: AssetLogPageProps) 
           <p className="mt-2 text-sm">
             <Link
               href="/admin/asset-tracking"
-              className="underline underline-offset-4 hover:text-[color:var(--color-accent)]"
+              className="underline underline-offset-4 hover:text-navy"
             >
               ← Back to Asset Tracking
             </Link>
@@ -122,7 +122,7 @@ export default async function AssetLogPage({ searchParams }: AssetLogPageProps) 
                   return (
                     <tr
                       key={`${line.trackingId}-${line.state}-${line.receivedAt}-${i}`}
-                      className="border-b border-[color:var(--color-border-subtle)] last:border-b-0"
+                      className="border-b border-[color:var(--color-border-default)] last:border-b-0"
                     >
                       <td className={`${TD} tabular-nums`}>
                         {time}

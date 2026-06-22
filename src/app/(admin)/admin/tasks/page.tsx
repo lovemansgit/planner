@@ -188,7 +188,7 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
               Showing {awbs.length} AWB{awbs.length === 1 ? "" : "s"} from a report
               drill-down{dateFrom === undefined ? " (all dates)" : ""}.
             </span>
-            <Link href="/admin/tasks" className="underline underline-offset-4 hover:text-[color:var(--color-accent)]">
+            <Link href="/admin/tasks" className="underline underline-offset-4 hover:text-navy">
               Clear filter
             </Link>
           </div>

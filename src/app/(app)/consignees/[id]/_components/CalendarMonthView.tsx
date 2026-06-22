@@ -166,8 +166,6 @@ export function CalendarMonthView({
         <CourierStatusFilter />
       </div>
 
-      <CalendarStatusLegend />
-
       <div className="grid grid-cols-7 gap-px border border-stone-200 bg-stone-200">
         {WEEKDAY_HEADERS.map((wd) => (
           <div
@@ -251,6 +249,26 @@ export function CalendarMonthView({
           );
         })}
       </div>
+
+      {/* D56 S1 (item 3) — status colour key relocated below the grid in a
+          collapsed disclosure so the calendar leads the page rather than ~180px
+          of colour key. The legend still teaches all 14 fine courier states;
+          this is PLACEMENT only — CalendarStatusLegend + LEGEND_FAMILIES are
+          unchanged, and the fine-status filter dropdown above is untouched. */}
+      <details className="group mt-8 border-t border-stone-200 pt-4">
+        <summary className="flex cursor-pointer list-none items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary [&::-webkit-details-marker]:hidden">
+          <span>Status colour key</span>
+          <span className="text-[color:var(--color-text-tertiary)] group-open:hidden" aria-hidden="true">
+            Show
+          </span>
+          <span className="hidden text-[color:var(--color-text-tertiary)] group-open:inline" aria-hidden="true">
+            Hide
+          </span>
+        </summary>
+        <div className="mt-4">
+          <CalendarStatusLegend />
+        </div>
+      </details>
     </div>
   );
 }

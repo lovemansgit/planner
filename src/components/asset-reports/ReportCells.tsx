@@ -32,7 +32,7 @@ export function CountCell({
     <td className={TD}>
       <Link
         href={href}
-        className="underline decoration-[color:var(--color-border-strong)] underline-offset-4 transition-colors hover:text-[color:var(--color-accent)]"
+        className="underline decoration-[color:var(--color-border-strong)] underline-offset-4 transition-colors hover:text-navy"
       >
         {value}
       </Link>

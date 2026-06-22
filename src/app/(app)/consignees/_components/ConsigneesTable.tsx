@@ -113,7 +113,7 @@ function Td({
   title?: string;
 }) {
   return (
-    <td className={`py-5 align-top ${className}`} title={title}>
+    <td className={`py-4 align-top ${className}`} title={title}>
       {children}
     </td>
   );

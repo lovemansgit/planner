@@ -89,7 +89,7 @@ export function Toast({
         visible ? "opacity-100" : "opacity-0"
       }`}
     >
-      <div className="rounded-sm border border-stone-200 bg-ivory px-4 py-3 text-sm text-navy shadow-sm">
+      <div className="rounded-sm border border-stone-200 bg-ivory px-4 py-3 text-sm text-navy">
         {message}
       </div>
     </div>

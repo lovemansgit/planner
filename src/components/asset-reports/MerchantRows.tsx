@@ -86,7 +86,7 @@ function MerchantSectionRows({
   const rollup = section.rollup;
   return (
     <>
-      <tr className="border-b border-[color:var(--color-border-subtle)] last:border-b-0">
+      <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
         <td className={`${TD} font-medium`}>
           {/* Refresh sits beside the toggle (a sibling, not nested — it must
               not toggle the section). Scoped to this one merchant, so it
@@ -96,7 +96,7 @@ function MerchantSectionRows({
               type="button"
               onClick={onToggle}
               aria-expanded={isOpen}
-              className="flex items-center gap-2 rounded-sm text-left hover:text-[color:var(--color-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy"
+              className="flex items-center gap-2 rounded-sm text-left hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy"
             >
               <span aria-hidden="true" className="inline-block w-3 text-xs">
                 {isOpen ? "▾" : "▸"}
@@ -139,7 +139,7 @@ function MerchantSectionRows({
         />
       </tr>
       {isOpen ? (
-        <tr className="border-b border-[color:var(--color-border-subtle)] bg-[color:var(--color-tint-navy-subtle)] last:border-b-0">
+        <tr className="border-b border-[color:var(--color-border-default)] bg-[color:var(--color-tint-navy-subtle)] last:border-b-0">
           <td colSpan={8} className="px-4 py-4 pl-9">
             {section.consignees.length === 0 ? (
               <p className="text-sm text-[color:var(--color-text-secondary)]">
