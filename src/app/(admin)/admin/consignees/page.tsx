@@ -182,24 +182,43 @@ function ConsigneesTable({ rows }: { rows: readonly AdminConsigneeRow[] }) {
 }
 
 function Row({ row }: { row: AdminConsigneeRow }) {
+  // Item 3: whole-row link → consignee detail. Each cell's content is a
+  // block <Link> (HTML can't wrap <tr> in <a>); row hover-tint + cursor.
+  const detailHref = `/admin/consignees/${row.consignee.id}`;
   return (
-    <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
+    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
       <Td>
-        <span className="font-medium text-navy">{row.merchant.name}</span>
-        <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
-          {row.merchant.slug}
-        </span>
+        <Link href={detailHref} className="block">
+          <span className="font-medium text-navy">{row.merchant.name}</span>
+          <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
+            {row.merchant.slug}
+          </span>
+        </Link>
       </Td>
-      <Td className="text-navy">{row.consignee.name}</Td>
+      <Td className="text-navy">
+        <Link href={detailHref} className="block">
+          {row.consignee.name}
+        </Link>
+      </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        {row.consignee.phone}
+        <Link href={detailHref} className="block">
+          {row.consignee.phone}
+        </Link>
       </Td>
-      <Td className="text-[color:var(--color-text-secondary)]">{row.consignee.district}</Td>
+      <Td className="text-[color:var(--color-text-secondary)]">
+        <Link href={detailHref} className="block">
+          {row.consignee.district}
+        </Link>
+      </Td>
       <Td>
-        <CrmStateBadge state={row.consignee.crmState} />
+        <Link href={detailHref} className="block">
+          <CrmStateBadge state={row.consignee.crmState} />
+        </Link>
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        {row.consignee.createdAt.slice(0, 10)}
+        <Link href={detailHref} className="block">
+          {row.consignee.createdAt.slice(0, 10)}
+        </Link>
       </Td>
     </tr>
   );

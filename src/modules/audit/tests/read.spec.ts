@@ -133,4 +133,34 @@ describe("listAuditEventsForSubscription", () => {
     expect(records).toHaveLength(1);
     expect(records[0].eventType).toBe("task.updated");
   });
+
+  // Floor-5 cross-tenant fence (Love-ruled 22 Jun 2026): the
+  // subscription_id metadata filter is NOT a tenant fence on its own —
+  // under withServiceRole a colliding/crafted subscription_id in another
+  // tenant's metadata would match. The admin path passes tenantId so the
+  // read is constrained explicitly. These prove the WHERE carries the
+  // tenant filter when (and only when) tenantId is supplied.
+  it("adds an explicit AND tenant_id filter when tenantId is supplied (cross-tenant-safe read)", async () => {
+    const { tx, execute } = stubTx([ROW]);
+    await listAuditEventsForSubscription(tx, {
+      subscriptionId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      tenantId: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+      limit: 500,
+    });
+    const text = sqlToText(execute.mock.calls[0][0]);
+    expect(text).toContain("metadata->>'subscription_id' =");
+    expect(text).toContain("tenant_id =");
+    expect(text).toContain("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+  });
+
+  it("omits the tenant filter when tenantId is not supplied (RLS-scoped read unchanged)", async () => {
+    const { tx, execute } = stubTx([ROW]);
+    await listAuditEventsForSubscription(tx, {
+      subscriptionId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      limit: 500,
+    });
+    const text = sqlToText(execute.mock.calls[0][0]);
+    expect(text).toContain("metadata->>'subscription_id' =");
+    expect(text).not.toContain("tenant_id =");
+  });
 });

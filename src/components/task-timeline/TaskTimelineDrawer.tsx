@@ -34,6 +34,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   getTaskHistoryAction,
   getTaskTimelineAction,
+  type GetTaskHistoryActionResult,
   type GetTaskTimelineActionResult,
 } from "./actions";
 import { moveLinkFor } from "./move-link";
@@ -59,6 +60,23 @@ interface TaskTimelineDrawerProps {
    * unchanged behaviour.
    */
   readonly awb?: string | null;
+  /**
+   * Item 3 (22 Jun 2026) — injectable data sources. When omitted, the
+   * drawer uses the tenant-scoped operator actions (getTaskTimelineAction
+   * / getTaskHistoryAction, scoped by the session tenant via
+   * `consigneeId`). The Transcorp ADMIN task surface injects the
+   * cross-tenant variants (getAdminTask*Action, gate `task:read_all`,
+   * which resolve the task's OWN tenant) — so one drawer serves both the
+   * operator (RLS-scoped) and admin (cross-tenant) contexts with
+   * identical rendering. The injected signatures take taskId only; the
+   * operator default closes over the `consigneeId` prop for its context
+   * path.
+   */
+  readonly fetchTimeline?: (taskId: string) => Promise<GetTaskTimelineActionResult>;
+  readonly fetchHistory?: (
+    taskId: string,
+    before?: AuditEventCursor,
+  ) => Promise<GetTaskHistoryActionResult>;
 }
 
 /**
@@ -110,6 +128,8 @@ export function TaskTimelineDrawer({
   deliveryDate,
   onClose,
   awb,
+  fetchTimeline,
+  fetchHistory,
 }: TaskTimelineDrawerProps) {
   const [state, setState] = useState<
     | { kind: "loading" }
@@ -119,13 +139,18 @@ export function TaskTimelineDrawer({
 
   useEffect(() => {
     let cancelled = false;
-    void getTaskTimelineAction(consigneeId, taskId).then((result) => {
+    // Injected (admin, cross-tenant) fetcher takes taskId only; the
+    // operator default closes over the consigneeId prop for its context.
+    const load = fetchTimeline
+      ? fetchTimeline(taskId)
+      : getTaskTimelineAction(consigneeId, taskId);
+    void load.then((result) => {
       if (!cancelled) setState({ kind: "loaded", result });
     });
     return () => {
       cancelled = true;
     };
-  }, [consigneeId, taskId]);
+  }, [consigneeId, taskId, fetchTimeline]);
 
   useEffect(() => {
     function handleKeydown(event: KeyboardEvent) {
@@ -218,7 +243,11 @@ export function TaskTimelineDrawer({
             </p>
           )}
 
-          <HistorySection consigneeId={consigneeId} taskId={taskId} />
+          <HistorySection
+            consigneeId={consigneeId}
+            taskId={taskId}
+            fetchHistory={fetchHistory}
+          />
         </div>
       </div>
     </div>
@@ -386,9 +415,14 @@ type HistoryState =
 function HistorySection({
   consigneeId,
   taskId,
+  fetchHistory,
 }: {
   readonly consigneeId: string;
   readonly taskId: string;
+  readonly fetchHistory?: (
+    taskId: string,
+    before?: AuditEventCursor,
+  ) => Promise<GetTaskHistoryActionResult>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [history, setHistory] = useState<HistoryState>({ kind: "collapsed" });
@@ -399,7 +433,11 @@ function HistorySection({
     before?: AuditEventCursor,
   ) {
     setHistory({ kind: "loading", entries: existing });
-    const result = await getTaskHistoryAction(consigneeId, taskId, before);
+    // Injected (admin) history fetcher takes taskId only; operator
+    // default closes over consigneeId for its request context.
+    const result = fetchHistory
+      ? await fetchHistory(taskId, before)
+      : await getTaskHistoryAction(consigneeId, taskId, before);
     if (result.kind === "success") {
       setHistory({
         kind: "loaded",

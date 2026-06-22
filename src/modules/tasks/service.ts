@@ -74,7 +74,7 @@ import {
   type AuditEventRecord,
   type EmitInput,
 } from "../audit";
-import { withServiceRole, withTenant } from "../../shared/db";
+import { withServiceRole, withTenant, type DbTx } from "../../shared/db";
 import {
   ForbiddenError,
   NoLabelablePushedTasksError,
@@ -877,6 +877,21 @@ export async function listAllTasks(
 }
 
 /**
+ * Item 3 (22 Jun 2026) — cross-tenant single-task fetch for the
+ * /admin/tasks/[id] detail view. Gates `task:read_all` and reads inside
+ * `withServiceRole`. `findTaskById` loads the task's packages. Returns
+ * null when no row matches. The detail page applies the genuine-tenant
+ * gate (Item 1) by resolving the owning merchant separately.
+ */
+export async function getAdminTaskById(
+  ctx: RequestContext,
+  id: Uuid,
+): Promise<Task | null> {
+  requirePermission(ctx, "task:read_all");
+  return withServiceRole("transcorp_staff:get_task", (tx) => findTaskById(tx, id));
+}
+
+/**
  * Day 17 / Session A — list tasks for a single consignee within a
  * date range. Powers the consignee detail-page Calendar tab (Week
  * view) per brief §3.3.3. Read-only; no audit emit (R-4).
@@ -1623,6 +1638,55 @@ type WebhookEventRow = {
   event_timestamp: string;
 } & Record<string, unknown>;
 
+/**
+ * Shared timeline builder. Given an already-resolved task and the tenant
+ * id that OWNS it, assembles the synthetic TASK_CREATED entry plus the
+ * cached SF webhook events. Used by both the tenant-scoped
+ * `getTaskTimeline` (operator, RLS) and the cross-tenant
+ * `getAdminTaskTimeline` (Transcorp admin, withServiceRole). The owning
+ * tenant id is passed EXPLICITLY so the webhook_events scope always
+ * follows the task's tenant — never the caller's — which is what makes
+ * the cross-tenant admin read correct (under withServiceRole RLS is off,
+ * so `tenant_id = ${tenantId}` is the only scope guard left).
+ */
+async function loadTaskTimeline(
+  tx: DbTx,
+  task: Task,
+  tenantId: Uuid,
+): Promise<TaskTimeline> {
+  const entries: TaskTimelineEntry[] = [
+    {
+      timestamp: task.createdAt,
+      action: "TASK_CREATED",
+      source: "task_created",
+    },
+  ];
+
+  if (task.externalTrackingNumber !== null) {
+    const webhookRows = await tx.execute<WebhookEventRow>(sqlTag`
+      SELECT action, event_timestamp::text AS event_timestamp
+      FROM webhook_events
+      WHERE tenant_id = ${tenantId}
+        AND suitefleet_task_id = ${task.externalTrackingNumber}
+      ORDER BY event_timestamp ASC
+    `);
+    for (const row of webhookRows) {
+      entries.push({
+        timestamp: row.event_timestamp as IsoTimestamp,
+        action: row.action,
+        source: "webhook",
+      });
+    }
+  }
+
+  return {
+    taskId: task.id,
+    entries,
+    currentInternalStatus: task.internalStatus,
+    currentCourierStatus: task.courierStatus ?? null,
+  };
+}
+
 export async function getTaskTimeline(
   ctx: RequestContext,
   taskId: Uuid,
@@ -1637,38 +1701,31 @@ export async function getTaskTimeline(
     if (!task) {
       throw new NotFoundError(`task not found: ${taskId}`);
     }
+    return loadTaskTimeline(tx, task, tenantId);
+  });
+}
 
-    const entries: TaskTimelineEntry[] = [
-      {
-        timestamp: task.createdAt,
-        action: "TASK_CREATED",
-        source: "task_created",
-      },
-    ];
+/**
+ * Item 3 (22 Jun 2026) — cross-tenant task timeline for the Transcorp
+ * admin task drawer (`/admin/tasks/[id]`). Mirrors `getAdminTaskById`:
+ * gates `task:read_all` and reads inside `withServiceRole` (RLS off —
+ * the admin surface is cross-tenant by definition). The webhook_events
+ * scope follows the TASK's own tenant (`task.tenantId`), not the caller,
+ * so a Transcorp actor sees the merchant's true SF timeline. Returns the
+ * same shape as the operator timeline; the drawer renders it identically.
+ */
+export async function getAdminTaskTimeline(
+  ctx: RequestContext,
+  taskId: Uuid,
+): Promise<TaskTimeline> {
+  requirePermission(ctx, "task:read_all");
 
-    if (task.externalTrackingNumber !== null) {
-      const webhookRows = await tx.execute<WebhookEventRow>(sqlTag`
-        SELECT action, event_timestamp::text AS event_timestamp
-        FROM webhook_events
-        WHERE tenant_id = ${tenantId}
-          AND suitefleet_task_id = ${task.externalTrackingNumber}
-        ORDER BY event_timestamp ASC
-      `);
-      for (const row of webhookRows) {
-        entries.push({
-          timestamp: row.event_timestamp as IsoTimestamp,
-          action: row.action,
-          source: "webhook",
-        });
-      }
+  return await withServiceRole("transcorp_staff:get_task_timeline", async (tx) => {
+    const task = await findTaskById(tx, taskId);
+    if (!task) {
+      throw new NotFoundError(`task not found: ${taskId}`);
     }
-
-    return {
-      taskId,
-      entries,
-      currentInternalStatus: task.internalStatus,
-      currentCourierStatus: task.courierStatus ?? null,
-    };
+    return loadTaskTimeline(tx, task, task.tenantId);
   });
 }
 
@@ -1935,6 +1992,158 @@ function actorLabelFor(
   }
 }
 
+/**
+ * Shared task-history page builder. Given an already-resolved task, the
+ * tx it was fetched in, and an optional keyset cursor, assembles one
+ * newest-first batch (this task's audit events + the affecting
+ * subscription events per the R8 rulings; actor names resolved;
+ * move-to-date AWB resolved at read time; metadata stripped to the
+ * allow-list before it leaves the server).
+ *
+ * Tenant-agnostic by construction: every read here is keyed on the
+ * task's own resource_id / subscription_id / event ids (all globally
+ * unique to one tenant), so it returns exactly THIS task's history
+ * whether the tx is tenant-scoped (withTenant, operator) or cross-tenant
+ * (withServiceRole, Transcorp admin). Used by both getTaskHistory and
+ * getAdminTaskHistory.
+ */
+async function loadTaskHistoryPage(
+  tx: DbTx,
+  task: Task,
+  before: AuditEventCursor | undefined,
+  // Floor-5 cross-tenant fence for the subscription-event family. The
+  // task's own events are keyed on the globally-unique resource_id and
+  // are safe cross-tenant; the subscription family is keyed only on
+  // metadata->>'subscription_id', which is NOT a tenant fence under
+  // withServiceRole. The cross-tenant admin path passes the task's
+  // resolved owning tenant here so a crafted/colliding subscription_id
+  // in another tenant cannot leak; the RLS-scoped operator path passes
+  // undefined (app.current_tenant_id already fences the read).
+  subscriptionTenantScope: Uuid | undefined,
+): Promise<TaskHistoryPage> {
+  const taskId = task.id;
+
+  // Task's own events — SQL-side exclusion + cursor + limit. One
+  // extra row signals whether an older batch exists past the slice.
+  const taskEvents = await listAuditEventsForResource(tx, {
+    resourceType: "task",
+    resourceId: taskId,
+    excludeEventTypes: TASK_HISTORY_EXCLUDED_EVENT_TYPES,
+    before,
+    limit: TASK_HISTORY_BATCH_SIZE + 1,
+  });
+
+  // Affecting subscription events — fetched as a family (relevance
+  // needs cross-event context), filtered in application code, then
+  // cursor-trimmed to match the task stream's pagination frame.
+  let relevantSubscriptionEvents: readonly AuditEventRecord[] = [];
+  if (task.subscriptionId !== null && task.subscriptionId !== undefined) {
+    const family = await listAuditEventsForSubscription(tx, {
+      subscriptionId: task.subscriptionId,
+      tenantId: subscriptionTenantScope,
+      limit: SUBSCRIPTION_EVENT_FETCH_CAP,
+    });
+    if (family.length === SUBSCRIPTION_EVENT_FETCH_CAP) {
+      logger.warn(
+        {
+          taskId,
+          subscriptionId: task.subscriptionId,
+          cap: SUBSCRIPTION_EVENT_FETCH_CAP,
+        },
+        "getTaskHistory: subscription event fetch hit cap — history may be truncated",
+      );
+    }
+    const pauseWindows = buildPauseWindows(family);
+    const linkage: TaskHistoryLinkage = {
+      taskId,
+      deliveryDate: task.deliveryDate,
+      isPushed:
+        task.externalTrackingNumber !== null && task.externalTrackingNumber !== undefined,
+    };
+    relevantSubscriptionEvents = family.filter(
+      (event) =>
+        (before === undefined || isBeforeCursor(event, before)) &&
+        subscriptionEventAffectsTask(event, linkage, pauseWindows),
+    );
+  }
+
+  // Merge the two newest-first streams and take one batch. The task
+  // stream holds BATCH+1 rows, so the slice can never need a task
+  // event older than its truncation point; the subscription stream
+  // is complete below the cursor.
+  const merged = [...taskEvents, ...relevantSubscriptionEvents].sort(compareDesc);
+  const page = merged.slice(0, TASK_HISTORY_BATCH_SIZE);
+  const hasMore = merged.length > TASK_HISTORY_BATCH_SIZE;
+
+  // Resolve operator display names for the page's user actors.
+  const userIds = [
+    ...new Set(
+      page
+        .filter((event) => event.actorKind === "user" && UUID_PATTERN.test(event.actorId))
+        .map((event) => event.actorId),
+    ),
+  ];
+  const userNames = new Map<string, { displayName: string | null; email: string }>();
+  if (userIds.length > 0) {
+    const rows = await tx.execute<ActorNameRow>(sqlTag`
+      SELECT id, display_name, email
+      FROM users
+      WHERE id = ANY(${"{" + userIds.join(",") + "}"}::uuid[])
+    `);
+    for (const row of rows) {
+      userNames.set(row.id, { displayName: row.display_name, email: row.email });
+    }
+  }
+
+  // D56 / Phase-5 — move-to-date timeline link. The task.moved_out event (on
+  // the cancelled original) cannot store the new task's AWB: SuiteFleet
+  // assigns it only after the asynchronous push, well after the move is
+  // recorded. Resolve it HERE, at read time, from the new task's current
+  // row (moved_to_task_id → external_tracking_number). When the new task
+  // hasn't been pushed yet the AWB is absent and the drawer shows an
+  // AWB-pending sub-line. The internal moved_to_task_id is stripped by the
+  // allow-list below; only the resolved moved_to_awb survives.
+  const resolvedMovedToAwb = new Map<string, string>();
+  for (const event of page) {
+    if (event.eventType !== "task.moved_out") continue;
+    const newTaskId = event.metadata["moved_to_task_id"];
+    if (typeof newTaskId !== "string") continue;
+    const newTask = await findTaskById(tx, newTaskId as Uuid);
+    if (newTask?.externalTrackingNumber) {
+      resolvedMovedToAwb.set(event.id, newTask.externalTrackingNumber);
+    }
+  }
+
+  const entries: TaskHistoryEntry[] = page.map((event) => {
+    const movedToAwb = resolvedMovedToAwb.get(event.id);
+    const rawMetadata =
+      movedToAwb !== undefined
+        ? { ...event.metadata, moved_to_awb: movedToAwb }
+        : event.metadata;
+    return {
+      id: event.id,
+      occurredAt: event.occurredAt,
+      eventType: event.eventType,
+      actorKind: event.actorKind,
+      actorId: event.actorId,
+      actorLabel: actorLabelFor(event, userNames),
+      // Day-53 PM hardening (followup_r8_server_side_metadata_strip.md,
+      // Love-ruled UAT-blocking): the R8 allow-list is applied HERE so
+      // hidden fields (last_error, correlation/idempotency plumbing,
+      // internal UUIDs) never leave the server. The drawer re-filters on
+      // the same shared set as belt-and-braces.
+      metadata: filterTaskHistoryMetadata(rawMetadata),
+    };
+  });
+
+  const last = entries[entries.length - 1];
+  return {
+    taskId,
+    entries,
+    nextCursor: hasMore && last !== undefined ? { occurredAt: last.occurredAt, id: last.id } : null,
+  };
+}
+
 export async function getTaskHistory(
   ctx: RequestContext,
   taskId: Uuid,
@@ -1953,125 +2162,40 @@ export async function getTaskHistory(
     if (!task) {
       throw new NotFoundError(`task not found: ${taskId}`);
     }
+    // RLS-scoped: app.current_tenant_id fences the subscription family,
+    // so no explicit tenant scope is needed (undefined).
+    return loadTaskHistoryPage(tx, task, before, undefined);
+  });
+}
 
-    // Task's own events — SQL-side exclusion + cursor + limit. One
-    // extra row signals whether an older batch exists past the slice.
-    const taskEvents = await listAuditEventsForResource(tx, {
-      resourceType: "task",
-      resourceId: taskId,
-      excludeEventTypes: TASK_HISTORY_EXCLUDED_EVENT_TYPES,
-      before,
-      limit: TASK_HISTORY_BATCH_SIZE + 1,
-    });
+/**
+ * Item 3 (22 Jun 2026) — cross-tenant task history for the Transcorp
+ * admin task drawer (`/admin/tasks/[id]`). Mirrors getAdminTaskTimeline:
+ * gates `task:read_all` and reads inside withServiceRole. The shared
+ * core is keyed entirely on the task's own ids, so the cross-tenant read
+ * returns exactly this task's history with no leak (the audit readers
+ * filter on resource_id / subscription_id, both globally unique to one
+ * tenant). Same R8 metadata strip applies before the payload leaves the
+ * server.
+ */
+export async function getAdminTaskHistory(
+  ctx: RequestContext,
+  taskId: Uuid,
+  opts?: { readonly before?: AuditEventCursor },
+): Promise<TaskHistoryPage> {
+  requirePermission(ctx, "task:read_all");
+  const before = opts?.before;
 
-    // Affecting subscription events — fetched as a family (relevance
-    // needs cross-event context), filtered in application code, then
-    // cursor-trimmed to match the task stream's pagination frame.
-    let relevantSubscriptionEvents: readonly AuditEventRecord[] = [];
-    if (task.subscriptionId !== null && task.subscriptionId !== undefined) {
-      const family = await listAuditEventsForSubscription(tx, {
-        subscriptionId: task.subscriptionId,
-        limit: SUBSCRIPTION_EVENT_FETCH_CAP,
-      });
-      if (family.length === SUBSCRIPTION_EVENT_FETCH_CAP) {
-        logger.warn(
-          {
-            taskId,
-            subscriptionId: task.subscriptionId,
-            cap: SUBSCRIPTION_EVENT_FETCH_CAP,
-          },
-          "getTaskHistory: subscription event fetch hit cap — history may be truncated",
-        );
-      }
-      const pauseWindows = buildPauseWindows(family);
-      const linkage: TaskHistoryLinkage = {
-        taskId,
-        deliveryDate: task.deliveryDate,
-        isPushed:
-          task.externalTrackingNumber !== null && task.externalTrackingNumber !== undefined,
-      };
-      relevantSubscriptionEvents = family.filter(
-        (event) =>
-          (before === undefined || isBeforeCursor(event, before)) &&
-          subscriptionEventAffectsTask(event, linkage, pauseWindows),
-      );
+  return await withServiceRole("transcorp_staff:get_task_history", async (tx) => {
+    const task = await findTaskById(tx, taskId);
+    if (!task) {
+      throw new NotFoundError(`task not found: ${taskId}`);
     }
-
-    // Merge the two newest-first streams and take one batch. The task
-    // stream holds BATCH+1 rows, so the slice can never need a task
-    // event older than its truncation point; the subscription stream
-    // is complete below the cursor.
-    const merged = [...taskEvents, ...relevantSubscriptionEvents].sort(compareDesc);
-    const page = merged.slice(0, TASK_HISTORY_BATCH_SIZE);
-    const hasMore = merged.length > TASK_HISTORY_BATCH_SIZE;
-
-    // Resolve operator display names for the page's user actors.
-    const userIds = [
-      ...new Set(
-        page
-          .filter((event) => event.actorKind === "user" && UUID_PATTERN.test(event.actorId))
-          .map((event) => event.actorId),
-      ),
-    ];
-    const userNames = new Map<string, { displayName: string | null; email: string }>();
-    if (userIds.length > 0) {
-      const rows = await tx.execute<ActorNameRow>(sqlTag`
-        SELECT id, display_name, email
-        FROM users
-        WHERE id = ANY(${"{" + userIds.join(",") + "}"}::uuid[])
-      `);
-      for (const row of rows) {
-        userNames.set(row.id, { displayName: row.display_name, email: row.email });
-      }
-    }
-
-    // D56 / Phase-5 — move-to-date timeline link. The task.moved_out event (on
-    // the cancelled original) cannot store the new task's AWB: SuiteFleet
-    // assigns it only after the asynchronous push, well after the move is
-    // recorded. Resolve it HERE, at read time, from the new task's current
-    // row (moved_to_task_id → external_tracking_number). When the new task
-    // hasn't been pushed yet the AWB is absent and the drawer shows an
-    // AWB-pending sub-line. The internal moved_to_task_id is stripped by the
-    // allow-list below; only the resolved moved_to_awb survives.
-    const resolvedMovedToAwb = new Map<string, string>();
-    for (const event of page) {
-      if (event.eventType !== "task.moved_out") continue;
-      const newTaskId = event.metadata["moved_to_task_id"];
-      if (typeof newTaskId !== "string") continue;
-      const newTask = await findTaskById(tx, newTaskId as Uuid);
-      if (newTask?.externalTrackingNumber) {
-        resolvedMovedToAwb.set(event.id, newTask.externalTrackingNumber);
-      }
-    }
-
-    const entries: TaskHistoryEntry[] = page.map((event) => {
-      const movedToAwb = resolvedMovedToAwb.get(event.id);
-      const rawMetadata =
-        movedToAwb !== undefined
-          ? { ...event.metadata, moved_to_awb: movedToAwb }
-          : event.metadata;
-      return {
-        id: event.id,
-        occurredAt: event.occurredAt,
-        eventType: event.eventType,
-        actorKind: event.actorKind,
-        actorId: event.actorId,
-        actorLabel: actorLabelFor(event, userNames),
-        // Day-53 PM hardening (followup_r8_server_side_metadata_strip.md,
-        // Love-ruled UAT-blocking): the R8 allow-list is applied HERE so
-        // hidden fields (last_error, correlation/idempotency plumbing,
-        // internal UUIDs) never leave the server. The drawer re-filters on
-        // the same shared set as belt-and-braces.
-        metadata: filterTaskHistoryMetadata(rawMetadata),
-      };
-    });
-
-    const last = entries[entries.length - 1];
-    return {
-      taskId,
-      entries,
-      nextCursor: hasMore && last !== undefined ? { occurredAt: last.occurredAt, id: last.id } : null,
-    };
+    // Floor-5 cross-tenant fence: RLS is OFF under withServiceRole, so
+    // pass the task's resolved owning tenant to constrain the
+    // subscription-event family explicitly. A colliding subscription_id
+    // in another tenant's metadata cannot leak into this admin read.
+    return loadTaskHistoryPage(tx, task, before, task.tenantId);
   });
 }
 

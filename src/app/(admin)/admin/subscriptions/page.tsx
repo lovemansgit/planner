@@ -169,28 +169,43 @@ function SubscriptionsTable({ rows }: { rows: readonly AdminSubscriptionRow[] })
 }
 
 function Row({ row }: { row: AdminSubscriptionRow }) {
+  // Item 3: row → subscription detail; the Actions cell (Materialize)
+  // keeps its own button behaviour (no Link wrap there).
+  const detailHref = `/admin/subscriptions/${row.subscription.id}`;
   return (
-    <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
+    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
       <Td>
-        <span className="font-medium text-navy">{row.merchant.name}</span>
-        <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
-          {row.merchant.slug}
-        </span>
+        <Link href={detailHref} className="block">
+          <span className="font-medium text-navy">{row.merchant.name}</span>
+          <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
+            {row.merchant.slug}
+          </span>
+        </Link>
       </Td>
       <Td className="font-mono text-xs tabular-nums text-[color:var(--color-text-secondary)]">
-        {shortId(row.subscription.consigneeId)}
+        <Link href={detailHref} className="block">
+          {shortId(row.subscription.consigneeId)}
+        </Link>
       </Td>
       <Td>
-        <StatusBadge status={row.subscription.status} />
+        <Link href={detailHref} className="block">
+          <StatusBadge status={row.subscription.status} />
+        </Link>
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        {formatDays(row.subscription.daysOfWeek)}
+        <Link href={detailHref} className="block">
+          {formatDays(row.subscription.daysOfWeek)}
+        </Link>
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        {row.subscription.deliveryWindowStart.slice(0, 5)} – {row.subscription.deliveryWindowEnd.slice(0, 5)}
+        <Link href={detailHref} className="block">
+          {row.subscription.deliveryWindowStart.slice(0, 5)} – {row.subscription.deliveryWindowEnd.slice(0, 5)}
+        </Link>
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        {row.subscription.startDate}
+        <Link href={detailHref} className="block">
+          {row.subscription.startDate}
+        </Link>
       </Td>
       <Td className="text-right">
         {row.subscription.status === "active" ? (

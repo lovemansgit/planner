@@ -112,10 +112,12 @@ import {
   createTask,
   getTask,
   getTaskHistory,
+  getAdminTaskHistory,
   getPodPhotoSourceUrl,
   getPodPhotoSourceUrlForAdmin,
   getTasksForSubscription,
   getTaskTimeline,
+  getAdminTaskTimeline,
   listAllTaskIds,
   listTasks,
   printLabelsForTasks,
@@ -2166,6 +2168,126 @@ describe("getTaskHistory — Day-52 / R8", () => {
     mockFindById.mockResolvedValueOnce(taskFixture());
     await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getAdminTaskTimeline / getAdminTaskHistory — Item 3 (22 Jun 2026)
+// Cross-tenant task drawer for the Transcorp admin surface
+// (/admin/tasks/[id]). Gate `task:read_all`, read under withServiceRole,
+// resolve the task's OWN owning tenant — never the caller's.
+// -----------------------------------------------------------------------------
+
+describe("getAdminTaskTimeline — Item 3 (cross-tenant admin drawer)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWithServiceRole.mockImplementation(async (_reason, fn) =>
+      fn({ execute: vi.fn().mockResolvedValue([]) } as never),
+    );
+  });
+
+  it("rejects an actor without task:read_all with ForbiddenError", async () => {
+    await expect(
+      getAdminTaskTimeline(userCtx([]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws NotFoundError when the task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getAdminTaskTimeline(userCtx(["task:read_all"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("runs under withServiceRole (cross-tenant), not withTenant, and returns the timeline", async () => {
+    mockFindById.mockResolvedValueOnce(taskFixture({ externalTrackingNumber: null }));
+    const result = await getAdminTaskTimeline(
+      userCtx(["task:read_all"], "00000000-0000-0000-0000-0000000000ff"),
+      TASK_ID as never,
+    );
+    expect(mockWithServiceRole).toHaveBeenCalled();
+    expect(mockWithTenant).not.toHaveBeenCalled();
+    // Synthetic TASK_CREATED entry always present.
+    expect(result.entries[0].action).toBe("TASK_CREATED");
+  });
+});
+
+describe("getAdminTaskHistory — Item 3 (cross-tenant admin drawer)", () => {
+  let mockExecute: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecute = vi.fn().mockResolvedValue([]);
+    // Both paths wired so the operator-contrast test can also run.
+    mockWithTenant.mockImplementation(async (_tenantId, fn) =>
+      fn({ execute: mockExecute } as never),
+    );
+    mockWithServiceRole.mockImplementation(async (_reason, fn) =>
+      fn({ execute: mockExecute } as never),
+    );
+    mockListAuditForResource.mockResolvedValue([]);
+    mockListAuditForSubscription.mockResolvedValue([]);
+  });
+
+  it("rejects an actor without task:read_all with ForbiddenError", async () => {
+    await expect(
+      getAdminTaskHistory(userCtx([]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("throws NotFoundError when the task does not exist", async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await expect(
+      getAdminTaskHistory(userCtx(["task:read_all"]), TASK_ID as never),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("runs under withServiceRole (cross-tenant), not withTenant", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ subscriptionId: HISTORY_SUBSCRIPTION_ID as never }),
+    );
+    await getAdminTaskHistory(userCtx(["task:read_all"]), TASK_ID as never);
+    expect(mockWithServiceRole).toHaveBeenCalled();
+    expect(mockWithTenant).not.toHaveBeenCalled();
+  });
+
+  // Floor-5 (Love-ruled 22 Jun 2026): the subscription-event family is
+  // keyed only on metadata->>'subscription_id', which is NOT a tenant
+  // fence under withServiceRole. A crafted/colliding subscription_id in
+  // another tenant must not leak into this admin read. The fence is the
+  // explicit tenantId passed to the family reader — set to the TASK's own
+  // resolved tenant, never the caller's. (The reader's SQL then adds
+  // `AND tenant_id = $`; proven in audit/tests/read.spec.ts.)
+  it("fences the subscription-event family to the task's OWN tenant — colliding subscription_id cannot leak", async () => {
+    const TASK_TENANT = "00000000-0000-0000-0000-0000000000a1";
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({
+        tenantId: TASK_TENANT as never,
+        subscriptionId: HISTORY_SUBSCRIPTION_ID as never,
+      }),
+    );
+
+    // Caller is a Transcorp actor whose home tenant differs from the task's.
+    await getAdminTaskHistory(
+      userCtx(["task:read_all"], "00000000-0000-0000-0000-0000000000ff"),
+      TASK_ID as never,
+    );
+
+    expect(mockListAuditForSubscription).toHaveBeenCalledOnce();
+    const params = mockListAuditForSubscription.mock.calls[0][1];
+    expect(params.subscriptionId).toBe(HISTORY_SUBSCRIPTION_ID);
+    // The fence: scoped to the TASK's tenant, not the caller's (…00ff).
+    expect(params.tenantId).toBe(TASK_TENANT);
+  });
+
+  it("operator getTaskHistory leaves the family RLS-scoped (no explicit tenantId — divergence is deliberate)", async () => {
+    mockFindById.mockResolvedValueOnce(
+      taskFixture({ subscriptionId: HISTORY_SUBSCRIPTION_ID as never }),
+    );
+    await getTaskHistory(userCtx(["task:view_timeline"]), TASK_ID as never);
+    expect(mockListAuditForSubscription).toHaveBeenCalledOnce();
+    const params = mockListAuditForSubscription.mock.calls[0][1];
+    expect(params.tenantId).toBeUndefined();
   });
 });
 

@@ -443,6 +443,23 @@ export async function listAllSubscriptions(
   });
 }
 
+/**
+ * Item 3 (22 Jun 2026) — cross-tenant single-subscription fetch for the
+ * /admin/subscriptions/[id] detail view. Gates `subscription:read_all`
+ * and reads inside `withServiceRole`. Returns null when no row matches.
+ * The detail page applies the genuine-tenant gate (Item 1) by resolving
+ * the owning merchant separately.
+ */
+export async function getAdminSubscriptionById(
+  ctx: RequestContext,
+  id: Uuid,
+): Promise<Subscription | null> {
+  requirePermission(ctx, "subscription:read_all");
+  return withServiceRole("transcorp_staff:get_subscription", (tx) =>
+    findSubscriptionById(tx, id),
+  );
+}
+
 // -----------------------------------------------------------------------------
 // F6 — triggerManualMaterialization (guarded admin/Ops on-demand trigger)
 // -----------------------------------------------------------------------------
