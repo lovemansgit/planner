@@ -37,12 +37,6 @@ export function roleOptionsForTenant(tenantSlug: string): readonly RoleOption[] 
     : MERCHANT_ROLE_OPTIONS;
 }
 
-/** Human label for a role slug; falls back to the slug if unknown. */
-export function roleLabel(slug: string): string {
-  const all = [...TRANSCORP_ROLE_OPTIONS, ...MERCHANT_ROLE_OPTIONS];
-  return all.find((r) => r.slug === slug)?.label ?? slug;
-}
-
 export interface ParsedUserEdit {
   /** Trimmed full name; empty → null (clears it). */
   readonly displayName: string | null;

@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { roleLabel } from "@/modules/identity/role-label";
 import { getUserById, type AdminUserRow } from "@/modules/identity/service";
 import {
   ForbiddenError,
@@ -26,8 +27,6 @@ import type { Uuid } from "@/shared/types";
 import { UserDisableModal } from "../_components/UserDisableModal";
 import { UserEnableButton } from "../_components/UserEnableButton";
 import { UserPasswordResetModal } from "../_components/UserPasswordResetModal";
-
-import { roleLabel } from "./edit/_helpers";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
