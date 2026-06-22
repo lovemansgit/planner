@@ -33,7 +33,10 @@ vi.mock("server-only", () => ({}));
 import { countAllTasksRows } from "../../src/modules/tasks/repository";
 import { withServiceRole } from "../../src/shared/db";
 
-const RUN_ID = randomUUID().slice(0, 8);
+// Item 1 (22 Jun 2026): seed tenants must read as GENUINE under the admin
+// test-tenant filter, so the per-run slug fragment interleaves a non-hex
+// separator to avoid the [0-9a-f]{8} heuristic; uniqueness is preserved.
+const RUN_ID = `${randomUUID().slice(0, 4)}g${randomUUID().slice(0, 4)}`;
 const TENANT_LIVE = randomUUID();
 const TENANT_ARCHIVED = randomUUID();
 const SLUG_LIVE = `atc-${RUN_ID}-live`;

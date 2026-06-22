@@ -50,7 +50,10 @@ import { withServiceRole } from "../../src/shared/db";
 // RUN_ID: hex slice (a-f + 0-9). Used for tenant UUIDs (not searched)
 // and slugs (UNIQUE-constrained, not searched by
 // buildAdminConsigneeSearchFilter). Digit content here is harmless.
-const RUN_ID = randomUUID().slice(0, 8);
+// Item 1 (22 Jun 2026): seed tenants must read as GENUINE under the admin
+// test-tenant filter, so the per-run slug fragment interleaves a non-hex
+// separator to avoid the [0-9a-f]{8} heuristic; uniqueness is preserved.
+const RUN_ID = `${randomUUID().slice(0, 4)}g${randomUUID().slice(0, 4)}`;
 
 // RUN_TAG: alphabetic-only suffix derived from concatenated UUIDs.
 // Used as the cross-run uniqueness anchor for SEARCHABLE name fields
