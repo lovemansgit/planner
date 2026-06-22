@@ -381,14 +381,26 @@ describe("listTasksByTenant", () => {
     });
 
     it("composes searchTerm with the status filter (both clauses present)", async () => {
-      // D56 Lane 3 — the status filter is now the FINE courier_status column.
+      // D57 Item A — the operator status filter is render-aligned (shared #554
+      // helper): FINE courier_status OR the coarse internal_status fallback for
+      // NULL-courier rows. Same fix as /admin/tasks; the operator count mirrors.
       const tx = makeStubTx([[]]);
       await listTasksByTenant(tx, TENANT_ID, { searchTerm: "Sarah", status: "OUT_FOR_DELIVERY" });
       const captured = compile(tx.execute.mock.calls[0][0]);
       expect(captured.sql).toMatch(/t\.courier_status\s*=\s*\$/i);
+      expect(captured.sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=\s*\$/i);
       expect(captured.sql).toMatch(/ILIKE/i);
       expect(captured.params).toContain("OUT_FOR_DELIVERY");
       expect(captured.params).toContain("%Sarah%");
+    });
+
+    it("countTasksByTenant mirrors the list predicate (render-aligned, D57 Item A)", async () => {
+      const tx = makeStubTx([[{ count: 0 }]]);
+      await countTasksByTenant(tx, TENANT_ID, { status: "DELIVERED" });
+      const captured = compile(tx.execute.mock.calls[0][0]);
+      expect(captured.sql).toMatch(/t\.courier_status\s*=\s*\$/i);
+      expect(captured.sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=\s*\$/i);
+      expect(captured.params.filter((p) => p === "DELIVERED")).toHaveLength(2);
     });
   });
 
