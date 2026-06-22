@@ -5,19 +5,29 @@ in every aesthetic) → ran parallel to Lane A (aesthetic) with zero collision.
 Adopts the shipped #560 humanise layer across rendered screens + fixes
 operator-facing copy. Per the frontend-design writing rules.
 
-## State: 3 PRs OPEN, all green, awaiting Love's promote ruling
+## State: ALL 3 MERGED to main via Love's ORCH-CLEARANCE — NOT promoted
 
-All three branched off `origin/main` (`3379a13`, #566 fast-lane tip).
-**Zero file overlap between the three** → independently mergeable in ANY order.
+Branched off `origin/main` (`3379a13`, #566 fast-lane tip); zero file overlap.
+Love cleared all three (2026-06-22/23): merged via the `orch-automerge`
+`love-cleared` route (squash), each re-gated server-side (ORCH-CLEARANCE comment
+present + ORCH-VERDICT APPROVE at head + CI green). **NOT promoted** — Love's
+separate ruling; bounds were "rendered UI copy only; storage stays raw; no
+migration; no promote".
 
-| PR | Branch | Scope | Reviewer |
-|----|--------|-------|----------|
-| **#567** | `lane-b/batch1-consignee-phones-noun` | consignee phones → `formatPhone()` (5 surfaces) + retire "subscriber" noun | **APPROVE r1** |
-| **#569** | `lane-b/batch2-admin-role-labels` | admin users list+detail → shipped `roleLabel()`; dedupe local helper | **APPROVE r1** |
-| **#570** | `lane-b/batch3-operator-copy` | engineer-speak → operator copy (failed-pushes + webhook surfaces) | **APPROVE r1** |
+| PR | Scope | Verdict | Merge commit |
+|----|-------|---------|--------------|
+| **#567** | consignee phones → `formatPhone()` (5 surfaces) + retire "subscriber" noun | APPROVE r1 | `508ee61` |
+| **#569** | admin users list+detail → shipped `roleLabel()`; dedupe local helper | APPROVE r1 | `d7a84da` |
+| **#570** | engineer-speak → operator copy (failed-pushes + webhook surfaces) | APPROVE r1 | `c051561` |
+
+main tip after the wave: `9ef93fe` (Lane A mockups #568 also landed on top).
+#569 transient-parked once ("Pull request is in unstable status" — its own
+in-flight gate check briefly flipped the PR to UNSTABLE, which
+`enablePullRequestAutoMerge` refuses); remedied by removing `parked-t3` +
+re-applying `love-cleared`, merged clean on the retry.
 
 Each: Round-0 self-review → fresh independent `reviewer` subagent (isolated
-worktree) → ORCH-VERDICT on PR. Full unit suite green on every branch
+worktree) → ORCH-VERDICT. Full unit suite green on every branch
 (2423–2427 tests), `tsc --noEmit` clean, `eslint` clean.
 
 ## What shipped, by batch
@@ -69,8 +79,10 @@ contract / API change.
    (truncated 8px badge). Fold into follow-up #1.
 
 ## Next session
-- Love rules promote on #567/#569/#570 (any order; all independent, all green).
-  These are code PRs → a promote, not the docs fast-lane.
+- **Promote when Love rules it** — all 3 are merged on main but NOT promoted.
+  A whole-main promote ships these alongside whatever else has landed since
+  `9ef93fe`. (Promote = `vercel promote <preview-dpl> --yes`; rollback anchor
+  per the last promote memo.)
 - Optional follow-up: the nav-config-owned "Failed pushes → Failed deliveries
   to SuiteFleet" rename (skip #1), then close the /tasks phone (skip #2).
-- This memo rides the #566 docs/memory fast-lane (memory/**.md only).
+- This memo (PR #571) rides the #566 docs/memory fast-lane (memory/**.md only).
