@@ -151,6 +151,19 @@
   --color-status-new-bg: #e6e8f1;
   --color-status-new-ink: #2b3266;
 
+  /* DataTable skin (Phase 9 · Step 3.4, #558 Gap C) — B+ values from the
+   * mockup. The floating card's soft navy depth; the faint window-track
+   * baseline; and the solid status-LED gutter tones (an indicator light per
+   * row). LED tones are the saturated mid-tones, distinct from the soft
+   * StatusBadge fills above; active/new echo the brand green/navy. */
+  --shadow-b-card: 0 1px 2px rgba(37, 45, 96, 0.05), 0 10px 30px -16px rgba(37, 45, 96, 0.28);
+  --color-b-track: rgba(37, 45, 96, 0.08);
+  --color-led-active: #3e7c4b;
+  --color-led-paused: #c0851f;
+  --color-led-risk: #c0392b;
+  --color-led-ended: #9a9486;
+  --color-led-new: #252d60;
+
   /* Type scale tokens (brief v1.4 §3.3.11). Values are size / line-height pairs in rem; weight + tracking declared in component CSS or Tailwind utility classes. */
   --text-display-xl-size: 6rem;     /* 96px (lower bound; mobile/tablet — desktop scales up to 128px via fluid utility) */
   --text-display-xl-line: 0.95;
