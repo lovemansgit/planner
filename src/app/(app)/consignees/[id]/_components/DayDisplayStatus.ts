@@ -25,7 +25,6 @@ import {
   resolveCourierDisplay,
   type CourierStatusDisplay,
 } from "@/app/(app)/tasks/status";
-import type { CourierStatus } from "@/modules/integration";
 import type { SubscriptionException } from "@/modules/subscription-exceptions";
 import type { Task, TaskStatusFilter } from "@/modules/tasks/types";
 
@@ -139,26 +138,47 @@ export const DAY_DISPLAY_VISUALS: Record<DayExceptionStatus, DayDisplayVisual> =
 };
 
 /**
- * Filter calendar tasks to a single fine courier state (the calendar's
- * `?status=` control). Mirrors Lane 3's server-side predicate exactly
- * (`t.courier_status = ${status}`): a NULL-courier row (Planner-only state /
- * pre-backfill) never matches a fine filter — it appears only under "All"
- * (OQ-5 forward-only). A `null` filter is the "All" view and returns the list
- * unchanged. Pure — render-layer narrowing of an already-fetched range.
+ * Filter calendar tasks to a single status (the calendar's `?status=` control),
+ * aligned to what each row RENDERS. This is the client twin of the server-side
+ * `buildCourierStatusFilter` (src/modules/tasks/repository.ts) — keep the two in
+ * lock-step: a row renders `resolveCourierDisplay(courier_status,
+ * internal_status)` (the FINE courier state when present, else the COARSE
+ * internal_status fallback), and the filter matches on exactly that, so "what
+ * you can filter" == "what you see".
+ *
+ * D57 OQ-5 (Love's Day-57 ruling, recorded in
+ * memory/decision_d56_phase8_status_distinct_render.md — supersedes the earlier
+ * "calendar forward-only" rule): a NULL-courier row (Planner-only state /
+ * pre-backfill) now matches the filter for the coarse status it displays —
+ * e.g. a NULL-courier IN_TRANSIT / CREATED / SKIPPED row is matched by that
+ * filter, no longer All-only. Fine-only values (OUT_FOR_DELIVERY, PICKED_UP, …)
+ * never appear in the 8-value internal_status domain, so the coarse fallback is
+ * inert for them — no false positives.
+ *
+ * ON_HOLD is the single exception (D57 Item C, mirroring the server): a
+ * recognised filter value whose predicate matches nothing —
+ * `courier_status === 'ON_HOLD'` is never true (ON_HOLD is not a fine courier
+ * state) and its coarse fallback is suppressed, so legacy ON_HOLD rows stay
+ * All-only and render label-neutral.
+ *
+ * A `null` filter is the "All" view and returns the list unchanged. Pure —
+ * render-layer narrowing of an already-fetched range.
  */
 export function filterTasksByCourierStatus(
   tasks: readonly Task[],
   status: TaskStatusFilter | null,
 ): readonly Task[] {
   if (status === null) return tasks;
-  // D57 — the consignee-detail calendar's client-side filter stays FINE-ONLY:
-  // the OQ-5 ruling (NULL-courier rows are All-only on this surface) is out of
-  // scope for the admin+operator render-alignment lane and is preserved here
-  // unchanged. The param type only widens (TaskStatusFilter) because it shares
-  // the parser; a coarse-only value (CREATED/SKIPPED) simply matches no fine
-  // courier_status here. Aligning this surface supersedes OQ-5 — Love's call
-  // (parked in the PR report).
-  return tasks.filter((t) => t.courierStatus === status);
+  // ON_HOLD: the server filters `courier_status = 'ON_HOLD'`, which the 0035
+  // CHECK constraint guarantees is always empty (ON_HOLD is not a fine courier
+  // state). The client `courierStatus` type (CourierStatus) excludes ON_HOLD
+  // for the same reason, so the faithful, type-safe mirror is to match nothing.
+  if (status === "ON_HOLD") return [];
+  return tasks.filter(
+    (t) =>
+      t.courierStatus === status ||
+      (t.courierStatus === null && t.internalStatus === status),
+  );
 }
 
 export interface DayCellVisual {

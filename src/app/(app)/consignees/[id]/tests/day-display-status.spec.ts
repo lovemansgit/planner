@@ -156,28 +156,44 @@ describe("projectDayDisplayStatus — NULL courier_status falls back to the coar
   });
 });
 
-describe("filterTasksByCourierStatus — calendar filters to a single fine state", () => {
-  const ofd = task("IN_TRANSIT", "OUT_FOR_DELIVERY");
-  const inTransit = task("IN_TRANSIT", "IN_TRANSIT");
-  const nullCourier = task("IN_TRANSIT", null); // pre-backfill row
-  const all = [ofd, inTransit, nullCourier];
+describe("filterTasksByCourierStatus — calendar filter aligned to the rendered status (D57 OQ-5)", () => {
+  // The calendar renders each task via resolveCourierDisplay(courier, internal):
+  // the FINE courier_status when present, else the COARSE internal_status. The
+  // filter mirrors that resolution exactly — the client twin of the server-side
+  // buildCourierStatusFilter — so "what you can filter" == "what you see".
+  const ofd = task("IN_TRANSIT", "OUT_FOR_DELIVERY"); // fine present → renders "Out for delivery"
+  const nullInTransit = task("IN_TRANSIT", null); // pre-backfill → renders coarse "In transit"
+  const nullCreated = task("CREATED", null); // coarse-only → renders "Created"
+  const nullSkipped = task("SKIPPED", null); // coarse-only → SKIPPED overlay
+  const nullOnHold = task("ON_HOLD", null); // legacy → label-neutral "—"
+  const all = [ofd, nullInTransit, nullCreated, nullSkipped, nullOnHold];
 
   it("returns the list unchanged for the null (All) filter", () => {
     expect(filterTasksByCourierStatus(all, null)).toBe(all);
   });
 
-  it("keeps only rows whose fine courier_status equals the filter", () => {
+  it("matches a row by its FINE courier_status when present", () => {
     expect(filterTasksByCourierStatus(all, "OUT_FOR_DELIVERY")).toEqual([ofd]);
-    expect(filterTasksByCourierStatus(all, "IN_TRANSIT")).toEqual([inTransit]);
   });
 
-  it("excludes NULL-courier rows under any fine filter (only shown under All — OQ-5)", () => {
-    const filtered = filterTasksByCourierStatus(all, "IN_TRANSIT");
-    expect(filtered).not.toContain(nullCourier);
+  it("matches a NULL-courier row by its COARSE internal_status (D57 OQ-5 alignment — no longer All-only)", () => {
+    // Pre-#562 this returned [] (OQ-5 forward-only). Love's Day-57 OQ-5 ruling
+    // aligns the calendar to the filter: the NULL-courier row that RENDERS
+    // "In transit" is now matched by the IN_TRANSIT filter, just like /tasks.
+    expect(filterTasksByCourierStatus(all, "IN_TRANSIT")).toEqual([nullInTransit]);
+  });
+
+  it("matches coarse-only CREATED and SKIPPED rows (NULL courier) via the fallback", () => {
+    expect(filterTasksByCourierStatus(all, "CREATED")).toEqual([nullCreated]);
+    expect(filterTasksByCourierStatus(all, "SKIPPED")).toEqual([nullSkipped]);
+  });
+
+  it("ON_HOLD is filter-invisible — matches nothing even for a legacy ON_HOLD row (D57 Item C parity)", () => {
+    expect(filterTasksByCourierStatus(all, "ON_HOLD")).toEqual([]);
   });
 
   it("returns empty when no row matches", () => {
-    expect(filterTasksByCourierStatus(all, "DELIVERED")).toEqual([]);
+    expect(filterTasksByCourierStatus(all, "FAILED")).toEqual([]);
   });
 });
 
