@@ -517,17 +517,70 @@ describe("listAllTasksRows", () => {
         merchantSlug: "mpl",
       });
       const captured = compile(tx.execute.mock.calls[0][0]);
-      // D56 Lane 5 — admin status filter is now the FINE courier_status (the
-      // headline A2 case: OUT_FOR_DELIVERY is indistinguishable from IN_TRANSIT
-      // under the coarse internal_status).
+      // D57 — admin status filter is render-aligned: the FINE courier_status
+      // OR the coarse internal_status fallback for NULL-courier rows. The
+      // headline A2 case (OUT_FOR_DELIVERY vs IN_TRANSIT) still resolves on the
+      // fine field; the fallback is inert for fine-only values.
       expect(captured.sql).toMatch(/t\.courier_status\s*=/i);
-      expect(captured.sql).not.toMatch(/t\.internal_status\s*=/i);
+      expect(captured.sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=/i);
       expect(captured.sql).toMatch(/ten\.slug\s*=/i);
       expect(captured.sql).toMatch(/ILIKE/i);
       expect(captured.params).toContain("OUT_FOR_DELIVERY");
       expect(captured.params).toContain("mpl");
       expect(captured.params).toContain("%Sarah%");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D57 — /admin/tasks status filter render-alignment.
+//
+// Bug: the admin filter matched `t.courier_status = $status` only, but every row
+// renders `resolveCourierDisplay(courier_status, internal_status)` — the FINE
+// courier_status when present, else the COARSE internal_status fallback. With
+// 100% of rows carrying courier_status NULL (the fine state is webhook-backfilled
+// going forward), every specific filter returned 0 while rows visibly displayed
+// DELIVERED/FAILED/etc. The filter must mirror the render: fine when present,
+// else the coarse value the row actually carries. List + count fix in lockstep
+// so the hero count agrees with the rows.
+// ---------------------------------------------------------------------------
+describe("admin status filter — render alignment (D57)", () => {
+  it("listAllTasksRows matches courier_status OR the coarse internal_status fallback", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { status: "DELIVERED" });
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/t\.courier_status\s*=\s*\$\d+/i);
+    expect(sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=\s*\$\d+/i);
+    // DELIVERED bound for BOTH the fine comparison and the coarse fallback.
+    expect(params.filter((p) => p === "DELIVERED")).toHaveLength(2);
+  });
+
+  it("countAllTasksRows mirrors the list predicate (hero count agrees with rows)", async () => {
+    const tx = makeStubTx([[{ count: 0 }]]);
+    await countAllTasksRows(tx, { status: "DELIVERED" });
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).toMatch(/t\.courier_status\s*=\s*\$\d+/i);
+    expect(sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=\s*\$\d+/i);
+    expect(params.filter((p) => p === "DELIVERED")).toHaveLength(2);
+  });
+
+  it("emits no status predicate when status is undefined (All view)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, {});
+    const { sql } = compile(tx.execute.mock.calls[0][0]);
+    expect(sql).not.toMatch(/courier_status\s*=/i);
+    expect(sql).not.toMatch(/internal_status\s*=/i);
+  });
+
+  it("fine-only values (OUT_FOR_DELIVERY) keep the coarse fallback inert — no false match", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, { status: "OUT_FOR_DELIVERY" });
+    const { sql, params } = compile(tx.execute.mock.calls[0][0]);
+    // Fallback clause present but compares against internal_status, whose
+    // 8-value domain never includes OUT_FOR_DELIVERY — so it matches only
+    // genuine fine-courier rows (render parity, zero false positives).
+    expect(sql).toMatch(/t\.courier_status\s+is\s+null\s+and\s+t\.internal_status\s*=/i);
+    expect(params.filter((p) => p === "OUT_FOR_DELIVERY")).toHaveLength(2);
   });
 });
 

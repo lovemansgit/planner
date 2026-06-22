@@ -890,10 +890,8 @@ export async function listAllTasksRows(
 > {
   const limit = Math.min(filters.limit ?? 50, 500);
   const offset = filters.offset ?? 0;
-  // D56 Lane 5 — fine courier_status filter (NULL-courier rows are "All"-only).
-  const statusFilter = filters.status
-    ? sqlTag`AND t.courier_status = ${filters.status}`
-    : sqlTag``;
+  // D57 — render-aligned status filter (see buildCourierStatusFilter).
+  const statusFilter = buildCourierStatusFilter(filters.status);
   const merchantFilter =
     filters.merchantSlug !== undefined
       ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
@@ -934,6 +932,28 @@ export async function listAllTasksRows(
       status: row.merchant_status,
     },
   }));
+}
+
+/**
+ * D57 — /admin/tasks status filter, aligned to what each row RENDERS.
+ *
+ * Every admin row renders `resolveCourierDisplay(courier_status, internal_status)`:
+ * the FINE `courier_status` when present, else the COARSE `internal_status`
+ * fallback. The filter mirrors that resolution, so a row that DISPLAYS a status
+ * is matched by filtering on it. This matters because the fine state is
+ * webhook-backfilled going forward — rows without it carry `courier_status NULL`
+ * and render via the coarse value, which a `courier_status`-only filter could
+ * never match (every specific filter returned 0).
+ *
+ * Fine-only values (OUT_FOR_DELIVERY, PICKED_UP, …) never appear in the 8-value
+ * `internal_status` domain, so the fallback branch is inert for them — no false
+ * positives. Once `courier_status` is populated the fine clause is authoritative
+ * (the fallback only applies while it is NULL). Shared by the admin list + count
+ * so the two never diverge.
+ */
+function buildCourierStatusFilter(status: CourierStatus | undefined) {
+  if (!status) return sqlTag``;
+  return sqlTag`AND (t.courier_status = ${status} OR (t.courier_status IS NULL AND t.internal_status = ${status}))`;
 }
 
 function buildAdminTaskSearchFilter(searchTerm: string | undefined) {
@@ -988,10 +1008,9 @@ export async function countAllTasksRows(
   tx: DbTx,
   filters: Omit<ListAllTasksFilters, "limit" | "offset"> = {},
 ): Promise<number> {
-  // D56 Lane 5 — fine courier_status filter (mirrors listAllTasksRows).
-  const statusFilter = filters.status
-    ? sqlTag`AND t.courier_status = ${filters.status}`
-    : sqlTag``;
+  // D57 — render-aligned status filter (mirrors listAllTasksRows exactly so the
+  // hero count agrees with the rows). See buildCourierStatusFilter.
+  const statusFilter = buildCourierStatusFilter(filters.status);
   const merchantFilter =
     filters.merchantSlug !== undefined
       ? sqlTag`AND ten.slug = ${filters.merchantSlug}`
