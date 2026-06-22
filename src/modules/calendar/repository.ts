@@ -35,6 +35,7 @@ import type {
   CalendarTopMerchantToday,
 } from "./types";
 import { COURIER_STATUS_VALUES, type CourierStatus } from "@/modules/integration/types";
+import { buildGenuineTenantsFilter } from "@/modules/merchants/genuine-merchants";
 
 import type { ConsigneeCrmState } from "../consignees/types";
 
@@ -308,29 +309,43 @@ export async function computeTranscorpAdminMetrics(
   tx: DbTx,
   today: string,
 ): Promise<CalendarMetricsTranscorpAdmin> {
+  // Item 1 fence (D57) — every counter is scoped to GENUINE merchants only, so
+  // the ~1,825 automated-test tenants and their tasks never inflate the numbers
+  // a person reads. Reuses buildGenuineTenantsFilter (the single source shared
+  // with the merchants list + /admin/tasks); each task counter joins tenants so
+  // the same fence applies to the task rows via their tenant.
   const rows = await tx.execute<TranscorpAdminMetricsRow>(sqlTag`
     SELECT
       (
         SELECT COUNT(*) FROM tenants
         WHERE status = 'active'
+        ${buildGenuineTenantsFilter("tenants")}
       ) AS active_merchants,
       (
-        SELECT COUNT(*) FROM tasks
-        WHERE delivery_date = ${today}
+        SELECT COUNT(*) FROM tasks tk
+        JOIN tenants ten ON ten.id = tk.tenant_id
+        WHERE tk.delivery_date = ${today}
+        ${buildGenuineTenantsFilter("ten")}
       ) AS total_deliveries_today,
       (
-        SELECT COUNT(*) FROM tasks
-        WHERE delivery_date = ${today}
-          AND internal_status = 'DELIVERED'
+        SELECT COUNT(*) FROM tasks tk
+        JOIN tenants ten ON ten.id = tk.tenant_id
+        WHERE tk.delivery_date = ${today}
+          AND tk.internal_status = 'DELIVERED'
+        ${buildGenuineTenantsFilter("ten")}
       ) AS delivered_today,
       (
-        SELECT COUNT(*) FROM tasks
-        WHERE internal_status = 'IN_TRANSIT'
+        SELECT COUNT(*) FROM tasks tk
+        JOIN tenants ten ON ten.id = tk.tenant_id
+        WHERE tk.internal_status = 'IN_TRANSIT'
+        ${buildGenuineTenantsFilter("ten")}
       ) AS in_transit,
       (
-        SELECT COUNT(*) FROM tasks
-        WHERE internal_status = 'FAILED'
-          AND delivery_date >= (${today}::date - INTERVAL '7 days')
+        SELECT COUNT(*) FROM tasks tk
+        JOIN tenants ten ON ten.id = tk.tenant_id
+        WHERE tk.internal_status = 'FAILED'
+          AND tk.delivery_date >= (${today}::date - INTERVAL '7 days')
+        ${buildGenuineTenantsFilter("ten")}
       ) AS failed_last_7_days
   `);
   const row = rows[0];
@@ -379,6 +394,7 @@ export async function listTopMerchantsTodayWithTaskCount(
     JOIN tenants t ON t.id = tasks.tenant_id
     WHERE tasks.delivery_date = ${today}
       AND t.status = 'active'
+      ${buildGenuineTenantsFilter("t")}
     GROUP BY t.id, t.name, t.slug
     ORDER BY task_count DESC, t.name ASC
     LIMIT ${clamped}
@@ -433,6 +449,7 @@ export async function listPerMerchantBreakdown(
     FROM tenants t
     LEFT JOIN tasks ON tasks.tenant_id = t.id
     WHERE t.status = 'active'
+      ${buildGenuineTenantsFilter("t")}
     GROUP BY t.id, t.name, t.slug
     ORDER BY t.name ASC
   `);
