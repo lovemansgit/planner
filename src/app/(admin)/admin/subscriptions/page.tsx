@@ -31,7 +31,10 @@ import {
   parsePageParam,
   parsePerPageParam,
 } from "@/app/(app)/tasks/status";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { DeliveryWindowTrack } from "@/components/DeliveryWindowTrack";
 import { StatusBadge } from "@/components/StatusBadge";
+import { statusMeta } from "@/components/status-badge-recipe";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import {
@@ -142,76 +145,87 @@ export default async function AdminSubscriptionsPage({
   );
 }
 
+// Phase 9 · 3.4 — the admin subscriptions list adopts the shared <DataTable>
+// (Gap C, B+ skin): floating card, never-wrap headers, mono figures, the
+// status-LED gutter, and the delivery-window track. The Consignee column keeps
+// the v1.5.1 NAME render (#556); the Actions cell keeps the MaterializeButton
+// (#574) and opts out of the row link. Column order is preserved from the
+// pre-B+ table (status-first ordering is an available refinement, not taken
+// here to avoid an information-architecture change).
+const SUBSCRIPTION_COLUMNS: ReadonlyArray<DataTableColumn<AdminSubscriptionRow>> = [
+  {
+    key: "merchant",
+    header: "Merchant",
+    cell: (row) => (
+      <>
+        <span className="font-b-display font-semibold text-navy">{row.merchant.name}</span>
+        <span className="ml-2 font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
+          {row.merchant.slug}
+        </span>
+      </>
+    ),
+    title: (row) => `${row.merchant.name} · ${row.merchant.slug}`,
+  },
+  {
+    key: "consignee",
+    header: "Consignee",
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => row.consigneeName,
+    title: (row) => row.consigneeName,
+  },
+  {
+    key: "status",
+    header: "Status",
+    cell: (row) => <StatusBadge domain="subscription" status={row.subscription.status} />,
+  },
+  {
+    key: "cadence",
+    header: "Cadence",
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => formatDays(row.subscription.daysOfWeek),
+    title: (row) => formatDays(row.subscription.daysOfWeek),
+  },
+  {
+    key: "window",
+    header: "Delivery window",
+    cell: (row) => (
+      <DeliveryWindowTrack
+        start={row.subscription.deliveryWindowStart}
+        end={row.subscription.deliveryWindowEnd}
+        muted={row.subscription.status === "ended"}
+      />
+    ),
+  },
+  {
+    key: "startDate",
+    header: "Start date",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => row.subscription.startDate,
+  },
+  {
+    key: "actions",
+    header: "Actions",
+    srHeader: true,
+    align: "right",
+    noRowLink: true,
+    cell: (row) =>
+      row.subscription.status === "active" ? (
+        <MaterializeButton subscriptionId={row.subscription.id} />
+      ) : null,
+  },
+];
+
 function SubscriptionsTable({ rows }: { rows: readonly AdminSubscriptionRow[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Merchant</Th>
-          <Th>Consignee</Th>
-          <Th>Status</Th>
-          <Th>Cadence</Th>
-          <Th>Window</Th>
-          <Th>Start date</Th>
-          <Th>
-            <span className="sr-only">Actions</span>
-          </Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <Row key={row.subscription.id} row={row} />
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Row({ row }: { row: AdminSubscriptionRow }) {
-  // Item 3: row → subscription detail; the Actions cell (Materialize)
-  // keeps its own button behaviour (no Link wrap there).
-  const detailHref = `/admin/subscriptions/${row.subscription.id}`;
-  return (
-    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
-      <Td>
-        <Link href={detailHref} className="block">
-          <span className="font-medium text-navy">{row.merchant.name}</span>
-          <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
-            {row.merchant.slug}
-          </span>
-        </Link>
-      </Td>
-      <Td className="text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {row.consigneeName}
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <StatusBadge domain="subscription" status={row.subscription.status} />
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {formatDays(row.subscription.daysOfWeek)}
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {row.subscription.deliveryWindowStart.slice(0, 5)} – {row.subscription.deliveryWindowEnd.slice(0, 5)}
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {row.subscription.startDate}
-        </Link>
-      </Td>
-      <Td className="text-right">
-        {row.subscription.status === "active" ? (
-          <MaterializeButton subscriptionId={row.subscription.id} />
-        ) : null}
-      </Td>
-    </tr>
+    <DataTable
+      columns={SUBSCRIPTION_COLUMNS}
+      rows={rows}
+      getRowKey={(row) => row.subscription.id}
+      rowHref={(row) => `/admin/subscriptions/${row.subscription.id}`}
+      led={(row) => statusMeta("subscription", row.subscription.status)?.tone}
+      caption="All subscriptions across the platform"
+    />
   );
 }
 
@@ -286,18 +300,6 @@ const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function formatDays(days: readonly number[]): string {
   return days.map((d) => DAY_LABELS[d - 1] ?? `?${d}`).join(", ");
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
 function EmptyState({ filtered }: { readonly filtered: boolean }) {
