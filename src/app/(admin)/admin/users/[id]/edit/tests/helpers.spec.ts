@@ -3,11 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  parseUserEditForm,
-  roleLabel,
-  roleOptionsForTenant,
-} from "../_helpers";
+import { parseUserEditForm, roleOptionsForTenant } from "../_helpers";
 
 describe("roleOptionsForTenant", () => {
   it("offers only transcorp-sysadmin for the Transcorp home tenant", () => {
@@ -21,17 +17,6 @@ describe("roleOptionsForTenant", () => {
       "tenant-admin",
       "ops-manager",
     ]);
-  });
-});
-
-describe("roleLabel", () => {
-  it("maps known slugs to human labels", () => {
-    expect(roleLabel("ops-manager")).toBe("Ops Manager");
-    expect(roleLabel("transcorp-sysadmin")).toBe("Transcorp Sysadmin");
-  });
-
-  it("falls back to the slug for an unknown role", () => {
-    expect(roleLabel("wizard")).toBe("wizard");
   });
 });
 

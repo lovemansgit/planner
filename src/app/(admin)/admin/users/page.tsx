@@ -21,6 +21,7 @@ import { redirect } from "next/navigation";
 
 import { SearchBar } from "@/components/SearchBar";
 import { Toast } from "@/components/Toast";
+import { roleLabel } from "@/modules/identity/role-label";
 import {
   listAllUsers,
   type AdminUserRow,
@@ -208,7 +209,7 @@ function Row({ row }: { row: AdminUserRow }) {
       <Td>
         <Link href={detailHref} className="block">
           {row.roleSlugs.length > 0 ? (
-            <span className={cellTone}>{row.roleSlugs.join(", ")}</span>
+            <span className={cellTone}>{row.roleSlugs.map(roleLabel).join(", ")}</span>
           ) : (
             <span className="text-[color:var(--color-text-tertiary)]">—</span>
           )}
