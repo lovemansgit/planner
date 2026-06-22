@@ -31,7 +31,10 @@ import { withServiceRole, withTenant } from "../../src/shared/db";
 import type { RequestContext } from "../../src/shared/tenant-context";
 import type { Permission, Uuid } from "../../src/shared/types";
 
-const RUN_ID = randomUUID().slice(0, 8);
+// Item 1 (22 Jun 2026): seed tenants must read as GENUINE under the admin
+// test-tenant filter, so the per-run slug fragment interleaves a non-hex
+// separator to avoid the [0-9a-f]{8} heuristic; uniqueness is preserved.
+const RUN_ID = `${randomUUID().slice(0, 4)}g${randomUUID().slice(0, 4)}`;
 const TENANT_A = randomUUID();
 const TENANT_B = randomUUID();
 const TENANT_ARCHIVED = randomUUID();

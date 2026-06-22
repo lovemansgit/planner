@@ -170,42 +170,59 @@ function Row({ row }: { row: AdminUserRow }) {
   // text-bearing cells keeps the row legible without making it look
   // like an error state.
   const rowTone = disabled
-    ? "border-b border-[color:var(--color-border-default)] last:border-b-0 bg-stone-100/40"
-    : "border-b border-[color:var(--color-border-default)] last:border-b-0";
+    ? "cursor-pointer border-b border-[color:var(--color-border-default)] last:border-b-0 bg-stone-100/40 transition-colors duration-[120ms] ease-out hover:bg-ivory"
+    : "cursor-pointer border-b border-[color:var(--color-border-default)] last:border-b-0 transition-colors duration-[120ms] ease-out hover:bg-ivory";
   const cellTone = disabled ? "text-[color:var(--color-text-tertiary)]" : "text-navy";
+  // Whole-row click target → user detail (Item 2). Mirrors the merchants
+  // list pattern (PR #270 §9.3): HTML can't wrap <tr> in <a>, so each
+  // non-Actions cell's content is a block <Link> to the detail URL;
+  // the Actions cell keeps its own button behaviour (no Link wrap).
+  const detailHref = `/admin/users/${row.userId}`;
 
   return (
     <tr className={rowTone}>
       <Td>
-        <span className={cellTone}>{row.email}</span>
+        <Link href={detailHref} className={`block ${cellTone}`}>
+          {row.email}
+        </Link>
       </Td>
       <Td>
-        {row.displayName ? (
-          <span className={cellTone}>{row.displayName}</span>
-        ) : (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        )}
+        <Link href={detailHref} className="block">
+          {row.displayName ? (
+            <span className={cellTone}>{row.displayName}</span>
+          ) : (
+            <span className="text-[color:var(--color-text-tertiary)]">—</span>
+          )}
+        </Link>
       </Td>
       <Td>
-        <span className={`font-medium ${disabled ? "text-[color:var(--color-text-tertiary)]" : "text-navy"}`}>
-          {row.tenantName}
-        </span>
-        <span className="ml-2 font-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
-          {row.tenantSlug}
-        </span>
+        <Link href={detailHref} className="block">
+          <span className={`font-medium ${disabled ? "text-[color:var(--color-text-tertiary)]" : "text-navy"}`}>
+            {row.tenantName}
+          </span>
+          <span className="ml-2 font-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
+            {row.tenantSlug}
+          </span>
+        </Link>
       </Td>
       <Td>
-        {row.roleSlugs.length > 0 ? (
-          <span className={cellTone}>{row.roleSlugs.join(", ")}</span>
-        ) : (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        )}
+        <Link href={detailHref} className="block">
+          {row.roleSlugs.length > 0 ? (
+            <span className={cellTone}>{row.roleSlugs.join(", ")}</span>
+          ) : (
+            <span className="text-[color:var(--color-text-tertiary)]">—</span>
+          )}
+        </Link>
       </Td>
       <Td>
-        <StatusBadge disabled={disabled} />
+        <Link href={detailHref} className="block">
+          <StatusBadge disabled={disabled} />
+        </Link>
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        {row.createdAt.slice(0, 10)}
+        <Link href={detailHref} className="block">
+          {row.createdAt.slice(0, 10)}
+        </Link>
       </Td>
       <Td className="text-right">
         <div className="inline-flex items-center justify-end gap-2">

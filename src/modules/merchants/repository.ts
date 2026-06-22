@@ -30,11 +30,7 @@ import { sql as sqlTag } from "drizzle-orm";
 import type { DbTx } from "@/shared/db";
 import type { Uuid } from "@/shared/types";
 
-import {
-  DEFAULT_VIEW_STATUSES,
-  GENUINE_MERCHANT_SLUGS,
-  TEST_TENANT_SLUG_PATTERN,
-} from "./genuine-merchants";
+import { buildGenuineTenantsFilter } from "./genuine-merchants";
 import type {
   CreateMerchantInput,
   ListMerchantsFilters,
@@ -428,25 +424,16 @@ export async function listMerchants(
  * F8 (20 Jun 2026) genuine-merchant default-view filter. A row shows
  * when it is allowlisted (the six genuine slugs) OR its status is in the
  * default-view set (everything but archived) AND its slug carries no
- * 8-hex automated-test fragment. Built from the shared constants in
- * ./genuine-merchants.ts so
- * this SQL and the JS `isGenuineMerchant` predicate cannot diverge. The
- * allowlist + statuses bind as `$N` params; the test pattern binds to
- * the Postgres `!~` regex operator.
+ * 8-hex automated-test fragment.
+ *
+ * Item 1 (22 Jun 2026): delegates to the shared `buildGenuineTenantsFilter`
+ * in ./genuine-merchants.ts — the single source now reused by every
+ * cross-tenant admin surface (consignees / subscriptions / users / tasks)
+ * so the rule cannot diverge per-surface. The merchants list selects
+ * `FROM tenants`, so the columns qualify as `tenants.slug` / `tenants.status`.
  */
 function buildGenuineMerchantsFilter() {
-  const allowlist = sqlTag.join(
-    GENUINE_MERCHANT_SLUGS.map((slug) => sqlTag`${slug}`),
-    sqlTag`, `,
-  );
-  const statuses = sqlTag.join(
-    DEFAULT_VIEW_STATUSES.map((status) => sqlTag`${status}`),
-    sqlTag`, `,
-  );
-  return sqlTag`AND (
-    slug IN (${allowlist})
-    OR (status IN (${statuses}) AND slug !~ ${TEST_TENANT_SLUG_PATTERN})
-  )`;
+  return buildGenuineTenantsFilter("tenants");
 }
 
 function buildMerchantSearchFilter(searchTerm: string | undefined) {
