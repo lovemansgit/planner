@@ -50,12 +50,68 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Day-57 docs-only CI fast-lane (Love-ruled on PR #564 / #565). A docs-only PR
+  # — every changed file under a trusted docs tree AND documentation-class, per
+  # the SAME predicate the server-side merge gate uses
+  # (scripts/orchestration/path-gate.sh -> docs-only-predicate.sh) — skips the
+  # heavy suites. The required check `lint + typecheck + test (unit)` still RUNS
+  # and reports a real SUCCESS in seconds (its steps short-circuit), so branch
+  # protection is satisfied and native auto-merge fires fast — branch protection
+  # is NOT changed. One non-docs file => docs_only=false => the full matrix,
+  # byte-identical to before.
+  #
+  # This job ALWAYS runs and ALWAYS succeeds with a docs_only output, so the
+  # downstream `needs: detect` jobs can never be stranded "skipped-because-a-
+  # dependency-was-skipped" (which would leave the required check Pending
+  # forever — the opposite of the goal). The fast-lane is scoped to
+  # pull_request -> main; push-to-main, production-targeted PRs, and ANY error
+  # all resolve to docs_only=false (fail-closed to FULL CI).
+  detect:
+    name: detect docs-only
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Compute docs_only
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docs_only=false
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.base_ref }}" = "main" ]; then
+            # path-gate exits 0 + prints AUTO_MERGE_ELIGIBLE only when EVERY file
+            # is docs-class under a trusted tree. PARK (exit 1) or any gh/network
+            # error leaves docs_only=false — uncertainty always runs FULL CI.
+            if out=$(bash scripts/orchestration/path-gate.sh "${{ github.event.pull_request.number }}"); then
+              case "$out" in
+                *AUTO_MERGE_ELIGIBLE*) docs_only=true ;;
+              esac
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "docs_only=$docs_only (event=${{ github.event_name }} base=${{ github.base_ref }})"
+
   ci:
     name: lint + typecheck + test (unit)
+    needs: detect
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Guard the merge-gate predicate itself: this is the shared classifier the
+      # server-side path-gate AND this workflow's `detect` job both rely on, so a
+      # regression here is a merge-gate regression. Pure bash, no deps. Gated
+      # like the rest — any PR that can change the predicate touches scripts/ and
+      # is therefore non-docs (docs_only=false), so it always runs where relevant.
+      - name: Test (docs-only predicate)
+        if: needs.detect.outputs.docs_only != 'true'
+        run: bash scripts/orchestration/docs-only-predicate.test.sh
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -64,16 +120,26 @@ jobs:
           node-version-file: ".nvmrc"
           cache: "npm"
 
+      # The heavy steps short-circuit on a docs-only PR. The job still RUNS and
+      # SUCCEEDS, so the required check `lint + typecheck + test (unit)` reports
+      # green in seconds — no branch-protection change, no separate sentinel.
+      # On a docs-only diff these validate byte-identical-to-main code, so they
+      # add zero safety; a single non-docs file flips docs_only=false and they
+      # all run (Love ruling #3: lint+typecheck SKIP on docs-only).
       - name: Install dependencies
+        if: needs.detect.outputs.docs_only != 'true'
         run: npm ci
 
       - name: Lint
+        if: needs.detect.outputs.docs_only != 'true'
         run: npm run lint
 
       - name: Typecheck
+        if: needs.detect.outputs.docs_only != 'true'
         run: npm run typecheck
 
       - name: Test (unit)
+        if: needs.detect.outputs.docs_only != 'true'
         run: npm run test
 
   integration:
@@ -93,7 +159,16 @@ jobs:
     #
     # Runs in parallel with the `ci` job above; both must pass for a
     # green PR.
+    #
+    # Day-57 fast-lane: skipped entirely on a docs-only PR (Love-ruled #564).
+    # This is NOT a required status check (branch protection requires only
+    # "Vercel" + "lint + typecheck + test (unit)"), so a skipped status here
+    # never strands the merge gate — it is pure Postgres-container compute saved
+    # on a no-code diff. On every code/mixed PR (docs_only=false) it runs exactly
+    # as before.
     name: test (integration)
+    needs: detect
+    if: needs.detect.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     services:
       postgres:

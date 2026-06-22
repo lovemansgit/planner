@@ -2,9 +2,15 @@
 # Shape-3 orchestration — Layer 1 mechanical path gate (Fork 4, Love-ruled).
 # v1 scope: DOCS-ONLY auto-merge. No model judgment anywhere in this file.
 #
-# Allowlist: memory/**, docs/**, tasks/**, root-level *.md.
-# One file outside the allowlist -> PARK.
-# supabase/migrations/** -> ALWAYS park, plus SQL_TO_APPLY flag.
+# This file owns ONE job: fetch the PR's trusted change-set (fail-closed) and
+# hand it to the PURE classifier, docs-only-predicate.sh. The allowlist +
+# extension-guard live there so the merge gate and the CI fast-lane share one
+# source of truth and can never drift. Verdict (Day-57, Love ruling on #564):
+#   Allowlist:  memory/**, docs/**, tasks/**, root-level *.md
+#               — AND, under the trees, a documentation-class extension
+#                 (extension-guard: a non-doc file under a trusted tree PARKS).
+#   supabase/migrations/** -> ALWAYS park, plus SQL_TO_APPLY flag.
+#   One file outside the allowlist -> PARK.
 #
 # Usage:  path-gate.sh <pr-number>
 # Stdout: optional "SQL_TO_APPLY" line, then "AUTO_MERGE_ELIGIBLE" or "PARK".
@@ -13,8 +19,7 @@ set -euo pipefail
 
 pr="$1"
 repo="lovemansgit/planner"
-park=false
-sql=false
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # gh api --paginate, NOT `gh pr view --json files` — the latter caps at 100
 # files and a truncated list must never decide a merge.
@@ -36,20 +41,7 @@ if [ -z "$files" ]; then
   exit 1
 fi
 
-while IFS= read -r f; do
-  [ -z "$f" ] && continue
-  case "$f" in
-    supabase/migrations/*) sql=true; park=true ;;
-    memory/*|docs/*|tasks/*) ;;
-    */*) park=true ;;
-    *.md) ;;
-    *) park=true ;;
-  esac
-done <<< "$files"
-
-$sql && echo "SQL_TO_APPLY"
-if $park; then
-  echo "PARK"
-  exit 1
-fi
-echo "AUTO_MERGE_ELIGIBLE"
+# Classify via the shared pure predicate. `pipefail` propagates its exit code
+# (0 = AUTO_MERGE_ELIGIBLE, 1 = PARK), and its stdout is this gate's stdout —
+# the external contract above is unchanged.
+printf '%s\n' "$files" | bash "$here/docs-only-predicate.sh"
