@@ -12,6 +12,14 @@ import type { ReactNode } from "react";
 
 type OutlineButtonTone = "navy" | "red";
 
+/**
+ * @deprecated Superseded by the unified `<Button>` (Phase 9 Step 3.2,
+ * Direction B): `tone="navy"` → `<Button variant="secondary">`, `tone="red"`
+ * → `<Button variant="danger">`. Not yet removed because its only remaining
+ * caller is the `/tasks` boundary file (status-filter lane, out of scope for
+ * the button lane). Removal rides the final adoption bundle once that caller
+ * migrates and no caller remains.
+ */
 export function OutlineButton({
   tone = "navy",
   disabled = false,

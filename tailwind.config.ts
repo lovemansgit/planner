@@ -33,6 +33,11 @@ const config: Config = {
         sans: ["var(--font-sans)"],
         serif: ["var(--font-serif)"],
         display: ["var(--font-display)"],
+        // Phase 9 — Direction B skin faces (see src/styles/brand-tokens.css).
+        // Available app-wide; only <Button> applies `font-b-body` in this bundle.
+        "b-body": ["var(--font-b-body)"],
+        "b-display": ["var(--font-b-display)"],
+        "b-mono": ["var(--font-b-mono)"],
       },
     },
   },

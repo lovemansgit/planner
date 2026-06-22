@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Manrope, Mulish, Sanchez } from "next/font/google";
+import { Bricolage_Grotesque, Hanken_Grotesk, IBM_Plex_Mono, Manrope, Mulish, Sanchez } from "next/font/google";
 
 import { registerAuditObserver } from "../modules/audit";
 
@@ -36,6 +36,34 @@ const manrope = Manrope({
   display: "swap",
 });
 
+// Phase 9 — Direction B ("Dispatch") skin faces (visual-directions pick, PR #568).
+// Wired here as the foundation for the Phase 9 rebuild: Hanken Grotesk (body),
+// Bricolage Grotesque (display), IBM Plex Mono (figures/IDs). In THIS bundle only
+// the shared <Button> consumes --font-hanken; the app's global display/body faces
+// stay Manrope/Mulish until the typography rebuild bundle re-skins them app-wide,
+// so no screen changes here. Bricolage + Plex Mono are loaded ready for the
+// imminent table/detail bundles.
+const hankenGrotesk = Hanken_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-hanken",
+  display: "swap",
+});
+
+const bricolageGrotesque = Bricolage_Grotesque({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-bricolage",
+  display: "swap",
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: "Subscription Planner",
   description: "Transcorp Subscription Planner — meal plan subscription management on SuiteFleet",
@@ -47,7 +75,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${manrope.variable} ${mulish.variable} ${sanchez.variable}`}>
+    <html
+      lang="en"
+      className={`${manrope.variable} ${mulish.variable} ${sanchez.variable} ${hankenGrotesk.variable} ${bricolageGrotesque.variable} ${ibmPlexMono.variable}`}
+    >
       <body className="antialiased font-sans">{children}</body>
     </html>
   );

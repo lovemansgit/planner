@@ -106,6 +106,32 @@
   /* Display font — net-new variable (Manrope) per brief v1.4 §3.3.11 type system */
   --font-display: var(--font-manrope), var(--font-mulish), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
+  /* ---------------------------------------------------------------------
+   * Phase 9 — Direction B ("Dispatch") skin tokens.
+   *
+   * Love picked Direction B from the visual-directions exploration (PR #568)
+   * as the skin contract for all Phase 9 build bundles. These encode B's
+   * authoritative values (memory/plans/day-57-phase9-visual-directions/
+   * direction-b-dispatch.html). Scoped use begins with the shared <Button>;
+   * later bundles (table, detail, cards) extend usage. The global brand
+   * faces/surfaces above are unchanged — B does NOT re-palette navy/green/cream.
+   *
+   * Font stacks fall back to the existing brand faces so an unloaded B face
+   * never leaves text faceless.
+   * ------------------------------------------------------------------- */
+  --font-b-body: var(--font-hanken), var(--font-mulish), system-ui, sans-serif;
+  --font-b-display: var(--font-bricolage), var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-b-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* B button skin — exact values from the picked mockup. Green primary is the
+   * one action that LIFTS (round-0 cut: secondary/danger stay flat); the focus
+   * ring is green; the warm-white card is B's raised-chip surface. */
+  --color-b-card: #fffdf8;                         /* floating warm-white chip surface */
+  --color-green-hover: #356b41;                    /* primary hover — darkened green */
+  --color-b-focus-ring: rgba(62, 124, 75, 0.32);   /* green focus-visible ring */
+  --shadow-b-rest: 0 1px 2px rgba(37, 45, 96, 0.12);      /* primary at rest */
+  --shadow-b-lift: 0 3px 10px -3px rgba(62, 124, 75, 0.55); /* primary on hover — the lift */
+
   /* Type scale tokens (brief v1.4 §3.3.11). Values are size / line-height pairs in rem; weight + tracking declared in component CSS or Tailwind utility classes. */
   --text-display-xl-size: 6rem;     /* 96px (lower bound; mobile/tablet — desktop scales up to 128px via fluid utility) */
   --text-display-xl-line: 0.95;
