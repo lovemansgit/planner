@@ -55,13 +55,15 @@ export default async function AdminUsersNewPage() {
     if (ctx.actor.kind !== "user" || !ctx.actor.permissions.has("merchant:read_all")) {
       throw new ForbiddenError("/admin/users/new requires merchant:read_all");
     }
-    const allTenants = await listMerchants(ctx);
-    // Keep every non-archived tenant — listMerchants's default
-    // already excludes archived. Filter only `inactive` (operators
-    // shouldn't provision new users for a sunset merchant); keep
-    // active + provisioning + suspended. Classification: the lone
-    // 'transcorp' slug is the internal tenant, everything else is a
-    // merchant.
+    // Item 1 (22 Jun 2026): genuine-only tenant picker — an operator
+    // must never be able to provision a user into an automated-test
+    // tenant (Love's "nowhere" ruling). transcorp + the genuine
+    // merchants are allowlisted, so every legitimate option remains.
+    const allTenants = await listMerchants(ctx, { excludeTestTenants: true });
+    // Then filter only `inactive` (operators shouldn't provision new
+    // users for a sunset merchant); keep active + provisioning +
+    // suspended. Classification: the lone 'transcorp' slug is the
+    // internal tenant, everything else is a merchant.
     tenantOptions = allTenants
       .filter((t) => t.status !== "inactive")
       .map<TenantOption>((t) => ({

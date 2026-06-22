@@ -63,7 +63,9 @@ export default async function AdminInventoryPage({ searchParams }: AdminInventor
   let allMerchants: Awaited<ReturnType<typeof getAdminAllMerchantsInventoryReport>> | null = null;
   try {
     const ctx = await buildRequestContext("/admin/inventory", requestId);
-    merchants = await listMerchants(ctx);
+    // Item 1: merchant-filter dropdown lists genuine merchants only —
+    // automated-test tenants are never offered as a filter option.
+    merchants = await listMerchants(ctx, { excludeTestTenants: true });
     if (merchantSlug !== undefined) {
       report = await getAdminInventoryReport(ctx, { merchantSlug, dateFrom: from, dateTo: to });
     } else {

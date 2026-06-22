@@ -328,8 +328,10 @@ describe("GET /api/admin/merchants — happy paths", () => {
     const body = await res.json();
     expect(body).toEqual({ merchants: [] });
     expect(mockListMerchants).toHaveBeenCalledOnce();
-    // Empty filter object passed when no query param.
-    expect(mockListMerchants.mock.calls[0][1]).toEqual({});
+    // Item 1 (22 Jun 2026): the admin merchants API defaults to the
+    // genuine-only view — automated-test tenants are NEVER returned
+    // unless an explicit ?status= forensic filter is supplied.
+    expect(mockListMerchants.mock.calls[0][1]).toEqual({ excludeTestTenants: true });
   });
 
   it("returns nested pickupAddress in the JSON response (Block 4-D §A Option C lock)", async () => {
@@ -387,20 +389,27 @@ describe("GET /api/admin/merchants — happy paths", () => {
     expect(mockListMerchants.mock.calls[0][1]).toEqual({ status: "inactive" });
   });
 
-  it("treats empty ?status= as absent filter (no-op, not 400)", async () => {
+  it("treats empty ?status= as absent filter (genuine-only default, not 400)", async () => {
     mockListMerchants.mockResolvedValue([]);
     await GET(makeGetRequest("status="));
-    expect(mockListMerchants.mock.calls[0][1]).toEqual({});
+    expect(mockListMerchants.mock.calls[0][1]).toEqual({ excludeTestTenants: true });
   });
 
-  it("ignores unknown query params (only ?status= is read; any others passed through unprocessed)", async () => {
+  it("ignores unknown query params (only ?status= is read) and keeps the genuine-only default", async () => {
     // ListMerchantsFilters declares status only per Service D types.ts:
-    // 133-135. Reviewer prompt mentioned a slug filter; Service D
-    // doesn't accept one. Route treats unknown query params as no-op
-    // — they don't error, they don't get forwarded.
+    // 133-135. Unknown query params are a no-op — they don't error and
+    // don't get forwarded; the genuine-only default still applies.
     mockListMerchants.mockResolvedValue([]);
     await GET(makeGetRequest("slug=demo&random=value"));
-    expect(mockListMerchants.mock.calls[0][1]).toEqual({});
+    expect(mockListMerchants.mock.calls[0][1]).toEqual({ excludeTestTenants: true });
+  });
+
+  it("explicit ?status= forensic filter wins over the genuine-only default", async () => {
+    // Item 1: the genuine-only default applies only to the unfiltered
+    // path; an explicit status query is a deliberate forensic lookup.
+    mockListMerchants.mockResolvedValue([]);
+    await GET(makeGetRequest("status=archived"));
+    expect(mockListMerchants.mock.calls[0][1]).toEqual({ status: "archived" });
   });
 });
 
