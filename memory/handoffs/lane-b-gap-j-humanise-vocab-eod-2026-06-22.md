@@ -14,7 +14,7 @@ All three branched off `origin/main` (`3379a13`, #566 fast-lane tip).
 |----|--------|-------|----------|
 | **#567** | `lane-b/batch1-consignee-phones-noun` | consignee phones → `formatPhone()` (5 surfaces) + retire "subscriber" noun | **APPROVE r1** |
 | **#569** | `lane-b/batch2-admin-role-labels` | admin users list+detail → shipped `roleLabel()`; dedupe local helper | **APPROVE r1** |
-| **#570** | `lane-b/batch3-operator-copy` | engineer-speak → operator copy (failed-pushes + webhook surfaces) | reviewer dispatched (verdict pending at memo-write) |
+| **#570** | `lane-b/batch3-operator-copy` | engineer-speak → operator copy (failed-pushes + webhook surfaces) | **APPROVE r1** |
 
 Each: Round-0 self-review → fresh independent `reviewer` subagent (isolated
 worktree) → ORCH-VERDICT on PR. Full unit suite green on every branch
