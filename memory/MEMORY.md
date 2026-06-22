@@ -2,6 +2,7 @@
 
 ## Permanent product memory
 
+- [**Build Methodology (Three-Role)**](BUILD-METHODOLOGY.md) — **governing operating model**, read during bootstrap by every builder and reviewer. Owner-ruled, agent-built, agent-reviewed delivery: the permanent two-party seam, the lanes/tiers, the v1.3 throughput posture (anti-idle run-to-PR / default-and-continue, round-0 self-review, token discipline, no-cap parallel sessions, unlimited sub-agents — never as reviewer), Love's standing dispatch model, and the on-record gate formats. **§2 floors are drift-exempt** including new Floor 10 (throughput never overrides a floor or hard-stop) — amendable only by an explicit owner ruling that names the floor. Canonical v1.3; mirror of `~/.claude/methodology/BUILD-METHODOLOGY.md`.
 - [**Product Brief (Path 2-A)**](PLANNER_PRODUCT_BRIEF.md) — **load-bearing source of truth** for Planner scope, architecture, demo posture (May 12, 2026). Supersedes plan.docx §10 Day 11-13 in conflict. Reading discipline: every fresh session reads this first; every substantive PR references brief sections; amendments require explicit `decision_*.md` + version bump in §9. Currently at v1.15.
 
 ## Day 2 (27 April 2026)
