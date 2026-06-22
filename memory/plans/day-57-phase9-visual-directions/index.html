@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phase 9 · Visual directions — pick one</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --navy:#252d60; --green:#3e7c4b; --paper:#f4f1ea; --card:#fcfbf7;
+    --ink:#1a1d2b; --line:rgba(37,45,96,.14); --t2:rgba(37,45,96,.6); --t3:rgba(37,45,96,.42);
+    --display:'Space Grotesk',system-ui,sans-serif; --body:'IBM Plex Sans',system-ui,sans-serif; --mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.55}
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 28px 90px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3)}
+  h1{font-family:var(--display);font-weight:600;font-size:34px;letter-spacing:-.02em;color:var(--navy);margin:10px 0 10px}
+  .lede{color:var(--t2);font-size:15px;max-width:78ch}
+  .lede b{color:var(--navy);font-weight:600}
+  .contract{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 6px}
+  .chip{font-family:var(--mono);font-size:11.5px;color:var(--navy);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+  .chip b{color:var(--green)}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:34px}
+  .opt{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;text-decoration:none;color:inherit;transition:border-color .15s,transform .12s,box-shadow .15s}
+  .opt:hover{border-color:var(--navy);transform:translateY(-3px);box-shadow:0 18px 40px -22px rgba(37,45,96,.4)}
+  .swatch{height:118px;position:relative;border-bottom:1px solid var(--line);overflow:hidden}
+  .opt .body{padding:18px 20px 22px}
+  .opt .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--green)}
+  .opt h2{font-family:var(--display);font-weight:600;font-size:22px;color:var(--navy);letter-spacing:-.02em;margin:7px 0 8px}
+  .opt p{font-size:13.5px;color:var(--t2);min-height:60px}
+  .opt .sig{font-size:12.5px;color:var(--ink);margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+  .opt .sig b{color:var(--navy);font-weight:600}
+  .opt .open{margin-top:14px;font-family:var(--display);font-weight:600;font-size:13px;color:var(--green);display:inline-flex;align-items:center;gap:6px}
+
+  /* swatch A — flat hairline, spine */
+  .sw-a{background:#f7f5ef}
+  .sw-a .rail{position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--green)}
+  .sw-a .ln{position:absolute;left:26px;right:18px;height:1px;background:rgba(37,45,96,.16)}
+  .sw-a .ln:nth-child(2){top:40px}.sw-a .ln:nth-child(3){top:64px}.sw-a .ln:nth-child(4){top:88px}
+  .sw-a .sp{position:absolute;left:0;width:4px;height:24px}
+  .sw-a .sp.s1{top:32px;background:#3e7c4b}.sw-a .sp.s2{top:56px;background:#c0851f}.sw-a .sp.s3{top:80px;background:#c0392b}
+  /* swatch B — warm card + window track */
+  .sw-b{background:#efeae0;display:flex;align-items:center;justify-content:center}
+  .sw-b .c{width:78%;background:#fffdf8;border-radius:10px;box-shadow:0 10px 24px -14px rgba(37,45,96,.4);padding:14px}
+  .sw-b .t{position:relative;height:6px;border-radius:99px;background:rgba(37,45,96,.1);margin:8px 0}
+  .sw-b .t i{position:absolute;top:0;bottom:0;border-radius:99px;background:#3e7c4b}
+  .sw-b .t1 i{left:5%;width:24%}.sw-b .t2 i{left:55%;width:16%}.sw-b .t3 i{left:30%;width:40%}
+  /* swatch C — navy band + LED gutter */
+  .sw-c{background:#f3f1ea}
+  .sw-c .band{position:absolute;left:0;right:0;top:0;height:36px;background:var(--navy);display:flex;align-items:center;gap:14px;padding:0 14px}
+  .sw-c .band b{font-family:var(--mono);font-size:12px;color:#fff}.sw-c .band b.dim{color:rgba(233,235,243,.55)}
+  .sw-c .row{position:absolute;left:0;right:0;height:18px;background:#fbfaf6;border-bottom:1px solid rgba(37,45,96,.1)}
+  .sw-c .row:nth-of-type(2){top:46px}.sw-c .row:nth-of-type(3){top:66px}.sw-c .row:nth-of-type(4){top:86px}
+  .sw-c .row i{position:absolute;left:0;top:0;bottom:0;width:4px}
+  .sw-c .row.r1 i{background:#3e7c4b}.sw-c .row.r2 i{background:#c0851f}.sw-c .row.r3 i{background:#c0392b}
+
+  .foot{margin-top:40px;font-size:13px;color:var(--t2);border-top:1px solid var(--line);padding-top:20px;line-height:1.7}
+  .foot a{color:var(--green);font-weight:600;text-decoration:none}
+  .foot code{font-family:var(--mono);font-size:12px;background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  @media (max-width:860px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">Transcorp · Phase 9 · Step 2½ — visual directions</div>
+  <h1>Pick one skin for the console</h1>
+  <p class="lede">Three premium executions of the <b>same</b> design-system contract (#558). Each renders the three surfaces that carry the premium feel — a <b>table</b>, a <b>detail view</b>, and the <b>button family</b>. The brand palette and the four locked rulings are identical across all three; only the <i>execution</i> differs — type, density, table treatment, and one signature move each. Your pick becomes the skin contract the Step-3 build bundles execute to, so they build once, not twice.</p>
+
+  <div class="contract">
+    <span class="chip">Locked · navy <b>#252d60</b></span>
+    <span class="chip">Locked · green <b>#3e7c4b</b></span>
+    <span class="chip">Locked · cream field</span>
+    <span class="chip">D1 green primary</span>
+    <span class="chip">D2 sentence case</span>
+    <span class="chip">D3 two-column detail</span>
+    <span class="chip">D4 humanise · "consignee"</span>
+  </div>
+
+  <div class="grid">
+    <a class="opt" href="direction-a-instrument.html">
+      <div class="swatch sw-a">
+        <span class="rail"></span>
+        <span class="sp s1"></span><span class="sp s2"></span><span class="sp s3"></span>
+        <span class="ln"></span><span class="ln"></span><span class="ln"></span>
+      </div>
+      <div class="body">
+        <div class="tag">Direction A</div>
+        <h2>Instrument</h2>
+        <p>A precision control surface. Flat, razor-aligned, near-monochrome — green is withheld until it means something. Space Grotesk + IBM Plex.</p>
+        <div class="sig">Signature — <b>the status spine</b>: a colour-coded row edge you read down the left margin.</div>
+        <span class="open">Open direction A →</span>
+      </div>
+    </a>
+
+    <a class="opt" href="direction-b-dispatch.html">
+      <div class="swatch sw-b">
+        <div class="c">
+          <div class="t t1"><i></i></div><div class="t t2"><i></i></div><div class="t t3"><i></i></div>
+        </div>
+      </div>
+      <div class="body">
+        <div class="tag">Direction B</div>
+        <h2>Dispatch</h2>
+        <p>The delivery manifest, elevated. Warm cream, floating cards, soft navy depth. Bricolage Grotesque carries the names with character.</p>
+        <div class="sig">Signature — <b>the window track</b>: every delivery window drawn on a 06:00→22:00 day baseline.</div>
+        <span class="open">Open direction B →</span>
+      </div>
+    </a>
+
+    <a class="opt" href="direction-c-terminal.html">
+      <div class="swatch sw-c">
+        <div class="band"><b>225</b><b class="dim">188</b><b class="dim">21</b><b class="dim">4</b></div>
+        <div class="row r1"><i></i></div><div class="row r2"><i></i></div><div class="row r3"><i></i></div>
+      </div>
+      <div class="body">
+        <div class="tag">Direction C</div>
+        <h2>Terminal</h2>
+        <p>A logistics ops terminal. Maximum density, monospace numerics, a navy band. The table is the interface. Archivo + JetBrains Mono.</p>
+        <div class="sig">Signature — <b>the LED gutter + metric ribbon</b>: indicator light per row, the book read along the top.</div>
+        <span class="open">Open direction C →</span>
+      </div>
+    </a>
+  </div>
+
+  <p class="foot">Full written rationales (type pairing, density rule, the signature, the one risk taken) are in <a href="README.md">README.md</a>. These are standalone HTML mockups with real brand-token hex inline — <b>no app code, no screen touched, no migration</b>. To view: open this folder over a local server (e.g. <code>python3 -m http.server</code>) — the directions link to each other.</p>
+</div>
+</body>
+</html>
