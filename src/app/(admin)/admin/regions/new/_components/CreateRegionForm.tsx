@@ -20,6 +20,8 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
 import { Button } from "@/components/Button";
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
 
 import {
   createRegionAction,
@@ -62,75 +64,44 @@ export function CreateRegionForm() {
       ) : null}
 
       <form action={formAction} className="space-y-8">
-        <div>
-          <label
-            htmlFor="region-client_id"
-            className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-          >
-            Client ID
-          </label>
+        <Field
+          label="Client ID"
+          htmlFor="region-client_id"
+          error={fieldErrors.client_id}
+          help="Lowercase letter then lowercase letters/digits (e.g. transcorpuae). The SuiteFleet authentication client ID for this region. Cannot be changed after creation."
+        >
           <input
             id="region-client_id"
             name="client_id"
             type="text"
             placeholder="transcorpuae"
             required
-            aria-invalid={fieldErrors.client_id ? "true" : undefined}
+            aria-invalid={fieldErrors.client_id ? true : undefined}
             aria-describedby={
-              fieldErrors.client_id
-                ? "region-client_id-error"
-                : "region-client_id-hint"
+              fieldErrors.client_id ? "region-client_id-error" : "region-client_id-help"
             }
-            className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 font-mono text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+            className={inputClass(Boolean(fieldErrors.client_id), "font-mono")}
           />
-          {fieldErrors.client_id ? (
-            <p
-              id="region-client_id-error"
-              role="alert"
-              className="mt-1 text-xs text-red"
-            >
-              {fieldErrors.client_id}
-            </p>
-          ) : (
-            <p
-              id="region-client_id-hint"
-              className="mt-1 text-xs text-[color:var(--color-text-tertiary)]"
-            >
-              Lowercase letter then lowercase letters/digits (e.g. transcorpuae). The SuiteFleet
-              authentication client ID for this region. Cannot be changed after creation.
-            </p>
-          )}
-        </div>
+        </Field>
 
-        <div>
-          <label
-            htmlFor="region-display_name"
-            className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-          >
-            Display name
-          </label>
+        <Field
+          label="Display name"
+          htmlFor="region-display_name"
+          error={fieldErrors.display_name}
+        >
           <input
             id="region-display_name"
             name="display_name"
             type="text"
             placeholder="Transcorp UAE"
             required
-            aria-invalid={fieldErrors.display_name ? "true" : undefined}
+            aria-invalid={fieldErrors.display_name ? true : undefined}
             aria-describedby={
               fieldErrors.display_name ? "region-display_name-error" : undefined
             }
-            className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+            className={inputClass(Boolean(fieldErrors.display_name))}
           />
-          {fieldErrors.display_name ? (
-            <p
-              id="region-display_name-error"
-              role="alert"
-              className="mt-1 text-xs text-red"
-            >
-              {fieldErrors.display_name}
-            </p>
-          ) : null}
-        </div>
+        </Field>
 
         <fieldset
           className="space-y-3 border-t border-[color:var(--color-border-strong)] pt-8"
