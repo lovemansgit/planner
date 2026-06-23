@@ -42,6 +42,7 @@ import {
   resolveCourierDisplay,
 } from "@/app/(app)/tasks/status";
 import { parseAwbsParam } from "@/components/asset-reports/report-helpers";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
 import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
@@ -258,84 +259,96 @@ function buildAdminTasksHref({
   return qs ? `/admin/tasks?${qs}` : "/admin/tasks";
 }
 
+// Phase 10 · Batch B1 — the admin tasks list adopts the shared <DataTable>
+// (Gap C, B+ skin): floating card, never-wrap eyebrow headers, mono figures,
+// truncation, hover, mobile-overflow containment. SHELL RESKIN ONLY — the task
+// courier-status rendering is untouched: the Status cell still calls
+// resolveCourierDisplay(courierStatus, internalStatus) and renders the same
+// pill (display.pillClass + <StatusIcon> + display.label) verbatim. No
+// StatusBadge and no LED status-spine here (task/courier domains are outside the
+// StatusBadge contract). The ?status= filter, parseCourierStatusParam, and
+// <CourierStatusFilter> are page-level and unchanged. Columns, order, the
+// whole-row detail link, and the POD cell (own lightbox, no row-link) are all
+// preserved.
+const TASK_COLUMNS: ReadonlyArray<DataTableColumn<AdminTaskRow>> = [
+  {
+    key: "merchant",
+    header: "Merchant",
+    cell: (row) => (
+      <>
+        <span className="font-b-display font-semibold text-navy">{row.merchant.name}</span>
+        <span className="ml-2 font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
+          {row.merchant.slug}
+        </span>
+      </>
+    ),
+    title: (row) => `${row.merchant.name} · ${row.merchant.slug}`,
+  },
+  {
+    key: "status",
+    header: "Status",
+    cell: (row) => {
+      // D56 Lane 5 — render the FINE courier_status (label + family colour +
+      // glyph), falling back to the coarse internal_status when NULL (mirrors
+      // /tasks). Derivation is untouched — shell-reskin only.
+      const display = resolveCourierDisplay(row.task.courierStatus, row.task.internalStatus);
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
+        >
+          <StatusIcon courierStatus={row.task.courierStatus} status={row.task.internalStatus} />
+          {display.label}
+        </span>
+      );
+    },
+  },
+  {
+    key: "orderNumber",
+    header: "Order #",
+    mono: true,
+    cell: (row) => row.task.customerOrderNumber,
+    title: (row) => row.task.customerOrderNumber,
+  },
+  {
+    key: "deliveryDate",
+    header: "Delivery date",
+    mono: true,
+    cell: (row) => row.task.deliveryDate,
+  },
+  {
+    key: "window",
+    header: "Window",
+    mono: true,
+    cell: (row) => `${row.task.deliveryStartTime.slice(0, 5)} – ${row.task.deliveryEndTime.slice(0, 5)}`,
+  },
+  {
+    key: "awb",
+    header: "AWB",
+    mono: true,
+    cell: (row) =>
+      row.task.externalTrackingNumber ?? (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+    title: (row) => row.task.externalTrackingNumber ?? undefined,
+  },
+  {
+    key: "pod",
+    header: "Proof of delivery",
+    srHeader: true,
+    noRowLink: true,
+    cell: (row) => <AdminPodCell task={row.task} />,
+  },
+];
+
 function AdminTasksTable({ rows }: { rows: readonly AdminTaskRow[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Merchant</Th>
-          <Th>Status</Th>
-          <Th>Order #</Th>
-          <Th>Delivery date</Th>
-          <Th>Window</Th>
-          <Th>AWB</Th>
-          <Th>
-            <span className="sr-only">Proof of delivery</span>
-          </Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <Row key={row.task.id} row={row} />
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Row({ row }: { row: AdminTaskRow }) {
-  // D56 Lane 5 — render the FINE courier_status (label + family colour + glyph),
-  // falling back to the coarse internal_status when it is NULL (mirrors /tasks).
-  const display = resolveCourierDisplay(row.task.courierStatus, row.task.internalStatus);
-  // Item 3: row → task detail; the POD cell keeps its own lightbox
-  // behaviour (no Link wrap there).
-  const detailHref = `/admin/tasks/${row.task.id}`;
-  return (
-    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
-      <Td>
-        <Link href={detailHref} className="block">
-          <span className="font-medium text-navy">{row.merchant.name}</span>
-          <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
-            {row.merchant.slug}
-          </span>
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <span
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${display.pillClass}`}
-          >
-            <StatusIcon courierStatus={row.task.courierStatus} status={row.task.internalStatus} />
-            {display.label}
-          </span>
-        </Link>
-      </Td>
-      <Td className="font-mono text-xs tabular-nums">
-        <Link href={detailHref} className="block">
-          {row.task.customerOrderNumber}
-        </Link>
-      </Td>
-      <Td className="tabular-nums">
-        <Link href={detailHref} className="block">
-          {row.task.deliveryDate}
-        </Link>
-      </Td>
-      <Td className="tabular-nums">
-        <Link href={detailHref} className="block">
-          {row.task.deliveryStartTime.slice(0, 5)} – {row.task.deliveryEndTime.slice(0, 5)}
-        </Link>
-      </Td>
-      <Td className="font-mono text-xs tabular-nums">
-        <Link href={detailHref} className="block">
-          {row.task.externalTrackingNumber ?? (
-            <span className="text-[color:var(--color-text-tertiary)]">—</span>
-          )}
-        </Link>
-      </Td>
-      <Td>
-        <AdminPodCell task={row.task} />
-      </Td>
-    </tr>
+    <DataTable
+      columns={TASK_COLUMNS}
+      rows={rows}
+      getRowKey={(row) => row.task.id}
+      rowHref={(row) => `/admin/tasks/${row.task.id}`}
+      caption="All tasks across the platform"
+    />
   );
 }
 
@@ -395,18 +408,6 @@ function Pagination({
       </div>
     </nav>
   );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
 function EmptyState({ filtered }: { readonly filtered: boolean }) {
