@@ -42,14 +42,14 @@ export function CopyableUrl({ url }: CopyableUrlProps) {
 
   return (
     <div className="flex items-start gap-3">
-      <code className="flex-1 break-all rounded border border-[color:var(--color-border-default)] bg-[color:var(--color-surface-secondary,white)] px-3 py-2 font-serif text-sm text-navy">
+      <code className="flex-1 break-all rounded-[10px] border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] px-3.5 py-2.5 font-b-mono text-sm text-navy">
         {url}
       </code>
       <button
         type="button"
         onClick={handleCopy}
         aria-label="Copy webhook URL"
-        className="inline-flex shrink-0 items-center gap-2 rounded border border-[color:var(--color-border-default)] bg-[color:var(--color-surface-secondary,white)] px-3 py-2 text-xs uppercase tracking-[0.15em] text-navy transition-colors hover:border-[color:var(--color-border-strong)]"
+        className="inline-flex shrink-0 items-center gap-2 rounded-[10px] border border-[color:var(--color-border-strong)] bg-[color:var(--color-b-card)] px-3.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:border-navy hover:bg-[rgba(37,45,96,0.03)]"
       >
         {state === "copied" ? (
           <>

@@ -36,6 +36,11 @@ import { CopyableUrl } from "@/components/CopyableUrl";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// B+ floating content card (Phase 9 · Gap C/D surface), mirroring DataTable /
+// DetailView so this config surface reads on the same warm-white elevation.
+const SECTION_CARD =
+  "rounded-2xl bg-[color:var(--color-b-card)] font-b-body shadow-[var(--shadow-b-card)] p-8";
+
 export default async function WebhookConfigPage() {
   const requestId = randomUUID();
 
@@ -71,7 +76,7 @@ export default async function WebhookConfigPage() {
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-4xl px-12 py-16">
-        <header className="mb-16">
+        <header className="mb-12">
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Operations · Integrations
           </p>
@@ -83,56 +88,58 @@ export default async function WebhookConfigPage() {
           </p>
         </header>
 
-        {/* URL display */}
-        <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Receiver URL
-          </p>
-          <div className="mt-6">
-            <CopyableUrl url={webhookUrl} />
-          </div>
-          <p className="mt-4 text-xs text-[color:var(--color-text-tertiary)]">
-            URL above reflects current deploy environment. For Production, use the value displayed
-            at planner-olive-sigma.vercel.app.
-          </p>
-        </section>
-
-        {/* Verification chain explainer */}
-        <section className="mb-16">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            How verification works
-          </p>
-          <div className="mt-6 space-y-4 text-sm text-navy">
-            <p>
-              <span className="font-semibold">Tier 1 (default).</span> Receiver verifies the URL
-              matches an active tenant and that the body conforms to SuiteFleet&apos;s known
-              shape. Most webhooks land here.
+        <div className="space-y-8">
+          {/* URL display */}
+          <section className={SECTION_CARD}>
+            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+              Receiver URL
             </p>
-            <p>
-              <span className="font-semibold">Tier 2 (opt-in).</span> If your SuiteFleet portal
-              has Client ID / Secret configured AND those credentials are seeded in the planner,
-              the receiver also verifies header credentials via timing-safe comparison.
-              Contact operations to enable Tier-2 verification today.
+            <div className="mt-6">
+              <CopyableUrl url={webhookUrl} />
+            </div>
+            <p className="mt-4 text-xs text-[color:var(--color-text-tertiary)]">
+              URL above reflects current deploy environment. For Production, use the value displayed
+              at planner-olive-sigma.vercel.app.
             </p>
-            <p className="text-[color:var(--color-text-secondary)]">
-              Receiver activity for this tenant is shown below.
+          </section>
+
+          {/* Verification chain explainer */}
+          <section className={SECTION_CARD}>
+            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+              How verification works
             </p>
-          </div>
-        </section>
+            <div className="mt-6 space-y-4 text-sm text-navy">
+              <p>
+                <span className="font-semibold">Tier 1 (default).</span> Receiver verifies the URL
+                matches an active tenant and that the body conforms to SuiteFleet&apos;s known
+                shape. Most webhooks land here.
+              </p>
+              <p>
+                <span className="font-semibold">Tier 2 (opt-in).</span> If your SuiteFleet portal
+                has Client ID / Secret configured AND those credentials are seeded in the planner,
+                the receiver also verifies header credentials via timing-safe comparison.
+                Contact operations to enable Tier-2 verification today.
+              </p>
+              <p className="text-[color:var(--color-text-secondary)]">
+                Receiver activity for this tenant is shown below.
+              </p>
+            </div>
+          </section>
 
-        {/* Tier-2 mismatch metrics */}
-        <section className="mb-16 border-t border-b border-[color:var(--color-border-strong)] py-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Tier-2 status
-          </p>
-          {tier2Configured ? (
-            <Tier2ConfiguredPanel count={mismatchSummary.count} />
-          ) : (
-            <Tier2NotConfiguredPanel />
-          )}
-        </section>
+          {/* Tier-2 mismatch metrics */}
+          <section className={SECTION_CARD}>
+            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+              Tier-2 status
+            </p>
+            {tier2Configured ? (
+              <Tier2ConfiguredPanel count={mismatchSummary.count} />
+            ) : (
+              <Tier2NotConfiguredPanel />
+            )}
+          </section>
+        </div>
 
-        <p className="mt-12 text-xs text-[color:var(--color-text-tertiary)]">
+        <p className="mt-8 text-xs text-[color:var(--color-text-tertiary)]">
           Other receiver metrics — last received time, success counts, error reasons — aren&apos;t
           available yet.
         </p>
