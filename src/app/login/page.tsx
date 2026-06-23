@@ -6,16 +6,14 @@
 // action emits `user.login_failed` with a structured `reason` enum and
 // returns `{ error }` to be rendered by the client form.
 //
-// Day-20 brand polish (FINDING-4): full-bleed split layout — left half
-// hosts a vertically-centered form column with a substantial Transcorp
-// logo lockup; right half is a co-equal cooler-bag photograph (desktop
-// only). Per Love's Vercel walkthrough verdict: pivoted from the prior
-// option (c) "small atmospheric accent" approach to a full split. The
-// image is now a layout peer rather than a corner accent.
-//
-// Mobile (<768px) hides the right half entirely; the form column expands
-// to full viewport width. Decorative semantics on the image are
-// preserved (aria-hidden + alt="" + pointer-events-none).
+// Day-58 Phase 9 — Direction B+ reskin (visual only). The Day-20 full-bleed
+// split is KEPT (form left, real cooler-bag photo right) and reskinned to
+// B+: a clean white form panel (white-dominant per Love's standing
+// preference), a Bricolage display heading, a mono eyebrow, sentence-case
+// labels, the unified green primary <Button>, and a single 3px navy
+// structural spine at the page edge. This is a brand-pass — the auth flow
+// below (session check, sanitizeNext, redirect) and the form's behaviour
+// (./form, ./actions) are unchanged.
 
 import Image from "next/image";
 import { redirect } from "next/navigation";
@@ -46,12 +44,14 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-surface-primary text-navy font-sans md:flex-row">
-      {/* Left half — form column, vertically centered. Inner max-w-md
-          constrains form width within the half; outer px-12 keeps
-          breathing room from the half edges. */}
-      <div className="flex w-full flex-col items-center justify-center px-12 py-16 md:w-1/2">
-        <div className="w-full max-w-md">
+    <main className="relative flex min-h-screen flex-col bg-white font-b-body text-navy md:flex-row">
+      {/* The one B+ structural accent — a 3px navy spine at the page edge.
+          Mirrors the shipped detail/table surfaces (detail-view-recipe.ts). */}
+      <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-10 w-[3px] bg-navy" />
+
+      {/* Left half — white form panel, vertically centred. */}
+      <div className="flex w-full flex-col items-center justify-center px-8 py-16 md:w-1/2 md:px-12">
+        <div className="w-full max-w-sm">
           <Image
             src="/brand/transcorp-logo.svg"
             alt="Transcorp"
@@ -59,18 +59,23 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             height={64}
             priority
             unoptimized
-            className="mb-16 h-20 w-auto"
+            className="mb-10 h-11 w-auto"
           />
-          <header className="mb-16">
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              Subscription Planner
-            </p>
-            <h1 className="mt-3 text-5xl font-bold tracking-tighter">Sign in</h1>
-            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              Enter your operator credentials to continue.
-            </p>
-          </header>
-          <LoginForm next={next} />
+          <p className="font-b-mono text-[11px] uppercase tracking-[0.16em] text-[color:var(--color-text-tertiary)]">
+            Subscription Planner
+          </p>
+          <h1 className="mt-2 font-b-display text-[33px] font-bold leading-[1.05] tracking-[-0.02em] text-navy">
+            Log in
+          </h1>
+          <p className="mt-2 text-sm text-[color:var(--color-text-secondary)]">
+            Enter your operator credentials to continue.
+          </p>
+          <div className="mt-8">
+            <LoginForm next={next} />
+          </div>
+          <p className="mt-6 text-xs text-[color:var(--color-text-tertiary)]">
+            Operator access is provisioned by Transcorp.
+          </p>
         </div>
       </div>
 

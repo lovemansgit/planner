@@ -13,6 +13,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { CrmStateBadge } from "@/app/(app)/consignees/[id]/_components/CrmStateBadge";
+import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
+import { FieldRow } from "@/components/FieldRow";
 import { getAdminConsigneeById } from "@/modules/consignees/service";
 import type { Consignee } from "@/modules/consignees/types";
 import { isGenuineMerchant } from "@/modules/merchants/genuine-merchants";
@@ -73,47 +75,56 @@ export default async function AdminConsigneeDetailPage({
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-4xl px-12 py-16">
-        <header className="mb-16 flex items-start justify-between gap-12">
-          <div className="flex-1">
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              Transcorp · Admin · Consignees
-            </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">{consignee.name}</h1>
-            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              {merchant.name}{" "}
-              <span className="font-mono text-xs text-[color:var(--color-text-tertiary)]">
-                ({merchant.slug})
-              </span>
-            </p>
-          </div>
-          <div className="shrink-0">
-            <CrmStateBadge state={consignee.crmState} />
-          </div>
-        </header>
+        {/* Phase 9 · 3.5 — adopts the shared DetailView (Gap D, B+ skin): one
+            floating card with a navy structural spine, two-column fill (D3), and
+            the shared FieldRow (sentence-case labels per D2, "Not set" inline
+            empties instead of bare "—"). Read-only: the CrmStateBadge stays as
+            the header status (its consolidation onto StatusBadge is the deferred
+            CRM follow-up). */}
+        <DetailView
+          header={
+            <DetailHeader
+              eyebrow="Transcorp · Admin · Consignees"
+              title={consignee.name}
+              status={<CrmStateBadge state={consignee.crmState} />}
+            />
+          }
+        >
+          <DetailSection label="Identity">
+            <FieldRow
+              label="Merchant"
+              value={
+                <>
+                  {merchant.name}{" "}
+                  <span className="font-b-mono text-xs text-[color:var(--color-text-tertiary)]">
+                    ({merchant.slug})
+                  </span>
+                </>
+              }
+            />
+            <FieldRow label="Name" value={consignee.name} />
+            <FieldRow label="Phone" value={formatPhone(consignee.phone)} mono />
+            <FieldRow label="Email" value={consignee.email} />
+            <FieldRow label="Merchant reference" value={consignee.externalRef} mono />
+          </DetailSection>
 
-        <Section title="Identity">
-          <FieldRow label="Name" value={consignee.name} />
-          <FieldRow label="Phone" value={formatPhone(consignee.phone)} mono />
-          <FieldRow label="Email" value={consignee.email} />
-          <FieldRow label="Merchant reference" value={consignee.externalRef} mono />
-        </Section>
+          <DetailSection label="Address">
+            <FieldRow label="Address line" value={consignee.addressLine} />
+            <FieldRow label="District" value={consignee.district} />
+            <FieldRow label="Emirate / region" value={consignee.emirateOrRegion} />
+          </DetailSection>
 
-        <Section title="Address">
-          <FieldRow label="Address line" value={consignee.addressLine} />
-          <FieldRow label="District" value={consignee.district} />
-          <FieldRow label="Emirate / region" value={consignee.emirateOrRegion} />
-        </Section>
+          <DetailSection label="Notes">
+            <FieldRow label="Delivery notes" value={consignee.deliveryNotes} />
+            <FieldRow label="Internal notes" value={consignee.notesInternal} />
+            <FieldRow label="Created" value={consignee.createdAt.slice(0, 10)} mono />
+          </DetailSection>
+        </DetailView>
 
-        <Section title="Notes">
-          <FieldRow label="Delivery notes" value={consignee.deliveryNotes} />
-          <FieldRow label="Internal notes" value={consignee.notesInternal} />
-          <FieldRow label="Created" value={consignee.createdAt.slice(0, 10)} mono />
-        </Section>
-
-        <p className="mt-12">
+        <p className="mt-8">
           <Link
             href="/admin/consignees"
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
+            className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)] transition-colors hover:text-navy"
           >
             ← Back to consignees
           </Link>
@@ -123,37 +134,3 @@ export default async function AdminConsigneeDetailPage({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="mb-12 border-t border-[color:var(--color-border-strong)] pt-8">
-      <p className="mb-6 text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-        {title}
-      </p>
-      <div className="divide-y divide-[color:var(--color-border-default)]">{children}</div>
-    </section>
-  );
-}
-
-function FieldRow({
-  label,
-  value,
-  mono = false,
-}: {
-  readonly label: string;
-  readonly value: string | null;
-  readonly mono?: boolean;
-}) {
-  const isEmpty = value === null || value === undefined || value === "";
-  return (
-    <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-      <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-        {label}
-      </p>
-      {isEmpty ? (
-        <p className="text-sm text-[color:var(--color-text-tertiary)]">—</p>
-      ) : (
-        <p className={`text-sm text-navy ${mono ? "font-mono" : ""}`}>{value}</p>
-      )}
-    </div>
-  );
-}
