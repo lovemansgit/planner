@@ -265,8 +265,13 @@ export function TasksClient({
 
       {/* R6-part-1: horizontal scroll — the consignee-context columns
           widen the table past narrow viewports. Responsive column
-          collapse stays Tier-2. */}
-      <div className="overflow-x-auto">
+          collapse stays Tier-2.
+          Phase 10 · Batch B2 — table SHELL reskin only: the scroll container
+          adopts the B+ floating-card surface (warm-white + soft navy depth,
+          matching the shared <DataTable> chrome). Shell only — status
+          derivation, courier_status rendering, selection, filters, and all row
+          logic are untouched (the status-filter lane owns those). */}
+      <div className="overflow-x-auto rounded-2xl bg-[color:var(--color-b-card)] shadow-[var(--shadow-b-card)]">
         <table className="w-full min-w-[64rem] border-collapse text-sm">
           <thead>
             <tr className="border-b border-[color:var(--color-border-strong)]">
@@ -946,20 +951,19 @@ function PodCell({
   );
 }
 
-// Day-54 polish — shared cell rhythm: px-3 column gutters (flush at the
-// table's outer edges via first/last), py-3 rows, align-middle everywhere.
-// Header weight/tracking aligned to the established label idiom
-// (font-semibold, tracking-[0.14em]).
+// Day-54 polish — shared cell rhythm: px-3 column gutters, py-3 rows,
+// align-middle everywhere. Header weight/tracking aligned to the established
+// label idiom (font-semibold, tracking-[0.14em]).
+// Phase 10 · B2 — the outer-edge flush (first:pl-0/last:pr-0) is dropped so the
+// row content insets within the B+ floating card. Presentation only.
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className="whitespace-nowrap px-3 py-3 text-left align-middle text-xs font-semibold uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)] first:pl-0 last:pr-0">
+    <th className="whitespace-nowrap px-3 py-3 text-left align-middle text-xs font-semibold uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
       {children}
     </th>
   );
 }
 
 function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <td className={`px-3 py-3 align-middle first:pl-0 last:pr-0 ${className}`}>{children}</td>
-  );
+  return <td className={`px-3 py-3 align-middle ${className}`}>{children}</td>;
 }
