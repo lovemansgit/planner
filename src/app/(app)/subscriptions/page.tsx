@@ -25,12 +25,15 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { DeliveryWindowTrack } from "@/components/DeliveryWindowTrack";
 import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
+import { StatusBadge } from "@/components/StatusBadge";
+import { statusMeta } from "@/components/status-badge-recipe";
 import {
   listSubscriptionsWithConsignee,
   type SubscriptionWithConsignee,
-  type Subscription,
 } from "@/modules/subscriptions";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
@@ -125,87 +128,65 @@ export default async function SubscriptionsPage({ searchParams }: SubscriptionsP
 // Components
 // -----------------------------------------------------------------------------
 
+// Phase 10 · Batch B2 — the operator subscriptions list adopts the shared
+// <DataTable> (Gap C, B+ skin): floating card, never-wrap eyebrow headers, mono
+// figures, the status-LED gutter, and the <DeliveryWindowTrack> signature cell —
+// bringing the operator surface in line with the admin subscriptions table.
+// Column order is preserved (Status-first) to avoid an information-architecture
+// change; the bespoke dot+text status badge is retired for the canonical
+// <StatusBadge domain="subscription"> per #558 Gap B.
+const SUBSCRIPTION_COLUMNS: ReadonlyArray<DataTableColumn<SubscriptionWithConsignee>> = [
+  {
+    key: "status",
+    header: "Status",
+    cell: ({ subscription: s }) => <StatusBadge domain="subscription" status={s.status} />,
+  },
+  {
+    key: "consignee",
+    header: "Consignee",
+    cell: ({ consigneeName }) => (
+      <span className="font-b-display font-semibold text-navy">{consigneeName}</span>
+    ),
+    title: ({ consigneeName }) => consigneeName,
+  },
+  {
+    key: "startDate",
+    header: "Start date",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: ({ subscription: s }) => s.startDate,
+  },
+  {
+    key: "days",
+    header: "Days",
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: ({ subscription: s }) => formatDays(s.daysOfWeek),
+    title: ({ subscription: s }) => formatDays(s.daysOfWeek),
+  },
+  {
+    key: "window",
+    header: "Window",
+    cell: ({ subscription: s }) => (
+      <DeliveryWindowTrack
+        start={s.deliveryWindowStart}
+        end={s.deliveryWindowEnd}
+        muted={s.status === "ended"}
+      />
+    ),
+  },
+];
+
 function SubscriptionsTable({ rows }: { rows: readonly SubscriptionWithConsignee[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Status</Th>
-          <Th>Consignee</Th>
-          <Th>Start date</Th>
-          <Th>Days</Th>
-          <Th>Window</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(({ subscription: s, consigneeName }) => (
-          <tr
-            key={s.id}
-            className="border-b border-[color:var(--color-border-default)] last:border-b-0"
-          >
-            <Td>
-              <StatusBadge status={s.status} />
-            </Td>
-            <Td>
-              <Link
-                href={`/subscriptions/${s.id}`}
-                className="text-navy underline decoration-[color:var(--color-border-strong)] underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
-              >
-                {consigneeName}
-              </Link>
-            </Td>
-            <Td className="tabular-nums">{s.startDate}</Td>
-            <Td className="tabular-nums">{formatDays(s.daysOfWeek)}</Td>
-            <Td className="tabular-nums">
-              {s.deliveryWindowStart.slice(0, 5)} – {s.deliveryWindowEnd.slice(0, 5)}
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={SUBSCRIPTION_COLUMNS}
+      rows={rows}
+      getRowKey={({ subscription: s }) => s.id}
+      rowHref={({ subscription: s }) => `/subscriptions/${s.id}`}
+      led={({ subscription: s }) => statusMeta("subscription", s.status)?.tone}
+      caption="Your subscriptions"
+    />
   );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-top ${className}`}>{children}</td>;
-}
-
-function StatusBadge({ status }: { status: Subscription["status"] }) {
-  // Status-to-token mapping is intentional: 'active' → green (positive
-  // operational state), 'paused' → amber (operator attention),
-  // 'ended' → tertiary text (low-attention historical state). All
-  // colours flow through Z-1 tokens.
-  switch (status) {
-    case "active":
-      return (
-        <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-green">
-          <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden />
-          Active
-        </span>
-      );
-    case "paused":
-      return (
-        <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-amber">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber" aria-hidden />
-          Paused
-        </span>
-      );
-    case "ended":
-      return (
-        <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-tertiary)]">
-          <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--color-text-tertiary)]" aria-hidden />
-          Ended
-        </span>
-      );
-  }
 }
 
 function EmptyState({ query }: { readonly query: string }) {
