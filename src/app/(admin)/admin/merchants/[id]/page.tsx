@@ -1,5 +1,12 @@
 // Day 25 / T2 — Read-only merchant detail page (per PR #270 plan).
 //
+// Phase 10 · Batch B3 — adopts the shared DetailView (Gap D, B+ skin): one
+// floating card with a navy structural spine, two-column fill (D3), and the
+// shared FieldRow (sentence-case labels per D2, "Not set" inline empties
+// instead of bare "—"). Pure presentation — every field, value, link, action,
+// and badge is preserved; the status badge moves to the header status slot and
+// UPDATE MERCHANT to the header actions slot.
+//
 // Server component preflight pattern mirrors merchants/page.tsx:
 //   - buildRequestContext + getMerchantById (gates on merchant:read_all
 //     post-C-2 perm-gate relaxation)
@@ -8,18 +15,9 @@
 //   - NoTenantConfiguredError → render SystemNotInitialised inline
 //   - merchant === null → notFound() (Next.js default not-found surface)
 //
-// Layout per plan §3 + §9.5 ruling:
-//   - Header: eyebrow + h1 name + explainer (left)
-//             status badge + EDIT MERCHANT button (right, top-aligned)
-//   - Section 1 Identity: Name, Slug, Created (status pulled to header
-//     right zone per §9.5 vertical-alignment ruling)
-//   - Section 2 Pickup address: Line / District / Emirate
-//   - Section 3 Routing: SF customer code + Webhook URL (CopyableUrl)
-//
 // EDIT MERCHANT button gated on merchant:update (renders only when the
 // actor's permission set includes it). Webhook URL uses the existing
-// buildWebhookUrl + resolvePublicBaseUrl helpers per plan §4 — zero
-// new derivation logic.
+// buildWebhookUrl + resolvePublicBaseUrl helpers — zero new derivation logic.
 
 import { randomUUID } from "node:crypto";
 
@@ -27,6 +25,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { CopyableUrl } from "@/components/CopyableUrl";
+import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
+import { FieldRow } from "@/components/FieldRow";
 import { findRegionForMerchant, type Region } from "@/modules/credentials";
 import {
   getMerchantAssetTrackingEnabled,
@@ -109,195 +109,159 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-4xl px-12 py-16">
-        <header className="mb-16 flex items-start justify-between gap-12">
-          <div className="flex-1">
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              Transcorp · Admin
-            </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">{merchant.name}</h1>
-            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              Read-only details. Edit non-status fields via UPDATE MERCHANT; activate / deactivate
-              from the merchants list.
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-3">
-            <span
-              className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
-            >
-              {badge.label}
-            </span>
-            {canEdit ? (
-              <Link
-                href={`/admin/merchants/${merchant.tenantId}/edit`}
-                className="inline-flex items-center rounded-sm border border-navy bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-              >
-                UPDATE MERCHANT
-              </Link>
-            ) : null}
-          </div>
-        </header>
-
-        <Section title="Identity">
-          <FieldRow label="Name" value={merchant.name} />
-          <FieldRow label="Slug" value={merchant.slug} mono />
-          <FieldRow label="Created" value={formatCreatedAt(merchant.createdAt)} />
-        </Section>
-
-        <Section title="Pickup address">
-          <FieldRow label="Address line" value={merchant.pickupAddress?.line ?? null} />
-          <FieldRow label="District" value={merchant.pickupAddress?.district ?? null} />
-          <FieldRow label="Emirate" value={merchant.pickupAddress?.emirate ?? null} />
-        </Section>
-
-        <Section title="Routing">
-          <FieldRow
-            label="SuiteFleet customer code"
-            value={merchant.suitefleetCustomerCode}
-            mono
-          />
-
-          <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-            <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-              SuiteFleet region
-            </p>
-            {region ? (
-              <Link
-                href={`/admin/regions/${region.id}`}
-                className="text-sm text-navy underline-offset-4 hover:underline"
-              >
-                {region.displayName}{" "}
-                <span className="font-mono text-xs text-[color:var(--color-text-secondary)]">
-                  ({region.clientId})
-                </span>
-              </Link>
-            ) : (
-              <p className="text-sm text-[color:var(--color-text-tertiary)]">—</p>
-            )}
-          </div>
-
-          {authBadge ? (
-            <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-              <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-                Auth method
-              </p>
-              <div className="flex items-center gap-2">
+        <DetailView
+          header={
+            <DetailHeader
+              eyebrow="Transcorp · Admin"
+              title={merchant.name}
+              status={
                 <span
-                  className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${authBadge.className}`}
+                  className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
                 >
-                  {authBadge.label}
+                  {badge.label}
                 </span>
-                {effectiveAuth?.overrideActive ? (
-                  <span className="text-xs text-[color:var(--color-text-secondary)]">
-                    (merchant override)
-                  </span>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-            <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-              Credentials
-            </p>
-            <div className="flex flex-wrap items-center gap-4">
-              {credentialsConfigured ? (
-                <span className="inline-flex items-center bg-green/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-green">
-                  Configured
-                </span>
-              ) : (
-                <span className="inline-flex items-center bg-amber/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-amber-deep">
-                  Missing
-                </span>
-              )}
-              {canManageCredentials ? (
-                <Link
-                  href={`/admin/merchants/${merchant.tenantId}/credentials`}
-                  className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] underline-offset-4 hover:text-navy hover:underline"
-                >
-                  Manage credentials →
-                </Link>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="py-4">
-            <p className="mb-2 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-              Webhook URL
-            </p>
-            <CopyableUrl url={webhookUrl} />
-            <p className="mt-3 text-xs text-[color:var(--color-text-tertiary)]">
-              Share with SuiteFleet vendor to wire inbound webhooks for this merchant. URL reflects
-              the current deploy environment — for Production, use the value displayed at
-              planner-olive-sigma.vercel.app.
-            </p>
-          </div>
-        </Section>
-
-        <Section title="Asset tracking">
-          <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-                Bag / asset tracking
-              </p>
-              <p className="mt-2 text-xs text-[color:var(--color-text-tertiary)]">
-                Gates the Inventory + Asset Tracking reports, the tracking
-                poll, and the related nav entries for this merchant. Off by
-                default; turning it on lights those surfaces for this merchant
-                only.
-              </p>
-            </div>
-            <AssetTrackingToggle
-              tenantId={merchant.tenantId}
-              enabled={assetTrackingEnabled}
-              canEdit={canEdit}
+              }
+              actions={
+                canEdit ? (
+                  <Link
+                    href={`/admin/merchants/${merchant.tenantId}/edit`}
+                    className="inline-flex items-center rounded-sm border border-navy bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                  >
+                    UPDATE MERCHANT
+                  </Link>
+                ) : undefined
+              }
             />
-          </div>
-        </Section>
+          }
+        >
+          <DetailSection label="Identity">
+            <FieldRow label="Name" value={merchant.name} />
+            <FieldRow label="Slug" value={merchant.slug} mono />
+            <FieldRow label="Created" value={formatCreatedAt(merchant.createdAt)} mono />
+          </DetailSection>
 
-        <p className="mt-12">
+          <DetailSection label="Pickup address">
+            <FieldRow label="Address line" value={merchant.pickupAddress?.line ?? null} />
+            <FieldRow label="District" value={merchant.pickupAddress?.district ?? null} />
+            <FieldRow label="Emirate" value={merchant.pickupAddress?.emirate ?? null} />
+          </DetailSection>
+
+          <DetailSection label="Routing">
+            <FieldRow
+              label="SuiteFleet customer code"
+              value={merchant.suitefleetCustomerCode}
+              mono
+            />
+            <FieldRow
+              label="SuiteFleet region"
+              value={
+                region ? (
+                  <Link
+                    href={`/admin/regions/${region.id}`}
+                    className="text-navy underline-offset-4 hover:underline"
+                  >
+                    {region.displayName}{" "}
+                    <span className="font-b-mono text-xs text-[color:var(--color-text-tertiary)]">
+                      ({region.clientId})
+                    </span>
+                  </Link>
+                ) : null
+              }
+            />
+            {authBadge ? (
+              <FieldRow
+                label="Auth method"
+                value={
+                  <span className="inline-flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${authBadge.className}`}
+                    >
+                      {authBadge.label}
+                    </span>
+                    {effectiveAuth?.overrideActive ? (
+                      <span className="text-xs text-[color:var(--color-text-secondary)]">
+                        (merchant override)
+                      </span>
+                    ) : null}
+                  </span>
+                }
+              />
+            ) : null}
+            <FieldRow
+              label="Credentials"
+              value={
+                <span className="inline-flex flex-wrap items-center gap-4">
+                  {credentialsConfigured ? (
+                    <span className="inline-flex items-center bg-green/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-green">
+                      Configured
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center bg-amber/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-amber-deep">
+                      Missing
+                    </span>
+                  )}
+                  {canManageCredentials ? (
+                    <Link
+                      href={`/admin/merchants/${merchant.tenantId}/credentials`}
+                      className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] underline-offset-4 hover:text-navy hover:underline"
+                    >
+                      Manage credentials →
+                    </Link>
+                  ) : null}
+                </span>
+              }
+            />
+            <FieldRow
+              label="Webhook URL"
+              value={
+                <>
+                  <CopyableUrl url={webhookUrl} />
+                  <span className="mt-3 block text-xs text-[color:var(--color-text-tertiary)]">
+                    Share with SuiteFleet vendor to wire inbound webhooks for this merchant. URL
+                    reflects the current deploy environment — for Production, use the value displayed
+                    at planner-olive-sigma.vercel.app.
+                  </span>
+                </>
+              }
+            />
+          </DetailSection>
+
+          <DetailSection label="Asset tracking">
+            <FieldRow
+              label="Bag / asset tracking"
+              value={
+                <>
+                  <AssetTrackingToggle
+                    tenantId={merchant.tenantId}
+                    enabled={assetTrackingEnabled}
+                    canEdit={canEdit}
+                  />
+                  <span className="mt-2 block text-xs text-[color:var(--color-text-tertiary)]">
+                    Gates the Inventory + Asset Tracking reports, the tracking poll, and the related
+                    nav entries for this merchant. Off by default; turning it on lights those
+                    surfaces for this merchant only.
+                  </span>
+                </>
+              }
+            />
+          </DetailSection>
+        </DetailView>
+
+        <p className="mt-4 max-w-2xl text-[13px] leading-relaxed text-[color:var(--color-text-secondary)]">
+          Read-only details. Edit non-status fields via UPDATE MERCHANT; activate / deactivate from
+          the merchants list.
+        </p>
+
+        <p className="mt-8">
           <Link
             href="/admin/merchants"
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
+            className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)] transition-colors hover:text-navy"
           >
             ← Back to merchants
           </Link>
         </p>
       </div>
     </main>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="mb-12 border-t border-[color:var(--color-border-strong)] pt-8">
-      <p className="mb-6 text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-        {title}
-      </p>
-      <div className="divide-y divide-[color:var(--color-border-default)]">{children}</div>
-    </section>
-  );
-}
-
-interface FieldRowProps {
-  readonly label: string;
-  readonly value: string | null;
-  readonly mono?: boolean;
-}
-
-function FieldRow({ label, value, mono = false }: FieldRowProps) {
-  const isEmpty = value === null || value === undefined || value === "";
-  const valueClass = mono ? "font-mono text-sm" : "text-sm";
-  return (
-    <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-      <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-        {label}
-      </p>
-      {isEmpty ? (
-        <p className="text-sm text-[color:var(--color-text-tertiary)]">—</p>
-      ) : (
-        <p className={`${valueClass} text-navy`}>{value}</p>
-      )}
-    </div>
   );
 }
 
