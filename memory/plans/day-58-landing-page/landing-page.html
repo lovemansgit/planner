@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Transcorp Planner — landing (mockup, B+ rev 2)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* ============================================================
+     TRANSCORP PLANNER · PUBLIC MARKETING LANDING — mockup (B+ rev 2)
+     rev-2 changes, per Love:
+       · WHITE-DOMINANT — white sections carry the page; cream is a
+         thin connective frame only (hairlines / one band), never a
+         full field. Premium, clean, minimal.
+       · REAL assets — the Transcorp logo (nav + footer); the real
+         cooler-bag photo used ONCE, as the single proof moment.
+       · SHORTER (MVP) — hero → problem (one block, one visual) →
+         4 pillars → how-it-works (4 crisp steps) → proof/CTA → footer.
+       · 4th pillar: merchant control ("Everything in one place").
+       · Proof facts printed as FACT (Love-confirmed): 50,000/day ·
+         GCC cold-chain leader · 6 markets. Quote/logos PLACEHOLDER.
+     LOCKED — navy #252d60, green #3e7c4b. Green window-track motif.
+     Body copy is PLACEHOLDER pending Love's final marketing copy.
+     ============================================================ */
+  :root{
+    --navy:#252d60; --green:#3e7c4b;
+    --white:#ffffff; --paper:#faf8f4; --cream:#efeae0; --ink:#23262f;
+    --line:rgba(37,45,96,.10); --line-strong:rgba(37,45,96,.18);
+    --t2:rgba(37,45,96,.62); --t3:rgba(37,45,96,.44);
+    --shadow:0 1px 2px rgba(37,45,96,.05), 0 16px 40px -22px rgba(37,45,96,.32);
+    --shadow-lg:0 2px 4px rgba(37,45,96,.06), 0 28px 64px -30px rgba(37,45,96,.40);
+    --track:rgba(37,45,96,.08);
+    --c-active:#3e7c4b; --c-paused:#c0851f; --c-risk:#c0392b; --c-ended:#9a9486;
+    --c-active-bg:#e8f0e9; --c-active-ink:#2c5d39;
+    --c-paused-bg:#f7ead0; --c-paused-ink:#7c5210;
+    --display:'Bricolage Grotesque',system-ui,sans-serif;
+    --body:'Hanken Grotesk',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--body);background:var(--white);color:var(--ink);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+
+  .devbar{background:var(--navy);color:#fff;font-family:var(--mono);font-size:11px;letter-spacing:.03em;padding:7px 16px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;justify-content:center;text-align:center}
+  .devbar b{color:#9fd3ab;font-weight:600}
+  .devbar span{opacity:.82}
+
+  .btn{font-family:var(--body);font-weight:600;font-size:14px;height:42px;padding:0 20px;border-radius:10px;border:1px solid transparent;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .14s,border-color .14s,box-shadow .14s,transform .05s;text-decoration:none}
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:var(--green);color:#fff;box-shadow:0 1px 2px rgba(37,45,96,.12)}
+  .btn-primary:hover{background:#356b41;box-shadow:0 3px 10px -3px rgba(62,124,75,.55)}
+  .btn-secondary{background:var(--white);color:var(--navy);border-color:var(--line-strong)}
+  .btn-secondary:hover{border-color:var(--navy)}
+  .btn-lg{height:48px;font-size:15px;padding:0 26px}
+
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--green);font-weight:600}
+  .placeholder-tag{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--c-paused-ink);background:var(--c-paused-bg);border-radius:99px;padding:2px 9px;font-weight:600}
+
+  /* NAV — white, thin cream hairline */
+  .nav{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.9);backdrop-filter:blur(10px);border-bottom:1px solid var(--cream)}
+  .nav .row{display:flex;align-items:center;justify-content:space-between;height:70px}
+  .nav .logo{height:30px;width:auto}
+  .nav .cta{display:flex;align-items:center;gap:10px}
+
+  /* HERO — white */
+  .hero{padding:78px 0 64px}
+  .hero-grid{display:grid;grid-template-columns:1.04fr .96fr;gap:48px;align-items:center}
+  .hero h1{font-family:var(--display);font-weight:700;font-size:51px;line-height:1.04;letter-spacing:-.03em;color:var(--navy);margin:16px 0 0}
+  .hero .sub{font-size:18px;color:var(--t2);max-width:31ch;margin:20px 0 30px;line-height:1.5}
+  .hero .actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .hero .micro{font-size:12.5px;color:var(--t3);margin-top:16px;display:flex;align-items:center;gap:7px}
+  .hero .micro::before{content:"";width:6px;height:6px;border-radius:99px;background:var(--green);flex:none}
+
+  /* product screen — white card carrying the window-track */
+  .screen{background:var(--white);border:1px solid var(--cream);border-radius:16px;box-shadow:var(--shadow-lg);position:relative;overflow:hidden}
+  .screen::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy);z-index:2}
+  .screen .scr-head{display:flex;align-items:baseline;justify-content:space-between;padding:16px 20px 13px;border-bottom:1px solid var(--line-strong)}
+  .screen .scr-head .t{font-family:var(--display);font-weight:600;font-size:15px;color:var(--navy)}
+  .screen .scr-head .scale{font-family:var(--mono);font-size:9.5px;color:var(--t3)}
+  .wkrow{display:flex;align-items:center;padding:11px 20px;border-bottom:1px solid var(--line)}
+  .wkrow:last-child{border-bottom:0}
+  .wkrow .day{width:42px;font-size:12px;color:var(--t2);flex:none}
+  .wkrow .time{width:96px;font-family:var(--mono);font-size:11.5px;color:var(--ink);font-variant-numeric:tabular-nums;flex:none}
+  .wkrow .track{position:relative;flex:1;height:7px;border-radius:99px;background:var(--track)}
+  .wkrow .track i{position:absolute;top:0;bottom:0;background:var(--green);border-radius:99px;opacity:.92}
+
+  /* SECTION scaffolding */
+  .sec{padding:62px 0;border-top:1px solid var(--cream)}
+  .sec-head{max-width:62ch}
+  .sec-head h2{font-family:var(--display);font-weight:700;font-size:32px;letter-spacing:-.02em;color:var(--navy);margin:12px 0 0;line-height:1.12}
+  .sec-head p{color:var(--t2);font-size:16px;margin-top:14px;max-width:52ch}
+
+  /* PROBLEM — one tight block, ONE visual */
+  .problem-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:46px;align-items:center}
+  .sheet-card{background:var(--white);border:1px solid var(--cream);border-radius:14px;box-shadow:var(--shadow);padding:20px 22px}
+  .sheet-card .sl{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);margin-bottom:14px}
+  .sheet{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .sheet b{font-family:var(--mono);font-size:9px;color:var(--t3);text-align:center;padding:2px 0}
+  .sheet u{display:block;height:16px;border-radius:3px;background:rgba(37,45,96,.05)}
+  .sheet u.x{background:#f8e3df}
+  .sheet u.q{background:var(--c-paused-bg)}
+  .sheet-card .scap{margin-top:14px;font-size:12px;color:var(--c-risk);font-weight:600}
+
+  /* PILLARS — 4 */
+  .pillar{display:grid;grid-template-columns:1fr 1fr;gap:46px;align-items:center;padding:46px 0;border-top:1px solid var(--cream)}
+  .pillar:first-of-type{border-top:0;padding-top:14px}
+  .pillar:nth-child(even) .pillar-art{order:-1}
+  .pillar .idx{font-family:var(--mono);font-size:13px;color:var(--green);font-weight:600}
+  .pillar h3{font-family:var(--display);font-weight:700;font-size:25px;letter-spacing:-.02em;color:var(--navy);margin:8px 0 11px;line-height:1.14}
+  .pillar p{color:var(--t2);font-size:15.5px;line-height:1.6;max-width:44ch}
+
+  .card-art{background:var(--white);border:1px solid var(--cream);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;position:relative}
+  .card-art::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy);z-index:2}
+  .card-art .ah{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);padding:12px 16px;border-bottom:1px solid var(--line-strong);display:flex;justify-content:space-between;align-items:center}
+  .card-art .ah .end{color:var(--t2)}
+  .card-art .ah .end b{color:var(--green)}
+
+  /* p1 — rule → generated */
+  .gen{display:flex;align-items:center;gap:14px;padding:16px}
+  .rulechip{flex:none;width:140px;background:var(--paper);border-radius:10px;padding:12px 13px}
+  .rulechip .rl{font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.08em}
+  .rulechip .rv{font-size:12.5px;color:var(--ink);font-weight:600;margin:2px 0 8px}
+  .arrow{color:var(--t3);font-size:20px;flex:none}
+  .genlist{flex:1}
+  .genlist .g{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .genlist .g:last-child{border-bottom:0}
+  .genlist .g .d{font-family:var(--mono);color:var(--ink)}
+  .genlist .g .s{color:var(--c-active-ink);font-size:11px}
+
+  /* p2 — self-healing skip (signature) */
+  .hwk{display:flex;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line)}
+  .hwk:last-child{border-bottom:0}
+  .hwk .day{width:38px;font-size:11.5px;color:var(--t2)}
+  .hwk .track{position:relative;flex:1;height:7px;border-radius:99px;background:var(--track)}
+  .hwk .track i{position:absolute;top:0;bottom:0;left:30%;width:24%;background:var(--green);border-radius:99px}
+  .hwk .tag{width:74px;text-align:right;font-family:var(--mono);font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em}
+  .hwk.tue .track i{animation:skipfade 7s ease-in-out infinite}
+  .hwk.tue .tag{animation:tagskip 7s ease-in-out infinite}
+  .hwk.tail{animation:tailgrow 7s ease-in-out infinite;overflow:hidden}
+  .hwk.tail .tag{color:var(--c-active-ink)}
+  @keyframes skipfade{0%,18%{background:var(--green);opacity:.92}30%,100%{background:#9a9486;opacity:.3}}
+  @keyframes tagskip{0%,18%{color:var(--t3)}30%,100%{color:var(--c-paused-ink)}}
+  @keyframes tailgrow{0%,30%{max-height:0;opacity:0;padding-top:0;padding-bottom:0}46%,100%{max-height:40px;opacity:1;padding-top:9px;padding-bottom:9px}}
+
+  /* p3 — one list */
+  .flow{display:flex;align-items:center;gap:12px;padding:16px}
+  .flow .many{display:flex;flex-direction:column;gap:6px;flex:none}
+  .flow .many b{font-family:var(--mono);font-size:9.5px;color:var(--t3);height:18px;display:flex;align-items:center;padding:0 8px;background:var(--paper);border-radius:5px;min-width:78px}
+  .flow .merge{flex:1;height:2px;background:linear-gradient(90deg,var(--line-strong),var(--green))}
+  .flow .onelist{flex:none;width:186px;border:1px solid var(--cream);border-radius:10px;overflow:hidden}
+  .flow .onelist .olh{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);padding:8px 12px;border-bottom:1px solid var(--line-strong)}
+  .flow .onelist .ol{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--line);font-size:11.5px}
+  .flow .onelist .ol:last-child{border-bottom:0}
+  .flow .onelist .ol .led{width:4px;height:16px;border-radius:2px;background:var(--c-active);flex:none}
+
+  /* p4 — merchant control (everything in one place) */
+  .ctrl{padding:16px}
+  .ctrl .crow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line)}
+  .ctrl .crow:last-child{border-bottom:0}
+  .ctrl .crow .nm{font-family:var(--display);font-weight:600;font-size:14px;color:var(--navy)}
+  .ctrl .pill{font-family:var(--body);font-size:11px;font-weight:600;padding:2px 9px;border-radius:99px}
+  .ctrl .pill.active{background:var(--c-active-bg);color:var(--c-active-ink)}
+  .ctrl .pill.paused{background:var(--c-paused-bg);color:var(--c-paused-ink)}
+  .ctrl .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+  .ctrl .chip{font-size:11.5px;color:var(--t2);border:1px solid var(--line-strong);border-radius:8px;padding:4px 10px}
+  .ctrl .chip.green{color:var(--c-active-ink);border-color:rgba(62,124,75,.34)}
+
+  /* HOW IT WORKS — 4 crisp steps, no sub-paragraphs */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:34px}
+  .step{background:var(--white);border:1px solid var(--cream);border-radius:14px;box-shadow:var(--shadow);padding:20px 18px;position:relative;overflow:hidden}
+  .step::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy)}
+  .step .n{font-family:var(--mono);font-size:12px;color:var(--green);font-weight:600}
+  .step h4{font-family:var(--display);font-weight:600;font-size:15.5px;color:var(--navy);margin:9px 0 6px;line-height:1.2}
+  .step p{font-size:13px;color:var(--t2);line-height:1.5}
+
+  /* PROOF + CTA — short, with the ONE cooler-bag proof moment */
+  .proof{padding:62px 0;border-top:1px solid var(--cream)}
+  .proof-band{display:grid;grid-template-columns:.85fr 1.15fr;gap:0;background:var(--white);border:1px solid var(--cream);border-radius:18px;overflow:hidden;box-shadow:var(--shadow-lg);position:relative}
+  .proof-band::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy);z-index:3}
+  .proof-photo{position:relative;min-height:300px;background:var(--cream)}
+  .proof-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center}
+  .proof-body{padding:36px 38px}
+  .proof-body .eyebrow{color:var(--green)}
+  .proof-body h2{font-family:var(--display);font-weight:700;font-size:27px;letter-spacing:-.02em;color:var(--navy);margin:10px 0 4px;line-height:1.15}
+  .proof-body .psub{color:var(--t2);font-size:14.5px;max-width:42ch}
+  .stats{display:flex;gap:28px;margin:22px 0 4px;flex-wrap:wrap}
+  .stat .v{font-family:var(--mono);font-size:27px;font-weight:500;color:var(--navy);line-height:1;font-variant-numeric:tabular-nums}
+  .stat .v small{font-size:14px}
+  .stat .k{font-size:12.5px;color:var(--t2);margin-top:6px;max-width:15ch}
+  .quote-slot{margin-top:22px;border:1.5px dashed var(--line-strong);border-radius:12px;padding:16px 18px;color:var(--t3);font-size:13.5px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+
+  .cta-final{margin-top:30px;display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
+  .cta-final .h{font-family:var(--display);font-weight:700;font-size:22px;color:var(--navy);letter-spacing:-.01em}
+  .cta-final .actions{display:flex;gap:12px;flex-wrap:wrap}
+
+  /* FOOTER */
+  footer{border-top:1px solid var(--cream);padding:30px 0 48px}
+  footer .row{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}
+  footer .logo{height:26px;width:auto;opacity:.9}
+  footer .links{display:flex;gap:20px;font-size:13px}
+  footer .links a{color:var(--t2);text-decoration:none}
+  footer .links a:hover{color:var(--navy)}
+  footer .fine{font-size:12px;color:var(--t3);margin-top:14px}
+
+  @media (max-width:860px){
+    .hero-grid,.problem-grid,.pillar,.proof-band{grid-template-columns:1fr}
+    .hero h1{font-size:38px}
+    .hero .screen,.problem-grid .sheet-card{margin-top:30px}
+    .pillar:nth-child(even) .pillar-art{order:0}
+    .pillar-art{margin-top:20px}
+    .steps{grid-template-columns:1fr 1fr}
+    .proof-photo{min-height:220px}
+  }
+  @media (max-width:520px){ .steps{grid-template-columns:1fr} .hero h1{font-size:32px} }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important;scroll-behavior:auto}
+    .hwk.tue .track i{background:#9a9486;opacity:.3}
+    .hwk.tail{max-height:none;opacity:1;padding:9px 16px}
+  }
+</style>
+</head>
+<body>
+  <div class="devbar">
+    <b>INTERNAL MOCKUP · rev 2</b>
+    <span>Transcorp Planner · public landing · B+ · white-dominant · real assets</span>
+    <span>body copy PLACEHOLDER · not a live route · for Love</span>
+  </div>
+
+  <!-- NAV -->
+  <div class="nav"><div class="wrap"><div class="row">
+    <img class="logo" src="../../../public/brand/transcorp-logo.svg" alt="Transcorp Planner" />
+    <div class="cta">
+      <a class="btn btn-secondary" href="#cta">Log in to Transcorp Planner</a>
+      <a class="btn btn-primary" href="#cta">Request access</a>
+    </div>
+  </div></div></div>
+
+  <!-- HERO -->
+  <section class="hero"><div class="wrap"><div class="hero-grid">
+    <div>
+      <span class="eyebrow">Transcorp Planner · for meal-plan &amp; subscription merchants</span>
+      <h1>One sale.<br />Months of deliveries.<br />Zero manual rescheduling.</h1>
+      <p class="sub">Your subscriptions don't fit in a spreadsheet. Put them somewhere that thinks in months, not days.</p>
+      <div class="actions">
+        <a class="btn btn-primary btn-lg" href="#cta">Request access</a>
+        <a class="btn btn-secondary btn-lg" href="#cta">Log in to Transcorp Planner</a>
+      </div>
+      <p class="micro">Onboarded by Transcorp Merchant Success — nothing to wire up yourself.</p>
+    </div>
+    <div class="screen">
+      <div class="scr-head"><span class="t">This week · Fatima Al Mansouri</span><span class="scale">06:00–22:00</span></div>
+      <div class="wkrow"><span class="day">Mon</span><span class="time">16:00–18:00</span><span class="track"><i style="left:62.5%;width:12.5%"></i></span></div>
+      <div class="wkrow"><span class="day">Tue</span><span class="time">16:00–18:00</span><span class="track"><i style="left:62.5%;width:12.5%"></i></span></div>
+      <div class="wkrow"><span class="day">Wed</span><span class="time">16:00–18:00</span><span class="track"><i style="left:62.5%;width:12.5%"></i></span></div>
+      <div class="wkrow"><span class="day">Thu</span><span class="time">16:00–18:00</span><span class="track"><i style="left:62.5%;width:12.5%"></i></span></div>
+      <div class="wkrow"><span class="day">Fri</span><span class="time">16:00–18:00</span><span class="track"><i style="left:62.5%;width:12.5%"></i></span></div>
+    </div>
+  </div></div></section>
+
+  <!-- PROBLEM — one block, one visual -->
+  <section class="sec"><div class="wrap"><div class="problem-grid">
+    <div class="sec-head" style="border:0">
+      <span class="eyebrow">The problem</span>
+      <h2>One row. Months of work behind it.</h2>
+      <p>You sold a three-month plan. Now it's a spreadsheet: sixty-odd deliveries to remember, a customer who wants Tuesdays skipped while they travel, a tail to re-add at the end, an address that changed last week. Miss one cell and someone's lunch doesn't arrive.</p>
+    </div>
+    <div class="sheet-card">
+      <div class="sl">Subscriptions.xlsx</div>
+      <div class="sheet">
+        <b>M</b><b>T</b><b>W</b><b>T</b><b>F</b><b>S</b><b>S</b>
+        <u></u><u class="x"></u><u></u><u></u><u></u><u class="q"></u><u></u>
+        <u></u><u></u><u class="q"></u><u></u><u></u><u></u><u></u>
+        <u class="x"></u><u></u><u></u><u></u><u></u><u></u><u></u>
+        <u></u><u></u><u></u><u class="q"></u><u></u><u></u><u></u>
+      </div>
+      <div class="scap">3 cells off. Someone's lunch is late.</div>
+    </div>
+  </div></div></section>
+
+  <!-- PILLARS -->
+  <section class="sec"><div class="wrap">
+    <div class="sec-head" style="margin-bottom:6px"><span class="eyebrow">What Planner does</span><h2>Four things a spreadsheet never will.</h2></div>
+
+    <div class="pillar">
+      <div>
+        <span class="idx">01</span>
+        <h3>The subscription, not the task.</h3>
+        <p>Most tools make you push one delivery at a time. Planner holds the whole subscription — the plan, the cadence, the rules — and generates the deliveries for you, on a rolling horizon. Set it up once; the days appear.</p>
+      </div>
+      <div class="pillar-art"><div class="card-art">
+        <div class="ah"><span>Subscription → deliveries</span></div>
+        <div class="gen">
+          <div class="rulechip"><div class="rl">Rule</div><div class="rv">Mon–Fri · 16:00–18:00</div><div class="rl">Length</div><div class="rv">12 weeks</div></div>
+          <span class="arrow">→</span>
+          <div class="genlist">
+            <div class="g"><span class="d">Mon 16 Jun</span><span class="s">Generated</span></div>
+            <div class="g"><span class="d">Tue 17 Jun</span><span class="s">Generated</span></div>
+            <div class="g"><span class="d">Wed 18 Jun</span><span class="s">Generated</span></div>
+            <div class="g"><span class="d">Thu 19 Jun</span><span class="s">Generated</span></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="pillar">
+      <div>
+        <span class="idx">02</span>
+        <h3>Skips that fix themselves.</h3>
+        <p>A customer skips Tuesday. Planner cancels that delivery, re-adds it to the tail, and extends the end date — by your rules, the moment you tap skip. No deleting rows, no recounting, no forgetting the make-up day.</p>
+      </div>
+      <div class="pillar-art"><div class="card-art">
+        <div class="ah"><span>Skip &amp; append</span><span class="end">Ends <b>+1 day</b></span></div>
+        <div class="hwk"><span class="day">Mon</span><span class="track"><i></i></span><span class="tag">Active</span></div>
+        <div class="hwk tue"><span class="day">Tue</span><span class="track"><i></i></span><span class="tag">Skipped</span></div>
+        <div class="hwk"><span class="day">Wed</span><span class="track"><i></i></span><span class="tag">Active</span></div>
+        <div class="hwk"><span class="day">…</span><span class="track"><i></i></span><span class="tag">Active</span></div>
+        <div class="hwk tail"><span class="day">+Sat</span><span class="track"><i></i></span><span class="tag">Re-added</span></div>
+      </div></div>
+    </div>
+
+    <div class="pillar">
+      <div>
+        <span class="idx">03</span>
+        <h3>One list, no reconciliation.</h3>
+        <p>Every delivery Planner generates flows straight onto the same task list Transcorp Operations runs on. No parallel system to keep in sync, no end-of-day handover, no copy-paste between your sheet and the courier's.</p>
+      </div>
+      <div class="pillar-art"><div class="card-art">
+        <div class="ah"><span>Into Transcorp Operations</span></div>
+        <div class="flow">
+          <div class="many"><b>Fatima · Mon</b><b>Toufic · Mon</b><b>Marwan · Mon</b></div>
+          <div class="merge"></div>
+          <div class="onelist">
+            <div class="olh">Operations</div>
+            <div class="ol"><span class="led"></span>16:00 · Jumeirah</div>
+            <div class="ol"><span class="led"></span>06:00 · Marina</div>
+            <div class="ol"><span class="led"></span>12:00 · Deira</div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="pillar">
+      <div>
+        <span class="idx">04</span>
+        <h3>Everything in one place.</h3>
+        <p>It's not just automation you watch. Manage, track and tailor every subscription from one screen — skip or pause, move a delivery, change an address, read the calendar, and keep each consignee's CRM state current. You stay in control; Planner does the bookkeeping.</p>
+      </div>
+      <div class="pillar-art"><div class="card-art">
+        <div class="ah"><span>Consignee · Fatima Al Mansouri</span></div>
+        <div class="ctrl">
+          <div class="crow"><span class="nm">Fatima Al Mansouri</span><span class="pill active">Active</span></div>
+          <div class="crow"><span class="nm">Roudy Mhanna</span><span class="pill paused">Paused</span></div>
+          <div class="chips">
+            <span class="chip">Skip</span><span class="chip">Pause</span><span class="chip">Move a delivery</span><span class="chip">Change address</span><span class="chip green">View calendar</span>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div></section>
+
+  <!-- HOW IT WORKS — 4 crisp steps -->
+  <section class="sec"><div class="wrap">
+    <div class="sec-head"><span class="eyebrow">How it works</span><h2>Onboard once. The rest runs itself.</h2></div>
+    <div class="steps">
+      <div class="step"><div class="n">01</div><h4>Onboard the consignee</h4><p>Capture the customer, address and rules — once.</p></div>
+      <div class="step"><div class="n">02</div><h4>The schedule generates</h4><p>Deliveries appear on a rolling horizon.</p></div>
+      <div class="step"><div class="n">03</div><h4>Exceptions auto-handle</h4><p>Skip, pause, move, re-address — the tail fixes itself.</p></div>
+      <div class="step"><div class="n">04</div><h4>It flows to Operations</h4><p>Every delivery lands on Transcorp's task list.</p></div>
+    </div>
+  </div></section>
+
+  <!-- PROOF + CTA — short; the one cooler-bag proof moment -->
+  <section class="proof" id="cta"><div class="wrap">
+    <div class="proof-band">
+      <div class="proof-photo"><img src="../../../public/login-hero-cooler-bag.jpg" alt="" aria-hidden="true" /></div>
+      <div class="proof-body">
+        <span class="eyebrow">Why Transcorp</span>
+        <h2>The deliveries go to Transcorp.</h2>
+        <p class="psub">Transcorp's logistics arm runs cold-chain delivery for meal-plan merchants. Planner sits on top of the operation you already trust.</p>
+        <div class="stats">
+          <div class="stat"><div class="v">50,000<small>/day</small></div><div class="k">packages delivered</div></div>
+          <div class="stat"><div class="v">GCC</div><div class="k">cold-chain delivery leader</div></div>
+          <div class="stat"><div class="v">6</div><div class="k">markets</div></div>
+        </div>
+        <div class="quote-slot"><span class="placeholder-tag">⚠ Placeholder</span><span>Merchant quote &amp; logos — pending real, approved ones from Love.</span></div>
+        <div class="cta-final">
+          <span class="h">Sell the plan. Let it run.</span>
+          <div class="actions">
+            <a class="btn btn-primary btn-lg" href="#">Request access</a>
+            <a class="btn btn-secondary btn-lg" href="#">Log in</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- FOOTER -->
+  <footer><div class="wrap">
+    <div class="row">
+      <img class="logo" src="../../../public/brand/transcorp-logo.svg" alt="Transcorp Planner" />
+      <div class="links"><a href="#cta">Request access</a><a href="#cta">Log in</a><a href="#">Contact</a></div>
+    </div>
+    <div class="fine">Planner is a Transcorp product — subscription management for meal-plan &amp; subscription merchants. Placeholder footer; links non-functional in mockup.</div>
+  </div></footer>
+</body>
+</html>
