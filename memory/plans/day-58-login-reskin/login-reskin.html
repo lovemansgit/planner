@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phase 9 · Login reskin — Direction B+</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* ============================================================
+     PHASE 9 · LOGIN RESKIN — DIRECTION B+
+     A pure visual reskin of the existing /login (src/app/login/).
+     No auth-logic change: the email/password form, the server
+     action, the error/pending states, and the ?next= behaviour are
+     all untouched — this only restyles the surface to the B+ skin.
+     Tokens are copied verbatim from the locked B+ contract
+     (../day-58-phase9-direction-b-plus/direction-b-plus.html).
+     LOCKED — navy #252d60, green #3e7c4b, cream field #efeae0.
+     ============================================================ */
+  :root{
+    --navy:#252d60; --green:#3e7c4b;
+    --field:#efeae0;          /* warm cream working field (B) */
+    --card:#fffdf8;           /* floating warm-white card (B) */
+    --input:#fffefb;
+    --ink:#23262f;
+    --line:rgba(37,45,96,.10);
+    --line-strong:rgba(37,45,96,.18);
+    --t2:rgba(37,45,96,.60); --t3:rgba(37,45,96,.42);
+    --shadow:0 1px 2px rgba(37,45,96,.05), 0 10px 30px -16px rgba(37,45,96,.28);
+    --c-risk:#c0392b; --c-risk-bg:#f8e3df; --c-risk-ink:#9a2b1e;
+    --display:'Bricolage Grotesque',system-ui,sans-serif;
+    --body:'Hanken Grotesk',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--body);background:var(--field);color:var(--ink);font-size:14.5px;line-height:1.55;-webkit-font-smoothing:antialiased}
+
+  /* ---- internal mockup ribbon (NOT part of the design) ---- */
+  .devbar{background:var(--navy);color:#fff;font-family:var(--mono);font-size:11px;letter-spacing:.04em;padding:7px 16px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .devbar b{color:#9fd3ab;font-weight:600}
+  .devbar span{opacity:.8}
+
+  .page{max-width:1080px;margin:0 auto;padding:36px 24px 72px}
+  .caption{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);margin:30px 0 14px}
+
+  /* ============================================================
+     THE LOGIN — a single floating B+ card on the cream field.
+     Centered, calm, one green primary action. Echoes the landing
+     hero so the marketing site and the app read as one thing.
+     ============================================================ */
+  .stage{display:flex;justify-content:center;padding:28px 0}
+  .login{width:100%;max-width:432px;background:var(--card);border-radius:16px;box-shadow:var(--shadow);position:relative;overflow:hidden;padding:38px 36px 34px}
+  .login::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy)}
+
+  /* brand lockup — real build uses /brand/transcorp-logo.svg; this
+     standalone mockup draws a faithful text wordmark stand-in. */
+  .brand{display:flex;align-items:center;gap:11px;margin-bottom:30px}
+  .brand .mark{width:34px;height:34px;border-radius:9px;background:var(--navy);display:flex;align-items:center;justify-content:center;flex:none}
+  .brand .mark i{display:block;width:13px;height:13px;border-radius:3px;background:var(--green)}
+  .brand .word{font-family:var(--display);font-weight:700;font-size:20px;letter-spacing:-.01em;color:var(--navy)}
+
+  .login .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--t3)}
+  .login h1{font-family:var(--display);font-weight:700;font-size:30px;letter-spacing:-.02em;color:var(--navy);margin:8px 0 7px}
+  .login .lede{color:var(--t2);font-size:14px;margin-bottom:26px}
+
+  .field{margin-bottom:16px}
+  .field label{display:block;font-size:13px;color:var(--t2);font-weight:500;margin-bottom:6px}
+  .field input{width:100%;height:44px;padding:0 13px;border-radius:10px;border:1px solid var(--line-strong);background:var(--input);font-family:var(--body);font-size:14.5px;color:var(--ink);transition:border-color .14s,box-shadow .14s}
+  .field input::placeholder{color:var(--t3)}
+  .field input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px rgba(62,124,75,.18)}
+
+  /* ---- the unified Button (B+ shipped family, primary only here) ---- */
+  .btn{font-family:var(--body);font-weight:600;font-size:14px;height:40px;padding:0 18px;border-radius:10px;border:1px solid transparent;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .14s,box-shadow .14s,transform .05s;text-decoration:none}
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(62,124,75,.32)}
+  .btn-primary{background:var(--green);color:#fff;box-shadow:0 1px 2px rgba(37,45,96,.12)}
+  .btn-primary:hover{background:#356b41;box-shadow:0 3px 10px -3px rgba(62,124,75,.55)}
+  .btn-lg{height:46px;font-size:15px;padding:0 24px}
+  .btn-block{width:100%}
+  .btn[disabled]{opacity:.55;cursor:not-allowed;pointer-events:none;box-shadow:none}
+  .spin{width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  .submit-wrap{margin-top:24px}
+
+  /* error alert — reskinned from the current inline error <p> */
+  .alert{display:flex;gap:9px;align-items:flex-start;background:var(--c-risk-bg);color:var(--c-risk-ink);border-radius:10px;padding:11px 13px;font-size:13px;margin-bottom:4px;margin-top:-4px}
+  .alert .dot{width:7px;height:7px;border-radius:99px;background:var(--c-risk);flex:none;margin-top:6px}
+
+  .footnote{margin-top:24px;font-size:12px;color:var(--t3);text-align:center}
+
+  /* ---- state gallery ---- */
+  .states{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;align-items:start;margin-top:6px}
+  .mini{background:var(--card);border-radius:14px;box-shadow:var(--shadow);position:relative;overflow:hidden;padding:22px 22px 24px}
+  .mini::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy)}
+  .mini .st{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--green);font-weight:600;margin-bottom:13px}
+  .mini .field{margin-bottom:11px}
+  .mini .field input{height:38px}
+
+  .note{font-size:12.5px;color:var(--t3);margin-top:34px;line-height:1.7;border-top:1px solid var(--line);padding-top:16px}
+  .note b{color:var(--green);font-weight:600}
+
+  @media (max-width:520px){ .login{padding:30px 24px} }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <div class="devbar">
+    <b>INTERNAL MOCKUP</b>
+    <span>Phase 9 · login reskin → Direction B+ · pure visual, no auth-logic change</span>
+    <span>not a live route · for Love's ruling on look</span>
+  </div>
+
+  <div class="page">
+
+    <div class="caption">The reskinned login — default state</div>
+    <div class="stage">
+      <div class="login">
+        <div class="brand"><span class="mark"><i></i></span><span class="word">Transcorp</span></div>
+        <div class="eyebrow">Subscription Planner</div>
+        <h1>Log in</h1>
+        <p class="lede">Enter your operator credentials to continue.</p>
+
+        <div class="field">
+          <label for="e1">Email</label>
+          <input id="e1" type="email" placeholder="you@yourkitchen.ae" autocomplete="email" />
+        </div>
+        <div class="field">
+          <label for="p1">Password</label>
+          <input id="p1" type="password" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+
+        <div class="submit-wrap">
+          <button class="btn btn-primary btn-lg btn-block">Log in to Transcorp Planner</button>
+        </div>
+        <p class="footnote">Operator access is provisioned by Transcorp.</p>
+      </div>
+    </div>
+
+    <div class="caption">The two behavioural states, reskinned (logic unchanged)</div>
+    <div class="states">
+      <!-- ERROR -->
+      <div class="mini">
+        <div class="st">Failed sign-in</div>
+        <div class="brand"><span class="mark"><i></i></span><span class="word">Transcorp</span></div>
+        <div class="field"><label>Email</label><input type="email" value="ops@grovekitchen.ae" /></div>
+        <div class="field"><label>Password</label><input type="password" value="••••••••" /></div>
+        <div class="alert"><span class="dot"></span><span>Those credentials didn't match. Check your email and password and try again.</span></div>
+        <div class="submit-wrap"><button class="btn btn-primary btn-lg btn-block">Log in to Transcorp Planner</button></div>
+      </div>
+
+      <!-- LOADING -->
+      <div class="mini">
+        <div class="st">Signing in</div>
+        <div class="brand"><span class="mark"><i></i></span><span class="word">Transcorp</span></div>
+        <div class="field"><label>Email</label><input type="email" value="ops@grovekitchen.ae" /></div>
+        <div class="field"><label>Password</label><input type="password" value="••••••••" /></div>
+        <div class="submit-wrap"><button class="btn btn-primary btn-lg btn-block" disabled><span class="spin"></span>Signing in…</button></div>
+      </div>
+    </div>
+
+    <p class="note">
+      <b>What changed:</b> only the skin. The cream field, the floating warm-white card with the 3&nbsp;px navy spine, Bricolage&nbsp;Grotesque for the heading, the mono eyebrow, sentence-case labels (D2), and the single green primary action are all carried straight from the locked B+ contract.
+      <br /><br />
+      <b>What did not change:</b> the email/password fields, the <code>loginAction</code> server action, the <code>user.login_succeeded</code> / <code>user.login_failed</code> audit events, the <code>?next=</code> redirect, and the error/pending states. This is a brand-pass on an existing screen, not a redesign of the auth flow.
+      <br /><br />
+      <b>Note on layout:</b> the shipped login is a full-bleed split (form left, cooler-bag photo right). This mockup proposes the calmer single centred card, which reads as one continuous thing with the new marketing landing page's hero. If Love prefers to keep the photo split, the same B+ card simply sits in the left half and the photo gets a warm navy-tint overlay — a one-line decision, recorded here so it isn't re-litigated. Recommendation: the centred card.
+    </p>
+  </div>
+</body>
+</html>
