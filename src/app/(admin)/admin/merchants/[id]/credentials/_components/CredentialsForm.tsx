@@ -28,16 +28,24 @@
 
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/Button";
+import { bButtonClass } from "@/components/button-recipe";
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
 import type { RegionAuthMethod } from "@/modules/credentials";
 
 import {
   storeCredentialsAction,
   type StoreCredentialsActionResult,
 } from "../_actions";
+
+// B+ floating card surface (Phase 9 · Gap C/D), mirroring DetailView so the
+// form and the AuthMethodSwitch above it read on the same warm-white elevation.
+const FORM_CARD =
+  "rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-[var(--shadow-b-card)]";
 
 interface CredentialsFormProps {
   readonly tenantId: string;
@@ -137,7 +145,7 @@ export function CredentialsForm({
             ? fieldErrors._form
             : null;
 
-  const submitLabel = hasCredentials ? "ROTATE CREDENTIALS" : "SET CREDENTIALS";
+  const submitLabel = hasCredentials ? "Rotate credentials" : "Set credentials";
 
   function handleSubmitClick(e: React.MouseEvent<HTMLButtonElement>) {
     if (!hasCredentials) {
@@ -161,61 +169,60 @@ export function CredentialsForm({
       {formError ? (
         <p
           role="alert"
-          className="mb-6 rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red"
+          className="mb-6 rounded-[10px] border border-red/40 bg-red/10 px-3.5 py-2.5 text-sm text-red"
         >
           {formError}
         </p>
       ) : null}
 
-      <form ref={formRef} action={formAction} className="space-y-8">
-        <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
-          <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {hasCredentials ? "Rotate credentials" : "Set credentials"}
-          </legend>
-          <p className="text-xs text-[color:var(--color-text-secondary)]">
-            Credentials for{" "}
-            <span className="font-medium text-navy">{merchantName}</span>{" "}
-            are write-only — existing values cannot be displayed back. Submitting overwrites
-            whatever is currently stored.
-          </p>
+      <div className={FORM_CARD}>
+        <form ref={formRef} action={formAction} className="space-y-8">
+          <fieldset className="space-y-6">
+            <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+              {hasCredentials ? "Rotate credentials" : "Set credentials"}
+            </legend>
+            <p className="text-xs text-[color:var(--color-text-secondary)]">
+              Credentials for{" "}
+              <span className="font-medium text-navy">{merchantName}</span>{" "}
+              are write-only — existing values cannot be displayed back. Submitting overwrites
+              whatever is currently stored.
+            </p>
 
-          <CredentialField
-            id="credential_1"
-            label={copy.credential1Label}
-            type={copy.credential1Type}
-            error={fieldErrors.credential_1}
-          />
+            <CredentialField
+              id="credential_1"
+              label={copy.credential1Label}
+              type={copy.credential1Type}
+              error={fieldErrors.credential_1}
+            />
 
-          <CredentialField
-            id="credential_2"
-            label={copy.credential2Label}
-            type={copy.credential2Type}
-            error={fieldErrors.credential_2}
-          />
-        </fieldset>
+            <CredentialField
+              id="credential_2"
+              label={copy.credential2Label}
+              type={copy.credential2Type}
+              error={fieldErrors.credential_2}
+            />
+          </fieldset>
 
-        <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-strong)] pt-8">
-          <Link
-            href={`/admin/merchants/${tenantId}`}
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-          >
-            Cancel
-          </Link>
-          <button
-            ref={triggerRef}
-            type="submit"
-            disabled={isPending}
-            onClick={handleSubmitClick}
-            className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isPending
-              ? hasCredentials
-                ? "Rotating…"
-                : "Saving…"
-              : submitLabel}
-          </button>
-        </div>
-      </form>
+          <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-default)] pt-6">
+            <Button href={`/admin/merchants/${tenantId}`} variant="ghost">
+              Cancel
+            </Button>
+            <button
+              ref={triggerRef}
+              type="submit"
+              disabled={isPending}
+              onClick={handleSubmitClick}
+              className={bButtonClass("primary", "md")}
+            >
+              {isPending
+                ? hasCredentials
+                  ? "Rotating…"
+                  : "Saving…"
+                : submitLabel}
+            </button>
+          </div>
+        </form>
+      </div>
 
       {confirmOpen ? (
         <div
@@ -226,32 +233,24 @@ export function CredentialsForm({
         >
           <div
             ref={panelRef}
-            className="w-full max-w-md rounded-sm border border-stone-200 border-t-[1px] border-t-green bg-surface-primary p-6"
+            className="w-full max-w-md rounded-2xl bg-[color:var(--color-b-card)] p-6 shadow-[var(--shadow-b-card)]"
           >
-            <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+            <p className="font-b-mono text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
               Credential rotation
             </p>
-            <h2 className="mt-1 font-display text-xl font-semibold text-navy">
+            <h2 className="mt-1 font-b-display text-xl font-semibold text-navy">
               Rotate credentials
             </h2>
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
               {copy.rotateModalCopy}
             </p>
             <div className="mt-6 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setConfirmOpen(false)}
-                className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-              >
+              <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
                 Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmRotation}
-                className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90"
-              >
+              </Button>
+              <Button variant="primary" onClick={handleConfirmRotation}>
                 Rotate
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -270,13 +269,7 @@ interface CredentialFieldProps {
 function CredentialField({ id, label, type, error }: CredentialFieldProps) {
   const fieldId = `credentials-${id}`;
   return (
-    <div>
-      <label
-        htmlFor={fieldId}
-        className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-      >
-        {label}
-      </label>
+    <Field label={label} htmlFor={fieldId} error={error}>
       <input
         id={fieldId}
         name={id}
@@ -285,13 +278,8 @@ function CredentialField({ id, label, type, error }: CredentialFieldProps) {
         required
         aria-invalid={error ? "true" : undefined}
         aria-describedby={error ? `${fieldId}-error` : undefined}
-        className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+        className={inputClass(Boolean(error))}
       />
-      {error ? (
-        <p id={`${fieldId}-error`} role="alert" className="mt-1 text-xs text-red">
-          {error}
-        </p>
-      ) : null}
-    </div>
+    </Field>
   );
 }

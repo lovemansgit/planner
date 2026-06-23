@@ -11,6 +11,8 @@
 
 import { useState, useTransition } from "react";
 
+import { Button } from "@/components/Button";
+
 import {
   setAuthMethodAction,
   type SetAuthMethodActionResult,
@@ -46,8 +48,8 @@ export function AuthMethodSwitch({
   };
 
   return (
-    <section className="mb-10 rounded-sm border border-stone-200 bg-paper p-5">
-      <h2 className="font-display text-sm font-semibold text-navy">
+    <section className="mb-10 rounded-2xl bg-[color:var(--color-b-card)] p-6 shadow-[var(--shadow-b-card)]">
+      <h2 className="font-b-display text-sm font-semibold text-navy">
         Authentication method
       </h2>
       <p className="mt-2 text-sm text-[color:var(--color-text-secondary)]">
@@ -63,18 +65,19 @@ export function AuthMethodSwitch({
       </p>
 
       {!confirming ? (
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
+          className="mt-4"
           onClick={() => setConfirming(true)}
-          className="mt-4 rounded-sm border border-stone-300 px-3 py-1.5 text-sm font-medium text-navy transition-opacity duration-[120ms] ease-out hover:opacity-80"
         >
           Switch to {METHOD_LABEL[other]}
-        </button>
+        </Button>
       ) : (
         <div
           role="alertdialog"
           aria-label="Confirm authentication method switch"
-          className="mt-4 rounded-sm border border-amber-300 bg-amber-50 p-4"
+          className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4"
         >
           <p className="text-sm text-navy">
             Switching to <span className="font-semibold">{METHOD_LABEL[other]}</span>{" "}
@@ -85,28 +88,28 @@ export function AuthMethodSwitch({
             silent fallback occurs.
           </p>
           <div className="mt-3 flex gap-3">
-            <button
-              type="button"
+            <Button
+              variant="danger"
+              size="sm"
               onClick={onConfirm}
               disabled={pending}
-              className="rounded-sm bg-navy px-3 py-1.5 text-sm font-medium text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:opacity-50"
             >
               {pending ? "Switching…" : `Switch and clear credentials`}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setConfirming(false)}
               disabled={pending}
-              className="rounded-sm border border-stone-300 px-3 py-1.5 text-sm font-medium text-navy transition-opacity duration-[120ms] ease-out hover:opacity-80 disabled:opacity-50"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       {result !== null && result.kind !== "switched" ? (
-        <p role="alert" className="mt-3 rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">
+        <p role="alert" className="mt-3 rounded-[10px] border border-red/40 bg-red/10 px-3.5 py-2.5 text-sm text-red">
           {result.kind === "noop"
             ? "The merchant is already on that method."
             : result.message}
