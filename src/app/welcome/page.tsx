@@ -45,7 +45,7 @@ export const metadata = {
 // Love's standing preference: white card on white page, defined by shadow +
 // spine, with a hairline frame.
 const CARD =
-  "relative overflow-hidden rounded-2xl bg-white shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]";
+  "relative overflow-hidden rounded-2xl bg-white shadow-b-card ring-1 ring-[color:var(--color-border-default)]";
 const SPINE = "pointer-events-none absolute inset-y-0 left-0 z-[2] w-[3px] bg-navy";
 const EYEBROW = "font-b-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-green";
 

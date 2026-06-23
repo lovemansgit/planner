@@ -271,7 +271,7 @@ export function TasksClient({
           matching the shared <DataTable> chrome). Shell only — status
           derivation, courier_status rendering, selection, filters, and all row
           logic are untouched (the status-filter lane owns those). */}
-      <div className="overflow-x-auto rounded-2xl bg-[color:var(--color-b-card)] shadow-[var(--shadow-b-card)]">
+      <div className="overflow-x-auto rounded-2xl bg-[color:var(--color-b-card)] shadow-b-card">
         <table className="w-full min-w-[64rem] border-collapse text-sm">
           <thead>
             <tr className="border-b border-[color:var(--color-border-strong)]">

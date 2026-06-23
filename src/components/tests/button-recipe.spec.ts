@@ -132,9 +132,9 @@ describe("bButtonClass", () => {
       // variant — the one that lifts
       "bg-green",
       "text-paper",
-      "shadow-[var(--shadow-b-rest)]",
+      "shadow-b-rest",
       "hover:bg-[color:var(--color-green-hover)]",
-      "hover:shadow-[var(--shadow-b-lift)]",
+      "hover:shadow-b-lift",
     ]);
     expect(classSet(bButtonClass("primary", "md"))).toEqual(expected);
   });
@@ -145,7 +145,7 @@ describe("bButtonClass", () => {
     expect(cls.has("text-navy")).toBe(true);
     expect(cls.has("border-[color:var(--color-border-strong)]")).toBe(true);
     expect(cls.has("hover:border-navy")).toBe(true);
-    expect([...cls].some((c) => c.includes("shadow-[var(--shadow-b"))).toBe(false);
+    expect([...cls].some((c) => c.includes("shadow-b-"))).toBe(false);
   });
 
   it("ghost uses tighter padding and no min-width", () => {
@@ -162,7 +162,7 @@ describe("bButtonClass", () => {
     expect(cls.has("border-[color:rgb(var(--color-red-rgb)/0.34)]")).toBe(true);
     expect(cls.has("hover:bg-red")).toBe(true);
     expect(cls.has("hover:text-paper")).toBe(true);
-    expect([...cls].some((c) => c.includes("shadow-[var(--shadow-b"))).toBe(false);
+    expect([...cls].some((c) => c.includes("shadow-b-"))).toBe(false);
   });
 
   it("size ladder sets exactly one height per size", () => {
@@ -202,9 +202,9 @@ describe("bButtonClass", () => {
   });
 
   it("only primary carries a resting elevation shadow", () => {
-    expect(bButtonClass("primary", "md")).toContain("shadow-[var(--shadow-b-rest)]");
+    expect(bButtonClass("primary", "md")).toContain("shadow-b-rest");
     for (const v of ["secondary", "ghost", "danger"] as const) {
-      expect(bButtonClass(v, "md")).not.toContain("shadow-[var(--shadow-b-rest)]");
+      expect(bButtonClass(v, "md")).not.toContain("shadow-b-rest");
     }
   });
 

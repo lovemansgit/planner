@@ -48,7 +48,7 @@ export function AuthMethodSwitch({
   };
 
   return (
-    <section className="mb-10 rounded-2xl bg-[color:var(--color-b-card)] p-6 shadow-[var(--shadow-b-card)]">
+    <section className="mb-10 rounded-2xl bg-[color:var(--color-b-card)] p-6 shadow-b-card">
       <h2 className="font-b-display text-sm font-semibold text-navy">
         Authentication method
       </h2>

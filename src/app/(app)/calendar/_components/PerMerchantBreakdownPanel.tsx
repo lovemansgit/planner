@@ -114,7 +114,7 @@ export function PerMerchantBreakdownPanel({ rows }: PerMerchantBreakdownPanelPro
   return (
     <section
       aria-label="Per-merchant breakdown"
-      className="mt-8 overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]"
+      className="mt-8 overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] shadow-b-card ring-1 ring-[color:var(--color-border-default)]"
     >
       <header className="border-b border-[color:var(--color-border-default)] px-4 py-3">
         <h2 className="text-xs font-medium uppercase tracking-[0.14em] text-navy">

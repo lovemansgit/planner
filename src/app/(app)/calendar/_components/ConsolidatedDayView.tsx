@@ -111,13 +111,13 @@ export function ConsolidatedDayView({ date, tasks }: ConsolidatedDayViewProps) {
       </header>
 
       {tasks.length === 0 ? (
-        <div className="rounded-2xl bg-[color:var(--color-b-card)] px-6 py-16 text-center shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
+        <div className="rounded-2xl bg-[color:var(--color-b-card)] px-6 py-16 text-center shadow-b-card ring-1 ring-[color:var(--color-border-default)]">
           <p className="text-sm text-[color:var(--color-text-secondary)]">
             No deliveries scheduled for this day. Try a different day or clear filters.
           </p>
         </div>
       ) : (
-        <ol className="overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
+        <ol className="overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] shadow-b-card ring-1 ring-[color:var(--color-border-default)]">
           {tasks.map((task) => (
             <DayTaskRow key={task.taskId} task={task} date={date} />
           ))}

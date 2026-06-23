@@ -39,7 +39,7 @@ export const revalidate = 0;
 // B+ floating content card (Phase 9 · Gap C/D surface), mirroring DataTable /
 // DetailView so this config surface reads on the same warm-white elevation.
 const SECTION_CARD =
-  "rounded-2xl bg-[color:var(--color-b-card)] font-b-body shadow-[var(--shadow-b-card)] p-8";
+  "rounded-2xl bg-[color:var(--color-b-card)] font-b-body shadow-b-card p-8";
 
 export default async function WebhookConfigPage() {
   const requestId = randomUUID();

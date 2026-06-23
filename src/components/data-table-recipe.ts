@@ -20,7 +20,7 @@ export type DataTableAlign = "left" | "right";
 // The floating B+ card: warm-white surface, soft navy depth, clipped corners,
 // body face. The whole table reads in Hanken; cells opt into mono/display.
 export const TABLE_CARD =
-  "overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] font-b-body shadow-[var(--shadow-b-card)]";
+  "overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] font-b-body shadow-b-card";
 
 // Horizontal-scroll containment so a wide table scrolls within the card instead
 // of breaking the page on narrow viewports (the audit's mobile-overflow fix;

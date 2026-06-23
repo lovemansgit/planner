@@ -124,7 +124,7 @@ export function CalendarFilterBar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-[color:var(--color-b-card)] px-4 py-3 shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
+    <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-[color:var(--color-b-card)] px-4 py-3 shadow-b-card ring-1 ring-[color:var(--color-border-default)]">
       <input
         type="search"
         value={q}

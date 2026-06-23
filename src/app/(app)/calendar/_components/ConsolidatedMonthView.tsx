@@ -57,7 +57,7 @@ export function ConsolidatedMonthView({
   return (
     <div
       data-month-anchor={monthAnchor}
-      className="overflow-hidden rounded-2xl bg-[color:var(--color-border-default)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]"
+      className="overflow-hidden rounded-2xl bg-[color:var(--color-border-default)] shadow-b-card ring-1 ring-[color:var(--color-border-default)]"
     >
       <div
         aria-hidden="true"

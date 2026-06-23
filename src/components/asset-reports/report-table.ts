@@ -36,4 +36,4 @@ export const REPORT_SUBROW =
 // Empty-state panel — the same floating card surface, so "no data" still reads
 // as a deliberate B+ surface rather than a bare bordered box.
 export const REPORT_EMPTY =
-  "rounded-2xl bg-[color:var(--color-b-card)] px-6 py-10 text-sm text-[color:var(--color-text-secondary)] shadow-[var(--shadow-b-card)]";
+  "rounded-2xl bg-[color:var(--color-b-card)] px-6 py-10 text-sm text-[color:var(--color-text-secondary)] shadow-b-card";

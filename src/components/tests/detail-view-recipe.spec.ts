@@ -28,7 +28,7 @@ describe("card + spine", () => {
     expect(c.has("overflow-hidden")).toBe(true);
     expect(c.has("rounded-2xl")).toBe(true);
     expect(c.has("bg-[color:var(--color-b-card)]")).toBe(true);
-    expect(c.has("shadow-[var(--shadow-b-card)]")).toBe(true);
+    expect(c.has("shadow-b-card")).toBe(true);
   });
 
   it("navy survives only as a thin 3px spine, never a band/fill", () => {
