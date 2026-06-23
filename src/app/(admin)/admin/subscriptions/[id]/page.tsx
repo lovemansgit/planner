@@ -1,5 +1,12 @@
 // Item 3 (22 Jun 2026) — read-only admin subscription detail.
 //
+// Phase 10 · Batch B3 — adopts the shared DetailView (Gap D, B+ skin): one
+// floating card with a navy structural spine, two-column fill (D3), and the
+// shared FieldRow (sentence-case labels per D2, "Not set" inline empties).
+// Pure presentation — every field/value/link preserved. The status pill moves
+// to the header status slot; the merchant subtitle becomes a "Merchant"
+// FieldRow in Recipient (mirroring the flagship admin-consignee-detail).
+//
 // Reached by clicking a row on /admin/subscriptions. Cross-tenant single
 // fetch (getAdminSubscriptionById), then resolve the consignee (name)
 // and the owning merchant. The merchant lookup doubles as Item 1's
@@ -12,6 +19,8 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
+import { FieldRow } from "@/components/FieldRow";
 import { getAdminConsigneeById } from "@/modules/consignees/service";
 import { isGenuineMerchant } from "@/modules/merchants/genuine-merchants";
 import { getMerchantById } from "@/modules/merchants/service";
@@ -84,111 +93,81 @@ export default async function AdminSubscriptionDetailPage({
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-4xl px-12 py-16">
-        <header className="mb-16 flex items-start justify-between gap-12">
-          <div className="flex-1">
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              Transcorp · Admin · Subscriptions
-            </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">
-              {subscription.mealPlanName ?? "Subscription"}
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              {merchant.name}{" "}
-              <span className="font-mono text-xs text-[color:var(--color-text-tertiary)]">
-                ({merchant.slug})
-              </span>
-            </p>
-          </div>
-          <span className="inline-flex shrink-0 items-center bg-[color:var(--color-tint-navy-subtle)] px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy">
-            {subscription.status}
-          </span>
-        </header>
+        <DetailView
+          header={
+            <DetailHeader
+              eyebrow="Transcorp · Admin · Subscriptions"
+              title={subscription.mealPlanName ?? "Subscription"}
+              status={
+                <span className="inline-flex items-center bg-[color:var(--color-tint-navy-subtle)] px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy">
+                  {subscription.status}
+                </span>
+              }
+            />
+          }
+        >
+          <DetailSection label="Recipient">
+            <FieldRow
+              label="Merchant"
+              value={
+                <>
+                  {merchant.name}{" "}
+                  <span className="font-b-mono text-xs text-[color:var(--color-text-tertiary)]">
+                    ({merchant.slug})
+                  </span>
+                </>
+              }
+            />
+            <FieldRow label="Consignee" value={consigneeName} />
+            <FieldRow label="Consignee ID" value={subscription.consigneeId} mono />
+          </DetailSection>
 
-        <Section title="Recipient">
-          <FieldRow label="Consignee" value={consigneeName} />
-          <FieldRow label="Consignee ID" value={subscription.consigneeId} mono />
-        </Section>
+          <DetailSection label="Schedule">
+            <FieldRow label="Plan name" value={subscription.mealPlanName} />
+            <FieldRow label="Start date" value={subscription.startDate} mono />
+            <FieldRow label="End date" value={subscription.endDate ?? "Open-ended"} mono />
+            <FieldRow label="Days of week" value={formatDays(subscription.daysOfWeek)} />
+            <FieldRow
+              label="Delivery window"
+              value={`${subscription.deliveryWindowStart} – ${subscription.deliveryWindowEnd}`}
+              mono
+            />
+            <FieldRow
+              label="Address"
+              value={
+                subscription.deliveryAddressOverride === null
+                  ? "Consignee default address"
+                  : "Custom override"
+              }
+            />
+          </DetailSection>
 
-        <Section title="Schedule">
-          <FieldRow label="Plan name" value={subscription.mealPlanName} />
-          <FieldRow label="Start date" value={subscription.startDate} mono />
-          <FieldRow label="End date" value={subscription.endDate ?? "Open-ended"} mono />
-          <FieldRow label="Days of week" value={formatDays(subscription.daysOfWeek)} />
-          <FieldRow
-            label="Delivery window"
-            value={`${subscription.deliveryWindowStart} – ${subscription.deliveryWindowEnd}`}
-            mono
-          />
-          <FieldRow
-            label="Address"
-            value={
-              subscription.deliveryAddressOverride === null
-                ? "Consignee default address"
-                : "Custom override"
-            }
-          />
-        </Section>
+          <DetailSection label="Meta">
+            <FieldRow label="External reference" value={subscription.externalRef} mono />
+            <FieldRow label="Internal notes" value={subscription.notesInternal} />
+            <FieldRow
+              label="Paused at"
+              value={subscription.pausedAt ? subscription.pausedAt.slice(0, 10) : null}
+              mono
+            />
+            <FieldRow
+              label="Ended at"
+              value={subscription.endedAt ? subscription.endedAt.slice(0, 10) : null}
+              mono
+            />
+            <FieldRow label="Created" value={subscription.createdAt.slice(0, 10)} mono />
+          </DetailSection>
+        </DetailView>
 
-        <Section title="Meta">
-          <FieldRow label="External reference" value={subscription.externalRef} mono />
-          <FieldRow label="Internal notes" value={subscription.notesInternal} />
-          <FieldRow
-            label="Paused at"
-            value={subscription.pausedAt ? subscription.pausedAt.slice(0, 10) : null}
-            mono
-          />
-          <FieldRow
-            label="Ended at"
-            value={subscription.endedAt ? subscription.endedAt.slice(0, 10) : null}
-            mono
-          />
-          <FieldRow label="Created" value={subscription.createdAt.slice(0, 10)} mono />
-        </Section>
-
-        <p className="mt-12">
+        <p className="mt-8">
           <Link
             href="/admin/subscriptions"
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
+            className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)] transition-colors hover:text-navy"
           >
             ← Back to subscriptions
           </Link>
         </p>
       </div>
     </main>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="mb-12 border-t border-[color:var(--color-border-strong)] pt-8">
-      <p className="mb-6 text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-        {title}
-      </p>
-      <div className="divide-y divide-[color:var(--color-border-default)]">{children}</div>
-    </section>
-  );
-}
-
-function FieldRow({
-  label,
-  value,
-  mono = false,
-}: {
-  readonly label: string;
-  readonly value: string | null;
-  readonly mono?: boolean;
-}) {
-  const isEmpty = value === null || value === undefined || value === "";
-  return (
-    <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-      <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-        {label}
-      </p>
-      {isEmpty ? (
-        <p className="text-sm text-[color:var(--color-text-tertiary)]">—</p>
-      ) : (
-        <p className={`text-sm text-navy ${mono ? "font-mono" : ""}`}>{value}</p>
-      )}
-    </div>
   );
 }
