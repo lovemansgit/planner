@@ -30,6 +30,7 @@ import {
   parsePageParam,
   parsePerPageParam,
 } from "@/app/(app)/tasks/status";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SearchBar } from "@/components/SearchBar";
 import {
   type AdminConsigneeRow,
@@ -160,68 +161,74 @@ export default async function AdminConsigneesPage({
   );
 }
 
+// Phase 10 · Batch B1 — the admin consignees list adopts the shared <DataTable>
+// (Gap C, B+ skin): floating card, never-wrap eyebrow headers, mono figures,
+// truncation, hover, mobile-overflow containment. Pure presentation — columns,
+// order, the whole-row detail link, and the existing CrmStateBadge are all
+// preserved (Item 3 row-link now lives in the component's rowHref). The status
+// spine (LED gutter) is intentionally not lit here: the canonical crm tone map
+// would clash with the preserved legacy CrmStateBadge (e.g. ON_HOLD), and the
+// CRM badge has an in-flight vocab ruling — a future badge-adoption pass can
+// swap CrmStateBadge→StatusBadge(crm) on list + detail together, then light it.
+const CONSIGNEE_COLUMNS: ReadonlyArray<DataTableColumn<AdminConsigneeRow>> = [
+  {
+    key: "merchant",
+    header: "Merchant",
+    cell: (row) => (
+      <>
+        <span className="font-b-display font-semibold text-navy">{row.merchant.name}</span>
+        <span className="ml-2 font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
+          {row.merchant.slug}
+        </span>
+      </>
+    ),
+    title: (row) => `${row.merchant.name} · ${row.merchant.slug}`,
+  },
+  {
+    key: "name",
+    header: "Name",
+    cellClassName: "text-navy",
+    cell: (row) => row.consignee.name,
+    title: (row) => row.consignee.name,
+  },
+  {
+    key: "phone",
+    header: "Phone",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => formatPhone(row.consignee.phone),
+    title: (row) => formatPhone(row.consignee.phone),
+  },
+  {
+    key: "district",
+    header: "District",
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => row.consignee.district,
+    title: (row) => row.consignee.district,
+  },
+  {
+    key: "crmState",
+    header: "CRM state",
+    cell: (row) => <CrmStateBadge state={row.consignee.crmState} />,
+  },
+  {
+    key: "created",
+    header: "Created",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => row.consignee.createdAt.slice(0, 10),
+  },
+];
+
 function ConsigneesTable({ rows }: { rows: readonly AdminConsigneeRow[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Merchant</Th>
-          <Th>Name</Th>
-          <Th>Phone</Th>
-          <Th>District</Th>
-          <Th>CRM state</Th>
-          <Th>Created</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <Row key={row.consignee.id} row={row} />
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Row({ row }: { row: AdminConsigneeRow }) {
-  // Item 3: whole-row link → consignee detail. Each cell's content is a
-  // block <Link> (HTML can't wrap <tr> in <a>); row hover-tint + cursor.
-  const detailHref = `/admin/consignees/${row.consignee.id}`;
-  return (
-    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
-      <Td>
-        <Link href={detailHref} className="block">
-          <span className="font-medium text-navy">{row.merchant.name}</span>
-          <span className="ml-2 text-[color:var(--color-text-tertiary)] font-mono text-xs tabular-nums">
-            {row.merchant.slug}
-          </span>
-        </Link>
-      </Td>
-      <Td className="text-navy">
-        <Link href={detailHref} className="block">
-          {row.consignee.name}
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {formatPhone(row.consignee.phone)}
-        </Link>
-      </Td>
-      <Td className="text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {row.consignee.district}
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <CrmStateBadge state={row.consignee.crmState} />
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {row.consignee.createdAt.slice(0, 10)}
-        </Link>
-      </Td>
-    </tr>
+    <DataTable
+      columns={CONSIGNEE_COLUMNS}
+      rows={rows}
+      getRowKey={(row) => row.consignee.id}
+      rowHref={(row) => `/admin/consignees/${row.consignee.id}`}
+      caption="All consignees across the platform"
+    />
   );
 }
 
@@ -295,18 +302,6 @@ function buildAdminConsigneesHref({
   if (q) params.set("q", q);
   const qs = params.toString();
   return qs ? `/admin/consignees?${qs}` : "/admin/consignees";
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
 function EmptyState({ filtered }: { readonly filtered: boolean }) {
