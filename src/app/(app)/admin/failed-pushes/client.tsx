@@ -212,6 +212,7 @@ export function FailedPushesAdmin({ initialRows }: { initialRows: readonly Faile
         </p>
         <div className="flex items-center gap-3">
           <Button
+            variant="secondary"
             onClick={() => {
               setResolveBanner(null);
               setResolveModalOpen(true);
@@ -220,7 +221,7 @@ export function FailedPushesAdmin({ initialRows }: { initialRows: readonly Faile
           >
             Resolve selected
           </Button>
-          <Button onClick={retrySelected} disabled={!anySelected || bulkInFlight || resolveInFlight}>
+          <Button variant="primary" onClick={retrySelected} disabled={!anySelected || bulkInFlight || resolveInFlight}>
             {bulkInFlight ? "Retrying…" : "Retry selected"}
           </Button>
         </div>
@@ -229,7 +230,7 @@ export function FailedPushesAdmin({ initialRows }: { initialRows: readonly Faile
       {resolveBanner !== null ? (
         <div
           role="status"
-          className={`mb-6 border px-4 py-3 text-sm ${
+          className={`mb-6 rounded-[10px] border px-4 py-3 text-sm ${
             resolveBanner.kind === "success"
               ? "border-[color:var(--color-border-default)] bg-[color:var(--color-surface-secondary)] text-navy"
               : "border-red bg-[color:var(--color-surface-primary)] text-red"
@@ -301,7 +302,7 @@ function RowView({
 }) {
   const isRetrying = state.kind === "retrying";
   return (
-    <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0 align-top">
+    <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0 align-top transition-colors duration-[120ms] ease-out hover:bg-[rgba(37,45,96,0.025)]">
       <Td className="w-8 py-5">
         <input
           type="checkbox"
@@ -320,7 +321,7 @@ function RowView({
         {formatTimestamp(row.lastAttemptedAt)}
       </Td>
       <Td>
-        <Button size="sm" onClick={onRetry} disabled={isRetrying || bulkInFlight}>
+        <Button variant="secondary" size="sm" onClick={onRetry} disabled={isRetrying || bulkInFlight}>
           {isRetrying ? "Retrying…" : "Retry"}
         </Button>
         <ResultBadge state={state} />
@@ -390,7 +391,7 @@ function humanizeOutcome(outcome: SinglePushOutcome): string {
 function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
     <th
-      className={`py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)] ${className}`}
+      className={`py-3 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-[color:var(--color-text-tertiary)] ${className}`}
     >
       {children}
     </th>
@@ -398,7 +399,7 @@ function Th({ children, className = "" }: { children: React.ReactNode; className
 }
 
 function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-5 align-top ${className}`}>{children}</td>;
+  return <td className={`py-4 align-top text-[color:var(--color-ink)] ${className}`}>{children}</td>;
 }
 
 function formatTimestamp(iso: string): string {
@@ -436,7 +437,7 @@ function BulkResolveModal({
       aria-labelledby="bulk-resolve-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6"
     >
-      <div className="w-full max-w-lg border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface-primary)] p-8 text-navy">
+      <div className="w-full max-w-lg rounded-2xl bg-[color:var(--color-b-card)] p-8 text-navy shadow-[var(--shadow-b-card)]">
         <h2
           id="bulk-resolve-modal-title"
           className="text-lg font-semibold tracking-tight"
@@ -465,10 +466,10 @@ function BulkResolveModal({
           {trimmed.length}/{RESOLUTION_NOTES_MAX_LEN}
         </p>
         <div className="mt-6 flex items-center justify-end gap-3">
-          <Button tone="default" onClick={onCancel} disabled={inFlight}>
+          <Button variant="ghost" onClick={onCancel} disabled={inFlight}>
             Cancel
           </Button>
-          <Button variant="filled" onClick={() => onConfirm(trimmed)} disabled={!canSubmit}>
+          <Button variant="primary" onClick={() => onConfirm(trimmed)} disabled={!canSubmit}>
             {inFlight ? "Resolving…" : "Resolve"}
           </Button>
         </div>
