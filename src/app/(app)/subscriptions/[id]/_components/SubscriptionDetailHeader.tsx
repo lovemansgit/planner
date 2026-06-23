@@ -7,6 +7,7 @@
 
 import Link from "next/link";
 
+import { StatusBadge } from "@/components/StatusBadge";
 import type { Subscription } from "@/modules/subscriptions";
 
 interface SubscriptionDetailHeaderProps {
@@ -64,7 +65,7 @@ export function SubscriptionDetailHeader({
           </dl>
         </div>
         <div className="flex-shrink-0">
-          <StatusBadge status={subscription.status} />
+          <StatusBadge domain="subscription" status={subscription.status} size="lg" />
         </div>
       </div>
     </header>
@@ -86,28 +87,3 @@ function daysRemainingLabel(sub: Subscription): string {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
-function StatusBadge({ status }: { readonly status: Subscription["status"] }) {
-  switch (status) {
-    case "active":
-      return (
-        <span className="inline-flex items-center gap-2 rounded-sm border border-green/30 px-3 py-1 text-xs font-medium uppercase tracking-[0.15em] text-green">
-          <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden />
-          Active
-        </span>
-      );
-    case "paused":
-      return (
-        <span className="inline-flex items-center gap-2 rounded-sm border border-amber/30 px-3 py-1 text-xs font-medium uppercase tracking-[0.15em] text-amber">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber" aria-hidden />
-          Paused
-        </span>
-      );
-    case "ended":
-      return (
-        <span className="inline-flex items-center gap-2 rounded-sm border border-stone-200 px-3 py-1 text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-tertiary)]">
-          <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--color-text-tertiary)]" aria-hidden />
-          Ended
-        </span>
-      );
-  }
-}

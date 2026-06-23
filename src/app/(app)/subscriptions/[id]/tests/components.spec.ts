@@ -108,7 +108,8 @@ describe("SubscriptionDetailHeader", () => {
       }),
     );
     expect(html).toMatch(/Active/);
-    expect(html).toMatch(/text-green/);
+    // Phase 9 · 3.3 — adopted onto the shared StatusBadge (B+ soft-fill tone).
+    expect(html).toMatch(/color-status-active-ink/);
   });
 
   it("renders the paused status badge in amber", () => {
@@ -120,7 +121,7 @@ describe("SubscriptionDetailHeader", () => {
       }),
     );
     expect(html).toMatch(/Paused/);
-    expect(html).toMatch(/text-amber/);
+    expect(html).toMatch(/color-status-paused-ink/);
   });
 
   it("renders the ended status badge in muted neutral", () => {
@@ -132,7 +133,7 @@ describe("SubscriptionDetailHeader", () => {
       }),
     );
     expect(html).toMatch(/Ended/);
-    expect(html).toMatch(/color-text-tertiary/);
+    expect(html).toMatch(/color-status-ended-ink/);
   });
 
   it("renders 'Open-ended' when subscription.endDate is null", () => {

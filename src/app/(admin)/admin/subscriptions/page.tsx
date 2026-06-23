@@ -31,13 +31,13 @@ import {
   parsePageParam,
   parsePerPageParam,
 } from "@/app/(app)/tasks/status";
+import { StatusBadge } from "@/components/StatusBadge";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import {
   type AdminSubscriptionRow,
   listAllSubscriptions,
 } from "@/modules/subscriptions/service";
-import type { Subscription } from "@/modules/subscriptions/types";
 
 import { MaterializeButton } from "./_components/MaterializeButton";
 import {
@@ -188,7 +188,7 @@ function Row({ row }: { row: AdminSubscriptionRow }) {
       </Td>
       <Td>
         <Link href={detailHref} className="block">
-          <StatusBadge status={row.subscription.status} />
+          <StatusBadge domain="subscription" status={row.subscription.status} />
         </Link>
       </Td>
       <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
@@ -213,32 +213,6 @@ function Row({ row }: { row: AdminSubscriptionRow }) {
       </Td>
     </tr>
   );
-}
-
-function StatusBadge({ status }: { status: Subscription["status"] }) {
-  switch (status) {
-    case "active":
-      return (
-        <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-green">
-          <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden />
-          Active
-        </span>
-      );
-    case "paused":
-      return (
-        <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-amber">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber" aria-hidden />
-          Paused
-        </span>
-      );
-    case "ended":
-      return (
-        <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-tertiary)]">
-          <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--color-text-tertiary)]" aria-hidden />
-          Ended
-        </span>
-      );
-  }
 }
 
 function Pagination({
