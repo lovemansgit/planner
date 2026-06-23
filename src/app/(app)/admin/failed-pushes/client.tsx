@@ -437,7 +437,7 @@ function BulkResolveModal({
       aria-labelledby="bulk-resolve-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6"
     >
-      <div className="w-full max-w-lg rounded-2xl bg-[color:var(--color-b-card)] p-8 text-navy shadow-[var(--shadow-b-card)]">
+      <div className="w-full max-w-lg rounded-2xl bg-[color:var(--color-b-card)] p-8 text-navy shadow-b-card">
         <h2
           id="bulk-resolve-modal-title"
           className="text-lg font-semibold tracking-tight"

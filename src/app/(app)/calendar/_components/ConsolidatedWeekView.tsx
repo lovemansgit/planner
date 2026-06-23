@@ -50,7 +50,7 @@ export function ConsolidatedWeekView({
 }: ConsolidatedWeekViewProps) {
   if (days.length === 0) {
     return (
-      <div className="rounded-2xl bg-[color:var(--color-b-card)] px-6 py-16 text-center shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
+      <div className="rounded-2xl bg-[color:var(--color-b-card)] px-6 py-16 text-center shadow-b-card ring-1 ring-[color:var(--color-border-default)]">
         <p className="text-sm text-[color:var(--color-text-secondary)]">
           No deliveries this week. Adjust filters or pick a different week.
         </p>
@@ -61,7 +61,7 @@ export function ConsolidatedWeekView({
   return (
     <div
       data-week-start={weekStart}
-      className="grid grid-cols-1 gap-px overflow-hidden rounded-2xl bg-[color:var(--color-border-default)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)] sm:grid-cols-2 lg:grid-cols-7"
+      className="grid grid-cols-1 gap-px overflow-hidden rounded-2xl bg-[color:var(--color-border-default)] shadow-b-card ring-1 ring-[color:var(--color-border-default)] sm:grid-cols-2 lg:grid-cols-7"
     >
       {days.map((day) => (
         <DayCell

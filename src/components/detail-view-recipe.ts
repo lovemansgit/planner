@@ -13,7 +13,7 @@
 
 // The floating B+ card (relative, so the spine can absolutely-position to it).
 export const DETAIL_CARD =
-  "relative overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] font-b-body shadow-[var(--shadow-b-card)]";
+  "relative overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] font-b-body shadow-b-card";
 
 // The navy structural spine — the B+ resolution of Terminal's heavy navy band.
 export const DETAIL_SPINE = "pointer-events-none absolute inset-y-0 left-0 w-[3px] bg-navy";

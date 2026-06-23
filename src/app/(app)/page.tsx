@@ -81,7 +81,7 @@ export default async function LandingPage() {
               <Link
                 key={card.path}
                 href={card.path}
-                className="group block rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-[var(--shadow-b-card)] outline-none ring-1 ring-transparent transition duration-150 hover:-translate-y-0.5 hover:ring-[color:var(--color-b-focus-ring)] focus-visible:ring-[color:var(--color-b-focus-ring)]"
+                className="group block rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-b-card outline-none ring-1 ring-transparent transition duration-150 hover:-translate-y-0.5 hover:ring-[color:var(--color-b-focus-ring)] focus-visible:ring-[color:var(--color-b-focus-ring)]"
               >
                 <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
                   Shortcut

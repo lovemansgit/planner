@@ -45,7 +45,7 @@ import {
 // B+ floating card surface (Phase 9 · Gap C/D), mirroring DetailView so the
 // form and the AuthMethodSwitch above it read on the same warm-white elevation.
 const FORM_CARD =
-  "rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-[var(--shadow-b-card)]";
+  "rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-b-card";
 
 interface CredentialsFormProps {
   readonly tenantId: string;
@@ -233,7 +233,7 @@ export function CredentialsForm({
         >
           <div
             ref={panelRef}
-            className="w-full max-w-md rounded-2xl bg-[color:var(--color-b-card)] p-6 shadow-[var(--shadow-b-card)]"
+            className="w-full max-w-md rounded-2xl bg-[color:var(--color-b-card)] p-6 shadow-b-card"
           >
             <p className="font-b-mono text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
               Credential rotation

@@ -39,6 +39,19 @@ const config: Config = {
         "b-display": ["var(--font-b-display)"],
         "b-mono": ["var(--font-b-mono)"],
       },
+      // Phase 11 Batch 1 — register the B+ shadow tokens as NAMED boxShadow
+      // utilities. Tailwind v3's arbitrary-value parser mis-reads the multi-layer
+      // `shadow-[var(--shadow-b-card)]` as a shadow COLOR (`--tw-shadow-color`),
+      // which resets box-shadow to transparent — so every B+ card rendered FLAT.
+      // A named utility assigns the value verbatim to `--tw-shadow`, so the
+      // multi-layer shadow renders (and still composes with `ring-*`). The token
+      // values stay canonical in src/styles/brand-tokens.css; this only references
+      // them, so the float follows the token.
+      boxShadow: {
+        "b-card": "var(--shadow-b-card)",
+        "b-rest": "var(--shadow-b-rest)",
+        "b-lift": "var(--shadow-b-lift)",
+      },
     },
   },
   plugins: [],

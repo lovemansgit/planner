@@ -98,7 +98,7 @@ const B_METRICS: Record<"solid" | "ghost", Record<BButtonSize, string>> = {
 // brand cream-white (no bare #fff). Danger border is the brand red at 34%.
 const B_VARIANT: Record<BButtonVariant, string> = {
   primary:
-    "bg-green text-paper shadow-[var(--shadow-b-rest)] hover:bg-[color:var(--color-green-hover)] hover:shadow-[var(--shadow-b-lift)]",
+    "bg-green text-paper shadow-b-rest hover:bg-[color:var(--color-green-hover)] hover:shadow-b-lift",
   secondary:
     "bg-[color:var(--color-b-card)] text-navy border-[color:var(--color-border-strong)] hover:border-navy",
   ghost:

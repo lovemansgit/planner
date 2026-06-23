@@ -29,7 +29,7 @@ describe("structural class constants", () => {
     expect(c.has("rounded-2xl")).toBe(true);
     expect(c.has("bg-[color:var(--color-b-card)]")).toBe(true);
     expect(c.has("font-b-body")).toBe(true);
-    expect(c.has("shadow-[var(--shadow-b-card)]")).toBe(true);
+    expect(c.has("shadow-b-card")).toBe(true);
   });
 
   it("scroll wrapper contains overflow on narrow viewports", () => {
