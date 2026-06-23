@@ -80,15 +80,21 @@ export default async function AppLayout({
     throw err;
   }
 
+  // Phase 10 — white-dominant pass. The route group owns its page field
+  // centrally here: a single min-h-screen bg-paper backdrop behind the nav
+  // and children. Per-page `<main>`s still paint their own (identical)
+  // bg-surface-primary on top, so this is seamless and adds no scroll; it
+  // guarantees the white-dominant field also covers loading states,
+  // short-content gaps, and any future page that omits its own field.
   return (
-    <>
+    <div className="min-h-screen bg-paper text-navy font-sans">
       <TopNav
         permissions={permissions}
         userIdentity={userIdentity}
         assetTrackingEnabled={assetTrackingEnabled}
       />
       {children}
-    </>
+    </div>
   );
 }
 
