@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { EmptyState as EmptyStateBlock } from "@/components/EmptyState";
 import { SearchBar } from "@/components/SearchBar";
 import { Toast } from "@/components/Toast";
 import { roleLabel } from "@/modules/identity/role-label";
@@ -326,18 +327,14 @@ function Td({ children, className = "" }: { children: React.ReactNode; className
   return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
+// Phase 9 · 3.6 — adopts the shared EmptyState (Gap H); the `filtered` wrapper
+// keeps the call site unchanged.
 function EmptyState({ filtered }: { readonly filtered: boolean }) {
   return (
-    <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
-      <p className="text-base text-navy">
-        {filtered ? "No users match the current search." : "No users yet."}
-      </p>
-      <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-        {filtered
-          ? "Clear the search to see all users."
-          : "Use New user to provision one."}
-      </p>
-    </div>
+    <EmptyStateBlock
+      title={filtered ? "No users match the current search." : "No users yet."}
+      body={filtered ? "Clear the search to see all users." : "Use New user to provision one."}
+    />
   );
 }
 
