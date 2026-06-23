@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { HeroCount } from "@/components/HeroCount";
 import {
   listResolvedFailedPushes,
@@ -82,69 +83,79 @@ function formatTimestamp(iso: string): string {
   return iso.replace("T", " ").slice(0, 16) + " UTC";
 }
 
+// Phase 10 · Batch B2 — the resolved-pushes review log adopts the shared
+// <DataTable> (Gap C, B+ skin): a floating warm-white card, never-wrap eyebrow
+// headers, mono tabular figures, and truncating cells with title tooltips.
+// Read-only: no row link, no actions, no status-LED (every row is resolved).
+// Columns + order are preserved exactly.
+const RESOLVED_COLUMNS: ReadonlyArray<DataTableColumn<ResolvedFailedPush>> = [
+  {
+    key: "resolvedAt",
+    header: "Resolved at",
+    mono: true,
+    cell: (row) => formatTimestamp(row.resolvedAt),
+  },
+  {
+    key: "resolvedBy",
+    header: "Resolved by",
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => row.resolvedByEmail ?? "System",
+    title: (row) => row.resolvedByEmail ?? "System",
+  },
+  {
+    key: "notes",
+    header: "Notes",
+    cell: (row) =>
+      row.resolutionNotes ?? <span className="text-[color:var(--color-text-tertiary)]">—</span>,
+    title: (row) => row.resolutionNotes ?? undefined,
+  },
+  {
+    key: "task",
+    header: "Task",
+    mono: true,
+    cell: (row) => row.taskId,
+    title: (row) => row.taskId,
+  },
+  {
+    key: "failure",
+    header: "Failure",
+    cell: (row) => (
+      <>
+        {row.failureReason}
+        {row.httpStatus !== null ? (
+          <span className="ml-1 font-b-mono tabular-nums text-[color:var(--color-text-secondary)]">
+            ({row.httpStatus})
+          </span>
+        ) : null}
+      </>
+    ),
+    title: (row) =>
+      row.httpStatus !== null ? `${row.failureReason} (${row.httpStatus})` : row.failureReason,
+  },
+  {
+    key: "attempts",
+    header: "Attempts",
+    mono: true,
+    cell: (row) => row.attemptCount,
+  },
+  {
+    key: "firstFailed",
+    header: "First failed",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => formatTimestamp(row.firstFailedAt),
+  },
+];
+
 function ResolvedTable({ rows }: { readonly rows: readonly ResolvedFailedPush[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)] text-left">
-          <Th>Resolved at</Th>
-          <Th>Resolved by</Th>
-          <Th>Notes</Th>
-          <Th>Task</Th>
-          <Th>Failure</Th>
-          <Th>Attempts</Th>
-          <Th>First failed</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr
-            key={row.id}
-            className="border-b border-[color:var(--color-border-default)] align-top"
-          >
-            <Td>
-              <span className="tabular-nums">{formatTimestamp(row.resolvedAt)}</span>
-            </Td>
-            <Td>{row.resolvedByEmail ?? "System"}</Td>
-            <Td>
-              {row.resolutionNotes ?? (
-                <span className="text-[color:var(--color-text-tertiary)]">—</span>
-              )}
-            </Td>
-            <Td>
-              <span className="font-mono text-xs">{row.taskId}</span>
-            </Td>
-            <Td>
-              {row.failureReason}
-              {row.httpStatus !== null ? (
-                <span className="ml-1 text-[color:var(--color-text-secondary)] tabular-nums">
-                  ({row.httpStatus})
-                </span>
-              ) : null}
-            </Td>
-            <Td>
-              <span className="tabular-nums">{row.attemptCount}</span>
-            </Td>
-            <Td>
-              <span className="tabular-nums">{formatTimestamp(row.firstFailedAt)}</span>
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={RESOLVED_COLUMNS}
+      rows={rows}
+      getRowKey={(row) => row.id}
+      caption="Resolved failed pushes — read-only history"
+    />
   );
-}
-
-function Th({ children }: { readonly children: React.ReactNode }) {
-  return (
-    <th className="py-3 pr-6 text-xs font-medium uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children }: { readonly children: React.ReactNode }) {
-  return <td className="py-3 pr-6">{children}</td>;
 }
 
 function EmptyState() {
