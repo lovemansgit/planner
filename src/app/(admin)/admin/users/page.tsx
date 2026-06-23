@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { EmptyState as EmptyStateBlock } from "@/components/EmptyState";
 import { SearchBar } from "@/components/SearchBar";
 import { Toast } from "@/components/Toast";
@@ -140,103 +141,115 @@ export default async function AdminUsersPage({ searchParams }: AdminUsersPagePro
   );
 }
 
-function AdminUsersTable({ rows }: { rows: readonly AdminUserRow[] }) {
-  return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Email</Th>
-          <Th>Full name</Th>
-          <Th>Tenant</Th>
-          <Th>Role</Th>
-          <Th>Status</Th>
-          <Th>Created</Th>
-          <Th>
-            <span className="sr-only">Actions</span>
-          </Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <Row key={row.userId} row={row} />
-        ))}
-      </tbody>
-    </table>
-  );
+// Phase 10 · Batch B1 — the admin users list adopts the shared <DataTable>
+// (Gap C, B+ skin): floating card, never-wrap eyebrow headers, mono figures,
+// truncation, hover, mobile-overflow containment. Pure presentation — the seven
+// columns + order, the whole-row detail link (Item 2 / PR #270 §9.3; Actions
+// cell opts out via noRowLink), the disabled-row muted-text tone, the local
+// Active/Disabled dot-badge, the password-reset / disable / enable actions, the
+// SearchBar, page-size dropdown, pagination, created toast, and shared
+// EmptyState are all preserved.
+//
+// One known delta vs the raw table: the faint full-row `bg-stone-100/40` wash
+// on disabled rows is not carried — DataTable owns a single <tr> className with
+// no per-row hook. The disabled state stays obvious (every text cell greys to
+// the tertiary tone + the "Disabled" dot-badge). If the row wash is wanted
+// back, the minimal fix is an optional `rowClassName?: (row) => string` prop on
+// DataTable — proposed as a fast-follow rather than expanding this batch's
+// shell-only scope into the shared primitive.
+function userCellTone(row: AdminUserRow): string {
+  return row.disabledAt !== null
+    ? "text-[color:var(--color-text-tertiary)]"
+    : "text-navy";
 }
 
-function Row({ row }: { row: AdminUserRow }) {
-  const disabled = row.disabledAt !== null;
-  // Muted styling for disabled rows so the sysadmin sees at a glance
-  // which accounts are blocked. Hairline border + reduced opacity on
-  // text-bearing cells keeps the row legible without making it look
-  // like an error state.
-  const rowTone = disabled
-    ? "cursor-pointer border-b border-[color:var(--color-border-default)] last:border-b-0 bg-stone-100/40 transition-colors duration-[120ms] ease-out hover:bg-ivory"
-    : "cursor-pointer border-b border-[color:var(--color-border-default)] last:border-b-0 transition-colors duration-[120ms] ease-out hover:bg-ivory";
-  const cellTone = disabled ? "text-[color:var(--color-text-tertiary)]" : "text-navy";
-  // Whole-row click target → user detail (Item 2). Mirrors the merchants
-  // list pattern (PR #270 §9.3): HTML can't wrap <tr> in <a>, so each
-  // non-Actions cell's content is a block <Link> to the detail URL;
-  // the Actions cell keeps its own button behaviour (no Link wrap).
-  const detailHref = `/admin/users/${row.userId}`;
+const USER_COLUMNS: ReadonlyArray<DataTableColumn<AdminUserRow>> = [
+  {
+    key: "email",
+    header: "Email",
+    cell: (row) => <span className={userCellTone(row)}>{row.email}</span>,
+    title: (row) => row.email,
+  },
+  {
+    key: "fullName",
+    header: "Full name",
+    cell: (row) =>
+      row.displayName ? (
+        <span className={userCellTone(row)}>{row.displayName}</span>
+      ) : (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+    title: (row) => row.displayName ?? undefined,
+  },
+  {
+    key: "tenant",
+    header: "Tenant",
+    cell: (row) => (
+      <>
+        <span
+          className={`font-b-display font-semibold ${row.disabledAt !== null ? "text-[color:var(--color-text-tertiary)]" : "text-navy"}`}
+        >
+          {row.tenantName}
+        </span>
+        <span className="ml-2 font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
+          {row.tenantSlug}
+        </span>
+      </>
+    ),
+    title: (row) => `${row.tenantName} · ${row.tenantSlug}`,
+  },
+  {
+    key: "role",
+    header: "Role",
+    cell: (row) =>
+      row.roleSlugs.length > 0 ? (
+        <span className={userCellTone(row)}>{row.roleSlugs.map(roleLabel).join(", ")}</span>
+      ) : (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+    title: (row) =>
+      row.roleSlugs.length > 0 ? row.roleSlugs.map(roleLabel).join(", ") : undefined,
+  },
+  {
+    key: "status",
+    header: "Status",
+    cell: (row) => <StatusBadge disabled={row.disabledAt !== null} />,
+  },
+  {
+    key: "created",
+    header: "Created",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (row) => row.createdAt.slice(0, 10),
+  },
+  {
+    key: "actions",
+    header: "Actions",
+    srHeader: true,
+    align: "right",
+    noRowLink: true,
+    cell: (row) => (
+      <div className="inline-flex items-center justify-end gap-2">
+        <UserPasswordResetModal userId={row.userId} email={row.email} />
+        {row.disabledAt !== null ? (
+          <UserEnableButton userId={row.userId} />
+        ) : (
+          <UserDisableModal userId={row.userId} email={row.email} />
+        )}
+      </div>
+    ),
+  },
+];
 
+function AdminUsersTable({ rows }: { rows: readonly AdminUserRow[] }) {
   return (
-    <tr className={rowTone}>
-      <Td>
-        <Link href={detailHref} className={`block ${cellTone}`}>
-          {row.email}
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          {row.displayName ? (
-            <span className={cellTone}>{row.displayName}</span>
-          ) : (
-            <span className="text-[color:var(--color-text-tertiary)]">—</span>
-          )}
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <span className={`font-medium ${disabled ? "text-[color:var(--color-text-tertiary)]" : "text-navy"}`}>
-            {row.tenantName}
-          </span>
-          <span className="ml-2 font-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
-            {row.tenantSlug}
-          </span>
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          {row.roleSlugs.length > 0 ? (
-            <span className={cellTone}>{row.roleSlugs.map(roleLabel).join(", ")}</span>
-          ) : (
-            <span className="text-[color:var(--color-text-tertiary)]">—</span>
-          )}
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <StatusBadge disabled={disabled} />
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {row.createdAt.slice(0, 10)}
-        </Link>
-      </Td>
-      <Td className="text-right">
-        <div className="inline-flex items-center justify-end gap-2">
-          <UserPasswordResetModal userId={row.userId} email={row.email} />
-          {disabled ? (
-            <UserEnableButton userId={row.userId} />
-          ) : (
-            <UserDisableModal userId={row.userId} email={row.email} />
-          )}
-        </div>
-      </Td>
-    </tr>
+    <DataTable
+      columns={USER_COLUMNS}
+      rows={rows}
+      getRowKey={(row) => row.userId}
+      rowHref={(row) => `/admin/users/${row.userId}`}
+      caption="All Planner users across tenants"
+    />
   );
 }
 
@@ -313,18 +326,6 @@ function Pagination({
       </div>
     </nav>
   );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
 // Phase 9 · 3.6 — adopts the shared EmptyState (Gap H); the `filtered` wrapper
