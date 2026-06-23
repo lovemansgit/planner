@@ -19,8 +19,9 @@
 
 import { useActionState, useState } from "react";
 
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
 import { FormError } from "@/components/forms/FormError";
-import { FormField } from "@/components/forms/FormField";
 import { FormSubmitButton } from "@/components/forms/FormSubmitButton";
 
 import {
@@ -132,17 +133,13 @@ function PausePanel({ subscriptionId }: { readonly subscriptionId: string }) {
 
       <form action={formAction} className="mt-4 space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <FormField name="pause_start" label="Pause from" type="date" required />
-          <FormField name="pause_end" label="Pause until" type="date" required />
+          <TextField name="pause_start" label="Pause from" type="date" required />
+          <TextField name="pause_end" label="Pause until" type="date" required />
         </div>
-        <FormField
+        <TextField
           name="reason"
           label="Reason"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           placeholder="Customer travel, kitchen closure, etc."
         />
         <div className="flex items-center justify-end gap-3 pt-2">
@@ -213,5 +210,45 @@ function ResumePanel({ subscriptionId }: { readonly subscriptionId: string }) {
         </FormSubmitButton>
       </form>
     </div>
+  );
+}
+
+interface TextFieldProps {
+  readonly label: string;
+  readonly name: string;
+  readonly type?: string;
+  readonly placeholder?: string;
+  readonly required?: boolean;
+  readonly optional?: boolean;
+  readonly error?: string;
+}
+
+// Composes the shipped <Field> over a native input on the B+ recipe surface —
+// the same form-local helper EditSubscriptionForm uses (a shared TextInput
+// primitive is the documented form-kit follow-up; kept form-local per B4 scope).
+function TextField({
+  label,
+  name,
+  type = "text",
+  placeholder,
+  required,
+  optional,
+  error,
+}: TextFieldProps) {
+  const id = `field-${name}`;
+  const describedBy = error ? `${id}-error` : undefined;
+  return (
+    <Field label={label} htmlFor={id} optional={optional} error={error}>
+      <input
+        id={id}
+        name={name}
+        type={type}
+        placeholder={placeholder}
+        required={required}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={inputClass(Boolean(error))}
+      />
+    </Field>
   );
 }
