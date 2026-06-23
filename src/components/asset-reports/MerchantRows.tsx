@@ -21,9 +21,15 @@ import { ConsigneeRows } from "./ConsigneeRows";
 import { CountCell, ReportHeaderCells } from "./ReportCells";
 import { RefreshButton } from "./RefreshButton";
 import { awbsHref } from "./report-helpers";
-
-const TD = "px-4 py-3 text-sm tabular-nums";
-const TH = "px-4 py-3 text-left text-xs uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]";
+import {
+  REPORT_ROW,
+  REPORT_SUBROW,
+  REPORT_TD,
+  REPORT_TH,
+  TABLE,
+  TABLE_CARD,
+  TABLE_SCROLL,
+} from "./report-table";
 
 export function MerchantRows({
   sections,
@@ -47,26 +53,28 @@ export function MerchantRows({
   }
 
   return (
-    <div className="overflow-x-auto border border-[color:var(--color-border-strong)]">
-      <table className="w-full border-collapse">
-        <thead className="border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)]">
-          <tr>
-            <th className={TH}>Merchant</th>
-            <ReportHeaderCells />
-          </tr>
-        </thead>
-        <tbody>
-          {sections.map((section) => (
-            <MerchantSectionRows
-              key={section.tenantId}
-              section={section}
-              isOpen={open.has(section.tenantId)}
-              onToggle={() => toggle(section.tenantId)}
-              tasksBasePath={tasksBasePath}
-            />
-          ))}
-        </tbody>
-      </table>
+    <div className={TABLE_CARD}>
+      <div className={TABLE_SCROLL}>
+        <table className={TABLE}>
+          <thead>
+            <tr>
+              <th className={REPORT_TH}>Merchant</th>
+              <ReportHeaderCells />
+            </tr>
+          </thead>
+          <tbody>
+            {sections.map((section) => (
+              <MerchantSectionRows
+                key={section.tenantId}
+                section={section}
+                isOpen={open.has(section.tenantId)}
+                onToggle={() => toggle(section.tenantId)}
+                tasksBasePath={tasksBasePath}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -86,8 +94,8 @@ function MerchantSectionRows({
   const rollup = section.rollup;
   return (
     <>
-      <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
-        <td className={`${TD} font-medium`}>
+      <tr className={REPORT_ROW}>
+        <td className={`${REPORT_TD} font-medium`}>
           {/* Refresh sits beside the toggle (a sibling, not nested — it must
               not toggle the section). Scoped to this one merchant, so it
               never fans out across the fleet (the #509 cost guard). */}
@@ -139,7 +147,7 @@ function MerchantSectionRows({
         />
       </tr>
       {isOpen ? (
-        <tr className="border-b border-[color:var(--color-border-default)] bg-[color:var(--color-tint-navy-subtle)] last:border-b-0">
+        <tr className={REPORT_SUBROW}>
           <td colSpan={8} className="px-4 py-4 pl-9">
             {section.consignees.length === 0 ? (
               <p className="text-sm text-[color:var(--color-text-secondary)]">
