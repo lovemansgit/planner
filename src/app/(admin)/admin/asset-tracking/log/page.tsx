@@ -18,6 +18,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { parseAwbsParam } from "@/components/asset-reports/report-helpers";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { getAssetScanLog } from "@/modules/asset-tracking/report-service";
 import type { AssetLogLine } from "@/modules/asset-tracking/report-service";
 import {
@@ -30,14 +31,75 @@ import { buildRequestContext } from "@/shared/request-context";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const TH = "px-4 py-3 text-left text-xs uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]";
-const TD = "px-4 py-3 text-sm";
-
 function formatScanTime(line: AssetLogLine): { time: string; recorded: boolean } {
   const iso = line.vendorScannedAt ?? line.receivedAt;
   const time = new Date(iso).toUTCString().replace("GMT", "UTC");
   return { time, recorded: line.vendorScannedAt === null };
 }
+
+// Phase 10 · Batch B1 — the Asset Log adopts the shared <DataTable> (Gap C, B+
+// skin): floating card, never-wrap eyebrow headers, mono figures, truncation,
+// hover, mobile-overflow containment. Pure presentation — the six columns +
+// order (Scan time · Status · Package · AWB · Scanned by · Merchant), the
+// newest-first order, the "recorded in Planner" timestamp annotation (with its
+// tooltip), and the raw scan-state text are all preserved. The asset scan-state
+// is rendered verbatim (no StatusBadge — task/asset domains are out of the
+// StatusBadge contract and untouched by this batch).
+const ASSET_LOG_COLUMNS: ReadonlyArray<DataTableColumn<AssetLogLine>> = [
+  {
+    key: "scanTime",
+    header: "Scan time",
+    title: (line) => formatScanTime(line).time,
+    cell: (line) => {
+      const { time, recorded } = formatScanTime(line);
+      return (
+        <>
+          <span className="font-b-mono tabular-nums">{time}</span>
+          {recorded ? (
+            <span
+              className="ml-2 text-xs text-[color:var(--color-text-secondary)]"
+              title="SuiteFleet does not provide scanner timestamps yet; this is when Planner recorded the scan."
+            >
+              recorded in Planner
+            </span>
+          ) : null}
+        </>
+      );
+    },
+  },
+  {
+    key: "status",
+    header: "Status",
+    cellClassName: "font-medium",
+    cell: (line) => line.state.replace("_", " "),
+  },
+  {
+    key: "package",
+    header: "Package",
+    mono: true,
+    cell: (line) => line.trackingId,
+    title: (line) => line.trackingId,
+  },
+  {
+    key: "awb",
+    header: "AWB",
+    mono: true,
+    cell: (line) => line.awb,
+    title: (line) => line.awb,
+  },
+  {
+    key: "scannedBy",
+    header: "Scanned by",
+    cell: (line) => line.scannedByName ?? "—",
+    title: (line) => line.scannedByName ?? undefined,
+  },
+  {
+    key: "merchant",
+    header: "Merchant",
+    cell: (line) => line.merchantName,
+    title: (line) => line.merchantName,
+  },
+];
 
 interface AssetLogPageProps {
   readonly searchParams: Promise<{ readonly awbs?: string }>;
@@ -104,48 +166,14 @@ export default async function AssetLogPage({ searchParams }: AssetLogPageProps) 
             </p>
           </section>
         ) : (
-          <div className="overflow-x-auto border border-[color:var(--color-border-strong)]">
-            <table className="w-full border-collapse">
-              <thead className="border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)]">
-                <tr>
-                  <th className={TH}>Scan time</th>
-                  <th className={TH}>Status</th>
-                  <th className={TH}>Package</th>
-                  <th className={TH}>AWB</th>
-                  <th className={TH}>Scanned by</th>
-                  <th className={TH}>Merchant</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((line, i) => {
-                  const { time, recorded } = formatScanTime(line);
-                  return (
-                    <tr
-                      key={`${line.trackingId}-${line.state}-${line.receivedAt}-${i}`}
-                      className="border-b border-[color:var(--color-border-default)] last:border-b-0"
-                    >
-                      <td className={`${TD} tabular-nums`}>
-                        {time}
-                        {recorded ? (
-                          <span
-                            className="ml-2 text-xs text-[color:var(--color-text-secondary)]"
-                            title="SuiteFleet does not provide scanner timestamps yet; this is when Planner recorded the scan."
-                          >
-                            recorded in Planner
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className={`${TD} font-medium`}>{line.state.replace("_", " ")}</td>
-                      <td className={`${TD} tabular-nums`}>{line.trackingId}</td>
-                      <td className={`${TD} tabular-nums`}>{line.awb}</td>
-                      <td className={TD}>{line.scannedByName ?? "—"}</td>
-                      <td className={TD}>{line.merchantName}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={ASSET_LOG_COLUMNS}
+            rows={lines}
+            getRowKey={(line) =>
+              `${line.trackingId}-${line.state}-${line.receivedAt}-${line.vendorScannedAt ?? ""}`
+            }
+            caption="Asset scan log, newest first"
+          />
         )}
       </div>
     </main>
