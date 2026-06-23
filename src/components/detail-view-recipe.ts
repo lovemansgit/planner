@@ -48,3 +48,13 @@ export const FIELD_EMPTY = "text-sm text-[color:var(--color-text-tertiary)]";
 export function fieldValueClass(mono: boolean): string {
   return [FIELD_VALUE, mono ? "font-b-mono tabular-nums" : ""].filter(Boolean).join(" ");
 }
+
+// ── Delivery-window track slot (Phase 11 Batch T) ──────────────────────────
+// The B+ signature motif — the green-on-rail delivery-window bar that leads the
+// /subscriptions list rows — surfaced as a detail-view slot. The track COMPONENT
+// (src/components/DeliveryWindowTrack) is REUSED verbatim, never re-implemented;
+// this is only the slot's wrapper (spacing + a width cap so the day baseline
+// reads as a band, not a full-bleed line). The track self-labels (its own HH:MM
+// caption + role="img" aria-label), so the slot carries no separate eyebrow —
+// avoiding a duplicated "Delivery window" label where one already exists.
+export const DETAIL_TRACK_SLOT = "mt-6 max-w-sm";
