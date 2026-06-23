@@ -1,5 +1,13 @@
 // Item 3 (22 Jun 2026) — read-only admin task detail.
 //
+// Phase 10 · Batch B3 — adopts the shared DetailView (Gap D, B+ skin) for the
+// detail CHROME only: one floating card with a navy structural spine, two-column
+// fill (D3), and the shared FieldRow. TASK BOUNDARY — task status derivation and
+// courier_status logic are untouched: the header pill keeps the exact
+// `courierStatus ?? internalStatus` expression and the Coarse/Courier status
+// rows render the same `internalStatus` / `courierStatus` values; only the
+// presentation shell changes.
+//
 // Reached by clicking a row on /admin/tasks. Cross-tenant single fetch
 // (getAdminTaskById), then resolve the consignee (name) and the owning
 // merchant — the merchant lookup is also Item 1's genuine-tenant gate
@@ -17,6 +25,8 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
+import { FieldRow } from "@/components/FieldRow";
 import { getAdminConsigneeById } from "@/modules/consignees/service";
 import { isGenuineMerchant } from "@/modules/merchants/genuine-merchants";
 import { getMerchantById } from "@/modules/merchants/service";
@@ -81,106 +91,78 @@ export default async function AdminTaskDetailPage({ params }: AdminTaskDetailPag
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-4xl px-12 py-16">
-        <header className="mb-16 flex items-start justify-between gap-12">
-          <div className="flex-1">
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              Transcorp · Admin · Tasks
-            </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">{title}</h1>
-            <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              {merchant.name}{" "}
-              <span className="font-mono text-xs text-[color:var(--color-text-tertiary)]">
-                ({merchant.slug})
-              </span>
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-3">
-            <span className="inline-flex items-center bg-[color:var(--color-tint-navy-subtle)] px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy">
-              {task.courierStatus ?? task.internalStatus}
-            </span>
-            <AdminTaskTimeline
-              consigneeId={task.consigneeId}
-              taskId={task.id}
-              deliveryDate={task.deliveryDate}
-              awb={task.externalTrackingNumber}
+        <DetailView
+          header={
+            <DetailHeader
+              eyebrow="Transcorp · Admin · Tasks"
+              title={title}
+              status={
+                <span className="inline-flex items-center bg-[color:var(--color-tint-navy-subtle)] px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy">
+                  {task.courierStatus ?? task.internalStatus}
+                </span>
+              }
+              actions={
+                <AdminTaskTimeline
+                  consigneeId={task.consigneeId}
+                  taskId={task.id}
+                  deliveryDate={task.deliveryDate}
+                  awb={task.externalTrackingNumber}
+                />
+              }
             />
-          </div>
-        </header>
+          }
+        >
+          <DetailSection label="Delivery">
+            <FieldRow
+              label="Merchant"
+              value={
+                <>
+                  {merchant.name}{" "}
+                  <span className="font-b-mono text-xs text-[color:var(--color-text-tertiary)]">
+                    ({merchant.slug})
+                  </span>
+                </>
+              }
+            />
+            <FieldRow label="Consignee" value={consigneeName} />
+            <FieldRow label="Delivery date" value={task.deliveryDate} mono />
+            <FieldRow
+              label="Window"
+              value={`${task.deliveryStartTime} – ${task.deliveryEndTime}`}
+              mono
+            />
+            <FieldRow label="Coarse status" value={task.internalStatus} />
+            <FieldRow label="Courier status" value={task.courierStatus ?? null} />
+          </DetailSection>
 
-        <Section title="Delivery">
-          <FieldRow label="Consignee" value={consigneeName} />
-          <FieldRow label="Delivery date" value={task.deliveryDate} mono />
-          <FieldRow
-            label="Window"
-            value={`${task.deliveryStartTime} – ${task.deliveryEndTime}`}
-            mono
-          />
-          <FieldRow label="Coarse status" value={task.internalStatus} />
-          <FieldRow label="Courier status" value={task.courierStatus ?? null} />
-        </Section>
+          <DetailSection label="Order">
+            <FieldRow label="AWB / tracking" value={task.externalTrackingNumber} mono />
+            <FieldRow label="Customer order #" value={task.customerOrderNumber} mono />
+            <FieldRow label="Reference #" value={task.referenceNumber} mono />
+            <FieldRow label="Created via" value={task.createdVia} />
+            <FieldRow label="Address label" value={task.addressLabel ?? null} />
+          </DetailSection>
 
-        <Section title="Order">
-          <FieldRow label="AWB / tracking" value={task.externalTrackingNumber} mono />
-          <FieldRow label="Customer order #" value={task.customerOrderNumber} mono />
-          <FieldRow label="Reference #" value={task.referenceNumber} mono />
-          <FieldRow label="Created via" value={task.createdVia} />
-          <FieldRow label="Address label" value={task.addressLabel ?? null} />
-        </Section>
+          <DetailSection label="Meta">
+            <FieldRow
+              label="Pushed to SuiteFleet"
+              value={task.pushedToExternalAt ? task.pushedToExternalAt.slice(0, 10) : null}
+              mono
+            />
+            <FieldRow label="SuiteFleet ID" value={task.externalId} mono />
+            <FieldRow label="Created" value={task.createdAt.slice(0, 10)} mono />
+          </DetailSection>
+        </DetailView>
 
-        <Section title="Meta">
-          <FieldRow
-            label="Pushed to SuiteFleet"
-            value={task.pushedToExternalAt ? task.pushedToExternalAt.slice(0, 10) : null}
-            mono
-          />
-          <FieldRow label="SuiteFleet ID" value={task.externalId} mono />
-          <FieldRow label="Created" value={task.createdAt.slice(0, 10)} mono />
-        </Section>
-
-        <p className="mt-12">
+        <p className="mt-8">
           <Link
             href="/admin/tasks"
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
+            className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)] transition-colors hover:text-navy"
           >
             ← Back to tasks
           </Link>
         </p>
       </div>
     </main>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="mb-12 border-t border-[color:var(--color-border-strong)] pt-8">
-      <p className="mb-6 text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-        {title}
-      </p>
-      <div className="divide-y divide-[color:var(--color-border-default)]">{children}</div>
-    </section>
-  );
-}
-
-function FieldRow({
-  label,
-  value,
-  mono = false,
-}: {
-  readonly label: string;
-  readonly value: string | null;
-  readonly mono?: boolean;
-}) {
-  const isEmpty = value === null || value === undefined || value === "";
-  return (
-    <div className="grid grid-cols-[1fr_2fr] gap-6 py-4">
-      <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-        {label}
-      </p>
-      {isEmpty ? (
-        <p className="text-sm text-[color:var(--color-text-tertiary)]">—</p>
-      ) : (
-        <p className={`text-sm text-navy ${mono ? "font-mono" : ""}`}>{value}</p>
-      )}
-    </div>
   );
 }
