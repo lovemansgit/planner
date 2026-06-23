@@ -2,16 +2,25 @@
 // client-side ConsigneesSearchableTable (whose in-memory filter was
 // replaced by server-side ILIKE search via ?q= URL param).
 //
+// Phase 10 · Batch B2 — adopts the shared <DataTable> (Gap C, B+ skin):
+// a floating warm-white card, never-wrap eyebrow headers, mono phone
+// figures, full-row links to the detail page, and the status-LED gutter
+// lit from CRM tone. The CRM cell adopts the canonical
+// <StatusBadge domain="crm">, retiring the bordered CrmStateBadge variant
+// on the list per #558 Gap B (CHURNED loses its strikethrough by design).
+// Data, column order, the ?q= search contract, and the /consignees/[id]
+// link target are unchanged. The consignee detail page keeps CrmStateBadge
+// (detail pages are out of scope for this batch).
+//
 // Pure render — no client state, no filter logic. The page reads
 // `searchParams.q` and threads it into `listConsignees`; this
 // component receives only the filtered rows.
 
-import Link from "next/link";
-
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { StatusBadge } from "@/components/StatusBadge";
+import { statusMeta } from "@/components/status-badge-recipe";
 import type { Consignee } from "@/modules/consignees";
 import { formatPhone } from "@/shared/humanize";
-
-import { CrmStateBadge } from "../[id]/_components/CrmStateBadge";
 
 type Row = Consignee & { taskCount?: number };
 
@@ -20,59 +29,66 @@ interface Props {
   readonly query: string;
 }
 
+const COLUMNS: ReadonlyArray<DataTableColumn<Row>> = [
+  {
+    key: "name",
+    header: "Name",
+    cell: (c) => (
+      <span className="inline-flex items-center gap-2">
+        <span className="font-b-display font-semibold text-navy">{c.name}</span>
+        {c.taskCount === 0 ? <NoTasksBadge /> : null}
+      </span>
+    ),
+    title: (c) => c.name,
+  },
+  {
+    key: "phone",
+    header: "Phone",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (c) => formatPhone(c.phone),
+  },
+  {
+    key: "emirate",
+    header: "Emirate",
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (c) => c.emirateOrRegion,
+    title: (c) => c.emirateOrRegion,
+  },
+  {
+    key: "crmState",
+    header: "CRM state",
+    cell: (c) => <StatusBadge domain="crm" status={c.crmState} />,
+  },
+  {
+    key: "address",
+    header: "Address",
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (c) => c.addressLine,
+    title: (c) => c.addressLine,
+  },
+];
+
 export function ConsigneesTable({ rows, query }: Props) {
   if (rows.length === 0) {
     return (
       <div className="border-t border-b border-[color:var(--color-border-strong)] py-16 text-center">
         <p className="text-base text-navy">
-          {query.length > 0
-            ? `No consignees match "${query}".`
-            : "No consignees yet."}
+          {query.length > 0 ? `No consignees match "${query}".` : "No consignees yet."}
         </p>
       </div>
     );
   }
 
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Name</Th>
-          <Th>Phone</Th>
-          <Th>Emirate</Th>
-          <Th>CRM state</Th>
-          <Th>Address</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((c) => (
-          <tr
-            key={c.id}
-            className="border-b border-[color:var(--color-border-default)] last:border-b-0 transition-colors hover:bg-ivory"
-          >
-            <Td>
-              <div className="flex items-center gap-2">
-                <Link
-                  href={`/consignees/${c.id}`}
-                  className="rounded-sm text-navy hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-1"
-                >
-                  {c.name}
-                </Link>
-                {c.taskCount === 0 ? <NoTasksBadge /> : null}
-              </div>
-            </Td>
-            <Td className="tabular-nums">{formatPhone(c.phone)}</Td>
-            <Td>{c.emirateOrRegion}</Td>
-            <Td>
-              <CrmStateBadge state={c.crmState} />
-            </Td>
-            <Td className="max-w-xs truncate" title={c.addressLine}>
-              {c.addressLine}
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={COLUMNS}
+      rows={rows}
+      getRowKey={(c) => c.id}
+      rowHref={(c) => `/consignees/${c.id}`}
+      led={(c) => statusMeta("crm", c.crmState)?.tone}
+      caption="Consignees you deliver to"
+    />
   );
 }
 
@@ -93,29 +109,5 @@ function NoTasksBadge() {
     >
       No tasks
     </span>
-  );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  className = "",
-  title,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  title?: string;
-}) {
-  return (
-    <td className={`py-4 align-top ${className}`} title={title}>
-      {children}
-    </td>
   );
 }
