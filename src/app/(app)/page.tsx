@@ -7,6 +7,13 @@
 // the home page.
 //
 // Brand: matches /admin/webhook-config and /admin/failed-pushes.
+//
+// Phase 10 · Batch B2 — B+ reskin: the permission-gated shortcut cards adopt the
+// Direction B+ floating-card surface (warm-white --color-b-card + --shadow-b-card
+// + display headings). Presentation only — still NO service-layer fetches; the
+// data-light "workflow shortcut, not metrics dashboard" posture is deliberately
+// preserved (there is no big-number hero strip / metric data here to convert to
+// MetricCards without breaking that posture).
 
 import { randomUUID } from "node:crypto";
 
@@ -60,7 +67,7 @@ export default async function LandingPage() {
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Subscription planner
           </p>
-          <h1 className="mt-3 text-5xl font-bold tracking-tighter">Welcome back</h1>
+          <h1 className="mt-3 font-b-display text-5xl font-bold tracking-tighter">Welcome back</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Signed in as {greeting}.
           </p>
@@ -74,12 +81,12 @@ export default async function LandingPage() {
               <Link
                 key={card.path}
                 href={card.path}
-                className="block border border-[color:var(--color-border-strong)] p-8 transition-colors duration-150 hover:border-t-green"
+                className="group block rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-[var(--shadow-b-card)] outline-none ring-1 ring-transparent transition duration-150 hover:-translate-y-0.5 hover:ring-[color:var(--color-b-focus-ring)] focus-visible:ring-[color:var(--color-b-focus-ring)]"
               >
                 <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
                   Shortcut
                 </p>
-                <h2 className="mt-3 text-2xl font-semibold tracking-tight">{card.label}</h2>
+                <h2 className="mt-3 font-b-display text-2xl font-semibold tracking-tight">{card.label}</h2>
                 <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
                   {card.description}
                 </p>
