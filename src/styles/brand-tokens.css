@@ -20,7 +20,20 @@
    * use the navy hex as RGB constituents. */
   --color-navy: #252d60;
   --color-green: #3e7c4b;
-  --color-surface-primary: #faf8f4;
+
+  /* PAGE-FIELD surface — Phase 10 white-dominant pass (brief v1.34 §3.3.11).
+   * Was Snow White cream #faf8f4; lifted to a warm near-white so WHITE
+   * dominates the page field (Love's standard — cream read dull next to
+   * /welcome's white). This is the single global lever: every page paints
+   * its field with `bg-surface-primary`/`bg-paper`, so the value cascades
+   * app-wide (incl. /login, outside the route groups). It stays FAINTLY
+   * WARM (R>G>B) and uniformly darker than --color-b-card (#fffdf8) on R/G
+   * so the Phase-9 B+ floating cards + --shadow-b-card still read as
+   * floating — never go stark #fff (the warm card would go dingy). Cream's
+   * warm identity now lives in the framing tokens (ivory / stone-200 /
+   * navy-alpha borders), not the field. Snow White #FAF8F4 is retained as
+   * the warm brand reference; navy/green/amber/red/status/LED unchanged. */
+  --color-surface-primary: #fcfbf8;
   --color-surface-secondary: #f2eee6;
 
   /* Accent palette */
@@ -70,7 +83,7 @@
    * ------------------------------------------------------------------- */
   --color-navy-rgb: 37 45 96;
   --color-green-rgb: 62 124 75;
-  --color-surface-primary-rgb: 250 248 244;
+  --color-surface-primary-rgb: 252 251 248;   /* Phase 10 white-dominant — was 250 248 244 */
   --color-surface-secondary-rgb: 242 238 230;
   --color-amber-rgb: 232 163 60;
   --color-red-rgb: 217 58 43;
@@ -79,7 +92,7 @@
   --color-amber-300-rgb: 241 191 107;
   --color-amber-600-rgb: 201 135 38;
   --color-amber-deep-rgb: 142 90 20;
-  --color-paper-rgb: 250 248 244;
+  --color-paper-rgb: 252 251 248;             /* Phase 10 white-dominant — was 250 248 244 */
   --color-ivory-rgb: 242 238 230;
   --color-stone-200-rgb: 211 206 194;
   --color-stone-600-rgb: 78 74 66;
@@ -96,9 +109,9 @@
   --color-amber-600: #C98726;  /* Hover / accent on light */
   --color-amber-deep: #8E5A14; /* Amber-on-light text */
 
-  /* Neutral palette (brief v1.4 §3.3.11) */
-  --color-paper: #FAF8F4;       /* Default page (alias of surface-primary) */
-  --color-ivory: #F2EEE6;       /* Surface / cards */
+  /* Neutral palette (brief v1.4 §3.3.11; page field Phase 10 / v1.34) */
+  --color-paper: #FCFBF8;       /* Default page (alias of surface-primary) — white-dominant, was #FAF8F4 */
+  --color-ivory: #F2EEE6;       /* Surface / cards / warm framing */
   --color-stone-200: #D3CEC2;   /* Dividers, hairline borders */
   --color-stone-600: #4E4A42;   /* Secondary text, muted state styling */
   --color-ink: #141414;         /* Body copy */

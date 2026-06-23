@@ -68,11 +68,15 @@ export default async function AdminLayout({
 
   const items = visibleAdminNavItems(permissions);
 
+  // Phase 10 — white-dominant pass. Mirrors (app)/layout.tsx: the admin
+  // route group owns its page field centrally via a single min-h-screen
+  // bg-paper backdrop behind the nav + children. Per-page `<main>`s paint
+  // the identical bg-surface-primary on top (seamless, no extra scroll).
   return (
-    <>
+    <div className="min-h-screen bg-paper text-navy font-sans">
       <AdminTopNav items={items} userIdentity={userIdentity} />
       {children}
-    </>
+    </div>
   );
 }
 
