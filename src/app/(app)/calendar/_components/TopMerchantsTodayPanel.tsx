@@ -7,9 +7,11 @@
 // /admin/tasks list filters by merchantSlug per
 // src/modules/tasks/service.ts:listAllTasks).
 //
-// Brand-canon: hairline border-stone-200, no shadow, navy table
-// header, stone-100 zebra rows, sentence case, tabular-nums on the
-// count column.
+// Brand-canon (Phase 10 · B5 — B+): a floating warm-white card
+// (`--color-b-card` + `--shadow-b-card`) hairlined with
+// `--color-border-default`, sentence-case header, mono tabular figures
+// on the rank + count columns. Layout (paddings, row structure, drill
+// links) is unchanged — chrome only.
 
 import Link from "next/link";
 
@@ -23,9 +25,9 @@ export function TopMerchantsTodayPanel({ merchants }: TopMerchantsTodayPanelProp
   return (
     <section
       aria-label="Top merchants today"
-      className="mt-12 border border-stone-200 bg-paper"
+      className="mt-12 overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]"
     >
-      <header className="border-b border-stone-200 bg-surface-primary px-4 py-3">
+      <header className="border-b border-[color:var(--color-border-default)] px-4 py-3">
         <h2 className="text-xs font-medium uppercase tracking-[0.14em] text-navy">
           Top merchants today
         </h2>
@@ -38,7 +40,7 @@ export function TopMerchantsTodayPanel({ merchants }: TopMerchantsTodayPanelProp
           No deliveries scheduled across any merchant today.
         </p>
       ) : (
-        <ol className="divide-y divide-stone-200">
+        <ol className="divide-y divide-[color:var(--color-border-default)]">
           {merchants.map((merchant, idx) => (
             <li key={merchant.tenantId}>
               <Link
@@ -46,12 +48,12 @@ export function TopMerchantsTodayPanel({ merchants }: TopMerchantsTodayPanelProp
                 className="flex items-center justify-between gap-4 px-4 py-3 transition-colors duration-[120ms] ease-out hover:bg-stone-100"
               >
                 <div className="flex items-center gap-4">
-                  <span className="font-display text-sm tabular-nums text-[color:var(--color-text-tertiary)]">
+                  <span className="font-b-mono text-sm tabular-nums text-[color:var(--color-text-tertiary)]">
                     {String(idx + 1).padStart(2, "0")}
                   </span>
                   <span className="text-sm text-navy">{merchant.tenantName}</span>
                 </div>
-                <span className="font-display text-base font-semibold tabular-nums text-navy">
+                <span className="font-b-mono text-base font-semibold tabular-nums text-navy">
                   {merchant.taskCount}
                 </span>
               </Link>
