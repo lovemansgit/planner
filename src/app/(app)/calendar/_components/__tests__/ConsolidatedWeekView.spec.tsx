@@ -78,7 +78,7 @@ describe("ConsolidatedWeekView — day cell rendering", () => {
         formatWeekdayLabel: formatLabel,
       }),
     );
-    expect(html).toMatch(/font-display[^"]*">5</);
+    expect(html).toMatch(/font-b-mono[^"]*">5</);
   });
 
   it("does NOT render any task-preview rows (Day-23n removed)", () => {

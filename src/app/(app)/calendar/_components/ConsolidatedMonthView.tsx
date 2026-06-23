@@ -7,7 +7,7 @@
 //
 // Each cell renders:
 //   - Date number (DD)
-//   - Aggregate task count (font-display tabular-nums) when total > 0
+//   - Aggregate task count (font-b-mono tabular-nums) when total > 0
 //   - HIGH_RISK marker when any task on that day is for a HIGH_RISK
 //     consignee
 //   - Click-through link to /calendar?view=day&date=<iso>, preserving
@@ -23,6 +23,12 @@
 // Weekday headers (Mon..Sun) render once above the grid. No nav inside
 // the component — month nav lives in the page header alongside the
 // view toggle (mirroring the WeekAnchorNav pattern).
+//
+// Phase 10 · Batch B5 — B+ chrome: the weekday-header strip + month grid
+// share one floating warm-white card (--color-b-card cells, --shadow-b-card,
+// hairline --color-border-default gaps/ring); count figures in font-b-mono.
+// Today tint, out-of-month dimming, drill links, and every date/derivation
+// are unchanged — chrome only.
 
 import Link from "next/link";
 
@@ -49,13 +55,16 @@ export function ConsolidatedMonthView({
 }: ConsolidatedMonthViewProps) {
   const monthIndex = parseMonthIndex(monthAnchor);
   return (
-    <div data-month-anchor={monthAnchor}>
+    <div
+      data-month-anchor={monthAnchor}
+      className="overflow-hidden rounded-2xl bg-[color:var(--color-border-default)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]"
+    >
       <div
         aria-hidden="true"
-        className="mb-px grid grid-cols-7 gap-px bg-stone-200 text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]"
+        className="mb-px grid grid-cols-7 gap-px text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]"
       >
         {WEEKDAY_HEADERS.map((label) => (
-          <div key={label} className="bg-surface-primary px-3 py-2">
+          <div key={label} className="bg-[color:var(--color-b-card)] px-3 py-2">
             {label}
           </div>
         ))}
@@ -63,7 +72,7 @@ export function ConsolidatedMonthView({
       <div
         role="grid"
         aria-label={`Month grid anchored at ${monthAnchor}`}
-        className="grid grid-cols-7 gap-px overflow-hidden border border-stone-200 bg-stone-200"
+        className="grid grid-cols-7 gap-px"
       >
         {days.map((day) => (
           <MonthCell
@@ -92,7 +101,7 @@ function MonthCell({ day, isToday, isInMonth, preservedQuery }: MonthCellProps) 
   const dayNumber = day.date.slice(8, 10);
   const backdrop = isToday
     ? "bg-[color:var(--color-tint-navy-subtle)]"
-    : "bg-paper";
+    : "bg-[color:var(--color-b-card)]";
   const numberTone = isInMonth
     ? "text-navy"
     : "text-[color:var(--color-text-tertiary)]";
@@ -122,7 +131,7 @@ function MonthCell({ day, isToday, isInMonth, preservedQuery }: MonthCellProps) 
       </header>
       <div className="px-3 pb-2">
         {day.total > 0 ? (
-          <p className={`font-display text-xl font-semibold tabular-nums leading-none ${totalTone}`}>
+          <p className={`font-b-mono text-xl font-semibold tabular-nums leading-none ${totalTone}`}>
             {day.total}
           </p>
         ) : null}

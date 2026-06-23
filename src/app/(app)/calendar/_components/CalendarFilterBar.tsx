@@ -24,6 +24,12 @@
 // filters)` exposed for spec coverage per the codebase's
 // no-render-test convention. The fn is the single source of truth
 // for the filter URL shape.
+//
+// Phase 10 · Batch B5 — B+ chrome: the bar is a floating warm-white card
+// (--color-b-card + --shadow-b-card + --color-border-default ring); the
+// search input + selects adopt the B+ control look (border-default
+// hairline, recessed surface, green focus-visible ring). The debounce,
+// URL-write, and filter logic are unchanged — chrome only.
 
 "use client";
 
@@ -118,14 +124,14 @@ export function CalendarFilterBar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-y border-stone-200 bg-surface-primary px-4 py-3">
+    <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-[color:var(--color-b-card)] px-4 py-3 shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
       <input
         type="search"
         value={q}
         onChange={onSearchChange}
         placeholder="Search consignee name or phone"
         aria-label="Search consignee name or phone"
-        className="min-w-[220px] flex-1 rounded-sm border border-stone-200 bg-paper px-3 py-1.5 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] focus:border-navy focus:outline-none transition-colors duration-[120ms] ease-out"
+        className="min-w-[220px] flex-1 rounded-[10px] border border-[color:var(--color-border-default)] bg-surface-primary px-3 py-1.5 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-b-focus-ring)]"
       />
       <FilterSelect
         ariaLabel="CRM state"
@@ -172,7 +178,7 @@ function FilterSelect({
       aria-label={ariaLabel}
       value={value}
       onChange={onChange}
-      className="rounded-sm border border-stone-200 bg-paper px-2 py-1.5 text-sm text-navy focus:border-navy focus:outline-none transition-colors duration-[120ms] ease-out"
+      className="rounded-[10px] border border-[color:var(--color-border-default)] bg-surface-primary px-2 py-1.5 text-sm text-navy transition-colors duration-[120ms] ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-b-focus-ring)]"
     >
       <option value="">{placeholder}</option>
       {options.map((opt) => (
