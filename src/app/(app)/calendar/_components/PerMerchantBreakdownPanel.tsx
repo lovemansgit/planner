@@ -15,10 +15,15 @@
 // inspection. The whole row is a single click target — bar segments
 // are visual only, not separately interactive.
 //
-// Brand-canon: hairline stone-200 borders, no shadow, navy/stone
-// tones, sentence case. Pure component — `computeMerchantBarSegments`
-// is exported below for spec coverage per the codebase's no-render
-// convention.
+// Brand-canon (Phase 10 · B5 — B+): a floating warm-white card
+// (`--color-b-card` + `--shadow-b-card`) hairlined with
+// `--color-border-default`, sentence case, mono tabular total. The bar
+// segments keep their navy/stone value-ramp encoding and the failed
+// badge keeps its red tone — these are the chart's own legend, not task
+// status colours, so they are intentionally not re-derived. Layout and
+// the `computeMerchantBarSegments` derivation are unchanged — chrome
+// only. Pure component — `computeMerchantBarSegments` is exported below
+// for spec coverage per the codebase's no-render convention.
 
 import Link from "next/link";
 
@@ -109,9 +114,9 @@ export function PerMerchantBreakdownPanel({ rows }: PerMerchantBreakdownPanelPro
   return (
     <section
       aria-label="Per-merchant breakdown"
-      className="mt-8 border border-stone-200 bg-paper"
+      className="mt-8 overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]"
     >
-      <header className="border-b border-stone-200 bg-surface-primary px-4 py-3">
+      <header className="border-b border-[color:var(--color-border-default)] px-4 py-3">
         <h2 className="text-xs font-medium uppercase tracking-[0.14em] text-navy">
           Per-merchant breakdown
         </h2>
@@ -125,7 +130,7 @@ export function PerMerchantBreakdownPanel({ rows }: PerMerchantBreakdownPanelPro
           No active merchants configured.
         </p>
       ) : (
-        <ul role="list" className="divide-y divide-stone-200">
+        <ul role="list" className="divide-y divide-[color:var(--color-border-default)]">
           {segments.map((seg) => (
             <li key={seg.tenantId}>
               <BarRow segment={seg} />
@@ -205,7 +210,7 @@ function BarRow({ segment }: { readonly segment: MerchantBarSegment }) {
             }}
           />
         </div>
-        <span className="w-12 shrink-0 text-right text-sm tabular-nums text-navy">
+        <span className="w-12 shrink-0 text-right font-b-mono text-sm tabular-nums text-navy">
           {segment.totalToday}
         </span>
         {segment.failedLast7Days > 0 ? (
