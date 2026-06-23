@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phase 9 · Login reskin — Direction B+ (rev 2)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* ============================================================
+     PHASE 9 · LOGIN RESKIN — DIRECTION B+ (rev 2, per Love)
+     A pure visual reskin of the existing /login. rev-2 changes:
+       · RESTORE the live co-equal split (form left, real cooler-bag
+         photo right) — not a centred card.
+       · Use the REAL logo (public/brand/transcorp-logo.svg).
+       · WHITE-DOMINANT: the form panel is clean white; cream is a thin
+         connective frame only (the spine + hairlines), never a field.
+     No auth-logic change: the form, server action, error/pending
+     states, and ?next= behaviour are untouched.
+     LOCKED — navy #252d60, green #3e7c4b.
+     ============================================================ */
+  :root{
+    --navy:#252d60; --green:#3e7c4b;
+    --white:#ffffff;          /* dominant surface */
+    --paper:#faf8f4;          /* page field — subtle warm, used sparingly */
+    --cream:#efeae0;          /* thin connective framing ONLY */
+    --ink:#23262f;
+    --line:rgba(37,45,96,.10);
+    --line-strong:rgba(37,45,96,.18);
+    --t2:rgba(37,45,96,.62); --t3:rgba(37,45,96,.44);
+    --shadow:0 1px 2px rgba(37,45,96,.05), 0 18px 48px -24px rgba(37,45,96,.34);
+    --c-risk:#c0392b; --c-risk-bg:#f8e3df; --c-risk-ink:#9a2b1e;
+    --display:'Bricolage Grotesque',system-ui,sans-serif;
+    --body:'Hanken Grotesk',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--body);background:var(--paper);color:var(--ink);font-size:14.5px;line-height:1.55;-webkit-font-smoothing:antialiased}
+
+  .devbar{background:var(--navy);color:#fff;font-family:var(--mono);font-size:11px;letter-spacing:.04em;padding:7px 16px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .devbar b{color:#9fd3ab;font-weight:600}
+  .devbar span{opacity:.82}
+
+  .page{max-width:1120px;margin:0 auto;padding:34px 24px 72px}
+  .caption{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);margin:30px 0 14px}
+
+  /* ============================================================
+     THE LOGIN — the live full-bleed split, reskinned to B+.
+     White form panel (dominant), real cooler-bag photo panel.
+     A 3px navy spine at the far edge is the only structural accent;
+     a hairline cream frame is the thin connective tissue.
+     ============================================================ */
+  .split{display:grid;grid-template-columns:1fr 1fr;background:var(--white);border:1px solid var(--cream);border-radius:18px;overflow:hidden;box-shadow:var(--shadow);position:relative;min-height:600px}
+  .split::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy);z-index:3}
+
+  .form-panel{background:var(--white);display:flex;flex-direction:column;justify-content:center;padding:56px 58px}
+  .form-col{width:100%;max-width:360px;margin:0 auto}
+  .brand-logo{height:44px;width:auto;margin-bottom:38px;display:block}
+  .form-panel .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--t3)}
+  .form-panel h1{font-family:var(--display);font-weight:700;font-size:33px;letter-spacing:-.02em;color:var(--navy);margin:9px 0 8px}
+  .form-panel .lede{color:var(--t2);font-size:14.5px;margin-bottom:30px}
+
+  .field{margin-bottom:16px}
+  .field label{display:block;font-size:13px;color:var(--t2);font-weight:500;margin-bottom:6px}
+  .field input{width:100%;height:44px;padding:0 13px;border-radius:10px;border:1px solid var(--line-strong);background:var(--white);font-family:var(--body);font-size:14.5px;color:var(--ink);transition:border-color .14s,box-shadow .14s}
+  .field input::placeholder{color:var(--t3)}
+  .field input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px rgba(62,124,75,.18)}
+
+  .btn{font-family:var(--body);font-weight:600;font-size:15px;height:46px;padding:0 24px;border-radius:10px;border:1px solid transparent;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .14s,box-shadow .14s,transform .05s;width:100%}
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(62,124,75,.32)}
+  .btn-primary{background:var(--green);color:#fff;box-shadow:0 1px 2px rgba(37,45,96,.12)}
+  .btn-primary:hover{background:#356b41;box-shadow:0 3px 10px -3px rgba(62,124,75,.55)}
+  .btn[disabled]{opacity:.55;cursor:not-allowed;pointer-events:none;box-shadow:none}
+  .spin{width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .submit-wrap{margin-top:24px}
+
+  .alert{display:flex;gap:9px;align-items:flex-start;background:var(--c-risk-bg);color:var(--c-risk-ink);border-radius:10px;padding:11px 13px;font-size:13px;margin-bottom:4px}
+  .alert .dot{width:7px;height:7px;border-radius:99px;background:var(--c-risk);flex:none;margin-top:6px}
+  .footnote{margin-top:22px;font-size:12px;color:var(--t3)}
+
+  /* photo panel — the real cooler-bag image, co-equal */
+  .photo-panel{position:relative;background:var(--cream)}
+  .photo-panel img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center}
+
+  /* state gallery — compact white panels */
+  .states{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;align-items:start}
+  .mini{background:var(--white);border:1px solid var(--cream);border-radius:14px;box-shadow:var(--shadow);position:relative;overflow:hidden;padding:26px 26px 28px}
+  .mini::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--navy)}
+  .mini .st{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--green);font-weight:600;margin-bottom:15px}
+  .mini img.brand-logo{height:34px;margin-bottom:20px}
+  .mini .field{margin-bottom:12px}
+  .mini .field input{height:40px}
+
+  .note{font-size:12.5px;color:var(--t3);margin-top:34px;line-height:1.7;border-top:1px solid var(--line);padding-top:16px}
+  .note b{color:var(--green);font-weight:600}
+
+  @media (max-width:760px){
+    .split{grid-template-columns:1fr;min-height:0}
+    .photo-panel{display:none}
+    .form-panel{padding:44px 30px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+  <div class="devbar">
+    <b>INTERNAL MOCKUP · rev 2</b>
+    <span>Phase 9 · login reskin → B+ · live split restored · real assets · white-dominant</span>
+    <span>pure visual · not a live route · for Love</span>
+  </div>
+
+  <div class="page">
+
+    <div class="caption">The reskinned login — the live split, B+ (default state)</div>
+    <div class="split">
+      <div class="form-panel">
+        <div class="form-col">
+          <img class="brand-logo" src="../../../public/brand/transcorp-logo.svg" alt="Transcorp" />
+          <div class="eyebrow">Subscription Planner</div>
+          <h1>Log in</h1>
+          <p class="lede">Enter your operator credentials to continue.</p>
+          <div class="field">
+            <label for="e1">Email</label>
+            <input id="e1" type="email" placeholder="you@yourkitchen.ae" autocomplete="email" />
+          </div>
+          <div class="field">
+            <label for="p1">Password</label>
+            <input id="p1" type="password" placeholder="••••••••" autocomplete="current-password" />
+          </div>
+          <div class="submit-wrap">
+            <button class="btn btn-primary">Log in to Transcorp Planner</button>
+          </div>
+          <p class="footnote">Operator access is provisioned by Transcorp.</p>
+        </div>
+      </div>
+      <div class="photo-panel">
+        <img src="../../../public/login-hero-cooler-bag.jpg" alt="" aria-hidden="true" />
+      </div>
+    </div>
+
+    <div class="caption">The two behavioural states, reskinned (logic unchanged)</div>
+    <div class="states">
+      <div class="mini">
+        <div class="st">Failed sign-in</div>
+        <img class="brand-logo" src="../../../public/brand/transcorp-logo.svg" alt="Transcorp" />
+        <div class="field"><label>Email</label><input type="email" value="ops@grovekitchen.ae" /></div>
+        <div class="field"><label>Password</label><input type="password" value="••••••••" /></div>
+        <div class="alert"><span class="dot"></span><span>Those credentials didn't match. Check your email and password and try again.</span></div>
+        <div class="submit-wrap"><button class="btn btn-primary">Log in to Transcorp Planner</button></div>
+      </div>
+      <div class="mini">
+        <div class="st">Signing in</div>
+        <img class="brand-logo" src="../../../public/brand/transcorp-logo.svg" alt="Transcorp" />
+        <div class="field"><label>Email</label><input type="email" value="ops@grovekitchen.ae" /></div>
+        <div class="field"><label>Password</label><input type="password" value="••••••••" /></div>
+        <div class="submit-wrap"><button class="btn btn-primary" disabled><span class="spin"></span>Signing in…</button></div>
+      </div>
+    </div>
+
+    <p class="note">
+      <b>rev 2, per Love:</b> the live full-bleed split is kept — clean <b>white</b> form panel on the left, the real <b>cooler-bag photo</b> co-equal on the right, the real <b>Transcorp logo</b> lockup (no drawn box). White dominates; cream is only the thin frame and the navy spine. B+ identity comes from the Bricolage heading, the mono eyebrow, sentence-case labels (D2), and the single green primary action.
+      <br /><br />
+      <b>Unchanged:</b> the email/password fields, the <code>loginAction</code> server action, the <code>user.login_succeeded</code> / <code>user.login_failed</code> audit events, the <code>?next=</code> redirect, and the error/pending states. Pure brand-pass.
+    </p>
+  </div>
+</body>
+</html>
