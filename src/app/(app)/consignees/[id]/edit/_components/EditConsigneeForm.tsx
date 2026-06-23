@@ -3,15 +3,23 @@
 // Single-page edit form for non-address consignee scalar fields.
 // Address editing deferred to Phase 2 per
 // memory/followup_multi_address_rotation_phase_2.md.
+//
+// Phase 10 · Batch B4 — fields migrate off forms/FormField onto the shipped
+// Field kit: the local TextField composes <Field> (sentence-case label + the
+// "Optional" eyebrow + help/error a11y) over a native input on the recipe
+// surface (inputClass). FormError + FormSubmitButton are unchanged (out of the
+// field/select scope). Pure presentation — names, defaults, hints, error
+// branches, and the bound action are all preserved.
 
 "use client";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, type InputHTMLAttributes } from "react";
 
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
 import { FormError } from "@/components/forms/FormError";
-import { FormField } from "@/components/forms/FormField";
 import { FormSubmitButton } from "@/components/forms/FormSubmitButton";
 
 import {
@@ -66,7 +74,7 @@ export function EditConsigneeForm({
       <FormError message={formError} className="mb-6" />
 
       <form action={formAction} className="space-y-6">
-        <FormField
+        <TextField
           name="name"
           label="Full name"
           required
@@ -74,7 +82,7 @@ export function EditConsigneeForm({
           error={fieldErrors.name}
           autoComplete="name"
         />
-        <FormField
+        <TextField
           name="phone"
           label="Primary phone"
           hint="E.164 format (country code prefix, no spaces)."
@@ -84,48 +92,32 @@ export function EditConsigneeForm({
           inputMode="tel"
           autoComplete="tel"
         />
-        <FormField
+        <TextField
           name="email"
           label="Email"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           type="email"
           defaultValue={defaults.email ?? ""}
           error={fieldErrors.email}
           autoComplete="email"
         />
-        <FormField
+        <TextField
           name="delivery_notes"
           label="Delivery notes"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           hint="Visible to drivers."
           defaultValue={defaults.deliveryNotes ?? ""}
         />
-        <FormField
+        <TextField
           name="external_ref"
           label="Merchant internal reference"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           defaultValue={defaults.externalRef ?? ""}
         />
-        <FormField
+        <TextField
           name="notes_internal"
           label="Internal notes"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           hint="Operator-only context. Not visible to drivers."
           defaultValue={defaults.notesInternal ?? ""}
         />
@@ -143,5 +135,53 @@ export function EditConsigneeForm({
         </div>
       </form>
     </>
+  );
+}
+
+interface TextFieldProps {
+  readonly label: string;
+  readonly name: string;
+  readonly type?: string;
+  readonly defaultValue?: string;
+  readonly hint?: string;
+  readonly error?: string;
+  readonly required?: boolean;
+  readonly optional?: boolean;
+  readonly autoComplete?: string;
+  readonly inputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
+}
+
+// Composes the shipped <Field> wrapper over a native input on the B+ recipe
+// surface (input-only, matching the FormField it replaces). A shared TextInput
+// primitive is the documented form-kit follow-up; kept form-local per B4 scope.
+function TextField({
+  label,
+  name,
+  type = "text",
+  defaultValue,
+  hint,
+  error,
+  required,
+  optional,
+  autoComplete,
+  inputMode,
+}: TextFieldProps) {
+  const id = `field-${name}`;
+  const describedBy = error ? `${id}-error` : hint ? `${id}-help` : undefined;
+  return (
+    <Field label={label} htmlFor={id} optional={optional} help={hint} error={error}>
+      <input
+        id={id}
+        name={name}
+        type={type}
+        defaultValue={defaultValue}
+        required={required}
+        autoComplete={autoComplete}
+        inputMode={inputMode}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={inputClass(Boolean(error))}
+      />
+    </Field>
   );
 }

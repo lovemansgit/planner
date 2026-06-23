@@ -10,6 +10,12 @@
 // Subscription creation moves to its own surface — the operator clicks
 // the Create-subscription CTA on the Overview-tab empty state after
 // consignee creation.
+//
+// Phase 10 · Batch B4 — fields adopt the shipped Field/Select kit: the local
+// TextField composes <Field> (sentence-case label + help/error a11y) over a
+// native control on the recipe surface (inputClass/textareaClass), and the
+// address-label <select> becomes <Select>. Pure presentation — every name,
+// hint, required flag, option, error branch, and the action wiring is preserved.
 
 "use client";
 
@@ -18,6 +24,9 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
 import { Button } from "@/components/Button";
+import { Field } from "@/components/Field";
+import { inputClass, textareaClass } from "@/components/form-field-recipe";
+import { Select } from "@/components/Select";
 
 import { createConsigneeAction, type CreateConsigneeActionResult } from "../_actions";
 
@@ -64,7 +73,7 @@ export function CreateConsigneeForm() {
             Identity
           </legend>
 
-          <Field
+          <TextField
             label="Full name"
             name="name"
             placeholder="Fatima Al Mansouri"
@@ -72,7 +81,7 @@ export function CreateConsigneeForm() {
             required
           />
 
-          <Field
+          <TextField
             label="Primary phone"
             name="phone"
             placeholder="+971501234567"
@@ -81,7 +90,7 @@ export function CreateConsigneeForm() {
             required
           />
 
-          <Field
+          <TextField
             label="Email"
             name="email"
             type="email"
@@ -89,7 +98,7 @@ export function CreateConsigneeForm() {
             error={fieldErrors.email}
           />
 
-          <Field
+          <TextField
             label="Delivery notes"
             name="delivery_notes"
             placeholder="Gate code 4221; leave at door if absent"
@@ -97,14 +106,14 @@ export function CreateConsigneeForm() {
             multiline
           />
 
-          <Field
+          <TextField
             label="Merchant internal reference"
             name="external_ref"
             placeholder="MPL-A1029"
             hint="Optional. Cross-reference to the merchant's own customer ID."
           />
 
-          <Field
+          <TextField
             label="Internal notes"
             name="notes_internal"
             hint="Operator-only. Not visible to drivers."
@@ -120,32 +129,27 @@ export function CreateConsigneeForm() {
             Single primary address for v1. Add more from the consignee detail page after onboarding.
           </p>
 
-          <div>
-            <label
-              htmlFor="consignee-address_label"
-              className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-            >
-              Address label
-            </label>
-            <select
+          <Field
+            label="Address label"
+            htmlFor="consignee-address_label"
+            error={fieldErrors.address_label}
+          >
+            <Select
               id="consignee-address_label"
               name="address_label"
               defaultValue="home"
-              aria-invalid={fieldErrors.address_label ? "true" : undefined}
-              className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+              invalid={Boolean(fieldErrors.address_label)}
+              aria-describedby={
+                fieldErrors.address_label ? "consignee-address_label-error" : undefined
+              }
             >
               <option value="home">Home</option>
               <option value="office">Office</option>
               <option value="other">Other</option>
-            </select>
-            {fieldErrors.address_label ? (
-              <p role="alert" className="mt-1 text-xs text-red">
-                {fieldErrors.address_label}
-              </p>
-            ) : null}
-          </div>
+            </Select>
+          </Field>
 
-          <Field
+          <TextField
             label="Address line"
             name="address_line"
             placeholder="Villa 14, Street 22, Jumeirah"
@@ -153,7 +157,7 @@ export function CreateConsigneeForm() {
             required
           />
 
-          <Field
+          <TextField
             label="District / area"
             name="address_district"
             placeholder="Jumeirah 1"
@@ -161,7 +165,7 @@ export function CreateConsigneeForm() {
             required
           />
 
-          <Field
+          <TextField
             label="Emirate"
             name="address_emirate"
             placeholder="Dubai"
@@ -186,7 +190,7 @@ export function CreateConsigneeForm() {
   );
 }
 
-interface FieldProps {
+interface TextFieldProps {
   readonly label: string;
   readonly name: string;
   readonly type?: string;
@@ -197,7 +201,10 @@ interface FieldProps {
   readonly multiline?: boolean;
 }
 
-function Field({
+// Composes the shipped <Field> wrapper over a native control on the B+ recipe
+// surface. A shared TextInput primitive is the documented form-kit follow-up;
+// kept form-local here per Batch B4 scope (no new kit components).
+function TextField({
   label,
   name,
   type = "text",
@@ -206,18 +213,11 @@ function Field({
   error,
   required,
   multiline,
-}: FieldProps) {
+}: TextFieldProps) {
   const id = `consignee-${name}`;
-  const baseClass =
-    "w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] focus:border-navy focus:outline-none aria-[invalid=true]:border-red";
+  const describedBy = error ? `${id}-error` : hint ? `${id}-help` : undefined;
   return (
-    <div>
-      <label
-        htmlFor={id}
-        className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-      >
-        {label}
-      </label>
+    <Field label={label} htmlFor={id} help={hint} error={error}>
       {multiline ? (
         <textarea
           id={id}
@@ -225,9 +225,9 @@ function Field({
           placeholder={placeholder}
           required={required}
           rows={3}
-          aria-invalid={error ? "true" : undefined}
-          aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
-          className={baseClass}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+          className={textareaClass(Boolean(error))}
         />
       ) : (
         <input
@@ -236,21 +236,11 @@ function Field({
           type={type}
           placeholder={placeholder}
           required={required}
-          aria-invalid={error ? "true" : undefined}
-          aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
-          className={baseClass}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+          className={inputClass(Boolean(error))}
         />
       )}
-      {hint && !error ? (
-        <p id={`${id}-hint`} className="mt-1 text-xs text-[color:var(--color-text-tertiary)]">
-          {hint}
-        </p>
-      ) : null}
-      {error ? (
-        <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red">
-          {error}
-        </p>
-      ) : null}
-    </div>
+    </Field>
   );
 }
