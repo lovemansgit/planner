@@ -24,7 +24,12 @@
 
 import Image from "next/image";
 
-import { Button } from "@/components/Button";
+// Static server component → link CTAs use the shared B+ button classes
+// (bButtonClass — the same recipe <Button> composes) on plain <a>. The
+// <Button> component is client-interactive (it always wires an onClick on its
+// <Link>), so it cannot be prerendered from a server component; bButtonClass
+// gives byte-identical styling with no client boundary.
+import { bButtonClass } from "@/components/button-recipe";
 
 export const metadata = {
   title: "Transcorp Planner — one sale, months of deliveries",
@@ -88,14 +93,14 @@ export default function WelcomePage() {
             className="h-[30px] w-auto"
           />
           <div className="flex items-center gap-2.5">
-            <Button href="/login" variant="secondary">
+            <a href="/login" className={bButtonClass("secondary", "md")}>
               Log in to Transcorp Planner
-            </Button>
+            </a>
             {/* Request access = lead-capture / contact (NOT self-serve signup);
                 destination TBD pending Love — placeholder anchor for now. */}
-            <Button href="#request-access" variant="primary">
+            <a href="#request-access" className={bButtonClass("primary", "md")}>
               Request access
-            </Button>
+            </a>
           </div>
         </nav>
       </header>
@@ -116,12 +121,12 @@ export default function WelcomePage() {
               Your subscriptions don&apos;t fit in a spreadsheet. Put them somewhere that thinks in months, not days.
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-3">
-              <Button href="#request-access" variant="primary" size="lg">
+              <a href="#request-access" className={bButtonClass("primary", "lg")}>
                 Request access
-              </Button>
-              <Button href="/login" variant="secondary" size="lg">
+              </a>
+              <a href="/login" className={bButtonClass("secondary", "lg")}>
                 Log in to Transcorp Planner
-              </Button>
+              </a>
             </div>
             <p className="mt-4 flex items-center gap-2 text-[12.5px] text-[color:var(--color-text-tertiary)]">
               <span className="h-1.5 w-1.5 flex-none rounded-full bg-green" />
@@ -461,12 +466,12 @@ export default function WelcomePage() {
               <div className="mt-7 flex flex-wrap items-center justify-between gap-4">
                 <span className="font-b-display text-[22px] font-bold tracking-[-0.01em] text-navy">Sell the plan. Let it run.</span>
                 <div className="flex flex-wrap gap-3">
-                  <Button href="#request-access" variant="primary" size="lg">
+                  <a href="#request-access" className={bButtonClass("primary", "lg")}>
                     Request access
-                  </Button>
-                  <Button href="/login" variant="secondary" size="lg">
+                  </a>
+                  <a href="/login" className={bButtonClass("secondary", "lg")}>
                     Log in
-                  </Button>
+                  </a>
                 </div>
               </div>
             </div>
