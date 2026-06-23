@@ -10,8 +10,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
 import { FormError } from "@/components/forms/FormError";
-import { FormField } from "@/components/forms/FormField";
 import { FormSubmitButton } from "@/components/forms/FormSubmitButton";
 import { TimeWindowPicker } from "@/components/forms/TimeWindowPicker";
 import { WeekdaySelector, type Weekday } from "@/components/forms/WeekdaySelector";
@@ -80,7 +81,7 @@ export function EditSubscriptionForm({
 
       <form action={formAction} className="space-y-6">
         <div className="grid gap-6 sm:grid-cols-2">
-          <FormField
+          <TextField
             name="start_date"
             label="Start date"
             type="date"
@@ -88,14 +89,10 @@ export function EditSubscriptionForm({
             defaultValue={defaults.startDate}
             error={fieldErrors.start_date}
           />
-          <FormField
+          <TextField
             name="end_date"
             label="End date"
-            labelTrailing={
-              <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                Optional
-              </span>
-            }
+            optional
             type="date"
             defaultValue={defaults.endDate ?? ""}
             error={fieldErrors.end_date}
@@ -119,34 +116,22 @@ export function EditSubscriptionForm({
           required
         />
 
-        <FormField
+        <TextField
           name="meal_plan_name"
           label="Plan name"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           defaultValue={defaults.mealPlanName ?? ""}
         />
-        <FormField
+        <TextField
           name="external_ref"
           label="Plan reference"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           defaultValue={defaults.externalRef ?? ""}
         />
-        <FormField
+        <TextField
           name="notes_internal"
           label="Internal notes"
-          labelTrailing={
-            <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-              Optional
-            </span>
-          }
+          optional
           defaultValue={defaults.notesInternal ?? ""}
         />
 
@@ -163,5 +148,45 @@ export function EditSubscriptionForm({
         </div>
       </form>
     </>
+  );
+}
+
+interface TextFieldProps {
+  readonly label: string;
+  readonly name: string;
+  readonly type?: string;
+  readonly defaultValue?: string;
+  readonly error?: string;
+  readonly required?: boolean;
+  readonly optional?: boolean;
+}
+
+// Composes the shipped <Field> over a native input on the B+ recipe surface
+// (input-only, matching the FormField it replaces). A shared TextInput primitive
+// is the deferred form-kit follow-up; kept form-local per B4 scope.
+function TextField({
+  label,
+  name,
+  type = "text",
+  defaultValue,
+  error,
+  required,
+  optional,
+}: TextFieldProps) {
+  const id = `field-${name}`;
+  const describedBy = error ? `${id}-error` : undefined;
+  return (
+    <Field label={label} htmlFor={id} optional={optional} error={error}>
+      <input
+        id={id}
+        name={name}
+        type={type}
+        defaultValue={defaultValue}
+        required={required}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={inputClass(Boolean(error))}
+      />
+    </Field>
   );
 }

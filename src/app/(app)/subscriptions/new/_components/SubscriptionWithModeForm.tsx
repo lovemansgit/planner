@@ -22,8 +22,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useMemo, useState } from "react";
 
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
 import { FormError } from "@/components/forms/FormError";
-import { FormField } from "@/components/forms/FormField";
 import { FormSubmitButton } from "@/components/forms/FormSubmitButton";
 import { TimeWindowPicker } from "@/components/forms/TimeWindowPicker";
 import {
@@ -31,6 +32,7 @@ import {
   weekdaysToIsoOrdinals,
   type Weekday,
 } from "@/components/forms/WeekdaySelector";
+import { Select } from "@/components/Select";
 
 import {
   createSubscriptionFormAction,
@@ -146,20 +148,14 @@ export function SubscriptionWithModeForm({
         ) : null}
 
         {/* Consignee picker — both modes */}
-        <div>
-          <label
-            htmlFor="consignee_id"
-            className="mb-1 block text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]"
-          >
-            Consignee
-          </label>
-          <select
+        <Field label="Consignee" htmlFor="consignee_id" error={fieldErrors.consignee_id}>
+          <Select
             id="consignee_id"
             name="consignee_id"
             required
             defaultValue={preselectedConsigneeId ?? ""}
-            aria-invalid={fieldErrors.consignee_id ? "true" : undefined}
-            className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy transition-colors duration-[120ms] ease-out focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+            invalid={Boolean(fieldErrors.consignee_id)}
+            aria-describedby={fieldErrors.consignee_id ? "consignee_id-error" : undefined}
           >
             <option value="" disabled>
               Pick a consignee
@@ -169,13 +165,8 @@ export function SubscriptionWithModeForm({
                 {c.name}
               </option>
             ))}
-          </select>
-          {fieldErrors.consignee_id ? (
-            <p role="alert" className="mt-1 text-xs text-red">
-              {fieldErrors.consignee_id}
-            </p>
-          ) : null}
-        </div>
+          </Select>
+        </Field>
 
         {/* Subscription mode — cadence + dates + window + plan */}
         {mode === "subscription" ? (
@@ -240,7 +231,7 @@ export function SubscriptionWithModeForm({
                 Window
               </legend>
               <div className="grid gap-6 sm:grid-cols-2">
-                <FormField
+                <TextField
                   name="start_date"
                   label="Start date"
                   type="date"
@@ -248,14 +239,10 @@ export function SubscriptionWithModeForm({
                   defaultValue={startDate}
                   error={fieldErrors.start_date}
                 />
-                <FormField
+                <TextField
                   name="end_date"
                   label="End date"
-                  labelTrailing={
-                    <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                      Optional
-                    </span>
-                  }
+                  optional
                   type="date"
                   hint="Leave empty for an open-ended subscription."
                   defaultValue={endDate}
@@ -283,35 +270,19 @@ export function SubscriptionWithModeForm({
               <legend className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
                 Plan details
               </legend>
-              <FormField
+              <TextField
                 name="meal_plan_name"
                 label="Plan name"
-                labelTrailing={
-                  <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                    Optional
-                  </span>
-                }
+                optional
                 placeholder="Vegetarian breakfast"
               />
-              <FormField
+              <TextField
                 name="external_ref"
                 label="Plan reference"
-                labelTrailing={
-                  <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                    Optional
-                  </span>
-                }
+                optional
                 placeholder="PLAN-2026-Q2"
               />
-              <FormField
-                name="notes_internal"
-                label="Internal notes"
-                labelTrailing={
-                  <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                    Optional
-                  </span>
-                }
-              />
+              <TextField name="notes_internal" label="Internal notes" optional />
             </fieldset>
           </>
         ) : null}
@@ -335,7 +306,7 @@ export function SubscriptionWithModeForm({
               </label>
 
               <div className="grid gap-6 sm:grid-cols-2">
-                <FormField
+                <TextField
                   name="start_date"
                   label={isRange ? "From" : "Delivery date"}
                   type="date"
@@ -344,7 +315,7 @@ export function SubscriptionWithModeForm({
                   error={fieldErrors.start_date}
                 />
                 {isRange ? (
-                  <FormField
+                  <TextField
                     name="end_date"
                     label="Until"
                     type="date"
@@ -374,24 +345,16 @@ export function SubscriptionWithModeForm({
               <legend className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-secondary)]">
                 Order details
               </legend>
-              <FormField
+              <TextField
                 name="customer_order_number"
                 label="Customer order number prefix"
-                labelTrailing={
-                  <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                    Optional
-                  </span>
-                }
+                optional
                 hint="Auto-generated if left empty (AD-HOC-{date}-{uuid8})."
               />
-              <FormField
+              <TextField
                 name="notes"
                 label="Notes"
-                labelTrailing={
-                  <span className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                    Optional
-                  </span>
-                }
+                optional
                 placeholder="Driver-visible note attached to the task"
               />
             </fieldset>
@@ -422,6 +385,52 @@ export function SubscriptionWithModeForm({
         </div>
       </form>
     </>
+  );
+}
+
+interface TextFieldProps {
+  readonly label: string;
+  readonly name: string;
+  readonly type?: string;
+  readonly placeholder?: string;
+  readonly hint?: string;
+  readonly error?: string;
+  readonly required?: boolean;
+  readonly optional?: boolean;
+  readonly defaultValue?: string;
+}
+
+// Composes the shipped <Field> over a native input on the B+ recipe surface
+// (input-only, matching the FormField it replaces — the date inputs keep their
+// type so the DateChangeListener still mirrors them). A shared TextInput
+// primitive is the deferred form-kit follow-up; kept form-local per B4 scope.
+function TextField({
+  label,
+  name,
+  type = "text",
+  placeholder,
+  hint,
+  error,
+  required,
+  optional,
+  defaultValue,
+}: TextFieldProps) {
+  const id = `field-${name}`;
+  const describedBy = error ? `${id}-error` : hint ? `${id}-help` : undefined;
+  return (
+    <Field label={label} htmlFor={id} optional={optional} help={hint} error={error}>
+      <input
+        id={id}
+        name={name}
+        type={type}
+        placeholder={placeholder}
+        required={required}
+        defaultValue={defaultValue}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={inputClass(Boolean(error))}
+      />
+    </Field>
   );
 }
 
