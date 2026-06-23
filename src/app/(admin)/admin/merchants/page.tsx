@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
@@ -129,75 +130,78 @@ export default async function MerchantsAdminPage({
   );
 }
 
+// Phase 10 · Batch B1 — the admin merchants list adopts the shared <DataTable>
+// (Gap C, B+ skin): floating card, never-wrap eyebrow headers, mono figures,
+// truncation, hover, mobile-overflow containment. Pure presentation — columns,
+// order, the whole-row detail link (PR #270 §9.3), the local status badge
+// (statusBadgeSurface), and the Actions cell (MerchantStatusModal / "—" / no
+// row-link) are all preserved. No LED status-spine: TenantStatus has no
+// canonical StatusBadge tone-domain, so the existing local badge stays as-is.
+const MERCHANT_COLUMNS: ReadonlyArray<DataTableColumn<Merchant>> = [
+  {
+    key: "name",
+    header: "Name",
+    cellClassName: "font-b-display font-semibold text-navy",
+    cell: (m) => m.name,
+    title: (m) => m.name,
+  },
+  {
+    key: "slug",
+    header: "Slug",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (m) => m.slug,
+    title: (m) => m.slug,
+  },
+  {
+    key: "status",
+    header: "Status",
+    cell: (m) => {
+      const badge = statusBadgeSurface(m.status);
+      return (
+        <span
+          className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
+        >
+          {badge.label}
+        </span>
+      );
+    },
+  },
+  {
+    key: "created",
+    header: "Created",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (m) => formatCreatedAt(m.createdAt),
+  },
+  {
+    key: "actions",
+    header: "Actions",
+    noRowLink: true,
+    cell: (m) => {
+      const action = statusAction(m.status);
+      return action === null ? (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ) : (
+        <MerchantStatusModal
+          tenantId={m.tenantId}
+          merchantName={m.name}
+          variant={action}
+        />
+      );
+    },
+  },
+];
+
 function MerchantsTable({ rows }: { rows: readonly Merchant[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Name</Th>
-          <Th>Slug</Th>
-          <Th>Status</Th>
-          <Th>Created</Th>
-          <Th>Actions</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((m) => (
-          <Row key={m.tenantId} merchant={m} />
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Row({ merchant }: { merchant: Merchant }) {
-  const badge = statusBadgeSurface(merchant.status);
-  const action = statusAction(merchant.status);
-  const detailHref = `/admin/merchants/${merchant.tenantId}`;
-  // Whole-row click target per PR #270 §9.3 ruling. HTML doesn't allow
-  // <a> to wrap <tr>; we instead wrap each non-Actions cell's content
-  // in a <Link> pointing at the detail URL, and apply row-level hover
-  // tint + cursor:pointer. Operator gets a single whole-row click
-  // affordance; middle-click new-tab works on any cell; Actions cell
-  // preserves its own button behavior (no Link wrap there).
-  return (
-    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
-      <Td>
-        <Link href={detailHref} className="block font-medium text-navy">
-          {merchant.name}
-        </Link>
-      </Td>
-      <Td className="font-mono text-xs tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {merchant.slug}
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <span
-            className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
-          >
-            {badge.label}
-          </span>
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {formatCreatedAt(merchant.createdAt)}
-        </Link>
-      </Td>
-      <Td>
-        {action === null ? (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        ) : (
-          <MerchantStatusModal
-            tenantId={merchant.tenantId}
-            merchantName={merchant.name}
-            variant={action}
-          />
-        )}
-      </Td>
-    </tr>
+    <DataTable
+      columns={MERCHANT_COLUMNS}
+      rows={rows}
+      getRowKey={(m) => m.tenantId}
+      rowHref={(m) => `/admin/merchants/${m.tenantId}`}
+      caption="Genuine merchants on the platform"
+    />
   );
 }
 
@@ -209,18 +213,6 @@ function Row({ merchant }: { merchant: Merchant }) {
  */
 function formatCreatedAt(iso: string): string {
   return iso.slice(0, 10);
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
 function EmptyState({ filtered }: { readonly filtered: boolean }) {

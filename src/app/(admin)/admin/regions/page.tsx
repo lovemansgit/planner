@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { listRegionsWithUsage, type RegionWithUsage } from "@/modules/credentials";
 import {
   ForbiddenError,
@@ -92,102 +93,103 @@ export default async function RegionsAdminPage() {
   );
 }
 
+// Phase 10 · Batch B1 — the admin SuiteFleet-regions list adopts the shared
+// <DataTable> (Gap C, B+ skin): floating card, never-wrap eyebrow headers, mono
+// figures, truncation, hover, mobile-overflow containment. Pure presentation —
+// the seven columns + order, the static display_name ASC sort, the whole-row
+// detail link, both local badges (authMethodBadge, regionStatusBadge), and the
+// Actions cell (RegionDeactivateModal when active / "—" / no row-link) are all
+// preserved. No LED status-spine: region status/auth have no canonical
+// StatusBadge tone-domain, so the existing local badges stay as-is.
+const REGION_COLUMNS: ReadonlyArray<DataTableColumn<RegionWithUsage>> = [
+  {
+    key: "displayName",
+    header: "Display name",
+    cellClassName: "font-b-display font-semibold text-navy",
+    cell: (r) => r.displayName,
+    title: (r) => r.displayName,
+  },
+  {
+    key: "clientId",
+    header: "Client ID",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (r) => r.clientId,
+    title: (r) => r.clientId,
+  },
+  {
+    key: "authMethod",
+    header: "Auth method",
+    cell: (r) => {
+      const auth = authMethodBadge(r.authMethod);
+      return (
+        <span
+          className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${auth.className}`}
+        >
+          {auth.label}
+        </span>
+      );
+    },
+  },
+  {
+    key: "status",
+    header: "Status",
+    cell: (r) => {
+      const status = regionStatusBadge(r.status);
+      return (
+        <span
+          className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${status.className}`}
+        >
+          {status.label}
+        </span>
+      );
+    },
+  },
+  {
+    key: "inUse",
+    header: "In use",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (r) => r.inUseCount,
+  },
+  {
+    key: "created",
+    header: "Created",
+    mono: true,
+    cellClassName: "text-[color:var(--color-text-secondary)]",
+    cell: (r) => formatCreatedAt(r.createdAt),
+  },
+  {
+    key: "actions",
+    header: "Actions",
+    noRowLink: true,
+    cell: (r) =>
+      r.status === "active" ? (
+        <RegionDeactivateModal
+          regionId={r.id}
+          regionDisplayName={r.displayName}
+          inUseCount={r.inUseCount}
+        />
+      ) : (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+  },
+];
+
 function RegionsTable({ rows }: { rows: readonly RegionWithUsage[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-[color:var(--color-border-strong)]">
-          <Th>Display name</Th>
-          <Th>Client ID</Th>
-          <Th>Auth method</Th>
-          <Th>Status</Th>
-          <Th>In use</Th>
-          <Th>Created</Th>
-          <Th>Actions</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <Row key={r.id} region={r} />
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function Row({ region }: { region: RegionWithUsage }) {
-  const status = regionStatusBadge(region.status);
-  const auth = authMethodBadge(region.authMethod);
-  const detailHref = `/admin/regions/${region.id}`;
-  return (
-    <tr className="cursor-pointer border-b border-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out last:border-b-0 hover:bg-ivory">
-      <Td>
-        <Link href={detailHref} className="block font-medium text-navy">
-          {region.displayName}
-        </Link>
-      </Td>
-      <Td className="font-mono text-xs tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {region.clientId}
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <span
-            className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${auth.className}`}
-          >
-            {auth.label}
-          </span>
-        </Link>
-      </Td>
-      <Td>
-        <Link href={detailHref} className="block">
-          <span
-            className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${status.className}`}
-          >
-            {status.label}
-          </span>
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {region.inUseCount}
-        </Link>
-      </Td>
-      <Td className="tabular-nums text-[color:var(--color-text-secondary)]">
-        <Link href={detailHref} className="block">
-          {formatCreatedAt(region.createdAt)}
-        </Link>
-      </Td>
-      <Td>
-        {region.status === "active" ? (
-          <RegionDeactivateModal
-            regionId={region.id}
-            regionDisplayName={region.displayName}
-            inUseCount={region.inUseCount}
-          />
-        ) : (
-          <span className="text-[color:var(--color-text-tertiary)]">—</span>
-        )}
-      </Td>
-    </tr>
+    <DataTable
+      columns={REGION_COLUMNS}
+      rows={rows}
+      getRowKey={(r) => r.id}
+      rowHref={(r) => `/admin/regions/${r.id}`}
+      caption="SuiteFleet regions"
+    />
   );
 }
 
 function formatCreatedAt(iso: string): string {
   return iso.slice(0, 10);
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="py-4 text-left text-xs font-medium uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]">
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`py-4 align-middle ${className}`}>{children}</td>;
 }
 
 function EmptyState() {
