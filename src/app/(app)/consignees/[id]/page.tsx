@@ -55,6 +55,8 @@ import type { Task } from "@/modules/tasks/types";
 import { parseCourierStatusParam } from "@/app/(app)/tasks/status";
 import { listFailedPushTaskIdsForTenant } from "@/modules/failed-pushes";
 
+import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
+import { FieldRow } from "@/components/FieldRow";
 import { Toast } from "@/components/Toast";
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { formatPhone } from "@/shared/humanize";
@@ -344,73 +346,78 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
           ← Consignees
         </Link>
 
-        <header
-          className={
-            consignee.crmState === "HIGH_RISK"
-              ? "mt-6 border-b border-stone-200 bg-red/[0.04] pb-8"
-              : "mt-6 border-b border-stone-200 pb-8"
-          }
-        >
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-                Consignee
-              </p>
-              <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight text-navy">
-                {consignee.name}
-              </h1>
-              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-[color:var(--color-text-secondary)]">
-                <span className="tabular-nums">{formatPhone(consignee.phone)}</span>
-                {consignee.email ? (
-                  <>
-                    <span className="text-[color:var(--color-text-tertiary)]">·</span>
-                    <span>{consignee.email}</span>
-                  </>
-                ) : null}
-                <span className="text-[color:var(--color-text-tertiary)]">·</span>
-                <span>{consignee.emirateOrRegion}</span>
-              </div>
-              <p className="mt-4 max-w-prose text-sm text-[color:var(--color-text-secondary)]">
-                {consignee.addressLine}
-              </p>
-            </div>
-            <div className="flex flex-col items-start gap-3 sm:items-end">
-              <CrmStateBadge state={consignee.crmState} size="lg" />
-              {canChangeState ? (
-                <CrmStateModal consigneeId={consignee.id} currentState={consignee.crmState} canChurn={canChurn} />
-              ) : null}
-              {canEditConsignee || canCreateSubscription || canAddAdHocTask ? (
-                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                  {canEditConsignee ? (
-                    <Link
-                      href={`/consignees/${consignee.id}/edit`}
-                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-                    >
-                      Edit
-                    </Link>
-                  ) : null}
-                  {canCreateSubscription ? (
-                    <Link
-                      href={`/subscriptions/new?consigneeId=${consignee.id}`}
-                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-                    >
-                      New subscription
-                    </Link>
-                  ) : null}
-                  {canAddAdHocTask ? (
-                    <AdHocTaskDialog
-                      consigneeId={consignee.id}
-                      addresses={overviewAddresses.map((a) => ({
-                        id: a.id,
-                        label: `${a.label} — ${a.line}`,
-                      }))}
-                    />
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </header>
+        {/* Phase 10 · Batch B3 — the identity header + contact detail adopt the
+            shared DetailView (Gap D, B+ skin): a floating card with a navy
+            structural spine, the CrmStateBadge in the header status slot, the
+            per-consignee actions in the actions slot, and the contact/location
+            fields as two-column FieldRows (moved up from the Overview tab so
+            contact stays visible across tabs). The HIGH_RISK cue is carried by
+            the CrmStateBadge; the former 4%-opacity red header tint is dropped.
+            Tabs, Subscription/Calendar/History, and the Addresses book are
+            untouched. */}
+        <div className="mt-6">
+          <DetailView
+            header={
+              <DetailHeader
+                eyebrow="Consignee"
+                title={consignee.name}
+                status={<CrmStateBadge state={consignee.crmState} size="lg" />}
+                actions={
+                  canChangeState ||
+                  canEditConsignee ||
+                  canCreateSubscription ||
+                  canAddAdHocTask ? (
+                    <>
+                      {canChangeState ? (
+                        <CrmStateModal
+                          consigneeId={consignee.id}
+                          currentState={consignee.crmState}
+                          canChurn={canChurn}
+                        />
+                      ) : null}
+                      {canEditConsignee ? (
+                        <Link
+                          href={`/consignees/${consignee.id}/edit`}
+                          className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                        >
+                          Edit
+                        </Link>
+                      ) : null}
+                      {canCreateSubscription ? (
+                        <Link
+                          href={`/subscriptions/new?consigneeId=${consignee.id}`}
+                          className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                        >
+                          New subscription
+                        </Link>
+                      ) : null}
+                      {canAddAdHocTask ? (
+                        <AdHocTaskDialog
+                          consigneeId={consignee.id}
+                          addresses={overviewAddresses.map((a) => ({
+                            id: a.id,
+                            label: `${a.label} — ${a.line}`,
+                          }))}
+                        />
+                      ) : null}
+                    </>
+                  ) : undefined
+                }
+              />
+            }
+          >
+            <DetailSection label="Contact">
+              <FieldRow label="Name" value={consignee.name} />
+              <FieldRow label="Phone" value={formatPhone(consignee.phone)} mono />
+              <FieldRow label="Email" value={consignee.email} />
+            </DetailSection>
+            <DetailSection label="Location">
+              <FieldRow label="District" value={consignee.district} />
+              <FieldRow label="Emirate / region" value={consignee.emirateOrRegion} />
+              <FieldRow label="Address" value={consignee.addressLine} />
+            </DetailSection>
+          </DetailView>
+        </div>
 
         <Tabs activeTab={activeTab} consigneeId={consignee.id} />
 
@@ -585,40 +592,6 @@ function OverviewTab({
           Current state:{" "}
           <span className="font-medium">{CRM_STATE_LABELS[consignee.crmState]}</span>.
         </p>
-      </section>
-
-      <section>
-        <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
-          Contact
-        </p>
-        <dl className="mt-2 grid grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="text-[color:var(--color-text-secondary)]">Name</dt>
-            <dd className="mt-0.5 text-navy">{consignee.name}</dd>
-          </div>
-          <div>
-            <dt className="text-[color:var(--color-text-secondary)]">Phone</dt>
-            <dd className="mt-0.5 tabular-nums text-navy">{formatPhone(consignee.phone)}</dd>
-          </div>
-          {consignee.email ? (
-            <div>
-              <dt className="text-[color:var(--color-text-secondary)]">Email</dt>
-              <dd className="mt-0.5 text-navy">{consignee.email}</dd>
-            </div>
-          ) : null}
-          <div>
-            <dt className="text-[color:var(--color-text-secondary)]">District</dt>
-            <dd className="mt-0.5 text-navy">{consignee.district}</dd>
-          </div>
-          <div>
-            <dt className="text-[color:var(--color-text-secondary)]">Emirate</dt>
-            <dd className="mt-0.5 text-navy">{consignee.emirateOrRegion}</dd>
-          </div>
-          <div className="sm:col-span-2">
-            <dt className="text-[color:var(--color-text-secondary)]">Address</dt>
-            <dd className="mt-0.5 max-w-prose text-navy">{consignee.addressLine}</dd>
-          </div>
-        </dl>
       </section>
 
       <section>
