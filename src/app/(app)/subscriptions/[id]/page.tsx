@@ -26,10 +26,13 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
+import { FieldRow } from "@/components/FieldRow";
+import { StatusBadge } from "@/components/StatusBadge";
 import { getConsignee } from "@/modules/consignees";
 import { requirePermission } from "@/modules/identity";
 import { getRecentExceptionsForSubscription } from "@/modules/subscription-exceptions";
-import { getSubscription } from "@/modules/subscriptions";
+import { getSubscription, type Subscription } from "@/modules/subscriptions";
 import { getTasksForSubscription } from "@/modules/tasks";
 import { ForbiddenError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
@@ -37,7 +40,6 @@ import type { Permission, Uuid } from "@/shared/types";
 
 import { PauseResumeActions } from "./edit/_components/PauseResumeActions";
 import { RecentExceptions } from "./_components/RecentExceptions";
-import { SubscriptionDetailHeader } from "./_components/SubscriptionDetailHeader";
 import { SubscriptionRuleSummary } from "./_components/SubscriptionRuleSummary";
 import { SubscriptionTasksList } from "./_components/SubscriptionTasksList";
 
@@ -94,23 +96,47 @@ export default async function SubscriptionDetailPage({ params }: PageProps) {
         </Link>
 
         <div className="mt-6">
-          <SubscriptionDetailHeader
-            subscription={subscription}
-            consigneeName={consignee.name}
-            consigneeId={consignee.id}
-          />
+          <DetailView
+            header={
+              <DetailHeader
+                eyebrow="Subscription"
+                title={subscription.mealPlanName ?? "Unnamed plan"}
+                status={
+                  <StatusBadge domain="subscription" status={subscription.status} size="lg" />
+                }
+                actions={
+                  canEdit ? (
+                    <Link
+                      href={`/subscriptions/${subscription.id}/edit`}
+                      className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                    >
+                      Edit
+                    </Link>
+                  ) : undefined
+                }
+              />
+            }
+          >
+            <DetailSection label="Recipient">
+              <FieldRow
+                label="Consignee"
+                value={
+                  <Link
+                    href={`/consignees/${consignee.id}`}
+                    className="text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+                  >
+                    {consignee.name}
+                  </Link>
+                }
+              />
+            </DetailSection>
+            <DetailSection label="Term">
+              <FieldRow label="Start" value={subscription.startDate} mono />
+              <FieldRow label="End" value={subscription.endDate ?? "Open-ended"} mono />
+              <FieldRow label="Days remaining" value={daysRemainingLabel(subscription)} mono />
+            </DetailSection>
+          </DetailView>
         </div>
-
-        {canEdit ? (
-          <div className="mt-6 flex justify-end">
-            <Link
-              href={`/subscriptions/${subscription.id}/edit`}
-              className="inline-flex items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-            >
-              Edit
-            </Link>
-          </div>
-        ) : null}
 
         <SubscriptionRuleSummary
           subscription={subscription}
@@ -156,4 +182,22 @@ async function tryBuildContext(
     }
     throw err;
   }
+}
+
+/**
+ * Days-remaining label for the subscription term. Open-ended → "—",
+ * past end → "Ended", otherwise the day count. UTC ISO date math (kept
+ * local to the page rather than coupling to the shared
+ * SubscriptionDetailHeader, which the consignee Subscription tab also uses).
+ */
+function daysRemainingLabel(sub: Subscription): string {
+  if (sub.endDate === null) return "—";
+  const today = new Date();
+  const todayIso = today.toISOString().slice(0, 10);
+  if (sub.endDate < todayIso) return "Ended";
+  const startMs = Date.parse(`${todayIso}T00:00:00Z`);
+  const endMs = Date.parse(`${sub.endDate}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return "—";
+  const days = Math.round((endMs - startMs) / 86_400_000);
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
