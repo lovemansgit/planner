@@ -1,43 +1,38 @@
-# Phase 9 · Login reskin — Direction B+ (mockup)
+# Phase 9 · Login reskin — Direction B+ (mockup, rev 2)
 
-**Lane:** design follow-on of B+ (docs + standalone mockup only). **Status:** mockup for Love's ruling on look. **Code:** blocked until the B+ component stack (3.3–3.6) fully resolves on `main`; this file has no code dependency.
-
-**Method:** the `frontend-design` skill, in *execution* mode — the direction is pinned (B+), so this is "build to the locked skin", not exploration.
+**Lane:** design follow-on of B+ (docs + standalone mockup only). **Status:** mockup for Love's eye; the login *code* is being built to this rev. **Method:** `frontend-design` skill, execution mode (the direction is pinned).
 
 ## What this is
 
-A **pure visual reskin** of the existing login at [`src/app/login/`](../../../src/app/login/) to the locked B+ skin. View it:
+A **pure visual reskin** of the existing login at [`src/app/login/`](../../../src/app/login/) to the locked B+ skin.
+
+View it (serve from the repo root so the real `public/` assets resolve):
 
 ```
-cd memory/plans/day-58-login-reskin
+# from the repo root of this branch:
 python3 -m http.server 8813
-# open http://localhost:8813/login-reskin.html
+# open http://localhost:8813/memory/plans/day-58-login-reskin/login-reskin.html
 ```
 
-`login-reskin.html` shows the reskinned login in its default state, plus the two behavioural states (failed sign-in, signing-in) reskinned so the full surface is legible.
+`login-reskin.html` shows the reskinned login (default) plus the failed-sign-in and signing-in states.
 
-## The reskin, in one move
+## rev 2 — per Love's feedback
 
-The current login is editorial — uppercase tracked labels, underline inputs, an outlined navy submit button, a full-bleed cooler-bag photo split. B+ resolves it to **calm**: a single floating warm-white card with the 3 px navy spine on the cream field, Bricolage Grotesque heading, a mono eyebrow, **sentence-case labels (D2)**, warm rounded inputs with a green focus ring, and the **one green primary action** — `Log in to Transcorp Planner` — drawn on the shipped unified `<Button>`.
+- **Live split restored.** The full-bleed split is kept — a clean **white** form panel on the left, the **real cooler-bag photo** (`public/login-hero-cooler-bag.jpg`) co-equal on the right. Not a centred card (rev-1's centred card is retired).
+- **Real logo.** The actual `public/brand/transcorp-logo.svg` lockup — no drawn box.
+- **White-dominant.** White carries the form panel; cream is only the thin frame + the 3px navy spine. Premium, clean.
+- B+ identity = Bricolage display heading, mono eyebrow, sentence-case labels (D2), the single green primary `Log in to Transcorp Planner` on the shipped unified `<Button>`.
 
-The card deliberately echoes the marketing landing page's hero so the public site and the app read as **one continuous thing** (the login is the bridge between them).
+## Boundaries (no new scope)
 
-## Boundaries honoured (no new scope)
+- **No auth-logic change.** The email/password fields, the `loginAction` server action, the `user.login_succeeded` / `user.login_failed` audit events, the `?next=` redirect/sanitiser, and the error + pending states are untouched. Brand-pass, not a flow redesign.
+- **Locked palette only** — navy `#252d60`, green `#3e7c4b`; no new brand hex. (White is a surface, per Love's standing white-dominant preference, not a palette change.)
+- Adds **no** marketing copy/claims — only the button verb and D2 label casing change.
 
-- **No auth-logic change.** The email/password fields, the `loginAction` server action, the `user.login_succeeded` / `user.login_failed` audit events, the `?next=` redirect/sanitiser, and the error + pending states are all untouched. This is a brand-pass, not a flow redesign.
-- **Locked palette only** — navy `#252d60`, green `#3e7c4b`, cream field `#efeae0`; no new hex.
-- **No new copy that carries marketing claims.** The only label changes are the button verb (`Log in to Transcorp Planner`) and switching the section labels to sentence case per D2. The lede keeps the existing operator-voice line. (`Operator access is provisioned by Transcorp.` is a one-line, factual footnote consistent with the brief's onboarded-by-Transcorp model — flagged here in case Love wants it cut.)
+## Code
 
-## One decision left to Love
+The login reskin ships as **its own PR** built to this rev (split + real assets + white form), with a Round-0 self-review + a fresh independent reviewer + an `ORCH-VERDICT`. Visual diff to `src/app/login/page.tsx` + `form.tsx`. No auth-logic change, no migration, no promote. **Parked for Love's clearance — nothing auto-merges.**
 
-**Layout:** keep the shipped photo-split, or move to the single centred card?
-- **Recommendation — centred card.** Calmer, more B+, and continuous with the landing hero.
-- **Alternative — keep the split.** The same B+ card sits in the left half; the cooler-bag photo stays in the right half with a warm navy-tint overlay to sit inside the palette. A one-line layout choice, not a rebuild.
+## Scope
 
-## When this becomes code
-
-Once B+ (3.3–3.6) is confirmed on `main`, the reskin ships as **its own PR** with a Round-0 self-review against the reviewer checklist, a fresh independent reviewer, and an `ORCH-VERDICT` — same gate as any code PR. The diff is small and visual: `src/app/login/page.tsx` (layout + card) and `src/app/login/form.tsx` (Button + Field styling). No migration, no promote.
-
-## Scope note
-
-A *visual* reskin using the locked §3.3.11 brand tokens is a brand-pass on an existing screen. It adds **no** new marketing copy or claims, so it does **not** by itself need a brief amendment — but it is surfaced for Love's directional ruling alongside the landing-page mockup, since the two are designed as a pair.
+A visual brand-pass on an existing screen using the locked §3.3.11 tokens — does not by itself need a brief amendment. Surfaced for Love alongside the landing-page mockup (designed as a pair).
