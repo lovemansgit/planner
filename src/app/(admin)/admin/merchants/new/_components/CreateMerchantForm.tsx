@@ -17,6 +17,12 @@
 // is visible). The redirect flips on the `created` result kind in
 // a useEffect — avoids the React 19 "redirect during render" warning
 // useActionState would otherwise emit.
+//
+// Phase 10 · Batch B4 — fields adopt the shipped Field/Select kit: the local
+// input-rendering Field becomes a form-local TextField over <Field> (sentence-
+// case labels + help/error a11y) + a native input on the recipe surface
+// (inputClass). The Day-30 / Fix-A4 value-preservation (defaultValue echoed from
+// submittedValues) is carried through unchanged.
 
 "use client";
 
@@ -25,6 +31,8 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
 import { Button } from "@/components/Button";
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
 
 import { createMerchantAction, type CreateActionResult } from "../../_actions";
 
@@ -82,7 +90,7 @@ export function CreateMerchantForm() {
 
       {/*
         Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — form value preservation.
-        Each Field below receives `defaultValue` from `submittedValues`
+        Each TextField below receives `defaultValue` from `submittedValues`
         (echoed back by createMerchantAction on validation / conflict /
         forbidden). React 19's `<form action={formAction}>` calls
         form.reset() after the action completes; reset restores each
@@ -91,7 +99,7 @@ export function CreateMerchantForm() {
         operator's input. No form remount needed.
       */}
       <form action={formAction} className="space-y-8">
-        <Field
+        <TextField
           label="Merchant name"
           name="name"
           placeholder="Demo Bistro"
@@ -100,7 +108,7 @@ export function CreateMerchantForm() {
           required
         />
 
-        <Field
+        <TextField
           label="Slug"
           name="slug"
           placeholder="demo-bistro"
@@ -118,7 +126,7 @@ export function CreateMerchantForm() {
             Captured at merchant creation; surfaces as ship-from on every task.
           </p>
 
-          <Field
+          <TextField
             label="Address line"
             name="pickup_line"
             placeholder="Building 4, Sheikh Zayed Road"
@@ -127,7 +135,7 @@ export function CreateMerchantForm() {
             required
           />
 
-          <Field
+          <TextField
             label="District"
             name="pickup_district"
             placeholder="Al Quoz"
@@ -136,7 +144,7 @@ export function CreateMerchantForm() {
             required
           />
 
-          <Field
+          <TextField
             label="Emirate"
             name="pickup_emirate"
             placeholder="Dubai"
@@ -155,7 +163,7 @@ export function CreateMerchantForm() {
             invalid codes fail-close the cron push for this tenant.
           </p>
 
-          <Field
+          <TextField
             label="SuiteFleet customer code"
             name="suitefleet_customer_code"
             placeholder="000"
@@ -182,7 +190,7 @@ export function CreateMerchantForm() {
   );
 }
 
-interface FieldProps {
+interface TextFieldProps {
   readonly label: string;
   readonly name: string;
   readonly placeholder?: string;
@@ -203,7 +211,10 @@ interface FieldProps {
   readonly defaultValue?: string;
 }
 
-function Field({
+// Composes the shipped <Field> over a native input on the B+ recipe surface.
+// A shared TextInput primitive is the deferred form-kit follow-up; kept
+// form-local per B4 scope (no new kit components).
+function TextField({
   label,
   name,
   placeholder,
@@ -211,16 +222,11 @@ function Field({
   error,
   required,
   defaultValue,
-}: FieldProps) {
+}: TextFieldProps) {
   const id = `merchant-${name}`;
+  const describedBy = error ? `${id}-error` : hint ? `${id}-help` : undefined;
   return (
-    <div>
-      <label
-        htmlFor={id}
-        className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-      >
-        {label}
-      </label>
+    <Field label={label} htmlFor={id} help={hint} error={error}>
       <input
         id={id}
         name={name}
@@ -228,20 +234,10 @@ function Field({
         defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}
-        aria-invalid={error ? "true" : undefined}
-        aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
-        className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={inputClass(Boolean(error))}
       />
-      {hint && !error ? (
-        <p id={`${id}-hint`} className="mt-1 text-xs text-[color:var(--color-text-tertiary)]">
-          {hint}
-        </p>
-      ) : null}
-      {error ? (
-        <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red">
-          {error}
-        </p>
-      ) : null}
-    </div>
+    </Field>
   );
 }

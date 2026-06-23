@@ -11,9 +11,10 @@
 // actual authority. Form-level errors come back via the action result
 // and render inline.
 //
-// Brand-canon form styling: hairline stone-200 fields at rest, navy
-// focus border, 120ms ease-out, sentence-case labels, no shadow.
-// Match the existing /admin/merchants/new form posture.
+// Phase 10 · Batch B4 — adopts the shipped Field/Select kit: the local
+// children-based Field is replaced by <Field> (sentence-case labels per D2),
+// inputs move to inputClass(), and the tenant/role <select>s become <Select>.
+// The controlled-select behaviour (tenant drives the role options) is preserved.
 
 "use client";
 
@@ -21,6 +22,9 @@ import Link from "next/link";
 import { useActionState, useMemo, useState } from "react";
 
 import { Button } from "@/components/Button";
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
+import { Select } from "@/components/Select";
 
 import {
   createUserAction,
@@ -88,7 +92,7 @@ export function UserCreateForm({
           type="email"
           required
           autoComplete="off"
-          className={INPUT_CLASS}
+          className={inputClass()}
         />
       </Field>
 
@@ -98,14 +102,14 @@ export function UserCreateForm({
           name="fullName"
           type="text"
           autoComplete="off"
-          className={INPUT_CLASS}
+          className={inputClass()}
         />
       </Field>
 
       <Field
         label="Temporary password"
         htmlFor="user-password"
-        helper="At least 8 characters. Share via 1Password; the user can change it after first login."
+        help="At least 8 characters. Share via 1Password; the user can change it after first login."
       >
         <input
           id="user-password"
@@ -114,12 +118,12 @@ export function UserCreateForm({
           required
           minLength={8}
           autoComplete="off"
-          className={INPUT_CLASS}
+          className={inputClass()}
         />
       </Field>
 
       <Field label="Tenant" htmlFor="user-tenant">
-        <select
+        <Select
           id="user-tenant"
           name="tenantId"
           required
@@ -128,7 +132,6 @@ export function UserCreateForm({
             setSelectedTenantId(e.target.value);
             setSelectedRoleSlug("");
           }}
-          className={SELECT_CLASS}
         >
           {tenantOptions.length === 0 ? (
             <option value="">No tenants configured</option>
@@ -139,17 +142,16 @@ export function UserCreateForm({
               </option>
             ))
           )}
-        </select>
+        </Select>
       </Field>
 
       <Field label="Role" htmlFor="user-role">
-        <select
+        <Select
           id="user-role"
           name="roleSlug"
           required
           value={effectiveRoleSlug}
           onChange={(e) => setSelectedRoleSlug(e.target.value)}
-          className={SELECT_CLASS}
         >
           {roleOptions.length === 0 ? (
             <option value="">Pick a tenant first</option>
@@ -160,7 +162,7 @@ export function UserCreateForm({
               </option>
             ))
           )}
-        </select>
+        </Select>
       </Field>
 
       {state.kind !== "idle" ? (
@@ -184,37 +186,5 @@ export function UserCreateForm({
         </Button>
       </div>
     </form>
-  );
-}
-
-const INPUT_CLASS =
-  "w-full border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:border-navy focus:bg-stone-100 focus:outline-none";
-
-const SELECT_CLASS = `${INPUT_CLASS} cursor-pointer`;
-
-function Field({
-  label,
-  htmlFor,
-  helper,
-  children,
-}: {
-  readonly label: string;
-  readonly htmlFor: string;
-  readonly helper?: string;
-  readonly children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-2">
-      <label
-        htmlFor={htmlFor}
-        className="block text-xs font-medium uppercase tracking-[0.14em] text-navy"
-      >
-        {label}
-      </label>
-      {children}
-      {helper ? (
-        <p className="text-xs text-[color:var(--color-text-secondary)]">{helper}</p>
-      ) : null}
-    </div>
   );
 }

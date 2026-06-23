@@ -4,8 +4,10 @@
 // for context. useActionState wires submit → the bound server action;
 // on success the action redirects to the detail view.
 //
-// Brand-canon form styling matches /admin/users/new (hairline stone-200
-// fields, navy focus, 120ms ease-out, sentence-case labels).
+// Phase 10 · Batch B4 — the editable Full name + Role fields adopt the shipped
+// Field/Select kit (sentence-case labels, recipe input surface, <Select>). The
+// read-only Email/Tenant context rows keep their distinct eyebrow display
+// (not editable controls — out of the field/select scope).
 
 "use client";
 
@@ -13,6 +15,9 @@ import Link from "next/link";
 import { useActionState } from "react";
 
 import { Button } from "@/components/Button";
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
+import { Select } from "@/components/Select";
 
 import {
   updateUserAction,
@@ -69,24 +74,18 @@ export function UserEditForm({
           type="text"
           autoComplete="off"
           defaultValue={initialDisplayName ?? ""}
-          className={INPUT_CLASS}
+          className={inputClass()}
         />
       </Field>
 
       <Field label="Role" htmlFor="user-role">
-        <select
-          id="user-role"
-          name="roleSlug"
-          required
-          defaultValue={defaultRole}
-          className={SELECT_CLASS}
-        >
+        <Select id="user-role" name="roleSlug" required defaultValue={defaultRole}>
           {roleOptions.map((r) => (
             <option key={r.slug} value={r.slug}>
               {r.label}
             </option>
           ))}
-        </select>
+        </Select>
       </Field>
 
       {state.kind !== "idle" ? (
@@ -107,33 +106,6 @@ export function UserEditForm({
         </Button>
       </div>
     </form>
-  );
-}
-
-const INPUT_CLASS =
-  "w-full border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:border-navy focus:bg-stone-100 focus:outline-none";
-
-const SELECT_CLASS = `${INPUT_CLASS} cursor-pointer`;
-
-function Field({
-  label,
-  htmlFor,
-  children,
-}: {
-  readonly label: string;
-  readonly htmlFor: string;
-  readonly children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-2">
-      <label
-        htmlFor={htmlFor}
-        className="block text-xs font-medium uppercase tracking-[0.14em] text-navy"
-      >
-        {label}
-      </label>
-      {children}
-    </div>
   );
 }
 
