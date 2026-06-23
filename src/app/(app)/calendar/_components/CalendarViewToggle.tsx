@@ -17,6 +17,11 @@
 //
 // Pure-logic extraction: `hrefFor(view, ...)` exposed for spec
 // coverage per the codebase's no-render-test convention.
+//
+// Phase 10 · Batch B5 — B+ chrome: the segmented control is hairlined
+// with --color-border-default; inactive segments sit on --color-b-card
+// with a navy-subtle hover, the active segment keeps the navy fill.
+// hrefFor and the anchor-preservation logic are unchanged — chrome only.
 
 import Link from "next/link";
 
@@ -79,14 +84,14 @@ export function CalendarViewToggle({
   return (
     <nav
       aria-label="Calendar view"
-      className="inline-flex overflow-hidden rounded-sm border border-stone-200"
+      className="inline-flex overflow-hidden rounded-[10px] ring-1 ring-[color:var(--color-border-default)]"
     >
       {SEGMENTS.map((seg, idx) => {
         const isActive = seg.name === activeView;
-        const separator = idx > 0 ? "border-l border-stone-200" : "";
+        const separator = idx > 0 ? "border-l border-[color:var(--color-border-default)]" : "";
         const tone = isActive
           ? "bg-navy text-paper"
-          : "bg-paper text-navy hover:bg-ivory";
+          : "bg-[color:var(--color-b-card)] text-navy hover:bg-[color:var(--color-tint-navy-subtle)]";
         const href = hrefFor({
           view: seg.name,
           weekAnchor,

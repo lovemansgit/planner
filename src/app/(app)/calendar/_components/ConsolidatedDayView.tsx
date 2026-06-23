@@ -25,6 +25,13 @@
 // Pure-logic exports (`formatDeliveryWindow`, `getDayHeaderLabel`,
 // `buildConsigneeLink`) covered by spec per the codebase's no-render-test
 // convention.
+//
+// Phase 10 · Batch B5 — B+ chrome: the task list is a floating warm-white
+// card (--color-b-card rows, --shadow-b-card, hairline --color-border-default
+// dividers/ring); the window + AWB figures render in font-b-mono. The status
+// pill keeps the SHIPPED `resolveCourierDisplay` colour token (not
+// re-derived); high-risk tint, drill links, delivery-window logic, and the
+// fine/coarse status fallback are unchanged — chrome only.
 
 import Link from "next/link";
 
@@ -95,7 +102,7 @@ export function ConsolidatedDayView({ date, tasks }: ConsolidatedDayViewProps) {
   return (
     <div data-day-anchor={date}>
       <header className="mb-4 flex items-baseline justify-between">
-        <h2 className="font-display text-2xl font-semibold tracking-tight text-navy">
+        <h2 className="text-2xl font-semibold tracking-tight text-navy">
           {dayLabel}
         </h2>
         <p className="text-xs uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)] tabular-nums">
@@ -104,13 +111,13 @@ export function ConsolidatedDayView({ date, tasks }: ConsolidatedDayViewProps) {
       </header>
 
       {tasks.length === 0 ? (
-        <div className="border border-stone-200 bg-paper px-6 py-16 text-center">
+        <div className="rounded-2xl bg-[color:var(--color-b-card)] px-6 py-16 text-center shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
           <p className="text-sm text-[color:var(--color-text-secondary)]">
             No deliveries scheduled for this day. Try a different day or clear filters.
           </p>
         </div>
       ) : (
-        <ol className="overflow-hidden border border-stone-200">
+        <ol className="overflow-hidden rounded-2xl bg-[color:var(--color-b-card)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
           {tasks.map((task) => (
             <DayTaskRow key={task.taskId} task={task} date={date} />
           ))}
@@ -140,11 +147,11 @@ function DayTaskRow({ task, date }: DayTaskRowProps) {
       data-task-id={task.taskId}
       data-status={task.status}
       data-high-risk={isHighRisk ? "true" : "false"}
-      className={`flex items-center gap-4 border-t border-stone-200 px-4 py-3 first:border-t-0 transition-colors duration-[120ms] ease-out hover:bg-stone-100 ${
-        isHighRisk ? "bg-red/[0.04]" : "bg-paper"
+      className={`flex items-center gap-4 border-t border-[color:var(--color-border-default)] px-4 py-3 first:border-t-0 transition-colors duration-[120ms] ease-out hover:bg-stone-100 ${
+        isHighRisk ? "bg-red/[0.04]" : "bg-[color:var(--color-b-card)]"
       }`}
     >
-      <p className="w-32 shrink-0 text-xs tabular-nums text-[color:var(--color-text-secondary)]">
+      <p className="w-32 shrink-0 font-b-mono text-xs tabular-nums text-[color:var(--color-text-secondary)]">
         {formatDeliveryWindow(task.deliveryWindowStart, task.deliveryWindowEnd)}
       </p>
       <div className="min-w-0 flex-1">
@@ -173,7 +180,7 @@ function DayTaskRow({ task, date }: DayTaskRowProps) {
         <StatusIcon courierStatus={task.courierStatus} status={task.status as TaskInternalStatus} />
         {display.label}
       </span>
-      <p className="hidden w-32 shrink-0 text-right text-xs tabular-nums text-[color:var(--color-text-tertiary)] sm:block">
+      <p className="hidden w-32 shrink-0 text-right font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)] sm:block">
         {task.externalTrackingNumber ?? "—"}
       </p>
     </li>

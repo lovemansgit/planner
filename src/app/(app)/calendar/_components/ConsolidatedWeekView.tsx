@@ -5,7 +5,7 @@
 // cell renders:
 //   - eyebrow weekday label + DD MMM date (date label underlined
 //     on hover per brand-canon)
-//   - hero count numeral when total > 0 (font-display, tabular-nums)
+//   - hero count numeral when total > 0 (font-b-mono, tabular-nums)
 //   - "No deliveries" sentence-case copy when total === 0
 //   - HIGH_RISK marker on the header eyebrow when any task on the
 //     day is for a HIGH_RISK consignee
@@ -17,6 +17,12 @@
 //
 // Today's column carries the --color-tint-navy-subtle atmosphere
 // background per §J-3.
+//
+// Phase 10 · Batch B5 — B+ chrome: the 7-day grid is a floating
+// warm-white card (--color-b-card cells, --shadow-b-card, hairline
+// --color-border-default dividers/ring), count figures in font-b-mono.
+// Today tint, hover, high-risk marker, drill-through links, and every
+// date/derivation are unchanged — chrome only.
 
 import Link from "next/link";
 
@@ -44,7 +50,7 @@ export function ConsolidatedWeekView({
 }: ConsolidatedWeekViewProps) {
   if (days.length === 0) {
     return (
-      <div className="border border-stone-200 bg-paper px-6 py-16 text-center">
+      <div className="rounded-2xl bg-[color:var(--color-b-card)] px-6 py-16 text-center shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)]">
         <p className="text-sm text-[color:var(--color-text-secondary)]">
           No deliveries this week. Adjust filters or pick a different week.
         </p>
@@ -55,7 +61,7 @@ export function ConsolidatedWeekView({
   return (
     <div
       data-week-start={weekStart}
-      className="grid grid-cols-1 gap-px overflow-hidden border border-stone-200 bg-stone-200 sm:grid-cols-2 lg:grid-cols-7"
+      className="grid grid-cols-1 gap-px overflow-hidden rounded-2xl bg-[color:var(--color-border-default)] shadow-[var(--shadow-b-card)] ring-1 ring-[color:var(--color-border-default)] sm:grid-cols-2 lg:grid-cols-7"
     >
       {days.map((day) => (
         <DayCell
@@ -81,7 +87,7 @@ function DayCell({ day, isToday, formatWeekdayLabel, preservedQuery }: DayCellPr
   const { weekday, date } = formatWeekdayLabel(day.date);
   const backdrop = isToday
     ? "bg-[color:var(--color-tint-navy-subtle)]"
-    : "bg-paper";
+    : "bg-[color:var(--color-b-card)]";
   const trail = preservedQuery ? `&${preservedQuery}` : "";
   const href = `/calendar?view=day&date=${day.date}${trail}`;
   return (
@@ -113,7 +119,7 @@ function DayCell({ day, isToday, formatWeekdayLabel, preservedQuery }: DayCellPr
       </header>
       <div className="px-3 pb-3">
         {day.total > 0 ? (
-          <p className="font-display text-3xl font-semibold tabular-nums leading-none text-navy">
+          <p className="font-b-mono text-3xl font-semibold tabular-nums leading-none text-navy">
             {day.total}
           </p>
         ) : (
