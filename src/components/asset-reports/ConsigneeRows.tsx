@@ -15,9 +15,15 @@ import type { InventoryByConsigneeRow } from "@/modules/asset-tracking/report-re
 
 import { CountCell, ReportHeaderCells } from "./ReportCells";
 import { awbsHref } from "./report-helpers";
-
-const TD = "px-4 py-3 text-sm tabular-nums";
-const TH = "px-4 py-3 text-left text-xs uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]";
+import {
+  REPORT_ROW,
+  REPORT_SUBROW,
+  REPORT_TD,
+  REPORT_TH,
+  TABLE,
+  TABLE_CARD,
+  TABLE_SCROLL,
+} from "./report-table";
 
 interface ConsigneeGroup {
   readonly consigneeId: string;
@@ -84,30 +90,32 @@ export function ConsigneeRows({
   }
 
   return (
-    <div className="overflow-x-auto border border-[color:var(--color-border-strong)]">
-      <table className="w-full border-collapse">
-        <thead className="border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)]">
-          <tr>
-            <th className={TH}>Consignee</th>
-            <ReportHeaderCells />
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((group) => {
-            const isOpen = open.has(group.consigneeId);
-            return (
-              <ConsigneeGroupRows
-                key={group.consigneeId}
-                group={group}
-                isOpen={isOpen}
-                onToggle={() => toggle(group.consigneeId)}
-                tasksBasePath={tasksBasePath}
-                extraTaskParams={extraTaskParams}
-              />
-            );
-          })}
-        </tbody>
-      </table>
+    <div className={TABLE_CARD}>
+      <div className={TABLE_SCROLL}>
+        <table className={TABLE}>
+          <thead>
+            <tr>
+              <th className={REPORT_TH}>Consignee</th>
+              <ReportHeaderCells />
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((group) => {
+              const isOpen = open.has(group.consigneeId);
+              return (
+                <ConsigneeGroupRows
+                  key={group.consigneeId}
+                  group={group}
+                  isOpen={isOpen}
+                  onToggle={() => toggle(group.consigneeId)}
+                  tasksBasePath={tasksBasePath}
+                  extraTaskParams={extraTaskParams}
+                />
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -127,8 +135,8 @@ function ConsigneeGroupRows({
 }) {
   return (
     <>
-      <tr className="border-b border-[color:var(--color-border-default)] last:border-b-0">
-        <td className={`${TD} font-medium`}>
+      <tr className={REPORT_ROW}>
+        <td className={`${REPORT_TD} font-medium`}>
           <button
             type="button"
             onClick={onToggle}
@@ -177,9 +185,9 @@ function ConsigneeGroupRows({
         ? group.dates.map((row) => (
             <tr
               key={`${group.consigneeId}-${row.deliveryDate}`}
-              className="border-b border-[color:var(--color-border-default)] bg-[color:var(--color-tint-navy-subtle)] last:border-b-0"
+              className={REPORT_SUBROW}
             >
-              <td className={`${TD} pl-12 text-[color:var(--color-text-secondary)]`}>
+              <td className={`${REPORT_TD} pl-12 text-[color:var(--color-text-secondary)]`}>
                 {row.deliveryDate}
               </td>
               <CountCell value={row.allocatedAssets} href={awbsHref(tasksBasePath, row.awbs, extraTaskParams)} />

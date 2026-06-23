@@ -19,6 +19,15 @@ import type {
 import { ConsigneeRows } from "./ConsigneeRows";
 import { CountCell, ReportHeaderCells } from "./ReportCells";
 import { awbsHref } from "./report-helpers";
+import {
+  REPORT_EMPTY,
+  REPORT_ROW,
+  REPORT_TD,
+  REPORT_TH,
+  TABLE,
+  TABLE_CARD,
+  TABLE_SCROLL,
+} from "./report-table";
 
 export interface InventoryViewProps {
   readonly byDate: readonly InventoryByDateRow[];
@@ -28,9 +37,6 @@ export interface InventoryViewProps {
   /** Extra query params carried on every drill-down (e.g. admin merchant). */
   readonly extraTaskParams?: Readonly<Record<string, string>>;
 }
-
-const TH = "px-4 py-3 text-left text-xs uppercase tracking-[0.15em] text-[color:var(--color-text-secondary)]";
-const TD = "px-4 py-3 text-sm tabular-nums";
 
 export function InventoryView({
   byDate,
@@ -43,57 +49,54 @@ export function InventoryView({
       <section className="mb-12">
         <h2 className="mb-4 text-xl font-semibold tracking-tight">By delivery date</h2>
         {byDate.length === 0 ? (
-          <p className="border border-[color:var(--color-border-strong)] px-6 py-8 text-sm text-[color:var(--color-text-secondary)]">
-            No asset data in this date range.
-          </p>
+          <p className={REPORT_EMPTY}>No asset data in this date range.</p>
         ) : (
-          <div className="overflow-x-auto border border-[color:var(--color-border-strong)]">
-            <table className="w-full border-collapse">
-              <thead className="border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)]">
-                <tr>
-                  <th className={TH}>Delivery date</th>
-                  <ReportHeaderCells />
-                </tr>
-              </thead>
-              <tbody>
-                {byDate.map((row) => (
-                  <tr
-                    key={row.deliveryDate}
-                    className="border-b border-[color:var(--color-border-default)] last:border-b-0"
-                  >
-                    <td className={`${TD} font-medium`}>{row.deliveryDate}</td>
-                    <CountCell
-                      value={row.allocatedAssets}
-                      href={awbsHref(tasksBasePath, row.awbs, extraTaskParams)}
-                    />
-                    <CountCell
-                      value={row.suppQuantity}
-                      href={awbsHref(tasksBasePath, row.awbs, extraTaskParams)}
-                    />
-                    <CountCell
-                      value={row.collected}
-                      href={awbsHref(tasksBasePath, row.awbsByState.collected, extraTaskParams)}
-                    />
-                    <CountCell
-                      value={row.received}
-                      href={awbsHref(tasksBasePath, row.awbsByState.received, extraTaskParams)}
-                    />
-                    <CountCell
-                      value={row.sorted}
-                      href={awbsHref(tasksBasePath, row.awbsByState.sorted, extraTaskParams)}
-                    />
-                    <CountCell
-                      value={row.enRoute}
-                      href={awbsHref(tasksBasePath, row.awbsByState.enRoute, extraTaskParams)}
-                    />
-                    <CountCell
-                      value={row.returned}
-                      href={awbsHref(tasksBasePath, row.awbsByState.returned, extraTaskParams)}
-                    />
+          <div className={TABLE_CARD}>
+            <div className={TABLE_SCROLL}>
+              <table className={TABLE}>
+                <thead>
+                  <tr>
+                    <th className={REPORT_TH}>Delivery date</th>
+                    <ReportHeaderCells />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {byDate.map((row) => (
+                    <tr key={row.deliveryDate} className={REPORT_ROW}>
+                      <td className={`${REPORT_TD} font-medium`}>{row.deliveryDate}</td>
+                      <CountCell
+                        value={row.allocatedAssets}
+                        href={awbsHref(tasksBasePath, row.awbs, extraTaskParams)}
+                      />
+                      <CountCell
+                        value={row.suppQuantity}
+                        href={awbsHref(tasksBasePath, row.awbs, extraTaskParams)}
+                      />
+                      <CountCell
+                        value={row.collected}
+                        href={awbsHref(tasksBasePath, row.awbsByState.collected, extraTaskParams)}
+                      />
+                      <CountCell
+                        value={row.received}
+                        href={awbsHref(tasksBasePath, row.awbsByState.received, extraTaskParams)}
+                      />
+                      <CountCell
+                        value={row.sorted}
+                        href={awbsHref(tasksBasePath, row.awbsByState.sorted, extraTaskParams)}
+                      />
+                      <CountCell
+                        value={row.enRoute}
+                        href={awbsHref(tasksBasePath, row.awbsByState.enRoute, extraTaskParams)}
+                      />
+                      <CountCell
+                        value={row.returned}
+                        href={awbsHref(tasksBasePath, row.awbsByState.returned, extraTaskParams)}
+                      />
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </section>
@@ -101,9 +104,7 @@ export function InventoryView({
       <section>
         <h2 className="mb-4 text-xl font-semibold tracking-tight">By consignee</h2>
         {byConsignee.length === 0 ? (
-          <p className="border border-[color:var(--color-border-strong)] px-6 py-8 text-sm text-[color:var(--color-text-secondary)]">
-            No asset data in this date range.
-          </p>
+          <p className={REPORT_EMPTY}>No asset data in this date range.</p>
         ) : (
           <ConsigneeRows
             rows={byConsignee}
