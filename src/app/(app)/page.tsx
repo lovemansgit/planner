@@ -64,10 +64,9 @@ export default async function LandingPage() {
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-4xl px-12 py-16">
         <header className="mb-16">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Subscription planner
-          </p>
-          <h1 className="mt-3 font-b-display text-5xl font-bold tracking-tighter">Welcome back</h1>
+          {/* Phase 11 Batch E — removed the redundant "Subscription planner"
+              page eyebrow; nav.tsx already renders it as the brand subtitle. */}
+          <h1 className="font-b-display text-5xl font-bold tracking-tighter">Welcome back</h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Signed in as {greeting}.
           </p>
