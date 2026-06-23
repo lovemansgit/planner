@@ -24,6 +24,21 @@ describe("Field", () => {
     expect(html).toContain("Region is required");
     expect(html).not.toContain("Pick one");
   });
+
+  it("wires error a11y — role=alert + an id derived from htmlFor (B4)", () => {
+    const html = renderToStaticMarkup(
+      Field({ label: "Region", htmlFor: "region", error: "Region is required", children: "x" }),
+    );
+    expect(html).toContain('id="region-error"');
+    expect(html).toContain('role="alert"');
+  });
+
+  it("gives help text an id derived from htmlFor so controls can describe it (B4)", () => {
+    const html = renderToStaticMarkup(
+      Field({ label: "Region", htmlFor: "region", help: "Pick the region", children: "x" }),
+    );
+    expect(html).toContain('id="region-help"');
+  });
 });
 
 describe("Select", () => {

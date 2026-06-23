@@ -3,6 +3,12 @@
 // The label + control + help/error wrapper for any form control (the styled
 // Select below, or a native input). Sentence-case label (D2), an optional
 // "Optional" eyebrow tag, and one place for help text or an error (error wins).
+//
+// A11y (Phase 10 · Batch B4): when `htmlFor` is set, the error/help text gets a
+// stable id (`${htmlFor}-error` / `${htmlFor}-help`) and the error carries
+// role="alert". The control (input/Select) should point `aria-describedby` at
+// the matching id so screen readers announce the message — the same linkage the
+// pre-kit form fields wired by hand.
 
 import type { ReactNode } from "react";
 
@@ -38,9 +44,17 @@ export function Field({ label, htmlFor, optional, help, error, children }: Field
       </div>
       {children}
       {error ? (
-        <p className={FORM_ERROR}>{error}</p>
+        <p
+          id={htmlFor ? `${htmlFor}-error` : undefined}
+          role="alert"
+          className={FORM_ERROR}
+        >
+          {error}
+        </p>
       ) : help ? (
-        <p className={FORM_HELP}>{help}</p>
+        <p id={htmlFor ? `${htmlFor}-help` : undefined} className={FORM_HELP}>
+          {help}
+        </p>
       ) : null}
     </div>
   );
