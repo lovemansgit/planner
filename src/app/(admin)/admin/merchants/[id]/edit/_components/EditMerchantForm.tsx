@@ -24,6 +24,12 @@
 //
 // On success: useEffect routes to /admin/merchants list (revalidatePath
 // already flushed the list server-side).
+//
+// Phase 10 · Batch B4 — fields adopt the shipped Field/Select kit: the local
+// input-rendering Field becomes a form-local TextField over <Field> + a native
+// input on the recipe surface (inputClass), and RegionPicker's <select> becomes
+// <Select> while keeping its sticky-inactive-region option logic. The read-only
+// Slug row keeps its distinct eyebrow display (not an editable control).
 
 "use client";
 
@@ -32,6 +38,9 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
 import { Button } from "@/components/Button";
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
+import { Select } from "@/components/Select";
 import type { Region } from "@/modules/credentials";
 import type { Merchant } from "@/modules/merchants/types";
 
@@ -102,7 +111,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
       ) : null}
 
       <form action={formAction} className="space-y-8">
-        <Field
+        <TextField
           label="Merchant name"
           name="name"
           defaultValue={initial.name}
@@ -133,7 +142,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
             required if any is provided.
           </p>
 
-          <Field
+          <TextField
             label="Address line"
             name="pickup_line"
             defaultValue={initial.pickupAddress?.line ?? ""}
@@ -141,7 +150,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
             error={fieldErrors.pickup_line}
           />
 
-          <Field
+          <TextField
             label="District"
             name="pickup_district"
             defaultValue={initial.pickupAddress?.district ?? ""}
@@ -149,7 +158,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
             error={fieldErrors.pickup_district}
           />
 
-          <Field
+          <TextField
             label="Emirate"
             name="pickup_emirate"
             defaultValue={initial.pickupAddress?.emirate ?? ""}
@@ -167,7 +176,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
             cron push for this tenant.
           </p>
 
-          <Field
+          <TextField
             label="SuiteFleet customer code"
             name="suitefleet_customer_code"
             defaultValue={initial.suitefleetCustomerCode ?? ""}
@@ -200,7 +209,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
   );
 }
 
-interface FieldProps {
+interface TextFieldProps {
   readonly label: string;
   readonly name: string;
   readonly defaultValue?: string;
@@ -224,21 +233,19 @@ function RegionPicker({ currentRegionId, activeRegions, error }: RegionPickerPro
   // sees the misalignment.
   const currentInList = activeRegions.some((r) => r.id === currentRegionId);
   return (
-    <div>
-      <label
-        htmlFor={id}
-        className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-      >
-        SuiteFleet region
-      </label>
-      <select
+    <Field
+      label="SuiteFleet region"
+      htmlFor={id}
+      error={error}
+      help="Determines which SuiteFleet region the merchant routes to + which authentication method applies to the credentials. Changing this is a routing change — credentials remain bound to the merchant."
+    >
+      <Select
         id={id}
         name="suitefleet_region_id"
         defaultValue={currentRegionId}
         required
-        aria-invalid={error ? "true" : undefined}
-        aria-describedby={error ? `${id}-error` : `${id}-hint`}
-        className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+        invalid={Boolean(error)}
+        aria-describedby={error ? `${id}-error` : `${id}-help`}
       >
         {!currentInList ? (
           <option value={currentRegionId} disabled>
@@ -250,26 +257,15 @@ function RegionPicker({ currentRegionId, activeRegions, error }: RegionPickerPro
             {r.displayName} ({r.clientId})
           </option>
         ))}
-      </select>
-      {error ? (
-        <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red">
-          {error}
-        </p>
-      ) : (
-        <p
-          id={`${id}-hint`}
-          className="mt-1 text-xs text-[color:var(--color-text-tertiary)]"
-        >
-          Determines which SuiteFleet region the merchant routes to + which authentication method
-          applies to the credentials. Changing this is a routing change — credentials remain bound
-          to the merchant.
-        </p>
-      )}
-    </div>
+      </Select>
+    </Field>
   );
 }
 
-function Field({
+// Composes the shipped <Field> over a native input on the B+ recipe surface.
+// A shared TextInput primitive is the deferred form-kit follow-up; kept
+// form-local per B4 scope (no new kit components).
+function TextField({
   label,
   name,
   defaultValue,
@@ -277,16 +273,11 @@ function Field({
   hint,
   error,
   required,
-}: FieldProps) {
+}: TextFieldProps) {
   const id = `merchant-edit-${name}`;
+  const describedBy = error ? `${id}-error` : hint ? `${id}-help` : undefined;
   return (
-    <div>
-      <label
-        htmlFor={id}
-        className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]"
-      >
-        {label}
-      </label>
+    <Field label={label} htmlFor={id} help={hint} error={error}>
       <input
         id={id}
         name={name}
@@ -294,20 +285,10 @@ function Field({
         defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}
-        aria-invalid={error ? "true" : undefined}
-        aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
-        className="w-full rounded-sm border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] focus:border-navy focus:outline-none aria-[invalid=true]:border-red"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={inputClass(Boolean(error))}
       />
-      {hint && !error ? (
-        <p id={`${id}-hint`} className="mt-1 text-xs text-[color:var(--color-text-tertiary)]">
-          {hint}
-        </p>
-      ) : null}
-      {error ? (
-        <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red">
-          {error}
-        </p>
-      ) : null}
-    </div>
+    </Field>
   );
 }
