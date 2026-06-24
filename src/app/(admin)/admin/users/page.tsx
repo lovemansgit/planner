@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { bButtonClass } from "@/components/button-recipe";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { EmptyState as EmptyStateBlock } from "@/components/EmptyState";
 import { SearchBar } from "@/components/SearchBar";
@@ -108,10 +109,10 @@ export default async function AdminUsersPage({ searchParams }: AdminUsersPagePro
               live here.
             </p>
           </div>
-          <Link
-            href="/admin/users/new"
-            className="inline-flex items-center rounded-sm border border-navy bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-          >
+          {/* B+ green-primary CTA. Server component → bare <Link> styled with
+              the shared button recipe (NOT <Button href>, which throws in a
+              server component — see followup_button_href_server_component_rsc_trap). */}
+          <Link href="/admin/users/new" className={bButtonClass("primary", "md")}>
             + New user
           </Link>
         </header>

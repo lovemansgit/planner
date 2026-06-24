@@ -21,6 +21,11 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/Button";
+import { bButtonClass } from "@/components/button-recipe";
+import { Field } from "@/components/Field";
+import { inputClass } from "@/components/form-field-recipe";
+
 import {
   resetUserPasswordAction,
   type UserPasswordResetActionResult,
@@ -72,13 +77,9 @@ function UserPasswordResetModalForm({
           them over a trusted channel — they should change it after signing in.
         </p>
         <div className="mt-6 flex items-center justify-end">
-          <button
-            type="button"
-            onClick={onDone}
-            className="rounded-sm border border-navy bg-navy px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90"
-          >
+          <Button type="button" variant="secondary" onClick={onDone}>
             Done
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -99,27 +100,24 @@ function UserPasswordResetModalForm({
         applies on next sign-in.
       </p>
 
-      <div className="mt-5 space-y-2">
-        <label
+      <div className="mt-5">
+        <Field
+          label="Temporary password"
           htmlFor="user-reset-password"
-          className="block text-xs font-medium uppercase tracking-[0.14em] text-navy"
+          help="Not stored or logged in plain text. The reset is recorded in the audit trail (password excluded)."
         >
-          Temporary password
-        </label>
-        <input
-          id="user-reset-password"
-          name="newPassword"
-          type="password"
-          autoComplete="new-password"
-          minLength={MIN_PASSWORD_LENGTH}
-          required
-          placeholder="At least 8 characters"
-          className="w-full border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:border-navy focus:bg-stone-100 focus:outline-none"
-        />
-        <p className="text-xs text-[color:var(--color-text-secondary)]">
-          Not stored or logged in plain text. The reset is recorded in the
-          audit trail (password excluded).
-        </p>
+          <input
+            id="user-reset-password"
+            name="newPassword"
+            type="password"
+            autoComplete="new-password"
+            minLength={MIN_PASSWORD_LENGTH}
+            required
+            placeholder="At least 8 characters"
+            aria-describedby="user-reset-password-help"
+            className={inputClass()}
+          />
+        </Field>
       </div>
 
       {errorMessage ? (
@@ -132,20 +130,12 @@ function UserPasswordResetModalForm({
       ) : null}
 
       <div className="mt-6 flex items-center justify-end gap-3">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-        >
+        <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={isPending}
-          className="rounded-sm border border-navy bg-navy px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        </Button>
+        <Button type="submit" variant="primary" disabled={isPending}>
           {isPending ? "Resetting…" : "Reset password"}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -200,11 +190,13 @@ export function UserPasswordResetModal({
 
   return (
     <>
+      {/* Native <button> (not <Button>) so triggerRef stays attached for
+          focus-return on Escape; styled with the shared B+ recipe (secondary). */}
       <button
         ref={triggerRef}
         type="button"
         onClick={openModal}
-        className="inline-flex items-center justify-center rounded-sm border border-stone-200 bg-paper px-3 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-navy transition-colors duration-[120ms] ease-out hover:border-navy hover:text-navy"
+        className={bButtonClass("secondary", "sm")}
       >
         Reset password
       </button>
