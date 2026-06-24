@@ -210,6 +210,10 @@ const SUBSCRIPTION_COLUMNS: ReadonlyArray<DataTableColumn<AdminSubscriptionRow>>
     srHeader: true,
     align: "right",
     noRowLink: true,
+    // This table overflows the shared content width on desktop; pin the
+    // Materialize action to the card's right edge so it stays visible and
+    // clickable while the rest of the row scrolls beneath it (Phase 12.1).
+    stickyRight: true,
     cell: (row) =>
       row.subscription.status === "active" ? (
         <MaterializeButton subscriptionId={row.subscription.id} />
