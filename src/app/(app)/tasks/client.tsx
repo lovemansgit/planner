@@ -34,7 +34,6 @@ import { podProxyPhotoPaths } from "@/modules/tasks/pod-proxy";
 import type { Task, TaskListRow } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
-import { Badge } from "@/components/Badge";
 import { OutlineButton } from "@/components/OutlineButton";
 import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
 
@@ -51,9 +50,8 @@ import {
 } from "./_actions";
 import { PodIcon } from "./_components/PodIcon";
 import { PodLightboxModal } from "./_components/PodLightboxModal";
-import { StatusIcon } from "./_components/StatusIcon";
+import { StatusPill, STATUS_PILL_BASE } from "./_components/StatusPill";
 import { podCellState } from "./_components/pod-state";
-import { resolveCourierDisplay } from "./status";
 
 interface TasksClientProps {
   readonly initialTasks: readonly TaskListRow[];
@@ -349,9 +347,6 @@ function Row({
   readonly onOpenPod: (photos: readonly string[]) => void;
   readonly onOpenTimeline: () => void;
 }) {
-  // D56 Lane 3 — render the FINE courier_status (label + family colour +
-  // glyph), falling back to the coarse internal_status when it is NULL.
-  const display = resolveCourierDisplay(task.courierStatus, task.internalStatus);
   const podTone = podCellState(task.podPhotos);
   const cgn = consigneeCellModel(task);
   return (
@@ -404,18 +399,16 @@ function Row({
         </button>
       </Td>
       <Td>
-        <Badge className={display.pillClass}>
-          <StatusIcon courierStatus={task.courierStatus} status={task.internalStatus} />
-          {display.label}
-        </Badge>
-        {/* R6: failed-push state folded onto the Status column (was its
-            own "Issues" column). */}
+        {/* Phase 11 Batch P — every task status renders through one B+ pill
+            (StatusPill): rounded-full, sentence-case, glyph + label; only the
+            family colour varies by state. Unifies the column and repairs the
+            coarse NULL-courier neutrals (Created/Skipped/Cancelled) that had
+            been rendering as bare text. */}
+        <StatusPill courierStatus={task.courierStatus} internalStatus={task.internalStatus} />
+        {/* R6: failed-push state folded onto the Status column (was its own
+            "Issues" column) — same pill geometry for parity. */}
         {failed ? (
-          // Component-lib rollout (finding 3) — this badge carried an
-          // off-recipe text-[10px]; normalising to the shared <Badge>
-          // (text-xs) is a deliberate, visible tidy-up, not a zero-change
-          // swap. Margin + red palette preserved via className.
-          <Badge className="mt-1 bg-red/15 text-red">Failed push</Badge>
+          <span className={`${STATUS_PILL_BASE} mt-1 bg-red/15 text-red`}>Failed push</span>
         ) : null}
       </Td>
       {/* R6.4: Consignee · Address · District · Emirate · Telephone form
