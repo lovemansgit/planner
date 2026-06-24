@@ -29,6 +29,9 @@ import type { SubscriptionException } from "@/modules/subscription-exceptions";
 import type { Subscription } from "@/modules/subscriptions";
 import type { Task } from "@/modules/tasks/types";
 
+import { DeliveryWindowTrack } from "@/components/DeliveryWindowTrack";
+import { DETAIL_TRACK_SLOT } from "@/components/detail-view-recipe";
+
 import { RecentExceptions } from "@/app/(app)/subscriptions/[id]/_components/RecentExceptions";
 import { SubscriptionDetailHeader } from "@/app/(app)/subscriptions/[id]/_components/SubscriptionDetailHeader";
 import { SubscriptionRuleSummary } from "@/app/(app)/subscriptions/[id]/_components/SubscriptionRuleSummary";
@@ -110,6 +113,19 @@ function SubscriptionDetailBlock({
         consigneeName={consigneeName}
         consigneeId={consigneeId}
       />
+      {/* Phase 11 Batch T — the B+ delivery-window track (the signature motif
+          from the /subscriptions list) leads each subscription block. The
+          shared <DeliveryWindowTrack> is reused verbatim, so the window reads
+          as a shape on the 06:00–22:00 day baseline (with its own HH:MM caption
+          + role="img" aria label) — not only as the text in the rule summary
+          below. Muted for ended subscriptions. */}
+      <div className={DETAIL_TRACK_SLOT}>
+        <DeliveryWindowTrack
+          start={group.subscription.deliveryWindowStart}
+          end={group.subscription.deliveryWindowEnd}
+          muted={group.subscription.status === "ended"}
+        />
+      </div>
       <SubscriptionRuleSummary
         subscription={group.subscription}
         addressLine={addressLine}
