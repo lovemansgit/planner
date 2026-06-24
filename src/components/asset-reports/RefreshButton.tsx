@@ -8,6 +8,42 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+/** Outcome of one bounded SuiteFleet poll for a single merchant (or, with no
+ *  slug, the caller's own tenant). */
+export type RefreshOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly status: number; readonly message: string };
+
+/**
+ * Fire ONE bounded refresh poll against the existing
+ * `POST /api/reports/asset-tracking/refresh` route — `?merchant=<slug>` for a
+ * named merchant (Transcorp staff), or no query for the caller's own tenant.
+ *
+ * Single source for the SuiteFleet refresh contract: both the single-merchant
+ * RefreshButton and the multi-select MerchantRefreshControl call it, so neither
+ * can drift the request shape. Each call is exactly one poll tick's load — the
+ * #509 cost guard is preserved by the CALLER choosing which (and how many)
+ * merchants to poll, never by an implicit fan-out here.
+ */
+export async function refreshMerchant(merchantSlug?: string): Promise<RefreshOutcome> {
+  try {
+    const qs = merchantSlug ? `?merchant=${encodeURIComponent(merchantSlug)}` : "";
+    const res = await fetch(`/api/reports/asset-tracking/refresh${qs}`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        message: res.status === 403 ? "Not enabled" : "Refresh failed",
+      };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 0, message: "Refresh failed" };
+  }
+}
+
 export function RefreshButton({
   merchantSlug,
 }: {
@@ -21,20 +57,12 @@ export function RefreshButton({
   async function onClick() {
     setBusy(true);
     setError(null);
-    try {
-      const qs = merchantSlug ? `?merchant=${encodeURIComponent(merchantSlug)}` : "";
-      const res = await fetch(`/api/reports/asset-tracking/refresh${qs}`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        setError(res.status === 403 ? "Not enabled" : "Refresh failed");
-        return;
-      }
+    const result = await refreshMerchant(merchantSlug);
+    setBusy(false);
+    if (result.ok) {
       router.refresh();
-    } catch {
-      setError("Refresh failed");
-    } finally {
-      setBusy(false);
+    } else {
+      setError(result.message);
     }
   }
 

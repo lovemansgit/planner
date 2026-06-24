@@ -15,7 +15,6 @@ import { randomUUID } from "node:crypto";
 
 import { redirect } from "next/navigation";
 
-import { RefreshButton } from "@/components/asset-reports/RefreshButton";
 import { CountCell, ReportHeaderCells } from "@/components/asset-reports/ReportCells";
 import {
   awbsHref,
@@ -38,6 +37,8 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 
 import { MerchantFilterDropdown } from "../../_components/MerchantFilterDropdown";
+
+import { MerchantRefreshControl } from "./_components/MerchantRefreshControl";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -137,9 +138,12 @@ export default async function AdminAssetTrackingPage({ searchParams }: AdminAsse
             initialTo={to}
             basePath="/admin/asset-tracking"
           />
-          <span className="flex items-center gap-4">
-            {merchantSlug !== undefined ? <RefreshButton merchantSlug={merchantSlug} /> : null}
+          <span className="flex flex-wrap items-end gap-4">
             <MerchantFilterDropdown merchants={dropdownMerchants} currentSlug={merchantSlug ?? null} />
+            <MerchantRefreshControl
+              merchants={dropdownMerchants.map((m) => ({ slug: m.slug, name: m.name }))}
+              currentSlug={merchantSlug ?? null}
+            />
           </span>
         </div>
 
@@ -178,16 +182,10 @@ function MerchantRows({ group }: { readonly group: MerchantGroup }) {
   return (
     <>
       <tr className="border-b border-[color:var(--color-border-default)] bg-[color:var(--color-tint-navy-subtle)]">
-        <td className={`${TD} font-semibold`}>
-          {/* Per-merchant refresh — gives Transcorp staff a pull control on
-              the all-merchants view (walk finding: admin had none). Scoped
-              to one merchant per click, so it never fans out across the
-              fleet (the #509 cost guard the page deliberately kept). */}
-          <span className="flex items-center gap-3">
-            {group.merchantName}
-            <RefreshButton merchantSlug={group.merchantSlug} />
-          </span>
-        </td>
+        {/* Refresh moved out of the rows into the single page-level
+            MerchantRefreshControl (Batch AT) — one select + select-all control
+            replaces the per-row buttons; same per-merchant #509 scoping. */}
+        <td className={`${TD} font-semibold`}>{group.merchantName}</td>
         <CountCell
           value={sum(group.dates, (r) => r.allocatedAssets)}
           href={awbsHref("/admin/asset-tracking/log", unionAwbs(group.dates, (r) => r.awbs))}
