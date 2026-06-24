@@ -2,10 +2,18 @@
 // Transcorp admin variant of /calendar (server component).
 //
 // Renders the top-N merchants by today's task volume as a ranked
-// list. Each row is a Link to /admin/tasks?merchantSlug=<slug> so
-// the operator drills into that tenant's tasks (the cross-tenant
-// /admin/tasks list filters by merchantSlug per
-// src/modules/tasks/service.ts:listAllTasks).
+// list. Each row is a Link to /admin/tasks?merchant=<slug> so the
+// operator drills into that tenant's tasks. The param key MUST be
+// `merchant` — the key /admin/tasks reads (admin/tasks/page.tsx:
+// `params.merchant`); the href is built via the shared
+// `buildMerchantDrilldownHref` (single source of truth with the sibling
+// PerMerchantBreakdownPanel) so the key cannot drift apart again.
+//
+// Phase 12.2 FIX 4 (extension): this panel previously emitted the stale
+// `?merchantSlug=` key. The admin tasks page reads `?merchant=`, so its
+// drill-downs silently dropped the filter and rendered ALL merchants.
+// Fix 4 aligned the sibling breakdown panel but not this one — they sit
+// one above the other on the same admin Overview.
 //
 // Brand-canon (Phase 10 · B5 — B+): a floating warm-white card
 // (`--color-b-card` + `--shadow-b-card`) hairlined with
@@ -16,6 +24,7 @@
 import Link from "next/link";
 
 import type { CalendarTopMerchantToday } from "../_types";
+import { buildMerchantDrilldownHref } from "./PerMerchantBreakdownPanel";
 
 export interface TopMerchantsTodayPanelProps {
   readonly merchants: readonly CalendarTopMerchantToday[];
@@ -44,7 +53,7 @@ export function TopMerchantsTodayPanel({ merchants }: TopMerchantsTodayPanelProp
           {merchants.map((merchant, idx) => (
             <li key={merchant.tenantId}>
               <Link
-                href={`/admin/tasks?merchantSlug=${encodeURIComponent(merchant.tenantSlug)}`}
+                href={buildMerchantDrilldownHref(merchant.tenantSlug)}
                 className="flex items-center justify-between gap-4 px-4 py-3 transition-colors duration-[120ms] ease-out hover:bg-stone-100"
               >
                 <div className="flex items-center gap-4">
