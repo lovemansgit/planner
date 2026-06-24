@@ -6,7 +6,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { CalendarPerMerchantBreakdownRow } from "../../_types";
-import { computeMerchantBarSegments } from "../PerMerchantBreakdownPanel";
+import {
+  buildMerchantDrilldownHref,
+  computeMerchantBarSegments,
+} from "../PerMerchantBreakdownPanel";
 
 function row(
   overrides: Partial<CalendarPerMerchantBreakdownRow>,
@@ -136,5 +139,35 @@ describe("computeMerchantBarSegments — count drift defence", () => {
     ];
     const seg = computeMerchantBarSegments(ROWS)[0]!;
     expect(seg.remainingPct).toBe(0);
+  });
+});
+
+// Phase 12.2 Batch A · FIX 4 — overview drill-down param-key contract.
+//
+// The breakdown link sent `?merchantSlug=` but /admin/tasks reads `?merchant=`
+// (admin/tasks/page.tsx: `params.merchant`), so the filter was silently dropped
+// and the page showed every merchant (and the label stayed "Total tasks"). The
+// href must carry the key the admin page consumes. ADMIN_TASKS_MERCHANT_KEY
+// below mirrors that parser; if either side moves, this fails.
+describe("buildMerchantDrilldownHref — lands merchant-scoped (FIX 4)", () => {
+  // The key admin/tasks/page.tsx reads: `params.merchant`.
+  const ADMIN_TASKS_MERCHANT_KEY = "merchant";
+
+  it("targets /admin/tasks with the key the page actually reads", () => {
+    const href = buildMerchantDrilldownHref("acme-co");
+    const [path, query] = href.split("?");
+    expect(path).toBe("/admin/tasks");
+    const params = new URLSearchParams(query);
+    expect(params.get(ADMIN_TASKS_MERCHANT_KEY)).toBe("acme-co");
+  });
+
+  it("does NOT emit the stale ?merchantSlug= key (the dropped-filter bug)", () => {
+    const params = new URLSearchParams(buildMerchantDrilldownHref("acme-co").split("?")[1]);
+    expect(params.has("merchantSlug")).toBe(false);
+  });
+
+  it("url-encodes slugs defensively", () => {
+    const params = new URLSearchParams(buildMerchantDrilldownHref("a b&c").split("?")[1]);
+    expect(params.get(ADMIN_TASKS_MERCHANT_KEY)).toBe("a b&c");
   });
 });

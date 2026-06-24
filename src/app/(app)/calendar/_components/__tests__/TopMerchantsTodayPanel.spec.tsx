@@ -40,10 +40,21 @@ describe("TopMerchantsTodayPanel", () => {
     expect(html).toMatch(/>7</);
   });
 
-  it("links each row to /admin/tasks?merchantSlug=<slug> with encoded slug", () => {
+  // Phase 12.2 FIX 4 (extension) — the drill-down key MUST be `merchant`, the
+  // key /admin/tasks reads (admin/tasks/page.tsx: `params.merchant`). The sibling
+  // PerMerchantBreakdownPanel was aligned in the original Fix 4, but this panel —
+  // rendered directly above it on the same admin Overview — still emitted the
+  // stale `?merchantSlug=` key, which the admin tasks page silently ignores, so
+  // its drill-downs dropped the filter and showed ALL merchants.
+  it("links each row to /admin/tasks?merchant=<slug> with encoded slug", () => {
     const html = renderToStaticMarkup(TopMerchantsTodayPanel({ merchants: SAMPLE }));
-    expect(html).toMatch(/href="\/admin\/tasks\?merchantSlug=mpl"/);
-    expect(html).toMatch(/href="\/admin\/tasks\?merchantSlug=dnr"/);
-    expect(html).toMatch(/href="\/admin\/tasks\?merchantSlug=fresh-butchers"/);
+    expect(html).toMatch(/href="\/admin\/tasks\?merchant=mpl"/);
+    expect(html).toMatch(/href="\/admin\/tasks\?merchant=dnr"/);
+    expect(html).toMatch(/href="\/admin\/tasks\?merchant=fresh-butchers"/);
+  });
+
+  it("does NOT emit the stale ?merchantSlug= key (the dropped-filter bug)", () => {
+    const html = renderToStaticMarkup(TopMerchantsTodayPanel({ merchants: SAMPLE }));
+    expect(html).not.toMatch(/merchantSlug=/);
   });
 });

@@ -47,6 +47,22 @@ export interface ConsolidatedMonthViewProps {
 
 const WEEKDAY_HEADERS: readonly string[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/**
+ * Build a day-cell drill-down href. Phase 12.2 FIX 5 — carries the ORIGINATING
+ * `month` so the day view can offer a "← Back to calendar" affordance that
+ * returns to exactly the month the operator drilled from (the day view's only
+ * other exit, the view toggle, loses it). Filters ride along in preservedQuery.
+ * Pure + exported for unit coverage (no-render convention).
+ */
+export function buildMonthCellDayHref(
+  date: string,
+  monthAnchor: string,
+  preservedQuery?: string,
+): string {
+  const trail = preservedQuery ? `&${preservedQuery}` : "";
+  return `/calendar?view=day&date=${date}&month=${monthAnchor}${trail}`;
+}
+
 export function ConsolidatedMonthView({
   monthAnchor,
   days,
@@ -78,6 +94,7 @@ export function ConsolidatedMonthView({
           <MonthCell
             key={day.date}
             day={day}
+            monthAnchor={monthAnchor}
             isToday={day.date === today}
             isInMonth={isDateInMonth(day.date, monthIndex)}
             preservedQuery={preservedQuery}
@@ -90,14 +107,14 @@ export function ConsolidatedMonthView({
 
 interface MonthCellProps {
   readonly day: CalendarDayCount;
+  readonly monthAnchor: string;
   readonly isToday: boolean;
   readonly isInMonth: boolean;
   readonly preservedQuery?: string;
 }
 
-function MonthCell({ day, isToday, isInMonth, preservedQuery }: MonthCellProps) {
-  const trail = preservedQuery ? `&${preservedQuery}` : "";
-  const href = `/calendar?view=day&date=${day.date}${trail}`;
+function MonthCell({ day, monthAnchor, isToday, isInMonth, preservedQuery }: MonthCellProps) {
+  const href = buildMonthCellDayHref(day.date, monthAnchor, preservedQuery);
   const dayNumber = day.date.slice(8, 10);
   const backdrop = isToday
     ? "bg-[color:var(--color-tint-navy-subtle)]"

@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildCalendarBackHref,
   buildConsigneeLink,
   formatDeliveryTime,
   formatDeliveryWindow,
@@ -62,5 +63,27 @@ describe("buildConsigneeLink", () => {
     expect(buildConsigneeLink("c_xyz", "2027-01-01")).toBe(
       "/consignees/c_xyz?tab=calendar&week=2026-12-28",
     );
+  });
+});
+
+// Phase 12.2 Batch A · FIX 5 — the "← Back to calendar" affordance (the day view
+// previously had NO back/breadcrumb; the view toggle was the only exit and it
+// lost the originating month). The back link returns to the month view at the
+// month the operator drilled from.
+describe("buildCalendarBackHref", () => {
+  it("returns the month view anchored at the originating month", () => {
+    const href = buildCalendarBackHref("2026-05-01");
+    const params = new URLSearchParams(href.split("?")[1]);
+    expect(href.split("?")[0]).toBe("/calendar");
+    expect(params.get("view")).toBe("month");
+    expect(params.get("month")).toBe("2026-05-01");
+  });
+
+  it("preserves the active filter trail on the way back", () => {
+    const href = buildCalendarBackHref("2026-05-01", "status=DELIVERED&q=sarah");
+    const params = new URLSearchParams(href.split("?")[1]);
+    expect(params.get("month")).toBe("2026-05-01");
+    expect(params.get("status")).toBe("DELIVERED");
+    expect(params.get("q")).toBe("sarah");
   });
 });

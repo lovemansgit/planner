@@ -123,7 +123,15 @@ export function UserMenu({ identity }: UserMenuProps) {
         ref={panelRef}
         role="menu"
         aria-label="Account menu"
-        className={`absolute right-0 top-full mt-2 min-w-64 origin-top-right rounded-sm border border-[color:var(--color-border-default)] border-t-[1px] border-t-green bg-surface-primary p-4 transition-all duration-[120ms] ease-out ${
+        // Phase 12.2 FIX 6 — z-50 so the open menu (and its Sign out) floats ABOVE
+        // page content. The panel had no z-index, so the sticky-right DataTable
+        // cells (data-table-recipe.ts: z-[1]/z-[2]) on admin/operator list pages —
+        // both positioned in the root stacking context — painted over it, hiding
+        // logout (same family as the 12.1 asset-tracking dropdown overlap). z-50
+        // matches the asset-tracking dropdown (MerchantRefreshControl) and beats
+        // every list-surface z-index; full-screen modals are z-50 fixed + later in
+        // DOM, so they still correctly cover the nav. Shared by both shells.
+        className={`absolute right-0 top-full z-50 mt-2 min-w-64 origin-top-right rounded-sm border border-[color:var(--color-border-default)] border-t-[1px] border-t-green bg-surface-primary p-4 transition-all duration-[120ms] ease-out ${
           open
             ? "pointer-events-auto translate-y-0 opacity-100"
             : "pointer-events-none -translate-y-1 opacity-0"

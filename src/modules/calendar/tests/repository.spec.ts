@@ -102,10 +102,12 @@ describe("countTasksGroupedByDay", () => {
     const { sql, params } = compile(tx.execute.mock.calls[0][0]);
     expect(sql).toMatch(/c\.crm_state = /);
     expect(sql).toMatch(/c\.district = /);
-    // D56 Lane 4 (E1) — the status filter now matches the FINE courier_status,
-    // not the coarse internal_status.
+    // Phase 12.2 FIX 1 — render-aligned status filter: matches the FINE
+    // courier_status when present, ELSE the coarse internal_status the row
+    // renders from (mirrors buildCourierStatusFilter; coarse-only states like
+    // CREATED/SKIPPED were returning zero under the prior fine-only predicate).
     expect(sql).toMatch(/t\.courier_status = /);
-    expect(sql).not.toContain("internal_status");
+    expect(sql).toMatch(/t\.courier_status IS NULL AND t\.internal_status = /);
     expect(params).toContain("HIGH_RISK");
     expect(params).toContain("Al Quoz");
     expect(params).toContain("OUT_FOR_DELIVERY");

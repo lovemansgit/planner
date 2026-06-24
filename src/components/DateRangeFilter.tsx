@@ -229,6 +229,24 @@ export function DateRangeFilter({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Phase 12.2 FIX 2b — re-sync the displayed range to the committed URL state.
+  // The page re-renders this client component with new initialFrom/initialTo
+  // whenever the query changes (a page-size change that resets the window, or any
+  // sibling filter write). Without re-syncing, `from`/`to` kept the values seeded
+  // at mount, so the button label still read "Last 30 days" after the query had
+  // reset — the label lied about the effective query. This is React's documented
+  // "adjust state when a prop changes" pattern: reset DURING RENDER via a
+  // previous-prop tracker (not in an effect — that triggers cascading renders;
+  // see react-hooks/set-state-in-effect). The own debounced custom push lands the
+  // same values it sets, so this never clobbers in-progress edits.
+  const [committedRange, setCommittedRange] = useState({ from: initialFrom, to: initialTo });
+  if (committedRange.from !== initialFrom || committedRange.to !== initialTo) {
+    setCommittedRange({ from: initialFrom, to: initialTo });
+    setFrom(initialFrom);
+    setTo(initialTo);
+    setCustomMode(detectActivePreset(initialFrom, initialTo, today) === "custom");
+  }
+
   const active = customMode ? "custom" : detectActivePreset(from, to, today);
   const buttonLabel = buildButtonLabel(active, from, to);
 

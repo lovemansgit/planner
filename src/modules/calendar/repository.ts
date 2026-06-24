@@ -68,11 +68,19 @@ function buildFilterClause(tenantId: Uuid, filters: CalendarFilters): SQL {
   const districtClause = filters.district
     ? sqlTag`c.district = ${filters.district}`
     : sqlTag`TRUE`;
-  // D56 Phase 8 / Lane 4 (Love's E1 ruling) — the `?status=` filter matches the
-  // FINE `tasks.courier_status` (single source of truth, as on /tasks), NOT the
-  // coarse `internal_status`. NULL-courier rows never match a fine filter.
+  // Phase 12.2 FIX 1 — render-aligned status filter (mirrors the tasks-repo
+  // `buildCourierStatusFilter` canonical helper, #554 / D57). The `?status=`
+  // filter matches the FINE `tasks.courier_status` when present, ELSE falls back
+  // to the coarse `internal_status` the row actually renders from. Without the
+  // fallback, coarse-only states (CREATED / SKIPPED — courier_status NULL)
+  // matched zero rows on week/month/day. ON_HOLD stays the single exception: a
+  // recognised filter value whose predicate matches nothing (All-only, never a
+  // fine state). Replicated rather than imported to avoid a cross-module repo
+  // dependency; keep in lockstep with buildCourierStatusFilter.
   const statusClause = filters.status
-    ? sqlTag`t.courier_status = ${filters.status}`
+    ? filters.status === "ON_HOLD"
+      ? sqlTag`t.courier_status = 'ON_HOLD'`
+      : sqlTag`(t.courier_status = ${filters.status} OR (t.courier_status IS NULL AND t.internal_status = ${filters.status}))`
     : sqlTag`TRUE`;
   return sqlTag`
     t.tenant_id = ${tenantId}

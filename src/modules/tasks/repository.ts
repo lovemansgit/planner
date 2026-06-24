@@ -859,6 +859,10 @@ type AdminTaskJoinRow = TaskRow & {
   readonly merchant_slug: string;
   readonly merchant_name: string;
   readonly merchant_status: TenantStatus;
+  // Phase 12.2 FIX 3 — consignee surface for the admin Consignee column. The
+  // consignees JOIN already exists (name-search); now projected, not just filtered.
+  readonly consignee_name: string | null;
+  readonly consignee_phone: string | null;
 };
 
 /**
@@ -889,6 +893,8 @@ export async function listAllTasksRows(
       name: string;
       status: TenantStatus;
     };
+    consigneeName: string | null;
+    consigneePhone: string | null;
   }[]
 > {
   const limit = Math.min(filters.limit ?? 50, 500);
@@ -910,7 +916,9 @@ export async function listAllTasksRows(
       ten.id   AS merchant_tenant_id,
       ten.slug AS merchant_slug,
       ten.name AS merchant_name,
-      ten.status AS merchant_status
+      ten.status AS merchant_status,
+      c.name  AS consignee_name,
+      c.phone AS consignee_phone
     FROM tasks t
     JOIN tenants ten ON ten.id = t.tenant_id
     LEFT JOIN consignees c ON c.id = t.consignee_id
@@ -934,6 +942,8 @@ export async function listAllTasksRows(
       name: row.merchant_name,
       status: row.merchant_status,
     },
+    consigneeName: row.consignee_name ?? null,
+    consigneePhone: row.consignee_phone ?? null,
   }));
 }
 
