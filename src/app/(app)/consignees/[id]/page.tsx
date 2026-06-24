@@ -88,6 +88,7 @@ import {
   type SubscriptionDetailGroup,
   SubscriptionTab,
 } from "./_components/SubscriptionTab";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -338,7 +339,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
       {createdParam ? (
         <Toast message="Subscription created successfully" paramKey="created" />
       ) : null}
-      <div className="mx-auto max-w-5xl px-12 py-12">
+      <div className={shellClass("py-12")}>
         <Link
           href="/consignees"
           className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)] hover:text-navy"

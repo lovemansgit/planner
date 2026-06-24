@@ -39,6 +39,7 @@ import {
   statusAction,
   statusBadgeSurface,
 } from "./_helpers";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -83,7 +84,7 @@ export default async function MerchantsAdminPage({
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-6xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <header className="mb-12 flex items-end justify-between gap-6">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">

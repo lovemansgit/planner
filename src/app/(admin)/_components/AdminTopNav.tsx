@@ -27,6 +27,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { shellClass } from "@/components/page-shell-recipe";
+
 import { groupNavItems, isActiveNavPath, type NavItem } from "../../(app)/nav-config";
 import { UserMenu } from "../../(app)/user-menu";
 import type { UserIdentity } from "../../(app)/layout";
@@ -54,7 +56,7 @@ export function AdminTopNav({ items, userIdentity }: AdminTopNavProps) {
       aria-label="Primary admin"
       className="border-b border-[color:var(--color-border-strong)] bg-surface-primary"
     >
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-8 gap-y-4 px-12 py-6">
+      <div className={shellClass("flex flex-wrap items-center justify-between gap-x-8 gap-y-4 py-6")}>
         <Link
           href="/admin/merchants"
           className="flex shrink-0 items-center gap-3 transition-opacity duration-150 hover:opacity-80"

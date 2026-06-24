@@ -6,7 +6,8 @@ import { detailGridClass, shellClass } from "@/components/page-shell-recipe";
 
 describe("page-shell-recipe — one shared content width (Gap E)", () => {
   it("centers with the single canonical max-width", () => {
-    expect(shellClass()).toContain("max-w-[75rem]");
+    // Phase 12 Batch A — adopted live at the nav's existing 6xl width.
+    expect(shellClass()).toContain("max-w-6xl");
     expect(shellClass()).toContain("mx-auto");
   });
   it("appends caller className", () => {

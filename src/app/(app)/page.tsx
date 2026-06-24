@@ -24,6 +24,7 @@ import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
 import { type LandingCard, visibleLandingCards } from "./nav-config";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -62,7 +63,7 @@ export default async function LandingPage() {
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-4xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <header className="mb-16">
           {/* Phase 11 Batch E — removed the redundant "Subscription planner"
               page eyebrow; nav.tsx already renders it as the brand subtitle. */}

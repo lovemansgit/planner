@@ -22,6 +22,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { shellClass } from "@/components/page-shell-recipe";
 import type { Permission } from "@/shared/types";
 
 import type { UserIdentity } from "./layout";
@@ -44,7 +45,7 @@ export function TopNav({ permissions, userIdentity, assetTrackingEnabled }: TopN
       aria-label="Primary"
       className="border-b border-[color:var(--color-border-strong)] bg-surface-primary"
     >
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-y-4 px-12 py-6">
+      <div className={shellClass("flex flex-wrap items-center justify-between gap-y-4 py-6")}>
         <Link
           href="/"
           className="flex shrink-0 items-center gap-3 rounded-sm transition-opacity duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary"
