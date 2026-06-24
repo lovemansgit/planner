@@ -39,6 +39,7 @@ import type { Uuid } from "@/shared/types";
 
 import { RegionDeactivateModal } from "../_components/RegionDeactivateModal";
 import { authMethodBadge, regionStatusBadge } from "../_helpers";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -79,7 +80,7 @@ export default async function RegionDetailPage({ params }: RegionDetailPageProps
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-4xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <DetailView
           header={
             <DetailHeader

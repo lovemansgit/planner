@@ -85,6 +85,7 @@ import { AdminPageSizeDropdown } from "../../_components/AdminPageSizeDropdown";
 import { MerchantFilterDropdown } from "../../_components/MerchantFilterDropdown";
 
 import { AdminPodCell } from "./_components/AdminPodCell";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -156,7 +157,7 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-6xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <header className="mb-12">
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Transcorp · Admin

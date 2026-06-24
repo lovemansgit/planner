@@ -28,6 +28,7 @@ import {
 import { formatPhone } from "@/shared/humanize";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -74,7 +75,7 @@ export default async function AdminConsigneeDetailPage({
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-4xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         {/* Phase 9 · 3.5 — adopts the shared DetailView (Gap D, B+ skin): one
             floating card with a navy structural spine, two-column fill (D3), and
             the shared FieldRow (sentence-case labels per D2, "Not set" inline

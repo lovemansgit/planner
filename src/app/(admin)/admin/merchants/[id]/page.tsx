@@ -45,6 +45,7 @@ import type { Uuid } from "@/shared/types";
 import { authMethodBadge } from "../../regions/_helpers";
 import { merchantEffectiveAuthMethod, statusBadgeSurface } from "../_helpers";
 import { AssetTrackingToggle } from "./_components/AssetTrackingToggle";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -108,7 +109,7 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-4xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <DetailView
           header={
             <DetailHeader

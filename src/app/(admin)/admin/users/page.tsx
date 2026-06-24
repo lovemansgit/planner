@@ -41,6 +41,7 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 
 import { AdminPageSizeDropdown } from "../../_components/AdminPageSizeDropdown";
+import { shellClass } from "@/components/page-shell-recipe";
 
 const ALLOWED_PAGE_SIZES: readonly number[] = [25, 50, 100];
 const PAGE_SIZE_DEFAULT = 50;
@@ -97,7 +98,7 @@ export default async function AdminUsersPage({ searchParams }: AdminUsersPagePro
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-6xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <header className="mb-12 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">

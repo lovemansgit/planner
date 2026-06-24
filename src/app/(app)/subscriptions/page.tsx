@@ -38,6 +38,7 @@ import {
 import { NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -77,7 +78,7 @@ export default async function SubscriptionsPage({ searchParams }: SubscriptionsP
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-5xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <header className="mb-16 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
             {/* Phase 11 Batch E — removed the redundant "Subscription planner"

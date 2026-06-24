@@ -31,6 +31,7 @@ import { buildRequestContext } from "@/shared/request-context";
 import type { Permission } from "@/shared/types";
 
 import { ConsigneesTable } from "./_components/ConsigneesTable";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -74,7 +75,7 @@ export default async function ConsigneesPage({ searchParams }: ConsigneesPagePro
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy">
-      <div className="mx-auto max-w-5xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <header className="mb-16 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
