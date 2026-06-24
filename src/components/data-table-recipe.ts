@@ -95,3 +95,21 @@ const LED: Record<StatusTone, string> = {
 export function gutterTdClass(tone: StatusTone): string {
   return `w-1 p-0 ${LED[tone]}`;
 }
+
+// Sticky-right column (opt-in via DataTableColumn.stickyRight). The admin list
+// tables carry a wide actions column (Materialize / Reset password + Disable)
+// and overflow the shared content width on desktop, so the action scrolls off
+// the card's right edge and is no longer clickable. Pinning that column to the
+// right edge of the horizontal-scroll viewport keeps the action fully visible
+// while the remaining columns scroll beneath it (the audit's desktop fix; the
+// rest of the row still scrolls within the card on narrow viewports).
+//
+// Opaque card-coloured fill occludes the cells scrolling underneath; STICKY_SHADOW
+// is applied as an INLINE box-shadow (not a `shadow-[…]` Tailwind class) to dodge
+// the v3 arbitrary-shadow parser that flat-carded the whole app when it mis-read a
+// composite shadow value (Phase 11 Batch 1). z-index keeps the header pin above
+// the body pins.
+const STICKY_RIGHT_BASE = "sticky right-0 bg-[color:var(--color-b-card)]";
+export const STICKY_RIGHT_TH = `${STICKY_RIGHT_BASE} z-[2]`;
+export const STICKY_RIGHT_TD = `${STICKY_RIGHT_BASE} z-[1]`;
+export const STICKY_SHADOW = "-8px 0 8px -8px rgba(37, 45, 96, 0.15)";

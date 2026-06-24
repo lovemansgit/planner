@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 
 import { redirect } from "next/navigation";
 
+import { shellClass } from "@/components/page-shell-recipe";
 import { requirePermission } from "@/modules/identity";
 import { ForbiddenError, NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
@@ -51,7 +52,10 @@ export default async function NewMerchantPage() {
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-2xl px-12 py-16">
+      {/* shellClass so the header + form share the nav's left edge (Batch A
+          content-width contract); the form itself stays a readable, left-aligned
+          column rather than stretching the full content width (Phase 12.1). */}
+      <div className={shellClass("py-16")}>
         <header className="mb-12">
           <p className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
             Transcorp · Admin
@@ -65,7 +69,9 @@ export default async function NewMerchantPage() {
           </p>
         </header>
 
-        <CreateMerchantForm />
+        <div className="max-w-2xl">
+          <CreateMerchantForm />
+        </div>
       </div>
     </main>
   );
