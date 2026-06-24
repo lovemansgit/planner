@@ -98,7 +98,11 @@ export default async function InventoryReportPage({ searchParams }: InventoryPag
           </section>
         ) : report ? (
           <>
-            <div className="flex flex-wrap items-end justify-between gap-4">
+            {/* Phase 12.2 Batch B / Item 5 — left-align the filter/refresh
+                cluster onto the shared header left edge. Was justify-between,
+                which floated the refresh control to the far right and broke the
+                page's shared left edge; it now sits next to the date filter. */}
+            <div className="flex flex-wrap items-end gap-4">
               <DateRangeFilter
                 today={today}
                 initialFrom={from}
