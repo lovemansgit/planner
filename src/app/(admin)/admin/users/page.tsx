@@ -230,6 +230,11 @@ const USER_COLUMNS: ReadonlyArray<DataTableColumn<AdminUserRow>> = [
     srHeader: true,
     align: "right",
     noRowLink: true,
+    // Reset password + Disable/Enable is the widest admin actions cell; this
+    // table overflows the shared content width by ~250px on desktop, so pin
+    // the actions to the card's right edge to keep them visible + clickable
+    // while the rest of the row scrolls beneath (Phase 12.1).
+    stickyRight: true,
     cell: (row) => (
       <div className="inline-flex items-center justify-end gap-2">
         <UserPasswordResetModal userId={row.userId} email={row.email} />

@@ -78,8 +78,8 @@ export default async function MerchantsAdminPage({ searchParams }: MerchantsAdmi
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className={shellClass("py-16")}>
-        <header className="mb-12 flex items-end justify-between gap-6">
-          <div>
+        <header className="mb-12 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+          <div className="max-w-2xl">
             <p className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
               Transcorp · Admin
             </p>

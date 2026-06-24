@@ -12,6 +12,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
+  STICKY_RIGHT_TD,
+  STICKY_RIGHT_TH,
+  STICKY_SHADOW,
   TABLE,
   TABLE_CARD,
   TABLE_SCROLL,
@@ -41,6 +44,14 @@ export interface DataTableColumn<Row> {
   readonly cell: (row: Row) => ReactNode;
   /** Opt this column out of the row-link wrap (e.g. an actions cell). */
   readonly noRowLink?: boolean;
+  /**
+   * Pin this column to the right edge of the horizontal-scroll viewport so it
+   * stays fully visible + clickable when a wide table scrolls within the card.
+   * Used for the admin actions column, which would otherwise overflow the
+   * shared content width on desktop. Opt-in — every existing column renders
+   * byte-identically without it.
+   */
+  readonly stickyRight?: boolean;
   /** Plain-text value used as the truncation tooltip + mobile fallback. */
   readonly title?: (row: Row) => string | undefined;
 }
@@ -81,7 +92,17 @@ export function DataTable<Row>({
             <tr>
               {hasGutter ? <th className={gutterThClass()} aria-hidden /> : null}
               {columns.map((col) => (
-                <th key={col.key} className={thClass(density, col.align, col.headerClassName)}>
+                <th
+                  key={col.key}
+                  className={thClass(
+                    density,
+                    col.align,
+                    [col.headerClassName, col.stickyRight ? STICKY_RIGHT_TH : ""]
+                      .filter(Boolean)
+                      .join(" "),
+                  )}
+                  style={col.stickyRight ? { boxShadow: STICKY_SHADOW } : undefined}
+                >
                   {col.srHeader ? <span className="sr-only">{col.header}</span> : col.header}
                 </th>
               ))}
@@ -104,7 +125,12 @@ export function DataTable<Row>({
                     const title = col.title?.(row);
                     const wrapped =
                       href && !col.noRowLink ? (
-                        <Link href={href} className="block">
+                        // `truncate` lives on the link, not just the <td>: a block
+                        // child suppresses the cell's text-overflow:ellipsis, so a
+                        // row-linked cell would hard-clip mid-character with no
+                        // ellipsis. Truncating the link restores the … (admin slug
+                        // truncation fix).
+                        <Link href={href} className="block truncate">
                           {content}
                         </Link>
                       ) : (
@@ -113,7 +139,15 @@ export function DataTable<Row>({
                     return (
                       <td
                         key={col.key}
-                        className={tdClass(density, col.align, col.mono, col.cellClassName)}
+                        className={tdClass(
+                          density,
+                          col.align,
+                          col.mono,
+                          [col.cellClassName, col.stickyRight ? STICKY_RIGHT_TD : ""]
+                            .filter(Boolean)
+                            .join(" "),
+                        )}
+                        style={col.stickyRight ? { boxShadow: STICKY_SHADOW } : undefined}
                         title={title}
                       >
                         {wrapped}
