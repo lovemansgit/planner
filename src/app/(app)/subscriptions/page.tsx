@@ -22,9 +22,9 @@
 
 import { randomUUID } from "node:crypto";
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { Button } from "@/components/Button";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { DeliveryWindowTrack } from "@/components/DeliveryWindowTrack";
 import { HeroCount } from "@/components/HeroCount";
@@ -80,21 +80,21 @@ export default async function SubscriptionsPage({ searchParams }: SubscriptionsP
       <div className="mx-auto max-w-5xl px-12 py-16">
         <header className="mb-16 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-              Subscription planner
-            </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Subscriptions</h1>
+            {/* Phase 11 Batch E — removed the redundant "Subscription planner"
+                page eyebrow; nav.tsx already renders it as the brand subtitle. */}
+            <h1 className="text-4xl font-semibold tracking-tight">Subscriptions</h1>
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
               Recurring delivery rules + ad-hoc tasks. Create new from here.
             </p>
           </div>
           {canCreate ? (
-            <Link
-              href="/subscriptions/new"
-              className="inline-flex items-center justify-center rounded-sm border border-navy bg-navy px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90"
-            >
+            // Phase 11 Batch E — navy-fill button → green primary (navy never
+            // fills / green is primary). Uses the shared B+ <Button> recipe
+            // (same primitive as the /login primary), so casing + lift + green
+            // focus ring match the rest of the app.
+            <Button href="/subscriptions/new" variant="primary">
               New subscription
-            </Link>
+            </Button>
           ) : null}
         </header>
 
