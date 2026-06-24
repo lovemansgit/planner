@@ -187,4 +187,20 @@ describe("Day-19 / Phase 1.5 — listAllTasks (real Postgres)", () => {
     expect(r.merchant.name).toBe("Phase-1.5 Tenant A");
     expect(r.merchant.status).toBe("active");
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 12.2 Batch A · FIX 3 — consignee projection (was never fetched).
+  // The admin /tasks SELECT was `SELECT t.*` and never projected the joined
+  // consignee, so the cross-tenant table had no Consignee column to render
+  // (Love: critical). The list now carries the consignee name + phone.
+  // ---------------------------------------------------------------------------
+
+  it("returned rows expose the consignee name + phone (FIX 3)", async () => {
+    const ctx = makeCtx(SYSADMIN_PERMS);
+    const rows = await listAllTasks(ctx, { merchantSlug: SLUG_A });
+    expect(rows.length).toBeGreaterThan(0);
+    const r = rows[0];
+    expect(r.consigneeName).toBe("Cons A");
+    expect(r.consigneePhone).toBe(`+97150a${RUN_ID}`);
+  });
 });

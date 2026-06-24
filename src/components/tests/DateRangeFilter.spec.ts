@@ -223,3 +223,31 @@ describe("buildButtonLabel", () => {
     );
   });
 });
+
+// Phase 12.2 Batch A · FIX 2b — effective-range label contract.
+//
+// The component re-syncs from/to to changed initialFrom/initialTo props (the
+// committed URL range) via a useEffect, so the button label always reflects the
+// EFFECTIVE query. The runtime re-sync is preview-verified (node has no jsdom,
+// per this file's header). This locks the pure derivation the re-sync feeds: a
+// preserved 30-day window (the UAT repro: 50/page + Last-30-days → change to
+// 100/page → range preserved by FIX 2a) must still resolve to "Last 30 days",
+// NOT a stale or mismatched label.
+describe("effective-range label reflects the committed window (FIX 2b)", () => {
+  const TODAY_ANCHOR = "2026-05-15";
+  const label = (from: string, to: string) =>
+    buildButtonLabel(detectActivePreset(from, to, TODAY_ANCHOR), from, to);
+
+  it("a preserved Last-30-days window still labels 'Last 30 days'", () => {
+    // computePresetRange('last30') = { from: today-29, to: today }.
+    expect(label("2026-04-16", TODAY_ANCHOR)).toBe("Last 30 days");
+  });
+
+  it("a window reset to today labels 'Today' (the pre-fix stale label was wrong)", () => {
+    expect(label(TODAY_ANCHOR, TODAY_ANCHOR)).toBe("Today");
+  });
+
+  it("a genuinely-custom committed window labels 'Custom: …'", () => {
+    expect(label("2026-05-01", "2026-05-10")).toBe("Custom: 1 May – 10 May");
+  });
+});

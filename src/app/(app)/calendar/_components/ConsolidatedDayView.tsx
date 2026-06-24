@@ -46,6 +46,25 @@ export interface ConsolidatedDayViewProps {
   readonly date: string;
   /** Tasks ordered by delivery-window-start ASC, then consignee name. */
   readonly tasks: readonly CalendarDayTaskRow[];
+  /**
+   * Phase 12.2 FIX 5 — YYYY-MM-01 anchor of the month the operator drilled from
+   * (the originating `?month=`, else the month containing this day). Powers the
+   * "← Back to calendar" affordance.
+   */
+  readonly backMonthAnchor: string;
+  /** Pre-URL-encoded filter trail (q, crm, district, status) to preserve on back. */
+  readonly preservedQuery?: string;
+}
+
+/**
+ * Phase 12.2 FIX 5 — build the "← Back to calendar" href returning to the month
+ * the operator drilled from. The day view's only other exit was the view toggle,
+ * which dropped the originating month; this returns to it exactly. Pure +
+ * exported for unit coverage (no-render convention).
+ */
+export function buildCalendarBackHref(monthAnchor: string, preservedQuery?: string): string {
+  const trail = preservedQuery ? `&${preservedQuery}` : "";
+  return `/calendar?view=month&month=${monthAnchor}${trail}`;
 }
 
 /**
@@ -97,10 +116,23 @@ function computeWeekStart(isoDate: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function ConsolidatedDayView({ date, tasks }: ConsolidatedDayViewProps) {
+export function ConsolidatedDayView({
+  date,
+  tasks,
+  backMonthAnchor,
+  preservedQuery,
+}: ConsolidatedDayViewProps) {
   const dayLabel = getDayHeaderLabel(date);
+  const backHref = buildCalendarBackHref(backMonthAnchor, preservedQuery);
   return (
     <div data-day-anchor={date}>
+      <Link
+        href={backHref}
+        data-testid="day-view-back"
+        className="mb-3 inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.14em] text-navy underline decoration-stone-300 underline-offset-4 transition-colors duration-[120ms] ease-out hover:decoration-navy"
+      >
+        ← Back to calendar
+      </Link>
       <header className="mb-4 flex items-baseline justify-between">
         <h2 className="text-2xl font-semibold tracking-tight text-navy">
           {dayLabel}

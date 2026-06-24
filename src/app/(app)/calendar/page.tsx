@@ -146,6 +146,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const weekAnchor = isIsoDate(params.week) ? params.week : defaultWeekAnchor(today);
   const monthAnchor = isIsoDate(params.month) ? params.month : defaultMonthAnchor(today);
   const dayAnchor = isIsoDate(params.date) ? params.date : today;
+  // Phase 12.2 FIX 5 — the month the day-view "← Back to calendar" returns to:
+  // the originating `?month=` the operator drilled from, else the month
+  // containing the viewed day (so a direct/week-drill day-view lands sensibly).
+  const dayBackMonthAnchor = isIsoDate(params.month)
+    ? params.month
+    : defaultMonthAnchor(dayAnchor);
 
   const filterValues: CalendarFiltersValue = {
     q: params.q ?? "",
@@ -287,6 +293,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 <DayAnchorNav
                   dayAnchor={dayAnchor}
                   today={today}
+                  monthContext={dayBackMonthAnchor}
                   preservedQuery={buildPreservedQuery(filterValues)}
                 />
               ) : null}
@@ -311,7 +318,12 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                 />
               ) : null}
               {view === "day" ? (
-                <ConsolidatedDayView date={dayAnchor} tasks={dayTasks} />
+                <ConsolidatedDayView
+                  date={dayAnchor}
+                  tasks={dayTasks}
+                  backMonthAnchor={dayBackMonthAnchor}
+                  preservedQuery={buildPreservedQuery(filterValues)}
+                />
               ) : null}
             </section>
           </>
@@ -489,10 +501,14 @@ function MonthAnchorNav({
 function DayAnchorNav({
   dayAnchor,
   today,
+  monthContext,
   preservedQuery,
 }: {
   readonly dayAnchor: string;
   readonly today: string;
+  /** Phase 12.2 FIX 5 — originating month, threaded so day→day paging keeps the
+   *  "← Back to calendar" target stable across the day view's own navigation. */
+  readonly monthContext: string;
   readonly preservedQuery: string;
 }) {
   const anchor = new Date(`${dayAnchor}T00:00:00Z`);
@@ -502,11 +518,8 @@ function DayAnchorNav({
   next.setUTCDate(anchor.getUTCDate() + 1);
   const prevIso = prev.toISOString().slice(0, 10);
   const nextIso = next.toISOString().slice(0, 10);
-  const trail = preservedQuery ? `&${preservedQuery}` : "";
-  const todayHref =
-    dayAnchor === today
-      ? `/calendar?view=day${trail}`
-      : `/calendar?view=day&date=${today}${trail}`;
+  const trail = `&month=${monthContext}${preservedQuery ? `&${preservedQuery}` : ""}`;
+  const todayHref = `/calendar?view=day&date=${today}${trail}`;
   return (
     <nav
       aria-label="Day navigation"

@@ -286,6 +286,32 @@ const TASK_COLUMNS: ReadonlyArray<DataTableColumn<AdminTaskRow>> = [
     title: (row) => `${row.merchant.name} · ${row.merchant.slug}`,
   },
   {
+    // Phase 12.2 FIX 3 — the Consignee column (Love: critical). Name primary,
+    // phone secondary muted-mono, mirroring the operator /tasks consignee
+    // presentation. Em-dash when the consignee row is absent (legacy LEFT JOIN).
+    key: "consignee",
+    header: "Consignee",
+    cell: (row) =>
+      row.consigneeName ? (
+        <>
+          <span className="font-medium text-navy">{row.consigneeName}</span>
+          {row.consigneePhone ? (
+            <span className="ml-2 font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
+              {row.consigneePhone}
+            </span>
+          ) : null}
+        </>
+      ) : (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+    title: (row) =>
+      row.consigneeName
+        ? row.consigneePhone
+          ? `${row.consigneeName} · ${row.consigneePhone}`
+          : row.consigneeName
+        : undefined,
+  },
+  {
     key: "status",
     header: "Status",
     cell: (row) => {

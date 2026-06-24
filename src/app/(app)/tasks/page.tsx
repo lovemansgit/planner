@@ -150,7 +150,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           count={totalCount}
           label={buildCountLabel(status, query)}
           trailing={
-            <PageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} status={status} />
+            <PageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} />
           }
         />
 

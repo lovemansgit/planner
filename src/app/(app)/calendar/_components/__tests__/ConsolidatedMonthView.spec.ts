@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildMonthCellDayHref,
   isDateInMonth,
   parseMonthIndex,
 } from "../ConsolidatedMonthView";
@@ -40,5 +41,35 @@ describe("isDateInMonth", () => {
   it("returns false for dates in a different year (same month number)", () => {
     expect(isDateInMonth("2025-05-15", may2026)).toBe(false);
     expect(isDateInMonth("2027-05-15", may2026)).toBe(false);
+  });
+});
+
+// Phase 12.2 Batch A · FIX 5 — month-cell drill-down preserves the originating
+// month so the day view can return to it. Pre-fix the link was
+// `?view=day&date=<date>` with no `month`, so the day view lost where the
+// operator came from.
+describe("buildMonthCellDayHref", () => {
+  it("carries the originating month alongside the day (was dropped pre-fix)", () => {
+    const href = buildMonthCellDayHref("2026-05-20", "2026-05-01");
+    const params = new URLSearchParams(href.split("?")[1]);
+    expect(params.get("view")).toBe("day");
+    expect(params.get("date")).toBe("2026-05-20");
+    expect(params.get("month")).toBe("2026-05-01");
+  });
+
+  it("preserves the filter trail after the month", () => {
+    const href = buildMonthCellDayHref("2026-05-20", "2026-05-01", "status=DELIVERED&crm=HIGH_RISK");
+    const params = new URLSearchParams(href.split("?")[1]);
+    expect(params.get("month")).toBe("2026-05-01");
+    expect(params.get("status")).toBe("DELIVERED");
+    expect(params.get("crm")).toBe("HIGH_RISK");
+  });
+
+  it("an out-of-month trailing cell still anchors back to the grid's month", () => {
+    // A June cell shown in the May grid drills to June 1 but returns to May.
+    const href = buildMonthCellDayHref("2026-06-01", "2026-05-01");
+    const params = new URLSearchParams(href.split("?")[1]);
+    expect(params.get("date")).toBe("2026-06-01");
+    expect(params.get("month")).toBe("2026-05-01");
   });
 });

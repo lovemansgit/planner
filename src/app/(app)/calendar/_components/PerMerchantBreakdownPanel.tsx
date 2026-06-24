@@ -3,8 +3,9 @@
 // feedback ("scales beyond ~10 merchants, table version doesn't").
 //
 // One row per active merchant, sorted DESC by total tasks today.
-// Each row is a Link to `/admin/tasks?merchantSlug=<slug>` for drill-
-// through. The bar shows three stacked segments — delivered (navy),
+// Each row is a Link to `/admin/tasks?merchant=<slug>` for drill-
+// through (FIX 4: aligned to the key the admin tasks page reads). The
+// bar shows three stacked segments — delivered (navy),
 // in transit (stone-400), and scheduled-remaining (stone-200) —
 // scaled so the widest merchant is the full row width and shorter
 // merchants render proportionally narrower. The 7-day failed count
@@ -104,6 +105,17 @@ export function computeMerchantBarSegments(
   });
 }
 
+/**
+ * Build the drill-down href for a merchant bar → the cross-tenant /admin/tasks
+ * list filtered to that merchant. The param key MUST be `merchant` — the key the
+ * admin tasks page reads (admin/tasks/page.tsx: `params.merchant`) and the key
+ * MerchantFilterDropdown + the page's own pagination emit. Pure + exported for
+ * unit coverage (the codebase's no-render convention).
+ */
+export function buildMerchantDrilldownHref(slug: string): string {
+  return `/admin/tasks?merchant=${encodeURIComponent(slug)}`;
+}
+
 export interface PerMerchantBreakdownPanelProps {
   readonly rows: readonly CalendarPerMerchantBreakdownRow[];
 }
@@ -184,7 +196,7 @@ function BarRow({ segment }: { readonly segment: MerchantBarSegment }) {
 
   return (
     <Link
-      href={`/admin/tasks?merchantSlug=${encodeURIComponent(segment.tenantSlug)}`}
+      href={buildMerchantDrilldownHref(segment.tenantSlug)}
       data-tenant-slug={segment.tenantSlug}
       title={tooltip}
       className="block px-4 py-4 transition-colors duration-[120ms] ease-out hover:bg-stone-100"

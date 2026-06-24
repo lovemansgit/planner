@@ -177,6 +177,11 @@ export interface AdminTaskRow {
     readonly name: string;
     readonly status: TenantStatus;
   };
+  // Phase 12.2 FIX 3 — consignee surface for the admin Consignee column. Mirrors
+  // the operator TaskListRow.consigneeName/consigneePhone; null on legacy rows
+  // whose consignee row is absent (LEFT JOIN).
+  readonly consigneeName: string | null;
+  readonly consigneePhone: string | null;
 }
 
 export type { ListTasksOpts } from "./repository";

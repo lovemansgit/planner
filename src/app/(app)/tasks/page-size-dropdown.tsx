@@ -11,7 +11,7 @@
 
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { type ChangeEvent } from "react";
 
 import { PAGE_SIZE_DEFAULT } from "./status";
@@ -19,19 +19,36 @@ import { PAGE_SIZE_DEFAULT } from "./status";
 interface PageSizeDropdownProps {
   readonly value: number;
   readonly options: readonly number[];
-  readonly status: string | undefined;
 }
 
-export function PageSizeDropdown({ value, options, status }: PageSizeDropdownProps) {
+/**
+ * Build the `/tasks` URL for a page-size change. Clones the CURRENT search
+ * params so every sibling filter (status, q, from, to) survives the change —
+ * the page-size control must not narrow the result set. `page` is dropped
+ * (page-N at 50/page is meaningless at 500/page) and the default size omits
+ * `perPage` to keep bookmarked URLs clean. Mirrors the admin sibling
+ * (AdminPageSizeDropdown) and the DateRangeFilter URL discipline. Pure +
+ * exported for unit coverage (the codebase's no-render convention).
+ */
+export function buildPageSizeUrl(currentParams: URLSearchParams, next: number): string {
+  const params = new URLSearchParams(currentParams.toString());
+  params.delete("page");
+  if (next === PAGE_SIZE_DEFAULT) {
+    params.delete("perPage");
+  } else {
+    params.set("perPage", String(next));
+  }
+  const qs = params.toString();
+  return qs ? `/tasks?${qs}` : "/tasks";
+}
+
+export function PageSizeDropdown({ value, options }: PageSizeDropdownProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   function onChange(e: ChangeEvent<HTMLSelectElement>) {
     const next = Number.parseInt(e.target.value, 10);
-    const params = new URLSearchParams();
-    if (status) params.set("status", status);
-    if (next !== PAGE_SIZE_DEFAULT) params.set("perPage", String(next));
-    const qs = params.toString();
-    router.push(qs ? `/tasks?${qs}` : "/tasks");
+    router.push(buildPageSizeUrl(new URLSearchParams(searchParams?.toString() ?? ""), next));
   }
 
   return (
