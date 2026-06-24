@@ -141,7 +141,34 @@ export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefre
   const succeeded = doneTotal !== null ? doneTotal - failures.length : 0;
 
   return (
-    <div className="flex flex-col items-end gap-1.5">
+    <div className="flex items-end gap-4">
+      {/* Status / result rail. Kept to the LEFT of the controls and
+          bottom-aligned with them so the merchant dropdown — which opens
+          downward — can never occlude the “Couldn’t refresh” message or the
+          cost-guard reassurance (Phase 12.1 layering fix). */}
+      <div className="flex max-w-[18rem] flex-col items-end gap-1 text-right">
+        {pendingConfirm && !busy ? (
+          <p className="text-xs text-navy">
+            Refresh {count} merchants? This runs {count} live SuiteFleet polls.
+          </p>
+        ) : null}
+
+        {failures.length > 0 ? (
+          <p role="alert" className="text-xs text-red-700">
+            Couldn’t refresh {failures.map((f) => `${f.name} (${f.message})`).join(", ")}
+          </p>
+        ) : doneTotal !== null ? (
+          <p className="text-xs text-[color:var(--color-text-secondary)]">
+            Refreshed {succeeded} merchant{succeeded === 1 ? "" : "s"}.
+          </p>
+        ) : null}
+
+        {/* Cost-guard reassurance: scope is exactly what the user picks. */}
+        <p className="text-[11px] text-[color:var(--color-text-tertiary)]">
+          Polls only the merchants you select — one live check each.
+        </p>
+      </div>
+
       <div className="flex items-center gap-3">
         <details className="relative">
           <summary
@@ -157,7 +184,7 @@ export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefre
             </span>
           </summary>
 
-          <div className="absolute right-0 z-20 mt-2 w-72 rounded-2xl border border-[color:var(--color-border-default)] bg-[color:var(--color-b-card)] p-2 shadow-b-card">
+          <div className="absolute right-0 z-50 mt-3 w-72 rounded-2xl border border-[color:var(--color-border-default)] bg-[color:var(--color-b-card)] p-2 shadow-b-card">
             <fieldset>
               <legend id={labelId} className="sr-only">
                 Merchants to refresh
@@ -221,27 +248,6 @@ export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefre
           </Button>
         )}
       </div>
-
-      {pendingConfirm && !busy ? (
-        <p className="max-w-xs text-right text-xs text-navy">
-          Refresh {count} merchants? This runs {count} live SuiteFleet polls.
-        </p>
-      ) : null}
-
-      {/* Cost-guard reassurance: scope is exactly what the user picks. */}
-      <p className="text-right text-[11px] text-[color:var(--color-text-tertiary)]">
-        Polls only the merchants you select — one live check each.
-      </p>
-
-      {failures.length > 0 ? (
-        <p role="alert" className="max-w-xs text-right text-xs text-red-700">
-          Couldn’t refresh {failures.map((f) => `${f.name} (${f.message})`).join(", ")}
-        </p>
-      ) : doneTotal !== null ? (
-        <p className="text-right text-xs text-[color:var(--color-text-secondary)]">
-          Refreshed {succeeded} merchant{succeeded === 1 ? "" : "s"}.
-        </p>
-      ) : null}
     </div>
   );
 }
