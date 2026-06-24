@@ -11,7 +11,6 @@
 
 "use client";
 
-import Link from "next/link";
 import { useActionState } from "react";
 
 import { Button } from "@/components/Button";
@@ -94,13 +93,10 @@ export function UserEditForm({
         </p>
       ) : null}
 
-      <div className="flex items-center justify-between border-t border-[color:var(--color-border-default)] pt-6">
-        <Link
-          href={`/admin/users/${userId}`}
-          className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)] hover:text-navy"
-        >
-          ← Cancel
-        </Link>
+      <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-default)] pt-6">
+        <Button href={`/admin/users/${userId}`} variant="ghost">
+          Cancel
+        </Button>
         <Button type="submit" variant="primary" disabled={pending}>
           {pending ? "Saving…" : "Save changes"}
         </Button>

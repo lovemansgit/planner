@@ -17,6 +17,11 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/Button";
+import { bButtonClass } from "@/components/button-recipe";
+import { Field } from "@/components/Field";
+import { textareaClass } from "@/components/form-field-recipe";
+
 import {
   disableUserAction,
   type UserStatusActionResult,
@@ -69,24 +74,23 @@ function UserDisableModalForm({
         their cookie expires.
       </p>
 
-      <div className="mt-5 space-y-2">
-        <label
+      <div className="mt-5">
+        <Field
+          label="Reason"
           htmlFor="user-disable-reason"
-          className="block text-xs font-medium uppercase tracking-[0.14em] text-navy"
+          optional
+          help="Logged in the audit trail. Visible to other Transcorp staff."
         >
-          Reason <span className="text-[color:var(--color-text-tertiary)] normal-case">(optional)</span>
-        </label>
-        <textarea
-          id="user-disable-reason"
-          name="reason"
-          rows={3}
-          maxLength={500}
-          placeholder="e.g. Left the company; rotating credentials; demo cleanup."
-          className="w-full border border-stone-200 bg-paper px-3 py-2 text-sm text-navy placeholder:text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out focus:border-navy focus:bg-stone-100 focus:outline-none"
-        />
-        <p className="text-xs text-[color:var(--color-text-secondary)]">
-          Logged in the audit trail. Visible to other Transcorp staff.
-        </p>
+          <textarea
+            id="user-disable-reason"
+            name="reason"
+            rows={3}
+            maxLength={500}
+            placeholder="e.g. Left the company; rotating credentials; demo cleanup."
+            aria-describedby="user-disable-reason-help"
+            className={textareaClass()}
+          />
+        </Field>
       </div>
 
       {errorMessage ? (
@@ -99,20 +103,12 @@ function UserDisableModalForm({
       ) : null}
 
       <div className="mt-6 flex items-center justify-end gap-3">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-        >
+        <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={isPending}
-          className="rounded-sm border border-red bg-red px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        </Button>
+        <Button type="submit" variant="danger" disabled={isPending}>
           {isPending ? "Disabling…" : "Disable"}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -164,11 +160,13 @@ export function UserDisableModal({ userId, email }: UserDisableModalProps) {
 
   return (
     <>
+      {/* Native <button> (not <Button>) so triggerRef stays attached for
+          focus-return on Escape; styled with the shared B+ recipe (danger). */}
       <button
         ref={triggerRef}
         type="button"
         onClick={openModal}
-        className="inline-flex items-center justify-center rounded-sm border border-stone-200 bg-paper px-3 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-navy transition-colors duration-[120ms] ease-out hover:border-red hover:text-red"
+        className={bButtonClass("danger", "sm")}
       >
         Disable
       </button>

@@ -18,7 +18,6 @@
 
 "use client";
 
-import Link from "next/link";
 import { useActionState, useMemo, useState } from "react";
 
 import { Button } from "@/components/Button";
@@ -174,13 +173,10 @@ export function UserCreateForm({
         </p>
       ) : null}
 
-      <div className="flex items-center justify-between border-t border-[color:var(--color-border-default)] pt-6">
-        <Link
-          href="/admin/users"
-          className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)] hover:text-navy"
-        >
-          ← Cancel
-        </Link>
+      <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-default)] pt-6">
+        <Button href="/admin/users" variant="ghost">
+          Cancel
+        </Button>
         <Button type="submit" variant="primary" disabled={pending || tenantOptions.length === 0}>
           {pending ? "Creating…" : "Create user"}
         </Button>

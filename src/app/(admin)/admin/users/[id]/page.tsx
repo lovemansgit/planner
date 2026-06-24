@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { bButtonClass } from "@/components/button-recipe";
 import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
 import { FieldRow } from "@/components/FieldRow";
 import { roleLabel } from "@/modules/identity/role-label";
@@ -80,9 +81,11 @@ export default async function AdminUserDetailPage({ params }: AdminUserDetailPag
               status={<LoginStatusBadge disabled={disabled} />}
               actions={
                 canEdit ? (
+                  // B+ secondary action (mockup detail header: Edit = secondary).
+                  // Server component → bare <Link> + button recipe, not <Button href>.
                   <Link
                     href={`/admin/users/${user.userId}/edit`}
-                    className="inline-flex items-center rounded-sm border border-navy bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                    className={bButtonClass("secondary", "md")}
                   >
                     Edit
                   </Link>
