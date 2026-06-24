@@ -28,11 +28,7 @@ import { listRegions, type Region } from "@/modules/credentials";
 import { requirePermission } from "@/modules/identity";
 import { getMerchantById } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
-import {
-  ForbiddenError,
-  NoTenantConfiguredError,
-  UnauthorizedError,
-} from "@/shared/errors";
+import { ForbiddenError, NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
 
@@ -65,9 +61,7 @@ export default async function EditMerchantPage({ params }: EditMerchantPageProps
     activeRegions = await listRegions(ctx, { onlyActive: true });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
-      redirect(
-        "/login?next=" + encodeURIComponent(`/admin/merchants/${id}/edit`),
-      );
+      redirect("/login?next=" + encodeURIComponent(`/admin/merchants/${id}/edit`));
     }
     if (err instanceof ForbiddenError) {
       redirect("/");
@@ -86,14 +80,16 @@ export default async function EditMerchantPage({ params }: EditMerchantPageProps
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-2xl px-12 py-16">
         <header className="mb-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+          <p className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
             Transcorp · Admin
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">Edit merchant</h1>
+          <h1 className="mt-2 font-b-display text-3xl font-bold tracking-[-0.01em] text-navy">
+            Edit merchant
+          </h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-            Update <span className="font-medium text-navy">{merchant.name}</span>{" "}
-            identity, pickup address, or SuiteFleet routing. Status changes
-            (activate / deactivate) happen on the merchants list.
+            Update <span className="font-medium text-navy">{merchant.name}</span> identity, pickup
+            address, or SuiteFleet routing. Status changes (activate / deactivate) happen on the
+            merchants list.
           </p>
         </header>
 

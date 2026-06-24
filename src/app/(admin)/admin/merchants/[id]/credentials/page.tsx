@@ -22,10 +22,7 @@ import { randomUUID } from "node:crypto";
 
 import { notFound, redirect } from "next/navigation";
 
-import {
-  loadCredentialsPageState,
-  type CredentialsPageState,
-} from "@/modules/credentials";
+import { loadCredentialsPageState, type CredentialsPageState } from "@/modules/credentials";
 import { requirePermission } from "@/modules/identity";
 import {
   ForbiddenError,
@@ -54,10 +51,7 @@ export default async function CredentialsPage({ params }: CredentialsPageProps) 
 
   let state: CredentialsPageState;
   try {
-    const ctx = await buildRequestContext(
-      `/admin/merchants/${id}/credentials`,
-      requestId,
-    );
+    const ctx = await buildRequestContext(`/admin/merchants/${id}/credentials`, requestId);
     // Page-level permission preflight (same gate the action enforces) —
     // defense-in-depth so an actor without merchant:update gets the
     // redirect rather than rendering an empty form and 403'ing on
@@ -66,9 +60,7 @@ export default async function CredentialsPage({ params }: CredentialsPageProps) 
     state = await loadCredentialsPageState(ctx, id as Uuid);
   } catch (err) {
     if (err instanceof UnauthorizedError) {
-      redirect(
-        "/login?next=" + encodeURIComponent(`/admin/merchants/${id}/credentials`),
-      );
+      redirect("/login?next=" + encodeURIComponent(`/admin/merchants/${id}/credentials`));
     }
     if (err instanceof ForbiddenError) {
       redirect("/");
@@ -82,18 +74,18 @@ export default async function CredentialsPage({ params }: CredentialsPageProps) 
     throw err;
   }
 
-  const eyebrow = state.hasCredentials
-    ? "Rotate credentials"
-    : "Set credentials";
+  const eyebrow = state.hasCredentials ? "Rotate credentials" : "Set credentials";
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-2xl px-12 py-16">
         <header className="mb-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+          <p className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
             Transcorp · Admin · {eyebrow}
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">{state.merchantName}</h1>
+          <h1 className="mt-2 font-b-display text-3xl font-bold tracking-[-0.01em] text-navy">
+            {state.merchantName}
+          </h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Region: <span className="font-medium text-navy">{state.region.displayName}</span> ·
             authentication method:{" "}

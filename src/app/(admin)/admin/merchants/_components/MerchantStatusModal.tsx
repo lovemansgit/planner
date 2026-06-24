@@ -16,6 +16,8 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 
+import { bButtonClass } from "@/components/button-recipe";
+
 import {
   activateMerchantAction,
   deactivateMerchantAction,
@@ -74,34 +76,26 @@ function MerchantStatusModalForm({
 
   return (
     <form action={formAction} className="mt-6">
-      <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+      <p className="font-b-mono text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
         Merchant lifecycle
       </p>
-      <h2 className="mt-1 font-display text-xl font-semibold text-navy">{heading}</h2>
+      <h2 className="mt-1 font-b-display text-xl font-semibold text-navy">{heading}</h2>
       <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">{summary}</p>
 
       {errorMessage ? (
         <p
           role="alert"
-          className="mt-4 rounded-sm border border-red/40 bg-red/10 px-2 py-1.5 text-xs text-red"
+          className="mt-4 rounded-[10px] border border-red/40 bg-red/10 px-3 py-2 text-xs text-red"
         >
           {errorMessage}
         </p>
       ) : null}
 
       <div className="mt-6 flex items-center justify-end gap-3">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-        >
+        <button type="button" onClick={onCancel} className={bButtonClass("ghost", "md")}>
           Cancel
         </button>
-        <button
-          type="submit"
-          disabled={isPending}
-          className="rounded-sm border border-green bg-green px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-paper transition-opacity duration-[120ms] ease-out hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <button type="submit" disabled={isPending} className={bButtonClass("primary", "md")}>
           {submitLabel}
         </button>
       </div>
@@ -115,11 +109,7 @@ interface MerchantStatusModalProps {
   readonly variant: "activate" | "deactivate";
 }
 
-export function MerchantStatusModal({
-  tenantId,
-  merchantName,
-  variant,
-}: MerchantStatusModalProps) {
+export function MerchantStatusModal({ tenantId, merchantName, variant }: MerchantStatusModalProps) {
   const [open, setOpen] = useState(false);
   const [formKey, setFormKey] = useState(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -169,7 +159,7 @@ export function MerchantStatusModal({
         ref={triggerRef}
         type="button"
         onClick={openModal}
-        className="inline-flex min-w-[120px] items-center justify-center rounded-sm border border-navy bg-paper px-3 py-1.5 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+        className={bButtonClass("secondary", "sm")}
       >
         {triggerLabel}
       </button>
@@ -183,7 +173,7 @@ export function MerchantStatusModal({
         >
           <div
             ref={panelRef}
-            className="w-full max-w-md rounded-sm border border-stone-200 border-t-[1px] border-t-green bg-surface-primary p-6"
+            className="w-full max-w-md rounded-2xl bg-[color:var(--color-b-card)] p-6 shadow-b-card"
           >
             <MerchantStatusModalForm
               key={formKey}

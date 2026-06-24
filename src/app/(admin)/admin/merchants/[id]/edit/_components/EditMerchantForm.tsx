@@ -33,7 +33,6 @@
 
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
@@ -44,10 +43,11 @@ import { Select } from "@/components/Select";
 import type { Region } from "@/modules/credentials";
 import type { Merchant } from "@/modules/merchants/types";
 
-import {
-  updateMerchantAction,
-  type UpdateActionResult,
-} from "../../../_actions";
+// B+ floating card surface (Phase 9 · Gap C/D), mirroring DetailView /
+// CredentialsForm so every merchant form reads on the same warm-white float.
+const FORM_CARD = "rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-b-card";
+
+import { updateMerchantAction, type UpdateActionResult } from "../../../_actions";
 
 interface EditMerchantFormProps {
   readonly initial: Merchant;
@@ -86,8 +86,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
     return () => clearTimeout(handle);
   }, [actionResult.kind, router]);
 
-  const fieldErrors =
-    actionResult.kind === "validation" ? actionResult.fieldErrors : {};
+  const fieldErrors = actionResult.kind === "validation" ? actionResult.fieldErrors : {};
   const formError =
     actionResult.kind === "conflict"
       ? actionResult.message
@@ -104,107 +103,106 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
       {formError ? (
         <p
           role="alert"
-          className="mb-6 rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red"
+          className="mb-6 rounded-[10px] border border-red/40 bg-red/10 px-3.5 py-2.5 text-sm text-red"
         >
           {formError}
         </p>
       ) : null}
 
-      <form action={formAction} className="space-y-8">
-        <TextField
-          label="Merchant name"
-          name="name"
-          defaultValue={initial.name}
-          placeholder="Demo Bistro"
-          error={fieldErrors.name}
-          required
-        />
-
-        <div>
-          <p className="mb-1 block text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
-            Slug
-          </p>
-          <p className="rounded-sm border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-sm text-[color:var(--color-text-secondary)]">
-            {initial.slug}
-          </p>
-          <p className="mt-1 text-xs text-[color:var(--color-text-tertiary)]">
-            Slug is set at creation and not editable here. Contact Transcorp
-            staff if a slug needs to be corrected.
-          </p>
-        </div>
-
-        <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
-          <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Pickup address
-          </legend>
-          <p className="text-xs text-[color:var(--color-text-secondary)]">
-            Captured at merchant creation; surfaces as ship-from on every task. All three fields are
-            required if any is provided.
-          </p>
-
+      <div className={FORM_CARD}>
+        <form action={formAction} className="space-y-8">
           <TextField
-            label="Address line"
-            name="pickup_line"
-            defaultValue={initial.pickupAddress?.line ?? ""}
-            placeholder="Building 4, Sheikh Zayed Road"
-            error={fieldErrors.pickup_line}
-          />
-
-          <TextField
-            label="District"
-            name="pickup_district"
-            defaultValue={initial.pickupAddress?.district ?? ""}
-            placeholder="Al Quoz"
-            error={fieldErrors.pickup_district}
-          />
-
-          <TextField
-            label="Emirate"
-            name="pickup_emirate"
-            defaultValue={initial.pickupAddress?.emirate ?? ""}
-            placeholder="Dubai"
-            error={fieldErrors.pickup_emirate}
-          />
-        </fieldset>
-
-        <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
-          <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            SuiteFleet routing
-          </legend>
-          <p className="text-xs text-[color:var(--color-text-secondary)]">
-            Required to route tasks to SuiteFleet outbound. Missing or invalid codes fail-close the
-            cron push for this tenant.
-          </p>
-
-          <TextField
-            label="SuiteFleet customer code"
-            name="suitefleet_customer_code"
-            defaultValue={initial.suitefleetCustomerCode ?? ""}
-            placeholder="000"
-            hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
-            error={fieldErrors.suitefleet_customer_code}
+            label="Merchant name"
+            name="name"
+            defaultValue={initial.name}
+            placeholder="Demo Bistro"
+            error={fieldErrors.name}
             required
           />
 
-          <RegionPicker
-            currentRegionId={initial.suitefleetRegionId}
-            activeRegions={activeRegions}
-            error={fieldErrors.suitefleet_region_id}
-          />
-        </fieldset>
+          <div>
+            <p className="mb-1.5 block text-[13px] font-medium text-[color:var(--color-text-secondary)]">
+              Slug
+            </p>
+            <p className="rounded-[10px] border border-[color:var(--color-border-default)] bg-[color:var(--color-surface-secondary)] px-3.5 py-2.5 font-b-mono text-sm text-[color:var(--color-text-secondary)]">
+              {initial.slug}
+            </p>
+            <p className="mt-1 text-xs text-[color:var(--color-text-tertiary)]">
+              Slug is set at creation and not editable here. Contact Transcorp staff if a slug needs
+              to be corrected.
+            </p>
+          </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-strong)] pt-8">
-          <Link
-            href="/admin/merchants"
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-          >
-            Cancel
-          </Link>
-          <Button type="submit" variant="primary" disabled={isPending}>
-            {isPending ? "Updating…" : "UPDATE MERCHANT"}
-          </Button>
-        </div>
-      </form>
+          <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
+            <legend className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+              Pickup address
+            </legend>
+            <p className="text-xs text-[color:var(--color-text-secondary)]">
+              Captured at merchant creation; surfaces as ship-from on every task. All three fields
+              are required if any is provided.
+            </p>
+
+            <TextField
+              label="Address line"
+              name="pickup_line"
+              defaultValue={initial.pickupAddress?.line ?? ""}
+              placeholder="Building 4, Sheikh Zayed Road"
+              error={fieldErrors.pickup_line}
+            />
+
+            <TextField
+              label="District"
+              name="pickup_district"
+              defaultValue={initial.pickupAddress?.district ?? ""}
+              placeholder="Al Quoz"
+              error={fieldErrors.pickup_district}
+            />
+
+            <TextField
+              label="Emirate"
+              name="pickup_emirate"
+              defaultValue={initial.pickupAddress?.emirate ?? ""}
+              placeholder="Dubai"
+              error={fieldErrors.pickup_emirate}
+            />
+          </fieldset>
+
+          <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
+            <legend className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+              SuiteFleet routing
+            </legend>
+            <p className="text-xs text-[color:var(--color-text-secondary)]">
+              Required to route tasks to SuiteFleet outbound. Missing or invalid codes fail-close
+              the cron push for this tenant.
+            </p>
+
+            <TextField
+              label="SuiteFleet customer code"
+              name="suitefleet_customer_code"
+              defaultValue={initial.suitefleetCustomerCode ?? ""}
+              placeholder="000"
+              hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
+              error={fieldErrors.suitefleet_customer_code}
+              required
+            />
+
+            <RegionPicker
+              currentRegionId={initial.suitefleetRegionId}
+              activeRegions={activeRegions}
+              error={fieldErrors.suitefleet_region_id}
+            />
+          </fieldset>
+
+          <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-strong)] pt-8">
+            <Button href="/admin/merchants" variant="ghost">
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={isPending}>
+              {isPending ? "Updating…" : "Update merchant"}
+            </Button>
+          </div>
+        </form>
+      </div>
     </>
   );
 }

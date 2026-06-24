@@ -24,21 +24,16 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { bButtonClass } from "@/components/button-recipe";
 import { CopyableUrl } from "@/components/CopyableUrl";
 import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
+import { SECTION_LABEL } from "@/components/detail-view-recipe";
 import { FieldRow } from "@/components/FieldRow";
 import { findRegionForMerchant, type Region } from "@/modules/credentials";
-import {
-  getMerchantAssetTrackingEnabled,
-  getMerchantById,
-} from "@/modules/merchants/service";
+import { getMerchantAssetTrackingEnabled, getMerchantById } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
 import { buildWebhookUrl, resolvePublicBaseUrl } from "@/modules/webhooks";
-import {
-  ForbiddenError,
-  NoTenantConfiguredError,
-  UnauthorizedError,
-} from "@/shared/errors";
+import { ForbiddenError, NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 import type { Uuid } from "@/shared/types";
 
@@ -71,8 +66,7 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
     canManageCredentials = ctx.actor.permissions.has("merchant:update");
     if (merchant) {
       region = await findRegionForMerchant(ctx, merchant.suitefleetRegionId);
-      assetTrackingEnabled =
-        (await getMerchantAssetTrackingEnabled(ctx, id as Uuid)) ?? false;
+      assetTrackingEnabled = (await getMerchantAssetTrackingEnabled(ctx, id as Uuid)) ?? false;
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
@@ -116,18 +110,21 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
               title={merchant.name}
               status={
                 <span
-                  className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
+                  className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${badge.className}`}
                 >
                   {badge.label}
                 </span>
               }
               actions={
                 canEdit ? (
+                  // Server component: a styled <Link> (NOT <Button href>) keeps
+                  // the B+ skin without the server-side onClick→next/link RSC
+                  // serialization trap (#624).
                   <Link
                     href={`/admin/merchants/${merchant.tenantId}/edit`}
-                    className="inline-flex items-center rounded-sm border border-navy bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
+                    className={bButtonClass("secondary", "md")}
                   >
-                    UPDATE MERCHANT
+                    Edit merchant
                   </Link>
                 ) : undefined
               }
@@ -174,7 +171,7 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
                 value={
                   <span className="inline-flex items-center gap-2">
                     <span
-                      className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${authBadge.className}`}
+                      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${authBadge.className}`}
                     >
                       {authBadge.label}
                     </span>
@@ -192,36 +189,23 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
               value={
                 <span className="inline-flex flex-wrap items-center gap-4">
                   {credentialsConfigured ? (
-                    <span className="inline-flex items-center bg-green/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-green">
+                    <span className="inline-flex items-center rounded-full bg-green/15 px-2.5 py-1 text-xs font-medium text-green">
                       Configured
                     </span>
                   ) : (
-                    <span className="inline-flex items-center bg-amber/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-amber-deep">
+                    <span className="inline-flex items-center rounded-full bg-amber/15 px-2.5 py-1 text-xs font-medium text-amber-deep">
                       Missing
                     </span>
                   )}
                   {canManageCredentials ? (
                     <Link
                       href={`/admin/merchants/${merchant.tenantId}/credentials`}
-                      className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] underline-offset-4 hover:text-navy hover:underline"
+                      className="text-xs text-[color:var(--color-text-secondary)] underline-offset-4 hover:text-navy hover:underline"
                     >
                       Manage credentials →
                     </Link>
                   ) : null}
                 </span>
-              }
-            />
-            <FieldRow
-              label="Webhook URL"
-              value={
-                <>
-                  <CopyableUrl url={webhookUrl} />
-                  <span className="mt-3 block text-xs text-[color:var(--color-text-tertiary)]">
-                    Share with SuiteFleet vendor to wire inbound webhooks for this merchant. URL
-                    reflects the current deploy environment — for Production, use the value displayed
-                    at planner-olive-sigma.vercel.app.
-                  </span>
-                </>
               }
             />
           </DetailSection>
@@ -245,11 +229,29 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
               }
             />
           </DetailSection>
+
+          {/*
+            Webhook URL is a full-bleed share affordance, not a label/value pair.
+            It spans both detail columns (md:col-span-2) so the CopyableUrl's
+            mono code box gets the full card width — the cramped ~160px value
+            cell of the 140px/1fr FieldRow grid forced break-all to wrap the URL
+            almost one character per line. Same SECTION_LABEL eyebrow as the
+            DetailSections so it reads as a peer section, not an orphan.
+          */}
+          <section className="md:col-span-2">
+            <p className={SECTION_LABEL}>Webhook URL</p>
+            <CopyableUrl url={webhookUrl} />
+            <p className="mt-3 text-xs text-[color:var(--color-text-tertiary)]">
+              Share with SuiteFleet vendor to wire inbound webhooks for this merchant. URL reflects
+              the current deploy environment — for Production, use the value displayed at
+              planner-olive-sigma.vercel.app.
+            </p>
+          </section>
         </DetailView>
 
         <p className="mt-4 max-w-2xl text-[13px] leading-relaxed text-[color:var(--color-text-secondary)]">
-          Read-only details. Edit non-status fields via UPDATE MERCHANT; activate / deactivate from
-          the merchants list.
+          Read-only details. Edit non-status fields via the Edit merchant action; activate /
+          deactivate from the merchants list.
         </p>
 
         <p className="mt-8">

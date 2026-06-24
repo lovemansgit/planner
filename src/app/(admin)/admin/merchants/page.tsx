@@ -22,23 +22,16 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { bButtonClass } from "@/components/button-recipe";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
-import {
-  ForbiddenError,
-  NoTenantConfiguredError,
-  UnauthorizedError,
-} from "@/shared/errors";
+import { ForbiddenError, NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
 import { MerchantStatusModal } from "./_components/MerchantStatusModal";
-import {
-  selectMerchantListFilters,
-  statusAction,
-  statusBadgeSurface,
-} from "./_helpers";
+import { selectMerchantListFilters, statusAction, statusBadgeSurface } from "./_helpers";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -49,12 +42,11 @@ interface MerchantsAdminPageProps {
   }>;
 }
 
-export default async function MerchantsAdminPage({
-  searchParams,
-}: MerchantsAdminPageProps) {
+export default async function MerchantsAdminPage({ searchParams }: MerchantsAdminPageProps) {
   const requestId = randomUUID();
   const params = await searchParams;
-  const q = typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
+  const q =
+    typeof params.q === "string" && params.q.trim().length > 0 ? params.q.trim() : undefined;
 
   let merchants: readonly Merchant[];
   try {
@@ -86,26 +78,26 @@ export default async function MerchantsAdminPage({
       <div className="mx-auto max-w-6xl px-12 py-16">
         <header className="mb-12 flex items-end justify-between gap-6">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+            <p className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
               Transcorp · Admin
             </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Merchants</h1>
+            <h1 className="mt-2 font-b-display text-3xl font-bold tracking-[-0.01em] text-navy">
+              Merchants
+            </h1>
             <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
-              Genuine merchants on the platform. Automated-test tenants and archived rows are
-              never shown. Activate provisioning merchants when ready; deactivate live merchants
-              to stop new task generation.
+              Genuine merchants on the platform. Automated-test tenants and archived rows are never
+              shown. Activate provisioning merchants when ready; deactivate live merchants to stop
+              new task generation.
             </p>
           </div>
-          <Link
-            href="/admin/merchants/new"
-            className="inline-flex items-center rounded-sm border border-navy bg-paper px-4 py-2 text-xs font-medium uppercase tracking-[0.1em] text-navy transition-colors duration-[120ms] ease-out hover:bg-ivory"
-          >
-            + New merchant
+          {/* Server component: styled <Link> (NOT <Button href>) — server-safe B+ skin. */}
+          <Link href="/admin/merchants/new" className={bButtonClass("secondary", "md")}>
+            New merchant
           </Link>
         </header>
 
         <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">
+          <p className="font-b-mono text-5xl tabular-nums leading-none text-navy">
             {merchants.length}
           </p>
           <div className="flex flex-col items-end gap-2">
@@ -115,10 +107,7 @@ export default async function MerchantsAdminPage({
           </div>
         </section>
 
-        <SearchBar
-          placeholder="Search by name or slug"
-          label="Search merchants by name or slug"
-        />
+        <SearchBar placeholder="Search by name or slug" label="Search merchants by name or slug" />
 
         {merchants.length === 0 ? (
           <EmptyState filtered={q !== undefined} />
@@ -160,7 +149,7 @@ const MERCHANT_COLUMNS: ReadonlyArray<DataTableColumn<Merchant>> = [
       const badge = statusBadgeSurface(m.status);
       return (
         <span
-          className={`inline-flex items-center px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] ${badge.className}`}
+          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${badge.className}`}
         >
           {badge.label}
         </span>
@@ -183,11 +172,7 @@ const MERCHANT_COLUMNS: ReadonlyArray<DataTableColumn<Merchant>> = [
       return action === null ? (
         <span className="text-[color:var(--color-text-tertiary)]">—</span>
       ) : (
-        <MerchantStatusModal
-          tenantId={m.tenantId}
-          merchantName={m.name}
-          variant={action}
-        />
+        <MerchantStatusModal tenantId={m.tenantId} merchantName={m.name} variant={action} />
       );
     },
   },
@@ -216,9 +201,7 @@ function formatCreatedAt(iso: string): string {
 }
 
 function EmptyState({ filtered }: { readonly filtered: boolean }) {
-  const headline = filtered
-    ? "No merchants match the search."
-    : "No genuine merchants to show.";
+  const headline = filtered ? "No merchants match the search." : "No genuine merchants to show.";
   const detail = filtered
     ? "Clear the search to see all merchants."
     : "Create your first merchant to get started.";

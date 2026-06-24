@@ -15,10 +15,9 @@
 
 import { useActionState } from "react";
 
-import {
-  setAssetTrackingAction,
-  type AssetTrackingActionResult,
-} from "../_actions";
+import { bButtonClass } from "@/components/button-recipe";
+
+import { setAssetTrackingAction, type AssetTrackingActionResult } from "../_actions";
 
 export interface AssetTrackingToggleProps {
   readonly tenantId: string;
@@ -26,26 +25,20 @@ export interface AssetTrackingToggleProps {
   readonly canEdit: boolean;
 }
 
-export function AssetTrackingToggle({
-  tenantId,
-  enabled,
-  canEdit,
-}: AssetTrackingToggleProps) {
+export function AssetTrackingToggle({ tenantId, enabled, canEdit }: AssetTrackingToggleProps) {
   // Bound to flip from the server-passed current value. revalidatePath
   // re-renders the page after each flip, so `enabled` (and this binding)
   // re-sync for the next click.
-  const [state, formAction, pending] = useActionState<
-    AssetTrackingActionResult,
-    FormData
-  >(setAssetTrackingAction.bind(null, tenantId, !enabled), { kind: "idle" });
+  const [state, formAction, pending] = useActionState<AssetTrackingActionResult, FormData>(
+    setAssetTrackingAction.bind(null, tenantId, !enabled),
+    { kind: "idle" }
+  );
 
   // Action result wins immediately after a flip; otherwise the server value.
   const effective = state.kind === "done" ? state.enabled : enabled;
 
   const errorMessage =
-    state.kind === "forbidden" ||
-    state.kind === "not_found" ||
-    state.kind === "error"
+    state.kind === "forbidden" || state.kind === "not_found" || state.kind === "error"
       ? state.message
       : null;
 
@@ -53,12 +46,12 @@ export function AssetTrackingToggle({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-4">
         {effective ? (
-          <span className="inline-flex items-center gap-1.5 bg-green/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-green">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-green/15 px-2.5 py-1 text-xs font-medium text-green">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-green" />
             Enabled
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1.5 bg-stone-100 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-[color:var(--color-text-tertiary)]">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--color-text-tertiary)]/15 px-2.5 py-1 text-xs font-medium text-[color:var(--color-text-tertiary)]">
             <span
               aria-hidden
               className="h-1.5 w-1.5 rounded-full bg-[color:var(--color-text-tertiary)]"
@@ -69,11 +62,7 @@ export function AssetTrackingToggle({
 
         {canEdit ? (
           <form action={formAction}>
-            <button
-              type="submit"
-              disabled={pending}
-              className="inline-flex items-center justify-center rounded-sm border border-stone-200 bg-paper px-3 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-navy transition-colors duration-[120ms] ease-out hover:border-navy hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
+            <button type="submit" disabled={pending} className={bButtonClass("secondary", "sm")}>
               {pending
                 ? enabled
                   ? "Disabling…"
