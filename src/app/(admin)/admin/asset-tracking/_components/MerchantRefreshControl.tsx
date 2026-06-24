@@ -43,6 +43,14 @@ interface Failure {
   readonly message: string;
 }
 
+// #509 cost guard — bulk speed-bump. Refreshing 1–2 merchants stays one click
+// (the common case). At this many or more selected — and therefore "Select all"
+// of any real fleet — Refresh asks for an explicit confirmation first, so a
+// fleet-wide live poll can never happen by accident. The confirm GATES the
+// existing poll; it does not change per-merchant behaviour (still one bounded,
+// sequential SuiteFleet call each — see runRefresh / refreshMerchant).
+const BULK_CONFIRM_THRESHOLD = 3;
+
 export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefreshControlProps) {
   const router = useRouter();
   const labelId = useId();
@@ -56,6 +64,8 @@ export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefre
   const [progress, setProgress] = useState<{ readonly done: number; readonly total: number } | null>(null);
   const [failures, setFailures] = useState<readonly Failure[]>([]);
   const [doneTotal, setDoneTotal] = useState<number | null>(null);
+  // True once a bulk Refresh has been requested but not yet confirmed.
+  const [pendingConfirm, setPendingConfirm] = useState(false);
 
   const allSelected = merchants.length > 0 && selected.size === merchants.length;
   const someSelected = selected.size > 0 && selected.size < merchants.length;
@@ -67,11 +77,14 @@ export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefre
     if (masterRef.current) masterRef.current.indeterminate = someSelected;
   }, [someSelected]);
 
+  // Changing the selection invalidates any open confirmation (its "N" is stale).
   function toggleAll(checked: boolean) {
+    setPendingConfirm(false);
     setSelected(checked ? new Set(merchants.map((m) => m.slug)) : new Set());
   }
 
   function toggleOne(slug: string, checked: boolean) {
+    setPendingConfirm(false);
     setSelected((prev) => {
       const next = new Set(prev);
       if (checked) next.add(slug);
@@ -80,7 +93,18 @@ export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefre
     });
   }
 
-  async function onRefresh() {
+  // Gate: small selections poll immediately; bulk selections require a confirm.
+  function requestRefresh() {
+    if (selected.size === 0 || busy) return;
+    if (selected.size >= BULK_CONFIRM_THRESHOLD) {
+      setPendingConfirm(true);
+      return;
+    }
+    void runRefresh();
+  }
+
+  async function runRefresh() {
+    setPendingConfirm(false);
     // Stable on-screen order; only the selected set.
     const targets = merchants.filter((m) => selected.has(m.slug));
     if (targets.length === 0 || busy) return;
@@ -176,16 +200,33 @@ export function MerchantRefreshControl({ merchants, currentSlug }: MerchantRefre
           </div>
         </details>
 
-        <Button
-          variant="primary"
-          onClick={onRefresh}
-          loading={busy}
-          disabled={count === 0}
-          title={count === 0 ? "Select at least one merchant to refresh" : undefined}
-        >
-          {refreshLabel}
-        </Button>
+        {pendingConfirm && !busy ? (
+          <span className="flex items-center gap-2" role="group" aria-label="Confirm bulk refresh">
+            <Button variant="ghost" onClick={() => setPendingConfirm(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void runRefresh()}>
+              Confirm {count} polls
+            </Button>
+          </span>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={requestRefresh}
+            loading={busy}
+            disabled={count === 0}
+            title={count === 0 ? "Select at least one merchant to refresh" : undefined}
+          >
+            {refreshLabel}
+          </Button>
+        )}
       </div>
+
+      {pendingConfirm && !busy ? (
+        <p className="max-w-xs text-right text-xs text-navy">
+          Refresh {count} merchants? This runs {count} live SuiteFleet polls.
+        </p>
+      ) : null}
 
       {/* Cost-guard reassurance: scope is exactly what the user picks. */}
       <p className="text-right text-[11px] text-[color:var(--color-text-tertiary)]">
