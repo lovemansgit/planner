@@ -60,10 +60,19 @@ export function getMetricCardToneClasses(
 export function MetricCard({ label, value, context, tone }: MetricCardProps) {
   const classes = getMetricCardToneClasses(tone);
   return (
-    <article className={`${METRIC_CARD} ${classes.card}`}>
-      <p className={METRIC_LABEL}>{label}</p>
-      <p className={`${METRIC_VALUE} ${classes.numeral}`}>{value}</p>
-      {context ? <p className={METRIC_SUBLABEL}>{context}</p> : null}
+    // Phase 12.2 Batch B / Item 4 — fixed 3-zone structure so the numerals sit
+    // on ONE horizontal line across the whole metric row regardless of label
+    // length. The owner's authed walk flagged that "Total deliveries today"
+    // wraps to 2 lines while siblings are 1, dropping its big number below the
+    // others. The label zone reserves up to 2 lines (top), the numeral is
+    // centered in the middle, and the context reserves up to 2 lines (bottom),
+    // so every card is equal height and the numbers align. `line-clamp-2` caps
+    // each text zone at 2 lines; `min-h` reserves that height even for 1-line
+    // text. h-full + my-auto centre the numeral if the grid stretches a card.
+    <article className={`${METRIC_CARD} ${classes.card} h-full`}>
+      <p className={`${METRIC_LABEL} line-clamp-2 min-h-[2.5em] leading-[1.25]`}>{label}</p>
+      <p className={`${METRIC_VALUE} ${classes.numeral} my-auto`}>{value}</p>
+      <p className={`${METRIC_SUBLABEL} line-clamp-2 min-h-[2.4em] leading-[1.2]`}>{context}</p>
     </article>
   );
 }
