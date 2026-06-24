@@ -227,9 +227,10 @@ describe("buildButtonLabel", () => {
 // Phase 12.2 Batch A · FIX 2b — effective-range label contract.
 //
 // The component re-syncs from/to to changed initialFrom/initialTo props (the
-// committed URL range) via a useEffect, so the button label always reflects the
-// EFFECTIVE query. The runtime re-sync is preview-verified (node has no jsdom,
-// per this file's header). This locks the pure derivation the re-sync feeds: a
+// committed URL range) via React's adjust-state-during-render previous-prop
+// pattern, so the button label always reflects the EFFECTIVE query. The runtime
+// re-sync is preview-verified (node has no jsdom, per this file's header). This
+// locks the pure derivation the re-sync feeds: a
 // preserved 30-day window (the UAT repro: 50/page + Last-30-days → change to
 // 100/page → range preserved by FIX 2a) must still resolve to "Last 30 days",
 // NOT a stale or mismatched label.
