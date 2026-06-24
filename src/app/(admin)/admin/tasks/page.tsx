@@ -85,7 +85,7 @@ import { AdminPageSizeDropdown } from "../../_components/AdminPageSizeDropdown";
 import { MerchantFilterDropdown } from "../../_components/MerchantFilterDropdown";
 
 import { AdminPodCell } from "./_components/AdminPodCell";
-import { shellClass } from "@/components/page-shell-recipe";
+import { shellClass, tableBleedClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -214,7 +214,15 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           <AdminPageSizeDropdown value={perPage} options={ALLOWED_PAGE_SIZES} />
         </div>
 
-        {rows.length === 0 ? <EmptyState filtered={status !== undefined || merchantSlug !== undefined || q !== undefined} /> : <AdminTasksTable rows={rows} />}
+        {rows.length === 0 ? (
+          <EmptyState filtered={status !== undefined || merchantSlug !== undefined || q !== undefined} />
+        ) : (
+          // Item 6 — bleed the table region into the right gutter (shared left
+          // edge preserved); header/filters above stay narrow.
+          <div className={tableBleedClass()}>
+            <AdminTasksTable rows={rows} />
+          </div>
+        )}
 
         <Pagination
           page={page}
