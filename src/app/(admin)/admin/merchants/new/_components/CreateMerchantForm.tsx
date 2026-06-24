@@ -26,7 +26,6 @@
 
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 
@@ -35,6 +34,10 @@ import { Field } from "@/components/Field";
 import { inputClass } from "@/components/form-field-recipe";
 
 import { createMerchantAction, type CreateActionResult } from "../../_actions";
+
+// B+ floating card surface (Phase 9 · Gap C/D), mirroring DetailView /
+// CredentialsForm so every merchant form reads on the same warm-white float.
+const FORM_CARD = "rounded-2xl bg-[color:var(--color-b-card)] p-8 shadow-b-card";
 
 export function CreateMerchantForm() {
   const router = useRouter();
@@ -52,8 +55,7 @@ export function CreateMerchantForm() {
     }
   }, [actionResult.kind, router]);
 
-  const fieldErrors =
-    actionResult.kind === "validation" ? actionResult.fieldErrors : {};
+  const fieldErrors = actionResult.kind === "validation" ? actionResult.fieldErrors : {};
 
   // Day-30 / Fix-A4 (Aqib UAT 2026-05-18) — preserve submitted values
   // across validation / conflict / forbidden round-trips. React 19
@@ -82,7 +84,7 @@ export function CreateMerchantForm() {
       {formError ? (
         <p
           role="alert"
-          className="mb-6 rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red"
+          className="mb-6 rounded-[10px] border border-red/40 bg-red/10 px-3.5 py-2.5 text-sm text-red"
         >
           {formError}
         </p>
@@ -98,94 +100,93 @@ export function CreateMerchantForm() {
         defaultValue from the action's submittedValues preserves the
         operator's input. No form remount needed.
       */}
-      <form action={formAction} className="space-y-8">
-        <TextField
-          label="Merchant name"
-          name="name"
-          placeholder="Demo Bistro"
-          error={fieldErrors.name}
-          defaultValue={submittedValues.name}
-          required
-        />
-
-        <TextField
-          label="Slug"
-          name="slug"
-          placeholder="demo-bistro"
-          hint="Lowercase letters, numbers, and hyphens (1-60 characters). Forms part of the merchant URL prefix."
-          error={fieldErrors.slug}
-          defaultValue={submittedValues.slug}
-          required
-        />
-
-        <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
-          <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Pickup address
-          </legend>
-          <p className="text-xs text-[color:var(--color-text-secondary)]">
-            Captured at merchant creation; surfaces as ship-from on every task.
-          </p>
-
+      <div className={FORM_CARD}>
+        <form action={formAction} className="space-y-8">
           <TextField
-            label="Address line"
-            name="pickup_line"
-            placeholder="Building 4, Sheikh Zayed Road"
-            error={fieldErrors.pickup_line}
-            defaultValue={submittedValues.pickup_line}
+            label="Merchant name"
+            name="name"
+            placeholder="Demo Bistro"
+            error={fieldErrors.name}
+            defaultValue={submittedValues.name}
             required
           />
 
           <TextField
-            label="District"
-            name="pickup_district"
-            placeholder="Al Quoz"
-            error={fieldErrors.pickup_district}
-            defaultValue={submittedValues.pickup_district}
+            label="Slug"
+            name="slug"
+            placeholder="demo-bistro"
+            hint="Lowercase letters, numbers, and hyphens (1-60 characters). Forms part of the merchant URL prefix."
+            error={fieldErrors.slug}
+            defaultValue={submittedValues.slug}
             required
           />
 
-          <TextField
-            label="Emirate"
-            name="pickup_emirate"
-            placeholder="Dubai"
-            error={fieldErrors.pickup_emirate}
-            defaultValue={submittedValues.pickup_emirate}
-            required
-          />
-        </fieldset>
+          <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
+            <legend className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+              Pickup address
+            </legend>
+            <p className="text-xs text-[color:var(--color-text-secondary)]">
+              Captured at merchant creation; surfaces as ship-from on every task.
+            </p>
 
-        <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
-          <legend className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            SuiteFleet routing
-          </legend>
-          <p className="text-xs text-[color:var(--color-text-secondary)]">
-            Required to route tasks to SuiteFleet outbound (per brief §5.3 Gate 2). Missing or
-            invalid codes fail-close the cron push for this tenant.
-          </p>
+            <TextField
+              label="Address line"
+              name="pickup_line"
+              placeholder="Building 4, Sheikh Zayed Road"
+              error={fieldErrors.pickup_line}
+              defaultValue={submittedValues.pickup_line}
+              required
+            />
 
-          <TextField
-            label="SuiteFleet customer code"
-            name="suitefleet_customer_code"
-            placeholder="000"
-            hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
-            error={fieldErrors.suitefleet_customer_code}
-            defaultValue={submittedValues.suitefleet_customer_code}
-            required
-          />
-        </fieldset>
+            <TextField
+              label="District"
+              name="pickup_district"
+              placeholder="Al Quoz"
+              error={fieldErrors.pickup_district}
+              defaultValue={submittedValues.pickup_district}
+              required
+            />
 
-        <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-strong)] pt-8">
-          <Link
-            href="/admin/merchants"
-            className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:text-navy"
-          >
-            Cancel
-          </Link>
-          <Button type="submit" variant="primary" disabled={isPending}>
-            {isPending ? "Creating…" : "Create merchant"}
-          </Button>
-        </div>
-      </form>
+            <TextField
+              label="Emirate"
+              name="pickup_emirate"
+              placeholder="Dubai"
+              error={fieldErrors.pickup_emirate}
+              defaultValue={submittedValues.pickup_emirate}
+              required
+            />
+          </fieldset>
+
+          <fieldset className="space-y-6 border-t border-[color:var(--color-border-strong)] pt-8">
+            <legend className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
+              SuiteFleet routing
+            </legend>
+            <p className="text-xs text-[color:var(--color-text-secondary)]">
+              Required to route tasks to SuiteFleet outbound (per brief §5.3 Gate 2). Missing or
+              invalid codes fail-close the cron push for this tenant.
+            </p>
+
+            <TextField
+              label="SuiteFleet customer code"
+              name="suitefleet_customer_code"
+              placeholder="000"
+              hint="Numeric ID provided by Transcorp's SF vendor contact (e.g. 12345). Positive integer, no leading zeros."
+              error={fieldErrors.suitefleet_customer_code}
+              defaultValue={submittedValues.suitefleet_customer_code}
+              required
+            />
+          </fieldset>
+
+          <div className="flex items-center justify-end gap-3 border-t border-[color:var(--color-border-strong)] pt-8">
+            <Button href="/admin/merchants" variant="ghost">
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={isPending}>
+              {isPending ? "Creating…" : "Create merchant"}
+            </Button>
+          </div>
+        </form>
+      </div>
     </>
   );
 }

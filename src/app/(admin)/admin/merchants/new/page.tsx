@@ -22,11 +22,7 @@ import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/modules/identity";
-import {
-  ForbiddenError,
-  NoTenantConfiguredError,
-  UnauthorizedError,
-} from "@/shared/errors";
+import { ForbiddenError, NoTenantConfiguredError, UnauthorizedError } from "@/shared/errors";
 import { buildRequestContext } from "@/shared/request-context";
 
 import { CreateMerchantForm } from "./_components/CreateMerchantForm";
@@ -57,10 +53,12 @@ export default async function NewMerchantPage() {
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
       <div className="mx-auto max-w-2xl px-12 py-16">
         <header className="mb-12">
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
+          <p className="font-b-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]">
             Transcorp · Admin
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">New merchant</h1>
+          <h1 className="mt-2 font-b-display text-3xl font-bold tracking-[-0.01em] text-navy">
+            New merchant
+          </h1>
           <p className="mt-3 text-sm text-[color:var(--color-text-secondary)]">
             Provision a new merchant tenant. The merchant lands in <em>provisioning</em> status —
             activate from the list once configuration is complete.
