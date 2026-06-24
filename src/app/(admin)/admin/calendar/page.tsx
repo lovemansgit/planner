@@ -42,6 +42,7 @@ import { buildRequestContext } from "@/shared/request-context";
 import { MetricCard } from "@/app/(app)/calendar/_components/MetricCard";
 import { PerMerchantBreakdownPanel } from "@/app/(app)/calendar/_components/PerMerchantBreakdownPanel";
 import { TopMerchantsTodayPanel } from "@/app/(app)/calendar/_components/TopMerchantsTodayPanel";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -83,7 +84,7 @@ export default async function AdminCalendarPage() {
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy font-sans">
-      <div className="mx-auto max-w-6xl px-12 py-16">
+      <div className={shellClass("py-16")}>
         <header className="mb-12">
           <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
             Transcorp · Admin

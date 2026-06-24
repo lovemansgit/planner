@@ -42,6 +42,7 @@ import { PauseResumeActions } from "./edit/_components/PauseResumeActions";
 import { RecentExceptions } from "./_components/RecentExceptions";
 import { SubscriptionRuleSummary } from "./_components/SubscriptionRuleSummary";
 import { SubscriptionTasksList } from "./_components/SubscriptionTasksList";
+import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -87,7 +88,7 @@ export default async function SubscriptionDetailPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-surface-primary text-navy">
-      <div className="mx-auto max-w-4xl px-12 py-12">
+      <div className={shellClass("py-12")}>
         <Link
           href="/subscriptions"
           className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)] transition-colors duration-[120ms] ease-out hover:text-navy"
