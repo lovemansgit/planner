@@ -7,6 +7,12 @@
 // to the header status slot; the merchant subtitle becomes a "Merchant"
 // FieldRow in Recipient (mirroring the flagship admin-consignee-detail).
 //
+// Phase 12 · Batch ADM-3 — the header status was a raw uppercase pill rendering
+// {subscription.status}; it now uses the shared <StatusBadge domain="subscription"
+// size="lg" /> so the admin detail matches its own list (DataTable) AND the
+// operator subscription detail ((app)/subscriptions/[id]/page.tsx). Subscription
+// IS a StatusBadge tone-domain, so this is pure kit-parity — no logic/data change.
+//
 // Reached by clicking a row on /admin/subscriptions. Cross-tenant single
 // fetch (getAdminSubscriptionById), then resolve the consignee (name)
 // and the owning merchant. The merchant lookup doubles as Item 1's
@@ -21,6 +27,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { DetailHeader, DetailSection, DetailView } from "@/components/DetailView";
 import { FieldRow } from "@/components/FieldRow";
+import { StatusBadge } from "@/components/StatusBadge";
 import { getAdminConsigneeById } from "@/modules/consignees/service";
 import { isGenuineMerchant } from "@/modules/merchants/genuine-merchants";
 import { getMerchantById } from "@/modules/merchants/service";
@@ -99,11 +106,7 @@ export default async function AdminSubscriptionDetailPage({
             <DetailHeader
               eyebrow="Transcorp · Admin · Subscriptions"
               title={subscription.mealPlanName ?? "Subscription"}
-              status={
-                <span className="inline-flex items-center bg-[color:var(--color-tint-navy-subtle)] px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] text-navy">
-                  {subscription.status}
-                </span>
-              }
+              status={<StatusBadge domain="subscription" status={subscription.status} size="lg" />}
             />
           }
         >
