@@ -80,6 +80,36 @@ function composeClasses(variant: Variant, size: BButtonSize, tone: ButtonTone, c
   return buttonClass(variant as ButtonVariant, legacySize, tone, className);
 }
 
+/**
+ * Decide the `onClick` (if any) handed to the link-mode <Link>.
+ *
+ * This is what keeps `<Button href>` SERVER-SAFE. Button.tsx has no
+ * `"use client"`, so it can be rendered from a server component — which means
+ * it must NEVER fabricate a function and hand it to the client <Link>. Doing so
+ * serializes a function across the RSC boundary and throws "Event handlers
+ * cannot be passed to Client Component props" at request time (the bug that
+ * 500'd /subscriptions). So we forward a handler ONLY when the caller actually
+ * passed an `onClick`:
+ *   • no `onClick` → `undefined` → nothing crosses the boundary. A plain nav
+ *     `<Button href>` (the common case) renders from a server component.
+ *   • `onClick` set → the caller is necessarily a client component already, and
+ *     we wrap the callback so the disabled state still blocks it for EVERY
+ *     variant (the deprecated recipe lacks `aria-disabled:pointer-events-none`).
+ */
+export function resolveLinkClickHandler(
+  onClick: (() => void) | undefined,
+  isDisabled: boolean,
+): ((event: MouseEvent<HTMLAnchorElement>) => void) | undefined {
+  if (onClick === undefined) return undefined;
+  return (event: MouseEvent<HTMLAnchorElement>) => {
+    if (isDisabled) {
+      event.preventDefault();
+      return;
+    }
+    onClick();
+  };
+}
+
 export function Button(props: ButtonProps) {
   const {
     // Default stays the legacy "outline" so the not-yet-migrated failed-pushes
@@ -106,13 +136,11 @@ export function Button(props: ButtonProps) {
   );
 
   if (props.href !== undefined) {
-    const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-      if (isDisabled) {
-        event.preventDefault();
-        return;
-      }
-      props.onClick?.();
-    };
+    // Forward a click handler ONLY when the caller passed one (see
+    // resolveLinkClickHandler) — a server-rendered <Button href> must not hand
+    // a fabricated function to the client <Link>. Disabled inertness is carried
+    // by aria-disabled (the B recipe maps it to pointer-events-none) plus
+    // tabIndex=-1, so a plain disabled nav link needs no client handler.
     return (
       <Link
         href={props.href}
@@ -121,7 +149,7 @@ export function Button(props: ButtonProps) {
         aria-disabled={isDisabled || undefined}
         aria-busy={loading || undefined}
         tabIndex={isDisabled ? -1 : undefined}
-        onClick={handleClick}
+        onClick={resolveLinkClickHandler(props.onClick, isDisabled)}
       >
         {inner}
       </Link>
