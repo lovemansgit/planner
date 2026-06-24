@@ -15,8 +15,10 @@
 //     value. It stops propagation + prevents default so it never triggers the
 //     row-link navigation the cell is wrapped in.
 //
-// The button's subtle elevation uses an INLINE boxShadow (NOT a shadow-[var()]
-// class) per the Phase 11 Tailwind arbitrary-shadow parser bug.
+// The button's subtle elevation uses an INLINE boxShadow (not a Tailwind
+// arbitrary-shadow utility) per the Phase 11 arbitrary-var parser bug — even
+// in a comment the literal arbitrary-shadow token is scanned by Tailwind and
+// emits an invalid CSS rule that breaks `next build`, so it is not written here.
 
 import Link from "next/link";
 import type { MouseEvent, ReactNode } from "react";
