@@ -22,9 +22,9 @@
 
 import { randomUUID } from "node:crypto";
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { Button } from "@/components/Button";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { DeliveryWindowTrack } from "@/components/DeliveryWindowTrack";
 import { HeroCount } from "@/components/HeroCount";
@@ -88,13 +88,21 @@ export default async function SubscriptionsPage({ searchParams }: SubscriptionsP
             </p>
           </div>
           {canCreate ? (
-            // Phase 11 Batch E — navy-fill button → green primary (navy never
-            // fills / green is primary). Uses the shared B+ <Button> recipe
-            // (same primitive as the /login primary), so casing + lift + green
-            // focus ring match the rest of the app.
-            <Button href="/subscriptions/new" variant="primary">
+            // Phase 11 Batch E goal (navy-never-fills / green primary), made
+            // server-safe. The shared <Button> renders next/link with an
+            // INTERNAL onClick handler; in this SERVER component that function
+            // can't serialize to the client Link → RSC throw (digest 1790271610,
+            // the prod /subscriptions 500). A bare <Link> passes only
+            // serializable props, so it renders server-side while keeping the B+
+            // green-primary look (green fill, paper text, sentence-case,
+            // rest→hover lift, green focus ring). Page-scoped fix; the shared
+            // Button primitive is intentionally left untouched.
+            <Link
+              href="/subscriptions/new"
+              className="inline-flex h-10 min-w-[88px] items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-transparent bg-green px-[18px] font-b-body text-sm font-semibold text-paper shadow-b-rest transition-[color,background-color,border-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--color-green-hover)] hover:shadow-b-lift active:translate-y-px focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-green)]"
+            >
               New subscription
-            </Button>
+            </Link>
           ) : null}
         </header>
 
