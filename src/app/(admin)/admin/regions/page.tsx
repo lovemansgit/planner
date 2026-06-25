@@ -30,7 +30,7 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 
 import { RegionDeactivateModal } from "./_components/RegionDeactivateModal";
-import { authMethodBadge, regionStatusBadge } from "./_helpers";
+import { authMethodBadge, isCanonicalRegion, regionStatusBadge } from "./_helpers";
 import { shellClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +42,13 @@ export default async function RegionsAdminPage() {
   let regions: readonly RegionWithUsage[];
   try {
     const ctx = await buildRequestContext("/admin/regions", requestId);
-    regions = await listRegionsWithUsage(ctx);
+    // Phase 12.2 Item 5 — DISPLAY-ONLY filter to the four canonical SuiteFleet
+    // regions (keyed by stable, UNIQUE client_id; see isCanonicalRegion). The
+    // 70+ seed/test junk regions accumulated through the New-region form are
+    // hidden from this list but stay live, active, and routable — this is a
+    // view filter, never a delete. The junk cleanup is a separate lane. The
+    // count band below reflects this canonical set by design.
+    regions = (await listRegionsWithUsage(ctx)).filter(isCanonicalRegion);
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       redirect("/login?next=" + encodeURIComponent("/admin/regions"));

@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   authMethodBadge,
+  CANONICAL_REGION_CLIENT_IDS,
+  isCanonicalRegion,
   parseCreateRegionForm,
   regionStatusBadge,
 } from "../_helpers";
@@ -126,6 +128,41 @@ describe("authMethodBadge", () => {
     expect(authMethodBadge("oauth").className).toEqual(
       authMethodBadge("api_key").className,
     );
+  });
+});
+
+describe("isCanonicalRegion (Phase 12.2 Item 5 — display-only list filter)", () => {
+  it("the allowlist is exactly the four seeded SuiteFleet client_ids (migration 0024)", () => {
+    expect([...CANONICAL_REGION_CLIENT_IDS].sort()).toEqual(
+      ["transcorp", "transcorpqatar", "transcorpsb", "transcorpuae"].sort(),
+    );
+    expect(CANONICAL_REGION_CLIENT_IDS.size).toBe(4);
+  });
+
+  it("returns true for each of the four canonical regions", () => {
+    for (const clientId of [
+      "transcorpsb",
+      "transcorp",
+      "transcorpuae",
+      "transcorpqatar",
+    ]) {
+      expect(isCanonicalRegion({ clientId })).toBe(true);
+    }
+  });
+
+  it("returns false for seed/test junk regions", () => {
+    expect(isCanonicalRegion({ clientId: "acdoauthregion" })).toBe(false);
+    expect(isCanonicalRegion({ clientId: "abc123" })).toBe(false);
+    expect(isCanonicalRegion({ clientId: "" })).toBe(false);
+  });
+
+  it("is EXACT membership, not a prefix match (the 'transcorp' prefix trap)", () => {
+    // "transcorp" (KSA) is a prefix of the other three canonical ids and of any
+    // junk id that happens to start with it — a startsWith filter would wrongly
+    // keep junk like "transcorpfoo". Set membership keeps each literal distinct.
+    expect(isCanonicalRegion({ clientId: "transcorpfoo" })).toBe(false);
+    expect(isCanonicalRegion({ clientId: "transcorpsbx" })).toBe(false);
+    expect(isCanonicalRegion({ clientId: "transcorp2" })).toBe(false);
   });
 });
 
