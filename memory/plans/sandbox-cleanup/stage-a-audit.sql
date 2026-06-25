@@ -1,7 +1,8 @@
 -- SANDBOX JUNK CLEANUP — STAGE A: AUDIT (READ ONLY — deletes nothing, writes nothing).
--- Target DB: qdotjmwqbyzldfuxphei (PROD). Love runs this FIRST, eyeballs the keep-set,
--- then exports Query D's id column as the frozen target list. The hex-slug pattern proves
--- itself on live data here BEFORE any delete.
+-- Target DB: qdotjmwqbyzldfuxphei (PROD). Love runs this FIRST and eyeballs the keep-set.
+-- The only value carried forward is Query A's junk_count (= 1759); the junk set is frozen
+-- IN-DATABASE at delete time (no id export). The hex-slug pattern proves itself on live data
+-- here BEFORE any delete.
 --
 -- Scope: tenants bound to the CANONICAL Sandbox region transcorpsb (KEPT — no region delete).
 -- Junk predicate: slug carries an 8-hex test-isolation run AND is not a genuine-allowlist slug.

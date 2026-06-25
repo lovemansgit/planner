@@ -51,8 +51,8 @@ editor's `postgres` owner role). No agent executes any SQL.
 - **Query C** — the **keep-set list** (every surviving tenant by slug/name/status). Love
   eyeballs that all ~11 real ones are present **before any delete** — the pattern proving
   itself on live data.
-- **Query D** — the **frozen target ids** (the junk `tenant_id`s). Love exports this id
-  column; the agent writes it into `target_ids.txt`.
+- **Query D** — RETIRED. No id export (1,759 ids exceed the CSV cap). The junk set is
+  frozen **in-DB** at delete time (Deliverable 2); only Query A's count carries forward.
 - **Query E** — backup-volume summary (per-table row counts for the junk set) so Love
   sizes the backup (single-file vs per-batch) before running it.
 
