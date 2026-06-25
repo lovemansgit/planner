@@ -21,6 +21,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { HeroCount } from "@/components/HeroCount";
 import { listRegionsWithUsage, type RegionWithUsage } from "@/modules/credentials";
 import {
   ForbiddenError,
@@ -79,14 +80,11 @@ export default async function RegionsAdminPage() {
           </Link>
         </header>
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">
-            {regions.length}
-          </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            Total regions
-          </p>
-        </section>
+        {/* Phase 12.2 cosmetic — adopt the shared <HeroCount> floating B+ card
+            in place of the legacy grey navy-tinted count band, matching the same
+            swap on admin Tasks (#644), Consignees (#650), and the operator list
+            pages. Count + the "Total regions" label are preserved. */}
+        <HeroCount count={regions.length} label="Total regions" />
 
         {regions.length === 0 ? <EmptyState /> : <RegionsTable rows={regions} />}
       </div>
