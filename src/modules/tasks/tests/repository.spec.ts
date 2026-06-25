@@ -496,6 +496,30 @@ describe("listAllTasksRows", () => {
     expect(captured.sql).not.toMatch(/ten\.slug\s*=/i);
   });
 
+  // Phase 12.2 RELABEL lane — admin /tasks gains District + City (emirate)
+  // columns, mirroring the operator listTasksByTenant projection EXACTLY: a
+  // LEFT JOIN onto the override address + COALESCE(override → consignee own).
+  it("LEFT JOINs the override address on (id = address_id AND same tenant)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, {});
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(
+      /LEFT JOIN addresses a ON a\.id\s*=\s*t\.address_id\s+AND\s+a\.tenant_id\s*=\s*t\.tenant_id/i,
+    );
+  });
+
+  it("projects the COALESCE effective district + emirate (override → consignee fallback)", async () => {
+    const tx = makeStubTx([[]]);
+    await listAllTasksRows(tx, {});
+    const captured = compile(tx.execute.mock.calls[0][0]);
+    expect(captured.sql).toMatch(
+      /COALESCE\(a\.district,\s*c\.district\)\s+AS\s+effective_district/i,
+    );
+    expect(captured.sql).toMatch(
+      /COALESCE\(a\.emirate,\s*c\.emirate_or_region\)\s+AS\s+effective_emirate/i,
+    );
+  });
+
   describe("searchTerm filter", () => {
     it("omits the ILIKE clause when searchTerm is undefined", async () => {
       const tx = makeStubTx([[]]);
