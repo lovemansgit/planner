@@ -72,20 +72,23 @@ export function CalendarViewToggle({
   return (
     <nav
       aria-label="Calendar view"
-      className="inline-flex overflow-hidden rounded-sm border border-stone-200"
+      className="inline-flex overflow-hidden rounded-lg ring-1 ring-[color:var(--color-border-default)]"
     >
       {CALENDAR_VIEW_SEGMENTS.map((seg, idx) => {
         const isActive = seg.name === activeView;
-        const sep = idx > 0 ? "border-l border-stone-200" : "";
+        const sep = idx > 0 ? "border-l border-[color:var(--color-border-default)]" : "";
+        // Phase 12.2 Batch B / Item 7 — B+ segmented control: navy-fill active
+        // segment, warm-white (--color-b-card) inactive, sentence case (no
+        // uppercase eyebrow), hairline ring.
         const tone = isActive
           ? "bg-navy text-paper"
-          : "bg-paper text-navy hover:bg-ivory";
+          : "bg-[color:var(--color-b-card)] text-navy hover:bg-ivory/60";
         return (
           <Link
             key={seg.name}
             href={hrefFor(seg.name)}
             aria-current={isActive ? "page" : undefined}
-            className={`${sep} ${tone} px-3 py-1 text-xs font-medium uppercase tracking-[0.1em] transition-colors duration-[120ms] ease-out`}
+            className={`${sep} ${tone} px-3 py-1 text-xs font-medium transition-colors duration-[120ms] ease-out`}
           >
             {seg.label}
           </Link>
