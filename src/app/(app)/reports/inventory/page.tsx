@@ -98,11 +98,20 @@ export default async function InventoryReportPage({ searchParams }: InventoryPag
           </section>
         ) : report ? (
           <>
-            {/* Phase 12.2 Batch B / Item 5 — left-align the filter/refresh
-                cluster onto the shared header left edge. Was justify-between,
-                which floated the refresh control to the far right and broke the
-                page's shared left edge; it now sits next to the date filter. */}
-            <div className="flex flex-wrap items-end gap-4">
+            {/* Phase 12.2 cosmetic — group "Refresh now" cleanly WITH the
+                date-range control as one left-aligned cluster, instead of
+                floating it to the far edge. Supersedes #642's partial hunk on
+                this file (which only dropped justify-between). Two changes vs
+                the old container:
+                (1) drop justify-between so the controls read as one row
+                (Date range · Refresh), left-aligned on the shared edge; and
+                (2) [&>*]:mb-0 neutralises the DateRangeFilter's own mb-6, which
+                with items-end was aligning the button to the date control's
+                MARGIN box and leaving Refresh ~1.5rem low ("out of place"). The
+                shared DateRangeFilter / RefreshButton components are untouched
+                — this is a container-layout fix on /reports/inventory only.
+                (The mt-8 on the next block keeps the row→table gap.) */}
+            <div className="flex flex-wrap items-end gap-4 [&>*]:mb-0">
               <DateRangeFilter
                 today={today}
                 initialFrom={from}
