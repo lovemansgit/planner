@@ -112,7 +112,7 @@ export default async function AdminConsigneeDetailPage({
           <DetailSection label="Address">
             <FieldRow label="Address line" value={consignee.addressLine} />
             <FieldRow label="District" value={consignee.district} />
-            <FieldRow label="Emirate / region" value={consignee.emirateOrRegion} />
+            <FieldRow label="City" value={consignee.emirateOrRegion} />
           </DetailSection>
 
           <DetailSection label="Notes">

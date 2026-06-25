@@ -141,7 +141,7 @@ export default async function MerchantDetailPage({ params }: MerchantDetailPageP
           <DetailSection label="Pickup address">
             <FieldRow label="Address line" value={merchant.pickupAddress?.line ?? null} />
             <FieldRow label="District" value={merchant.pickupAddress?.district ?? null} />
-            <FieldRow label="Emirate" value={merchant.pickupAddress?.emirate ?? null} />
+            <FieldRow label="City" value={merchant.pickupAddress?.emirate ?? null} />
           </DetailSection>
 
           <DetailSection label="Routing">
