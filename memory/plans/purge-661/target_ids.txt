@@ -1,6 +1,55 @@
-# PURGE #661 — Stage-A target tenant_ids (the AUTHORITATIVE list).
-# Paste the 54 literal tenant_id UUIDs from the Stage-A audit output here,
-# ONE per line. The generator validates: exactly 54, all valid UUIDs, all distinct.
-# Lines starting with # or -- are ignored; surrounding quotes/commas are tolerated.
-# DO NOT hand-edit (Love pastes in chat; the agent writes this file).
-# (placeholder — no ids yet)
+# PURGE #661 — Stage-A target tenant_ids (AUTHORITATIVE; pasted by Love 2026-06-25).
+4a0cc2d9-c683-40fa-8cc0-12f1ad1ddf1b
+cdd95e8a-b5e6-4861-b19d-3cd92f6b04d9
+ed5d5d4d-7c2d-4ea4-9694-ec97931d169f
+da52a275-9400-4332-8990-cdd3394d7df5
+8e4f013b-e710-4303-adb4-fc5b538b5afc
+a9c3703e-4ebe-4c2c-a1e9-46c23b95bcd7
+0ae10727-2d28-403c-80fb-2b33e6f6ddea
+a07091e4-522f-45c8-9693-ef1128f466d5
+a1604e6a-c330-4331-a536-7e655fa4311a
+d6aaa464-a845-435b-bc3c-d7dc88489d86
+5316e279-b908-4774-9432-298c326438fd
+85a28635-3b78-455d-a431-4796afbb916b
+67e60381-b6be-4015-87b4-623a919e04a2
+2bf91498-7378-47f2-8946-f1b48c81257c
+5d4cc356-4b71-4511-bd7d-b600b4588edf
+97f79e8a-c515-4b72-81bc-167595c393b2
+fb4f0ede-9085-49b5-9053-279f115624d1
+d733b5ec-abcf-4764-86f0-2cfaa38db530
+e706cda5-7e69-46ff-abfd-b59d5b4480eb
+468d69c2-d5f1-4665-b3cf-9f7eac7b3cee
+33196097-cd28-4996-9111-1a7655bc4371
+f660d0d5-ad75-4c65-b64c-68c0efb9f586
+2268b44a-be48-410a-8541-02955a04cf1f
+dccc1e44-6807-425e-949e-f39c32e249a4
+f8c1ad1f-62dd-48a1-b2e7-c19a30a32071
+ca503081-fa2a-4850-897d-5b70fe10bfba
+30c77726-3350-4855-9e6f-65fa0971c57c
+e314ea24-7128-4caf-866f-26cd1e46c440
+82fde736-bef9-4fe4-991f-96a7ec740fc8
+d99138ea-0d6a-4e90-bca5-f4e390322477
+1d9583d4-e83c-4b3e-acb7-fd0b53ccc189
+780140de-0648-4dc4-8d66-f3d400029f39
+956bf9af-a034-40f2-8818-69aeef5eda54
+1e638746-eb75-4db9-af96-f941bedd1a63
+2d87bae2-916c-45f5-b5a2-cbd0538091e5
+d3bb2988-51fc-4887-8080-e2b256cef54c
+5943b8e0-1675-4415-9374-54ce6d392bcb
+510180d6-57ce-4ec2-87c3-be94a039a06d
+aa40de6f-91ba-4b9f-8ae9-44812ae96aa0
+d8dea240-47e0-4b11-8927-840ba6476fc6
+ecd23830-4cb6-484e-91f5-279ce7bee3fe
+5f1d924f-7fd0-4243-b4c8-a7a25ac6151e
+ba33b974-1e08-4092-a3f5-3d456174c5b9
+600bd2f8-6bb7-49e3-90c5-814befa66672
+4d5124b1-5e85-46bd-8cc3-6e4bc194a594
+5b59b1a8-f19c-46a9-8e83-84c2b75af02d
+38cb2d11-6fe6-4cd7-ac33-b9f4ac9b52d9
+44a78e59-6bd8-4644-8705-8f22856796b3
+f1daceca-5783-49c7-9b11-e478d759e27d
+d8c9dbad-87ef-4b80-8fb5-a149a66da668
+0e6c4b05-ec2d-4f3a-9ccf-bcbd6363ebdc
+f31e69db-b4a1-4f2c-b9b2-6e8e5757c68d
+b0bc3ac5-ead4-4e9a-9ac5-9409c6e1f6c9
+cacb9c62-94b0-4944-8553-bd86666f6c30
