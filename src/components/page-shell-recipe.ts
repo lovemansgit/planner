@@ -27,3 +27,25 @@ export function shellClass(className = ""): string {
 export function detailGridClass(className = ""): string {
   return ["grid grid-cols-1 gap-x-16 gap-y-6 md:grid-cols-2", className].filter(Boolean).join(" ");
 }
+
+/**
+ * Phase 12.2 Batch B / Item 6 — table-region right-bleed.
+ *
+ * Wide admin LIST tables (Subscriptions / Users / Tasks) overflow the shared
+ * `shellClass` cap (max-w-6xl, 1056px inner) and scroll horizontally, even
+ * though there is unused gutter outside the cap (~128px at 1280, ~288px at
+ * 1440). This wraps ONLY the table region: it keeps the shared LEFT edge that
+ * Phase 12 Batch A established (the header/filters stay in `shellClass`) and
+ * extends the table's RIGHT edge into that otherwise-unused right gutter so more
+ * columns show before the in-card horizontal scroll engages.
+ *
+ * Stepped at xl/2xl with fixed bleeds chosen to stay WITHIN the available
+ * gutter at each breakpoint's minimum width (no viewport overflow, no page
+ * horizontal scrollbar); zero below xl, so tablet/mobile keep the in-card
+ * scroll unchanged. Table-SCOPED on purpose: `shellClass` itself is untouched,
+ * so forms, detail views, and every non-table page are unaffected (the Item-6
+ * floor — the widen must not be global).
+ */
+export function tableBleedClass(className = ""): string {
+  return ["xl:-mr-24 2xl:-mr-40", className].filter(Boolean).join(" ");
+}

@@ -51,7 +51,7 @@ import { buildRequestContext } from "@/shared/request-context";
 
 import { AdminPageSizeDropdown } from "../../_components/AdminPageSizeDropdown";
 import { MerchantFilterDropdown } from "../../_components/MerchantFilterDropdown";
-import { shellClass } from "@/components/page-shell-recipe";
+import { shellClass, tableBleedClass } from "@/components/page-shell-recipe";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -131,7 +131,12 @@ export default async function AdminSubscriptionsPage({
         {rows.length === 0 ? (
           <EmptyState filtered={merchantSlug !== undefined} />
         ) : (
-          <SubscriptionsTable rows={rows} />
+          // Item 6 — bleed the table region into the right gutter (left edge
+          // stays on the shared shellClass edge); the header/filters above stay
+          // narrow.
+          <div className={tableBleedClass()}>
+            <SubscriptionsTable rows={rows} />
+          </div>
         )}
 
         <Pagination
@@ -166,6 +171,7 @@ const SUBSCRIPTION_COLUMNS: ReadonlyArray<DataTableColumn<AdminSubscriptionRow>>
       </>
     ),
     title: (row) => `${row.merchant.name} · ${row.merchant.slug}`,
+    copyable: true,
   },
   {
     key: "consignee",
@@ -173,6 +179,7 @@ const SUBSCRIPTION_COLUMNS: ReadonlyArray<DataTableColumn<AdminSubscriptionRow>>
     cellClassName: "text-[color:var(--color-text-secondary)]",
     cell: (row) => row.consigneeName,
     title: (row) => row.consigneeName,
+    copyable: true,
   },
   {
     key: "status",
