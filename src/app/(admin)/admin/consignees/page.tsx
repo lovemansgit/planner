@@ -31,6 +31,7 @@ import {
   parsePerPageParam,
 } from "@/app/(app)/tasks/status";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
 import {
   type AdminConsigneeRow,
@@ -122,14 +123,18 @@ export default async function AdminConsigneesPage({
           </p>
         </header>
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">
-            {totalCount}
-          </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {merchantSlug !== undefined || q !== undefined ? "Matching consignees" : "Total consignees"}
-          </p>
-        </section>
+        {/* Phase 12.2 cosmetic pass — adopt the shared <HeroCount> floating B+
+            card in place of the legacy grey navy-tinted count-band, matching the
+            same swap on admin Tasks (#644) and Merchants/Subscriptions. Count +
+            the existing "Matching"/"Total consignees" label logic preserved. */}
+        <HeroCount
+          count={totalCount}
+          label={
+            merchantSlug !== undefined || q !== undefined
+              ? "Matching consignees"
+              : "Total consignees"
+          }
+        />
 
         <SearchBar
           placeholder="Search by name, phone, or merchant"
