@@ -123,6 +123,9 @@ DELETE FROM asset_scan_log WHERE tenant_id IN (SELECT tenant_id FROM _purge_targ
 -- Graph deletes (child -> parent). Cascades clear task_packages / failed_pushes /
 -- asset_tracking_cache / outbound_push_failures (via tasks) and the subscription_* children.
 DELETE FROM tasks                WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
+-- task_generation_runs (0012:157): tenant-direct CASCADE, no task FK, leaf -> independent order.
+-- Made EXPLICIT (was previously removed only by the Stage-2 tenant cascade; every-row-verified).
+DELETE FROM task_generation_runs WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
 DELETE FROM subscriptions        WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
 DELETE FROM consignee_crm_events WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
 DELETE FROM addresses            WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
@@ -137,6 +140,7 @@ UNION ALL SELECT 'task_packages',  count(*) FROM task_packages    WHERE tenant_i
 UNION ALL SELECT 'failed_pushes',  count(*) FROM failed_pushes    WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'asset_tracking_cache', count(*) FROM asset_tracking_cache WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'outbound_push_failures', count(*) FROM outbound_push_failures WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'task_generation_runs', count(*) FROM task_generation_runs WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'subscriptions',  count(*) FROM subscriptions    WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'subscription_address_rotations', count(*) FROM subscription_address_rotations WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'subscription_exceptions', count(*) FROM subscription_exceptions WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
@@ -270,6 +274,9 @@ DELETE FROM asset_scan_log WHERE tenant_id IN (SELECT tenant_id FROM _purge_targ
 -- Graph deletes (child -> parent). Cascades clear task_packages / failed_pushes /
 -- asset_tracking_cache / outbound_push_failures (via tasks) and the subscription_* children.
 DELETE FROM tasks                WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
+-- task_generation_runs (0012:157): tenant-direct CASCADE, no task FK, leaf -> independent order.
+-- Made EXPLICIT (was previously removed only by the Stage-2 tenant cascade; every-row-verified).
+DELETE FROM task_generation_runs WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
 DELETE FROM subscriptions        WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
 DELETE FROM consignee_crm_events WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
 DELETE FROM addresses            WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
@@ -284,6 +291,7 @@ UNION ALL SELECT 'task_packages',  count(*) FROM task_packages    WHERE tenant_i
 UNION ALL SELECT 'failed_pushes',  count(*) FROM failed_pushes    WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'asset_tracking_cache', count(*) FROM asset_tracking_cache WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'outbound_push_failures', count(*) FROM outbound_push_failures WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'task_generation_runs', count(*) FROM task_generation_runs WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'subscriptions',  count(*) FROM subscriptions    WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'subscription_address_rotations', count(*) FROM subscription_address_rotations WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
 UNION ALL SELECT 'subscription_exceptions', count(*) FROM subscription_exceptions WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
