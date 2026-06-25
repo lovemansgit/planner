@@ -96,26 +96,33 @@ function MerchantSectionRows({
     <>
       <tr className={REPORT_ROW}>
         <td className={`${REPORT_TD} font-medium`}>
-          {/* Refresh sits beside the toggle (a sibling, not nested — it must
-              not toggle the section). Scoped to this one merchant, so it
-              never fans out across the fleet (the #509 cost guard). */}
-          <span className="flex items-center gap-3">
+          {/* Phase 12.2 cosmetic — line the per-merchant controls into clean
+              columns. The ▸ toggle + merchant name keep the shared LEFT edge,
+              while the "(N consignees)" count and the Refresh button right-align
+              as a group (justify-between) to the Merchant column's right edge —
+              so they no longer sit ragged at variable x after variable-length
+              merchant names. Refresh stays a sibling of the toggle (not nested —
+              it must not toggle the section) and scoped to this one merchant
+              (the #509 cost guard); the count is now an info label beside it. */}
+          <div className="flex w-full items-center justify-between gap-3">
             <button
               type="button"
               onClick={onToggle}
               aria-expanded={isOpen}
               className="flex items-center gap-2 rounded-sm text-left hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy"
             >
-              <span aria-hidden="true" className="inline-block w-3 text-xs">
+              <span aria-hidden="true" className="inline-block w-3 shrink-0 text-xs">
                 {isOpen ? "▾" : "▸"}
               </span>
               {section.merchantName}
-              <span className="text-xs text-[color:var(--color-text-secondary)]">
+            </button>
+            <span className="flex shrink-0 items-center gap-3">
+              <span className="text-xs tabular-nums text-[color:var(--color-text-secondary)]">
                 ({new Set(section.consignees.map((row) => row.consigneeId)).size} consignees)
               </span>
-            </button>
-            <RefreshButton merchantSlug={section.merchantSlug} />
-          </span>
+              <RefreshButton merchantSlug={section.merchantSlug} />
+            </span>
+          </div>
         </td>
         <CountCell
           value={rollup?.allocatedAssets ?? 0}
