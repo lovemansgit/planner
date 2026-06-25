@@ -53,6 +53,56 @@ export function authMethodBadge(authMethod: RegionAuthMethod): BadgeSurface {
 }
 
 // -----------------------------------------------------------------------------
+// Display-only canonical-region filter — Phase 12.2 Item 5
+// -----------------------------------------------------------------------------
+//
+// /admin/regions accumulated 70+ rows over the build, almost all seed/test junk
+// created through the New-region form (throwaway client_ids; display names like
+// "ACD OAuth Region"). Per Love's Phase-12.2 walk the LIST VIEW shows ONLY the
+// four canonical SuiteFleet regions.
+//
+// The reliable key is `client_id`, NOT the display name:
+//   - client_id is UNIQUE (migration 0024 constraint), so this allowlist is
+//     exact — no junk row can shadow a real one;
+//   - client_id is the routing identifier and is never edited (the admin
+//     surface offers create + deactivate only — there is no rename), so the
+//     seeded literals are stable;
+//   - matching on display name (mutable) or "anything named ACD" would be a
+//     guess, not a key.
+//
+// Source of truth — supabase/migrations/0024_suitefleet_regions_and_per_merchant_credentials.sql
+// seeds exactly these four:
+//   transcorpsb     → Sandbox         (oauth)
+//   transcorp       → Transcorp KSA   (api_key)
+//   transcorpuae    → Transcorp UAE   (api_key)
+//   transcorpqatar  → Transcorp Qatar (api_key)
+//
+// Match is EXACT-membership, never prefix: "transcorp" (KSA) is a prefix of
+// "transcorpuae"/"transcorpqatar"/"transcorpsb", so a startsWith filter would
+// be wrong — a Set lookup keeps each literal distinct.
+//
+// This is a VIEW filter ONLY. Every hidden region stays live, active, and
+// routable; merchants bound to them keep routing unchanged. Deleting the junk
+// (re-point merchants, audit bindings, remove rows) is a separate plan-first
+// lane — explicitly NOT done here.
+export const CANONICAL_REGION_CLIENT_IDS: ReadonlySet<string> = new Set([
+  "transcorpsb",
+  "transcorp",
+  "transcorpuae",
+  "transcorpqatar",
+]);
+
+/**
+ * True when the region is one of the four canonical SuiteFleet regions, keyed
+ * by its stable, UNIQUE `client_id` (see CANONICAL_REGION_CLIENT_IDS). Used to
+ * filter the /admin/regions LIST VIEW down to the real regions; never used to
+ * gate routing, deletion, or any write.
+ */
+export function isCanonicalRegion(region: { readonly clientId: string }): boolean {
+  return CANONICAL_REGION_CLIENT_IDS.has(region.clientId);
+}
+
+// -----------------------------------------------------------------------------
 // Create-region form parsing
 // -----------------------------------------------------------------------------
 
