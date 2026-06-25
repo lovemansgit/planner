@@ -189,6 +189,14 @@ export const ADMIN_NAV_ITEMS: readonly NavItem[] = [
   // Transcorp-only operation; tenant-admins manage their own users
   // via Phase 1.5 (deferred per memory/followup_team_management_ui.md).
   { label: "Users", path: "/admin/users", permission: "merchant:read_all" },
+  // Phase 12.2 Batch B / Item 8 — Regions nav entry. /admin/regions and
+  // /admin/regions/* lit no tab because the surface was absent from this
+  // list, so isActiveNavPath had no item to match against the active path.
+  // Gated on `region:manage` (systemOnly, transcorp-sysadmin per brief §3.6
+  // v1.14) — the same permission the /admin/regions page and the
+  // createRegion/updateRegion service surface already enforce. Config entry
+  // only; the nav is green-underline (no boxed active state) — no restyle.
+  { label: "Regions", path: "/admin/regions", permission: "region:manage" },
   // Day-54 P2 — Reports group (plan #502). Cross-tenant report
   // surfaces; gated on the systemOnly read_all perm. NOT dark-switch
   // gated at nav level — the report itself scopes to enabled tenants

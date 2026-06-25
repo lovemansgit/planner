@@ -155,7 +155,7 @@ describe("visibleAdminNavItems", () => {
   // (all systemOnly; only transcorp-sysadmin carries them).
   const TRANSCORP_SYSADMIN = ROLES["transcorp-sysadmin"].permissions;
 
-  it("transcorp-sysadmin sees all 8 admin nav items (Overview first; Reports pair tails per Day-54 P2)", () => {
+  it("transcorp-sysadmin sees all 9 admin nav items (Overview first; Regions after Users; Reports pair tails)", () => {
     expect(visibleAdminNavItems(TRANSCORP_SYSADMIN).map((i) => i.label)).toEqual([
       "Overview",
       "Merchants",
@@ -163,6 +163,7 @@ describe("visibleAdminNavItems", () => {
       "Consignees",
       "Subscriptions",
       "Users",
+      "Regions",
       "Asset Tracking",
       "Inventory",
     ]);
@@ -190,6 +191,20 @@ describe("visibleAdminNavItems", () => {
     const overview = ADMIN_NAV_ITEMS.find((i) => i.label === "Overview");
     expect(overview).toBeDefined();
     expect(overview?.path).toBe("/admin/calendar");
+  });
+
+  it("Regions entry exists and lights up /admin/regions(/*) (Phase 12.2 B / Item 8)", () => {
+    // Regression pin: /admin/regions* lit no nav tab because the surface was
+    // absent from ADMIN_NAV_ITEMS, so isActiveNavPath had no item to match.
+    const regions = ADMIN_NAV_ITEMS.find((i) => i.label === "Regions");
+    expect(regions).toBeDefined();
+    expect(regions?.path).toBe("/admin/regions");
+    expect(regions?.permission).toBe("region:manage");
+    // The list page and a region detail page both activate the tab.
+    expect(isActiveNavPath("/admin/regions", regions!)).toBe(true);
+    expect(isActiveNavPath("/admin/regions/123e4567-e89b-12d3-a456-426614174000", regions!)).toBe(true);
+    // A sibling admin path must NOT activate it (no over-broad prefix match).
+    expect(isActiveNavPath("/admin/merchants", regions!)).toBe(false);
   });
 });
 
@@ -272,6 +287,7 @@ describe("groupNavItems", () => {
       "Consignees",
       "Subscriptions",
       "Users",
+      "Regions",
       "group:Reports",
     ]);
     const reports = entries.find((e) => e.kind === "group");
