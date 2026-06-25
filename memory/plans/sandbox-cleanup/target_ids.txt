@@ -1,0 +1,5 @@
+# SANDBOX JUNK CLEANUP — frozen junk tenant_ids (AUTHORITATIVE list, from Stage-A Query D).
+# Add the audited junk_count from Stage-A Query A on the next line, then one UUID per line below it.
+# AUDITED_COUNT: 0
+# (placeholder — paste Stage-A Query D ids here; the agent writes this file from Love's paste/export.
+#  The generator ABORTS unless the id count == AUDITED_COUNT and all are distinct valid UUIDs.)
