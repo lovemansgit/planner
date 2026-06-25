@@ -1,0 +1,6 @@
+# PURGE #661 — Stage-A target tenant_ids (the AUTHORITATIVE list).
+# Paste the 54 literal tenant_id UUIDs from the Stage-A audit output here,
+# ONE per line. The generator validates: exactly 54, all valid UUIDs, all distinct.
+# Lines starting with # or -- are ignored; surrounding quotes/commas are tolerated.
+# DO NOT hand-edit (Love pastes in chat; the agent writes this file).
+# (placeholder — no ids yet)
