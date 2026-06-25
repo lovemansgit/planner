@@ -137,20 +137,27 @@ function ConsigneeGroupRows({
     <>
       <tr className={REPORT_ROW}>
         <td className={`${REPORT_TD} font-medium`}>
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={isOpen}
-            className="flex items-center gap-2 rounded-sm text-left hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy"
-          >
-            <span aria-hidden="true" className="inline-block w-3 text-xs">
-              {isOpen ? "▾" : "▸"}
-            </span>
-            {group.consigneeName}
-            <span className="text-xs text-[color:var(--color-text-secondary)]">
+          {/* Phase 12.2 cosmetic — right-align the "(N dates)" count into a clean
+              column (justify-between) so it no longer sits ragged at variable x
+              after variable-length consignee names; the ▸ toggle + name keep the
+              shared left edge. Mirrors the admin MerchantRows treatment so both
+              inventory views read consistently. */}
+          <div className="flex w-full items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={isOpen}
+              className="flex items-center gap-2 rounded-sm text-left hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy"
+            >
+              <span aria-hidden="true" className="inline-block w-3 shrink-0 text-xs">
+                {isOpen ? "▾" : "▸"}
+              </span>
+              {group.consigneeName}
+            </button>
+            <span className="shrink-0 text-xs tabular-nums text-[color:var(--color-text-secondary)]">
               ({group.dates.length} {group.dates.length === 1 ? "date" : "dates"})
             </span>
-          </button>
+          </div>
         </td>
         <CountCell
           value={group.totals.allocatedAssets}
