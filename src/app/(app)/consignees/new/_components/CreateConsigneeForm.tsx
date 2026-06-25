@@ -166,7 +166,7 @@ export function CreateConsigneeForm() {
           />
 
           <TextField
-            label="Emirate"
+            label="City"
             name="address_emirate"
             placeholder="Dubai"
             error={fieldErrors.address_emirate}
