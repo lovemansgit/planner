@@ -1,7 +1,7 @@
 // Day-53 R6-part-1 — consignee-block cell model.
 //
 // Pure helper deriving the display model for the /tasks consignee
-// columns (Name · Address · District · Emirate · Telephone). Per Love's
+// columns (Name · Address · District · City · Telephone). Per Love's
 // Ruling 2 (R6.4) those five columns are ONE click target to the
 // consignee detail page; the telephone is plain text, NOT a `tel:` link.
 //
