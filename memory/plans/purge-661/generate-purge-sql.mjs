@@ -170,6 +170,73 @@ ${BACKUP_TABLES.map((t) => backupQuery(t)).join("\n\n")}
 -- before the Stage-1 (child-delete) authorization is given.
 `;
 
+// ---- SINGLE-FILE BACKUP (one read-only query -> one restorable artifact) ----
+// Emits a ready-to-run INSERT statement per row via to_jsonb + jsonb_populate_record,
+// so EVERY column is captured automatically (no hand-listing, drift-proof, faithful
+// type round-trip) and the one downloaded file restores in parent->child seq order.
+// BACKUP_TABLES is already in restore order (regions=1, tenants=2, children 3..23).
+function whereFor(scope) {
+  return scope === "regions"
+    ? `x.client_id NOT IN (${canonicalList})`
+    : scope === "tenant_pk"
+      ? `x.id IN (SELECT tenant_id FROM tgt)`
+      : `x.tenant_id IN (SELECT tenant_id FROM tgt)`;
+}
+function dumpArm([table, scope, , cite], seq) {
+  return `  SELECT ${seq} AS restore_seq, '${table}' AS tbl,
+         format('INSERT INTO %I SELECT * FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+                '${table}', '${table}', to_jsonb(x)::text) AS stmt
+  FROM ${table} x WHERE ${whereFor(scope)}   -- ${cite}`;
+}
+function countArm([table, scope], seq) {
+  const w = scope === "regions"
+    ? `client_id NOT IN (${canonicalList})`
+    : scope === "tenant_pk"
+      ? `id IN (SELECT tenant_id FROM tgt)`
+      : `tenant_id IN (SELECT tenant_id FROM tgt)`;
+  return `  SELECT ${seq} AS restore_seq, '${table}' AS table_name, count(*) AS n FROM ${table} WHERE ${w}`;
+}
+const dumpArms = BACKUP_TABLES.map((t, i) => dumpArm(t, i + 1)).join("\n  UNION ALL\n");
+const countArms = BACKUP_TABLES.map((t, i) => countArm(t, i + 1)).join("\n  UNION ALL\n");
+
+const singleFileSql = `-- PURGE #661 — STAGE B (SINGLE-FILE VARIANT): ONE read-only query -> ONE restorable artifact.
+-- Target DB: ${PROJECT_REF} (PROD). READ ONLY — deletes nothing, writes nothing (SELECT only).
+-- Captures every row Stage 1/2/3 will delete: all non-canonical regions + the ${EXPECTED_COUNT} tenants
+-- + every FK-child row (full dependency map). Keyed to the literal ${EXPECTED_COUNT} ids (frozen below), no pattern.
+-- Companion to the 23-file stage-b-backup.sql (kept as an alternative). Use EITHER, not both.
+--
+-- HOW TO RUN (minimal clicks):
+--   Query 1 (SUMMARY): run it, then paste the grid back to the agent to sanity-check completeness.
+--   Query 2 (ARTIFACT): run it ONCE, then "Download CSV" -> save as
+--     memory/handoffs/purge-661-backup-${"2026-06-25"}.csv  (this single file IS the rollback artifact).
+--
+-- ONE-DOWNLOAD FEASIBILITY: yes — Query 2 is a single SELECT, so its result is one grid and
+-- "Download CSV" yields one file. CAVEAT: the editor may *display* only the first ~1000 rows, but
+-- the CSV export contains ALL rows. After download, confirm the CSV's data-row count equals the
+-- SUM of Query 1's counts. (For these fixture tenants the total is expected to be small.)
+--
+-- RESTORE (break-glass, its own named clear): the 'stmt' column, ordered by restore_seq, is a
+-- runnable script — each cell is a complete INSERT that rebuilds the row from JSON via
+-- jsonb_populate_record (regions before tenants before children; INSERT is allowed on
+-- audit_events + asset_scan_log — their RULE/trigger block only UPDATE/DELETE). Paste the CSV
+-- back to the agent to reassemble an ordered .sql, or run the stmt column top-to-bottom.
+-- CAVEAT: faithful for text/uuid/timestamptz/numeric/boolean/jsonb/array/null. No bytea columns
+-- exist in this set; if one is ever added, review its round-trip before relying on it.
+${fingerprint}
+
+-- ===== QUERY 1 — ROW-COUNT SUMMARY (run; paste the grid to the agent) =====
+${cte}
+SELECT * FROM (
+${countArms}
+) c ORDER BY restore_seq;
+
+-- ===== QUERY 2 — SINGLE-FILE BACKUP ARTIFACT (run once; Download CSV) =====
+${cte}
+SELECT restore_seq, tbl, stmt FROM (
+${dumpArms}
+) s ORDER BY restore_seq, stmt;
+`;
+
 // ---- STAGE 1: child deletes ----
 const stage1Body = (finalWord) => `BEGIN;
 
@@ -303,12 +370,14 @@ ${stage3Body("COMMIT")}
 
 // ---- write ----
 writeFileSync(join(HERE, "stage-b-backup.sql"), backupSql);
+writeFileSync(join(HERE, "stage-b-backup-singlefile.sql"), singleFileSql);
 writeFileSync(join(HERE, "stage-1-child-deletes.sql"), stage1Sql);
 writeFileSync(join(HERE, "stage-2-tenant-deletes.sql"), stage2Sql);
 writeFileSync(join(HERE, "stage-3-region-deletes.sql"), stage3Sql);
 
-console.log(`Generated 4 SQL files keyed to ${ids.length} literal tenant_ids:`);
-console.log("  stage-b-backup.sql        (READ ONLY, " + BACKUP_TABLES.length + " CSV dumps)");
-console.log("  stage-1-child-deletes.sql (DRY-RUN + EXECUTE)");
+console.log(`Generated 5 SQL files keyed to ${ids.length} literal tenant_ids:`);
+console.log("  stage-b-backup.sql            (READ ONLY, " + BACKUP_TABLES.length + " CSV dumps)");
+console.log("  stage-b-backup-singlefile.sql (READ ONLY, 1 query -> 1 restorable artifact)");
+console.log("  stage-1-child-deletes.sql     (DRY-RUN + EXECUTE)");
 console.log("  stage-2-tenant-deletes.sql");
 console.log("  stage-3-region-deletes.sql");
