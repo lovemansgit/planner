@@ -270,15 +270,17 @@ export function TasksClient({
           matching the shared <DataTable> chrome). Shell only — status
           derivation, courier_status rendering, selection, filters, and all row
           logic are untouched (the status-filter lane owns those). */}
-      {/* Phase 12.2 cosmetic — widen the operator /tasks table to match the
-          admin tables: bleed the table region's RIGHT edge into the otherwise
-          unused right gutter via the shared tableBleedClass (#646), keeping the
-          shared LEFT edge (shellClass) and the header/filters narrow. The bleed
-          only ADDS width (xl:-mr-24 / 2xl:-mr-40, zero below xl), so it never
-          introduces a scrollbar — overflow-x-auto stays the in-card fallback,
-          now with more room before it engages. */}
+      {/* Phase 12.2 cosmetic — TWO combined changes on this table region:
+          (1) WIDEN — bleed the table region's RIGHT edge into the otherwise
+          unused right gutter via the shared tableBleedClass (#646/#658), keeping
+          the shared LEFT edge (shellClass) and the header/filters narrow; and
+          (2) DROP the forced min-w-[64rem] (#652) — with the Address column gone
+          the remaining columns fit the shell width at desktop.
+          Net: the bleed only ADDS width and the min-w is removed, so no
+          horizontal scrollbar is introduced — overflow-x-auto stays the
+          narrow-viewport fallback only, now with more room before it engages. */}
       <div className={tableBleedClass("overflow-x-auto rounded-2xl bg-[color:var(--color-b-card)] shadow-b-card")}>
-        <table className="w-full min-w-[64rem] border-collapse text-sm">
+        <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-[color:var(--color-border-strong)]">
               <Th>
@@ -294,7 +296,6 @@ export function TasksClient({
               <Th>AWB</Th>
               <Th>Status</Th>
               <Th>Consignee</Th>
-              <Th>Address</Th>
               <Th>District</Th>
               <Th>City</Th>
               <Th>Telephone</Th>
@@ -419,16 +420,18 @@ function Row({
           <span className={`${STATUS_PILL_BASE} mt-1 bg-red/15 text-red`}>Failed push</span>
         ) : null}
       </Td>
-      {/* R6.4: Consignee · Address · District · City · Telephone form
-          ONE click target to the consignee detail page. The name cell is
+      {/* R6.4 + Phase 12.2 cosmetic: Consignee · District · City · Telephone
+          form ONE click target to the consignee detail page. The name cell is
           the keyboard-focusable primary link; the rest are mouse targets
-          (tabIndex -1) so the block is one logical stop. Telephone is
-          plain text inside the link — NOT a tel: link. */}
+          (tabIndex -1) so the block is one logical stop. Telephone is plain text
+          inside the link — NOT a tel: link. The Address column was dropped (Love
+          consciously superseded the Day-53 R6.2/R6.4 nine-column ruling:
+          District + City suffice, and Address forced the table's horizontal
+          scroll); the underlying addressLine projection is unchanged — just not
+          rendered. "City" is the relabel-lane header (#648) over the emirate
+          value (`cgn.emirate`). */}
       <ConsigneeCell href={cgn.href} primary ariaLabel={`View consignee ${cgn.name}`}>
         {cgn.name}
-      </ConsigneeCell>
-      <ConsigneeCell href={cgn.href} truncateTitle={cgn.addressLine}>
-        {cgn.addressLine}
       </ConsigneeCell>
       <ConsigneeCell href={cgn.href}>{cgn.district}</ConsigneeCell>
       <ConsigneeCell href={cgn.href}>{cgn.emirate}</ConsigneeCell>
