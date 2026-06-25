@@ -50,7 +50,7 @@ const COLUMNS: ReadonlyArray<DataTableColumn<Row>> = [
   },
   {
     key: "emirate",
-    header: "Emirate",
+    header: "City",
     cellClassName: "text-[color:var(--color-text-secondary)]",
     cell: (c) => c.emirateOrRegion,
     title: (c) => c.emirateOrRegion,

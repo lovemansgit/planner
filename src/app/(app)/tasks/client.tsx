@@ -288,7 +288,7 @@ export function TasksClient({
               <Th>Consignee</Th>
               <Th>Address</Th>
               <Th>District</Th>
-              <Th>Emirate</Th>
+              <Th>City</Th>
               <Th>Telephone</Th>
               <Th>Actions</Th>
             </tr>
@@ -411,7 +411,7 @@ function Row({
           <span className={`${STATUS_PILL_BASE} mt-1 bg-red/15 text-red`}>Failed push</span>
         ) : null}
       </Td>
-      {/* R6.4: Consignee · Address · District · Emirate · Telephone form
+      {/* R6.4: Consignee · Address · District · City · Telephone form
           ONE click target to the consignee detail page. The name cell is
           the keyboard-focusable primary link; the rest are mouse targets
           (tabIndex -1) so the block is one logical stop. Telephone is
@@ -439,7 +439,7 @@ function Row({
 }
 
 // R6.4 — one consignee column cell. Each cell links to the same
-// /consignees/[id] href so the Name·Address·District·Emirate·Telephone
+// /consignees/[id] href so the Name·Address·District·City·Telephone
 // block reads as a single click target. Padding matches `Td` (px-3 py-3)
 // so the link fills the cell and the hover tint signals the target.
 // `truncateTitle` clips long values (the address) to keep the row rhythm;
