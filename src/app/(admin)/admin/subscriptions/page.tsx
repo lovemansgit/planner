@@ -42,7 +42,6 @@ import {
   listAllSubscriptions,
 } from "@/modules/subscriptions/service";
 
-import { MaterializeButton } from "./_components/MaterializeButton";
 import {
   ForbiddenError,
   NoTenantConfiguredError,
@@ -149,10 +148,11 @@ export default async function AdminSubscriptionsPage({
 // Phase 9 · 3.4 — the admin subscriptions list adopts the shared <DataTable>
 // (Gap C, B+ skin): floating card, never-wrap headers, mono figures, the
 // status-LED gutter, and the delivery-window track. The Consignee column keeps
-// the v1.5.1 NAME render (#556); the Actions cell keeps the MaterializeButton
-// (#574) and opts out of the row link. Column order is preserved from the
-// pre-B+ table (status-first ordering is an available refinement, not taken
-// here to avoid an information-architecture change).
+// the v1.5.1 NAME render (#556). Column order is preserved from the pre-B+ table
+// (status-first ordering is an available refinement, not taken here to avoid an
+// information-architecture change). Phase 12.2 cosmetic: the trailing Actions
+// column (admin "Materialize" trigger) was removed — see the note at its former
+// site below.
 const SUBSCRIPTION_COLUMNS: ReadonlyArray<DataTableColumn<AdminSubscriptionRow>> = [
   {
     key: "merchant",
@@ -204,21 +204,11 @@ const SUBSCRIPTION_COLUMNS: ReadonlyArray<DataTableColumn<AdminSubscriptionRow>>
     cellClassName: "text-[color:var(--color-text-secondary)]",
     cell: (row) => row.subscription.startDate,
   },
-  {
-    key: "actions",
-    header: "Actions",
-    srHeader: true,
-    align: "right",
-    noRowLink: true,
-    // This table overflows the shared content width on desktop; pin the
-    // Materialize action to the card's right edge so it stays visible and
-    // clickable while the rest of the row scrolls beneath it (Phase 12.1).
-    stickyRight: true,
-    cell: (row) =>
-      row.subscription.status === "active" ? (
-        <MaterializeButton subscriptionId={row.subscription.id} />
-      ) : null,
-  },
+  // Phase 12.2 cosmetic — the Actions column (which held only the admin
+  // "Materialize" trigger) is removed per Love's walk: this PR deletes the
+  // VISIBLE CONTROL only. The MaterializeButton component and its server action
+  // (_actions.ts) + service-layer permission are intentionally untouched — the
+  // cross-tenant capability closure is a separate T3 plan-first lane.
 ];
 
 function SubscriptionsTable({ rows }: { rows: readonly AdminSubscriptionRow[] }) {
