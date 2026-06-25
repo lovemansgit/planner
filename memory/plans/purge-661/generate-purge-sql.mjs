@@ -314,7 +314,19 @@ ${guardCount}
 
 ${guardSafe}
 
+-- Blocker A ALSO fires on the CASCADE path: the tenant delete's ON DELETE CASCADE into
+-- audit_events (0002:45) issues a cascade DELETE that the audit_events_no_delete RULE
+-- (0002:90) rewrites to nothing -> Postgres aborts the whole tenant delete with XX000
+-- ("referential integrity query on tenants ... gave unexpected result ... a rule having
+-- rewritten the query"). Stage 1 already cleared these targets' audit rows (0 to cascade),
+-- but the rule must be DOWN for the cascade probe to pass. Re-enabled inside the txn so a
+-- ROLLBACK or any failure restores it (DDL is transactional).
+-- NOTE: asset_scan_log needs NO escape here — its FK is RESTRICT (0032:42), not CASCADE, so
+-- the tenant delete only SELECT-probes it; its append-only trigger fires on UPDATE/DELETE not
+-- SELECT, and Stage 1 already cleared its rows, so the probe returns 0 and passes.
+ALTER TABLE audit_events DISABLE RULE audit_events_no_delete;
 DELETE FROM tenants WHERE id IN (SELECT tenant_id FROM _purge_targets);
+ALTER TABLE audit_events ENABLE RULE audit_events_no_delete;
 -- Cascades the 6 identity/integration leaf children: users, roles, role_assignments,
 -- api_keys, tenant_suitefleet_webhook_credentials, webhook_events.
 -- (task_generation_runs was already deleted explicitly in Stage 1.)
