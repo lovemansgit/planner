@@ -68,20 +68,12 @@ ORDER BY is_allowlisted DESC, t.slug;
 -- has_hex_run = true but is_allowlisted = true, it is kept (allowlist wins) — confirm that is intended.
 
 -- ============================================================================
--- QUERY D — FROZEN TARGET IDS: the junk tenant_ids to delete. EXPORT this id column
--- (Download CSV) and hand it to the agent -> target_ids.txt. The delete acts ONLY on these
--- frozen ids; a tenant created after this snapshot can never be swept.
+-- QUERY D — (OBSOLETE) no id export. The ~1,759 ids exceed the SQL-editor CSV export cap, so the
+-- frozen set is NOT exported to a literal list. Instead the delete script snapshots the SAME predicate
+-- IN-DATABASE at delete time into a TEMP table `_sandbox_junk` and count-guards it == QUERY A's
+-- junk_count (baked into the generator as AUDITED_COUNT). The only value to carry forward from Stage A
+-- is QUERY A's junk_count (= 1759). Nothing to copy/paste.
 -- ============================================================================
-SELECT t.id
-FROM tenants t
-JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
-WHERE r.client_id = 'transcorpsb'
-  AND t.slug ~ '[0-9a-f]{8}'
-  AND t.slug NOT IN ('meal-plan-scheduler','dr-nutrition','fresh-butchers','transcorp',
-                     'hem','mlp','demo-bistro','demo-bistro1')
-ORDER BY t.id;
--- The COUNT of rows here MUST equal QUERY A's junk_count. The generator will refuse to emit
--- unless the frozen list length == this audited count.
 
 -- ============================================================================
 -- QUERY E — BACKUP-VOLUME SUMMARY: per-table row counts for the junk set, so Love sizes the

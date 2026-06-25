@@ -2,32 +2,46 @@
 
 Plan: `sandbox-cleanup-plan.md`. **Nothing here executes against a database.** Love runs
 each stage in the Supabase SQL editor (project `qdotjmwqbyzldfuxphei`, PROD), one named
-clear per stage. Deletes the ~1,821 hex-slug junk tenants ON the KEPT `transcorpsb`
-(Sandbox) region — tenants only, no region delete.
+clear per stage. Deletes the **1,759** hex-slug junk tenants ON the KEPT `transcorpsb`
+(Sandbox) region — tenants only, no region delete. Keep-set = **11** (8 allowlist +
+`r0-test-a` + `r0-test-b` + `sandbox-merchant-588`).
+
+## In-DB frozen snapshot (no literal id list)
+
+The ~1,759 ids exceed the SQL-editor CSV export cap, so there is **no `target_ids.txt`**.
+The delete script snapshots the junk set in-DB into a TEMP table `_sandbox_junk` (count-
+guarded `= 1759`) and batches over disjoint `rn`-ranges. Run each delete section as **one
+SQL-editor Run** so the `ON COMMIT PRESERVE ROWS` snapshot survives the per-batch commits.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `stage-a-audit.sql` | READ-ONLY. Love runs FIRST: junk/keep counts, the keep-set list to eyeball, the frozen target ids (Query D → `target_ids.txt`), and a backup-volume summary. |
-| `target_ids.txt` | The frozen junk `tenant_id`s + a `# AUDITED_COUNT: <n>` header (Stage-A Query A). Single source of truth; written by the agent from Love's export (Love does not hand-edit). |
-| `generate-sandbox-cleanup-sql.mjs` | Generator. Reads `target_ids.txt`, emits the 3 SQL files below. **Aborts unless the id count == AUDITED_COUNT** and all are distinct valid UUIDs. |
-| `delete-batched.sql` | *(generated)* Batched delete (BATCH_SIZE=100). DRY-RUN section (all batches ROLLBACK) + EXECUTE section (all batches COMMIT). Each batch: fingerprint → frozen seed → guards → Blocker A/B → child→parent deletes → 0-residual verify. |
-| `stage-b-backup-singlefile.sql` | *(generated)* READ-ONLY, one query → one restorable artifact. Modest sets only — see scale note. |
-| `stage-b-backup-perbatch.sql` | *(generated)* READ-ONLY, one CSV per batch. **Recommended at ~1,821 scale.** |
+| `stage-a-audit.sql` | READ-ONLY. Already run: junk_count (A) = 1759, keep_count (B) = 11, keep-set LIST (C), backup-volume summary (E). (Query D id-export retired — frozen in-DB instead.) |
+| `generate-sandbox-cleanup-sql.mjs` | Generator (no id input; `AUDITED_COUNT=1759`, `BATCH_SIZE=100`). Emits the 2 SQL files below. |
+| `delete-batched.sql` | *(generated)* DRY-RUN + EXECUTE sections. Each: fingerprint → snapshot → freeze guard (=1759) → scope fence → 18 `rn`-range batches (Blocker A/B, child→parent deletes, 0-residual verify) → drop snapshot. |
+| `stage-b-backup-perbatch.sql` | *(generated)* READ-ONLY, 18 per-batch CSVs (same predicate + `rn`-ranges as the delete). Secondary artifact — see backup note. |
+
+## Backup
+
+**Primary (recommended):** a Supabase **database backup** (Dashboard → Database → Backups,
+or PITR) taken immediately before EXECUTE — one click, full fidelity, no row cap. The right
+tool for ~20k backup rows vs the editor's ~1k CSV export cap.
+
+**Secondary:** `stage-b-backup-perbatch.sql` (18 CSVs) for granular row-level restore. If a
+batch CSV truncates at the cap, rely on the DB backup for that slice.
 
 ## Flow
 
-1. Love runs `stage-a-audit.sql`; eyeballs Query C keep-set; exports Query D ids + notes Query A count.
-2. Agent writes `target_ids.txt` (ids + `# AUDITED_COUNT`), runs the generator → 3 SQL files.
-3. Independent reviewer body-reads the emitted SQL at the pinned head SHA; Love outside-checks.
-4. Execution, each its own named clear: **Backup (size via Query E/summary → single-file or per-batch) → Delete DRY-RUN → Delete EXECUTE → final verify.**
+1. Stage A — DONE (junk=1759, keep=11; the 11 eyeballed kept).
+2. Reviewer body-reads the emitted SQL at the pinned head; Love outside-checks.
+3. Execution, each its own named clear: **Backup (DB backup ± per-batch CSV) → Delete DRY-RUN (one Run) → Delete EXECUTE (one Run) → final verify.**
 
 ## Safety properties
 
-- Project-ref fingerprint + `transcorpsb` presence on every batch (abort on mismatch).
-- Frozen-id authority: deletes target only the literal frozen list, never a live pattern.
-- Scope fence per batch: abort if any id is off-Sandbox, lacks the 8-hex run (keep-set), or is allowlisted; + count + existence checks.
-- Blocker A (audit-rule wrap on the tenant delete — the #661 Stage-2 lesson) and Blocker B (asset_scan_log GUC) in every batch.
+- Fingerprint + `transcorpsb` presence (each section).
+- Freeze: in-DB snapshot count-guarded `= 1759`; batches consume the frozen snapshot, never a live pattern per batch.
+- Scope fence (once, vs snapshot): abort if any id is off-Sandbox / lacks the 8-hex run (keep-set) / is allowlisted. The 11 keep-set can never enter (3 fixtures have no 8-hex run; 8 allowlist excluded).
+- Blocker A (audit-rule wrap on the tenant delete, every batch — the #661 Stage-2 lesson) + Blocker B (asset_scan_log GUC).
 - Every-row-verified: per-batch 0-residual sum across all 22 tenant-scoped tables.
-- Batched (100/txn) so no single transaction can lock/time out; verify-before-commit via DRY-RUN→EXECUTE.
+- Batched (100/txn, 18 batches) within one Run; verify-before-commit via DRY-RUN→EXECUTE.
