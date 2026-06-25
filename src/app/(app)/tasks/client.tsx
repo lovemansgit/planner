@@ -35,6 +35,7 @@ import type { Task, TaskListRow } from "@/modules/tasks/types";
 import type { ConsigneeAddressRow } from "@/modules/subscription-addresses";
 
 import { OutlineButton } from "@/components/OutlineButton";
+import { tableBleedClass } from "@/components/page-shell-recipe";
 import { TaskTimelineDrawer } from "@/components/task-timeline/TaskTimelineDrawer";
 
 import { consigneeCellModel } from "./_components/consignee-cell";
@@ -269,7 +270,14 @@ export function TasksClient({
           matching the shared <DataTable> chrome). Shell only — status
           derivation, courier_status rendering, selection, filters, and all row
           logic are untouched (the status-filter lane owns those). */}
-      <div className="overflow-x-auto rounded-2xl bg-[color:var(--color-b-card)] shadow-b-card">
+      {/* Phase 12.2 cosmetic — widen the operator /tasks table to match the
+          admin tables: bleed the table region's RIGHT edge into the otherwise
+          unused right gutter via the shared tableBleedClass (#646), keeping the
+          shared LEFT edge (shellClass) and the header/filters narrow. The bleed
+          only ADDS width (xl:-mr-24 / 2xl:-mr-40, zero below xl), so it never
+          introduces a scrollbar — overflow-x-auto stays the in-card fallback,
+          now with more room before it engages. */}
+      <div className={tableBleedClass("overflow-x-auto rounded-2xl bg-[color:var(--color-b-card)] shadow-b-card")}>
         <table className="w-full min-w-[64rem] border-collapse text-sm">
           <thead>
             <tr className="border-b border-[color:var(--color-border-strong)]">
