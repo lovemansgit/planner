@@ -41,7 +41,7 @@ import {
 import { buildRequestContext } from "@/shared/request-context";
 
 import { AdminPageSizeDropdown } from "../../_components/AdminPageSizeDropdown";
-import { shellClass } from "@/components/page-shell-recipe";
+import { shellClass, tableBleedClass } from "@/components/page-shell-recipe";
 
 const ALLOWED_PAGE_SIZES: readonly number[] = [25, 50, 100];
 const PAGE_SIZE_DEFAULT = 50;
@@ -130,7 +130,11 @@ export default async function AdminUsersPage({ searchParams }: AdminUsersPagePro
         {rows.length === 0 ? (
           <EmptyState filtered={q !== undefined} />
         ) : (
-          <AdminUsersTable rows={rows} />
+          // Item 6 — bleed the table region into the right gutter (shared left
+          // edge preserved); header/filters above stay narrow.
+          <div className={tableBleedClass()}>
+            <AdminUsersTable rows={rows} />
+          </div>
         )}
 
         <Pagination page={page} hasNext={hasNext} perPage={perPage} q={q} />
@@ -171,6 +175,7 @@ const USER_COLUMNS: ReadonlyArray<DataTableColumn<AdminUserRow>> = [
     header: "Email",
     cell: (row) => <span className={userCellTone(row)}>{row.email}</span>,
     title: (row) => row.email,
+    copyable: true,
   },
   {
     key: "fullName",
@@ -199,6 +204,7 @@ const USER_COLUMNS: ReadonlyArray<DataTableColumn<AdminUserRow>> = [
       </>
     ),
     title: (row) => `${row.tenantName} · ${row.tenantSlug}`,
+    copyable: true,
   },
   {
     key: "role",
