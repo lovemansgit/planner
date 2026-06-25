@@ -56,6 +56,13 @@ const TASK_A2 = randomUUID() as Uuid;
 const TASK_B1 = randomUUID() as Uuid;
 const TASK_C1 = randomUUID() as Uuid;
 
+// Phase 12.2 RELABEL lane — an override-address task proves the admin SELECT
+// COALESCEs the task's resolved address district/emirate over the consignee's
+// own (mirrors the operator list). Dated in the past so DESC ordering keeps it
+// off rows[0]; the test finds it by id, not position.
+const ADDRESS_A_OVR = randomUUID();
+const TASK_A_OVR = randomUUID() as Uuid;
+
 const SYSADMIN_PERMS = ROLES["transcorp-sysadmin"].permissions;
 const TENANT_ADMIN_PERMS = ROLES["tenant-admin"].permissions;
 
@@ -108,6 +115,23 @@ describe("Day-19 / Phase 1.5 — listAllTasks (real Postgres)", () => {
            'CREATED', '2099-01-03', '08:00', '10:00', 'manual_admin'),
           (${TASK_C1}, ${TENANT_C}, ${CONSIGNEE_C}, ${`C1-${RUN_ID}`},
            'CREATED', '2099-01-04', '08:00', '10:00', 'manual_admin')
+      `);
+      // Override-address row for TENANT_A: a resolved address whose
+      // district/emirate DIFFER from the consignee's own (D-A / Dubai), so the
+      // COALESCE(override → consignee) is observable.
+      await tx.execute(sqlTag`
+        INSERT INTO addresses (id, tenant_id, consignee_id, label, is_primary, line, district, emirate)
+        VALUES (${ADDRESS_A_OVR}, ${TENANT_A}, ${CONSIGNEE_A},
+                'office', false, 'Override Line', 'Override-D', 'Sharjah')
+      `);
+      await tx.execute(sqlTag`
+        INSERT INTO tasks (
+          id, tenant_id, consignee_id, address_id, customer_order_number,
+          internal_status, delivery_date, delivery_start_time, delivery_end_time,
+          created_via
+        ) VALUES
+          (${TASK_A_OVR}, ${TENANT_A}, ${CONSIGNEE_A}, ${ADDRESS_A_OVR}, ${`AOVR-${RUN_ID}`},
+           'CREATED', '2098-12-31', '08:00', '10:00', 'manual_admin')
       `);
     });
   });
@@ -202,5 +226,33 @@ describe("Day-19 / Phase 1.5 — listAllTasks (real Postgres)", () => {
     const r = rows[0];
     expect(r.consigneeName).toBe("Cons A");
     expect(r.consigneePhone).toBe(`+97150a${RUN_ID}`);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 12.2 RELABEL lane — effective District + City (emirate) projection.
+  // The admin /tasks list now carries the override-resolved district/emirate the
+  // same way the operator list does, so the admin table can render District +
+  // City columns. effective_* COALESCE(override address → consignee own).
+  // ---------------------------------------------------------------------------
+
+  it("exposes effective district + emirate, falling through to the consignee when no address override", async () => {
+    const ctx = makeCtx(SYSADMIN_PERMS);
+    const rows = await listAllTasks(ctx, { merchantSlug: SLUG_A });
+    // rows[0] is the latest A task (2099-01-02), which has no address_id, so the
+    // effective values fall through to the consignee's own district/emirate.
+    const r = rows.find((row) => row.task.id === TASK_A2);
+    expect(r).toBeDefined();
+    expect(r!.effectiveDistrict).toBe("D-A");
+    expect(r!.effectiveEmirate).toBe("Dubai");
+  });
+
+  it("COALESCEs the override address district + emirate over the consignee's own", async () => {
+    const ctx = makeCtx(SYSADMIN_PERMS);
+    const rows = await listAllTasks(ctx, { merchantSlug: SLUG_A });
+    const r = rows.find((row) => row.task.id === TASK_A_OVR);
+    expect(r).toBeDefined();
+    // Address override wins: 'Override-D' / 'Sharjah', not the consignee 'D-A' / 'Dubai'.
+    expect(r!.effectiveDistrict).toBe("Override-D");
+    expect(r!.effectiveEmirate).toBe("Sharjah");
   });
 });
