@@ -383,6 +383,37 @@ const TASK_COLUMNS: ReadonlyArray<DataTableColumn<AdminTaskRow>> = [
     title: (row) => row.consigneePhone ?? undefined,
   },
   {
+    // Phase 12.2 RELABEL lane — District. effectiveDistrict is COALESCE(override
+    // address → consignee own), projected by listAllTasksRows (mirrors the
+    // operator /tasks District column). Em-dash on null/blank.
+    key: "district",
+    header: "District",
+    cell: (row) =>
+      row.effectiveDistrict?.trim() ? (
+        row.effectiveDistrict
+      ) : (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+    title: (row) => row.effectiveDistrict ?? undefined,
+  },
+  {
+    // Phase 12.2 RELABEL lane — City. The header is "City" but the bound value is
+    // the EMIRATE field (effectiveEmirate): migration 0013 maps SF's "city" onto
+    // the district/emirate model, so "City" is the app-wide display label for the
+    // emirate value (operator /tasks header relabelled in the sibling PR). DB
+    // column names (emirate_or_region / addresses.emirate) are unchanged —
+    // display-only. Em-dash on null/blank.
+    key: "city",
+    header: "City",
+    cell: (row) =>
+      row.effectiveEmirate?.trim() ? (
+        row.effectiveEmirate
+      ) : (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+    title: (row) => row.effectiveEmirate ?? undefined,
+  },
+  {
     key: "pod",
     header: "Proof of delivery",
     srHeader: true,
