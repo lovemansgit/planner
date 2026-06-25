@@ -90,6 +90,13 @@ export interface CalendarMonthViewProps {
 
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
+// Phase 12.2 Batch B / Item 7 — B+ calendar nav chip. The consignee calendar is
+// the product's showcase hero surface; lift it to the B+ language: a floating
+// warm-white chip (--color-b-card) with a navy hairline ring (--color-border-
+// default) and a green accent on hover, replacing the old cool stone-200 outline.
+const CAL_NAV_BTN =
+  "rounded-lg bg-[color:var(--color-b-card)] px-2.5 py-1 text-xs text-[color:var(--color-text-secondary)] ring-1 ring-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out hover:text-green hover:ring-green/50";
+
 export function CalendarMonthView({
   consigneeId,
   monthStart,
@@ -135,26 +142,26 @@ export function CalendarMonthView({
         <div className="flex items-center gap-2">
           <Link
             href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${prevMonth}${statusSuffix}`}
-            className="rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
+            className={CAL_NAV_BTN}
             aria-label="Previous month"
           >
             ←
           </Link>
           <Link
             href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${nextMonth}${statusSuffix}`}
-            className="rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
+            className={CAL_NAV_BTN}
             aria-label="Next month"
           >
             →
           </Link>
           <Link
             href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${todayMonth}${statusSuffix}`}
-            className="ml-2 rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
+            className={`ml-2 ${CAL_NAV_BTN}`}
           >
             Today
           </Link>
         </div>
-        <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+        <p className="font-b-display text-sm font-medium text-navy">
           {formatMonthLabel(monthStart)}
         </p>
       </div>
@@ -166,11 +173,16 @@ export function CalendarMonthView({
         <CourierStatusFilter />
       </div>
 
-      <div className="grid grid-cols-7 gap-px border border-stone-200 bg-stone-200">
+      {/* Phase 12.2 Batch B / Item 7 — the month grid lifts to a floating B+
+          card: warm-white cells (--color-b-card) on a navy-hairline rule
+          (--color-border-default via gap-px), clipped to rounded-2xl with the
+          soft B+ depth (shadow-b-card), replacing the old flat cool-grey
+          stone-200 grid. */}
+      <div className="grid grid-cols-7 gap-px overflow-hidden rounded-2xl bg-[color:var(--color-border-default)] shadow-b-card ring-1 ring-[color:var(--color-border-default)]">
         {WEEKDAY_HEADERS.map((wd) => (
           <div
             key={wd}
-            className="bg-paper px-2 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]"
+            className="bg-[color:var(--color-b-card)] px-2 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)]"
           >
             {wd}
           </div>
@@ -190,15 +202,15 @@ export function CalendarMonthView({
           return (
             <div
               key={isoDate}
-              className={`min-h-[96px] p-1.5 ${isOffMonth ? "bg-ivory/40" : "bg-paper"}`}
+              className={`min-h-[96px] p-1.5 ${isOffMonth ? "bg-ivory/50" : "bg-[color:var(--color-b-card)]"}`}
             >
               <p
                 className={
                   isToday
-                    ? "mb-1 font-display text-xs font-semibold text-green"
+                    ? "mb-1 font-b-mono text-xs font-semibold tabular-nums text-green"
                     : isOffMonth
-                      ? "mb-1 font-display text-xs text-[color:var(--color-text-tertiary)]"
-                      : "mb-1 font-display text-xs text-navy"
+                      ? "mb-1 font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]"
+                      : "mb-1 font-b-mono text-xs tabular-nums text-navy"
                 }
               >
                 {dayNum}
@@ -255,7 +267,7 @@ export function CalendarMonthView({
           of colour key. The legend still teaches all 14 fine courier states;
           this is PLACEMENT only — CalendarStatusLegend + LEGEND_FAMILIES are
           unchanged, and the fine-status filter dropdown above is untouched. */}
-      <details className="group mt-8 border-t border-stone-200 pt-4">
+      <details className="group mt-8 border-t border-[color:var(--color-border-default)] pt-4">
         <summary className="flex cursor-pointer list-none items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-[color:var(--color-text-tertiary)] transition-colors duration-[120ms] ease-out hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary [&::-webkit-details-marker]:hidden">
           <span>Status colour key</span>
           <span className="text-[color:var(--color-text-tertiary)] group-open:hidden" aria-hidden="true">

@@ -49,7 +49,7 @@ export function CalendarPodCard({
         type="button"
         onClick={() => setOpen(true)}
         aria-label={`Proof of delivery for ${deliveryDate}`}
-        className="block w-full overflow-hidden rounded-sm border border-stone-200 bg-paper text-left transition-opacity duration-[120ms] ease-out hover:opacity-90"
+        className="block w-full overflow-hidden rounded-lg bg-[color:var(--color-b-card)] text-left ring-1 ring-[color:var(--color-border-default)] transition-opacity duration-[120ms] ease-out hover:opacity-90"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -63,7 +63,7 @@ export function CalendarPodCard({
           >
             {statusLabel}
           </span>
-          <span className="mt-0.5 block text-[10px] tabular-nums text-[color:var(--color-text-tertiary)]">
+          <span className="mt-0.5 block font-b-mono text-[10px] tabular-nums text-[color:var(--color-text-tertiary)]">
             {timeWindow}
           </span>
           <AddressIndicator label={addressLabel} />
