@@ -63,7 +63,7 @@ interface DayBucket {
  *   - Append overlay: green-bordered (anomaly highlight)
  *   - Skip-on-empty-day: muted grey + line-through (handled inline)
  *   - Delivery density: green ramp (brand canon)
- *   - Empty (no signal): visible neutral (`bg-stone-200/40`) — must
+ *   - Empty (no signal): visible neutral (`bg-surface-secondary`) — must
  *     NOT match `bg-paper` because the page background is paper too;
  *     blending was the root cause of the Day-21 visual gate failure.
  */
@@ -93,6 +93,11 @@ const MONTH_NAMES = [
   "Nov",
   "Dec",
 ] as const;
+
+// Phase 12.2 Batch B / Item 7 — B+ calendar nav chip (mirrors CalendarMonthView):
+// floating warm-white surface, navy hairline ring, green hover accent.
+const CAL_NAV_BTN =
+  "rounded-lg bg-[color:var(--color-b-card)] px-2.5 py-1 text-xs text-[color:var(--color-text-secondary)] ring-1 ring-[color:var(--color-border-default)] transition-colors duration-[120ms] ease-out hover:text-green hover:ring-green/50";
 
 export function CalendarYearView({
   consigneeId,
@@ -138,26 +143,26 @@ export function CalendarYearView({
         <div className="flex items-center gap-2">
           <Link
             href={`/consignees/${consigneeId}?tab=calendar&view=year&year=${prevYear}`}
-            className="rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
+            className={CAL_NAV_BTN}
             aria-label="Previous year"
           >
             ←
           </Link>
           <Link
             href={`/consignees/${consigneeId}?tab=calendar&view=year&year=${nextYear}`}
-            className="rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
+            className={CAL_NAV_BTN}
             aria-label="Next year"
           >
             →
           </Link>
           <Link
             href={`/consignees/${consigneeId}?tab=calendar&view=year&year=${todayYear}`}
-            className="ml-2 rounded-sm border border-stone-200 px-2 py-1 text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)] hover:border-navy hover:text-navy"
+            className={`ml-2 ${CAL_NAV_BTN}`}
           >
             Today
           </Link>
         </div>
-        <p className="text-xs uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
+        <p className="font-b-display text-sm font-medium tabular-nums text-navy">
           {formatYearLabel(yearStart)}
         </p>
       </div>
@@ -170,16 +175,16 @@ export function CalendarYearView({
       <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px] uppercase tracking-[0.1em] text-[color:var(--color-text-secondary)]">
         <span>Deliveries</span>
         <span>Less</span>
-        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-stone-200/40" />
-        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-green/20" />
-        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-green/40" />
-        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-green/60" />
+        <span className="h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-surface-secondary" />
+        <span className="h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-green/20" />
+        <span className="h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-green/40" />
+        <span className="h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-green/60" />
         <span>More</span>
         <span className="ml-2">Failures</span>
-        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-red/25" />
-        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-red/45" />
-        <span className="h-3 w-3 rounded-sm border border-stone-200/60 bg-red/65" />
-        <span className="ml-2 inline-block h-3 w-3 rounded-sm border border-stone-200/60 bg-[color:var(--color-text-secondary)]/15 line-through" />
+        <span className="h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-red/25" />
+        <span className="h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-red/45" />
+        <span className="h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-red/65" />
+        <span className="ml-2 inline-block h-3 w-3 rounded-sm border border-[color:var(--color-border-default)] bg-[color:var(--color-text-secondary)]/15 line-through" />
         <span>Skipped</span>
         <span className="ml-2 inline-block h-3 w-3 rounded-sm border border-green/40 bg-green/10" />
         <span>Appended</span>
@@ -209,10 +214,10 @@ export function CalendarYearView({
             <Link
               key={monthAnchor}
               href={`/consignees/${consigneeId}?tab=calendar&view=month&month=${monthAnchor}`}
-              className="block rounded-sm transition-colors duration-[120ms] ease-out hover:bg-ivory/60"
+              className="block rounded-lg p-1 transition-colors duration-[120ms] ease-out hover:bg-ivory/60"
               aria-label={`Drill to ${monthName} ${year} month view`}
             >
-              <span className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-navy">
+              <span className="mb-2 block font-b-display text-xs font-semibold text-navy">
                 {monthName}
               </span>
               <div className="grid grid-cols-7 gap-px">
@@ -244,12 +249,12 @@ export function CalendarYearView({
                   } else if (total > 0) {
                     bgClass = deliveryDensityClass(total);
                   } else {
-                    bgClass = "bg-stone-200/40";
+                    bgClass = "bg-surface-secondary";
                   }
                   const borderClass =
                     appendException !== undefined
                       ? "border border-green/40"
-                      : "border border-stone-200/60";
+                      : "border border-[color:var(--color-border-default)]";
                   const todayRing = isToday ? " ring-1 ring-green" : "";
                   // Aria-label + native title surface per-status
                   // breakdown so hover + assistive tech see the same
