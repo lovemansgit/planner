@@ -489,13 +489,13 @@ export interface TriggerManualMaterializationResult {
  * ON CONFLICT idempotency) over [today, horizon] in Asia/Dubai — no new
  * capability, just on-demand timing.
  *
- * Guard: `subscription:update`. Cross-tenant triggers (a Transcorp admin
- * acting on another tenant's subscription, as on the /admin/subscriptions
- * surface) additionally require `subscription:read_all` — a tenant
- * operator without that marker can only materialize their own tenant's
- * subscriptions. The subscription's real tenant is resolved via
- * `withServiceRole` so the cross-tenant lookup is not hidden by RLS
- * before the authority check runs.
+ * Guard: `subscription:update`, and same-tenant only. An actor may only
+ * materialize a subscription owned by their own tenant; ANY cross-tenant
+ * trigger is forbidden regardless of permission (no `subscription:read_all`
+ * escape — Love, Phase 12.2 Lane 1: Transcorp staff have no reachable path
+ * to materialize a merchant's subscription). The subscription's real tenant
+ * is resolved via `withServiceRole` so the cross-tenant lookup is not hidden
+ * by RLS before the authority check runs.
  *
  * Audit: emits the existing `cron.on_demand_invoked` event with
  * `triggered_by='admin_manual_trigger'` (additive enum value) on success
@@ -506,8 +506,8 @@ export interface TriggerManualMaterializationResult {
  * up SuiteFleet push on the next cron tick (no enqueue coupled here).
  *
  * Throws:
- *   - ForbiddenError    actor lacks `subscription:update`, or a
- *                       cross-tenant trigger without `subscription:read_all`.
+ *   - ForbiddenError    actor lacks `subscription:update`, or the trigger is
+ *                       cross-tenant (subscription owned by another tenant).
  *   - NotFoundError     no subscription with that id.
  */
 export async function triggerManualMaterialization(
@@ -529,10 +529,12 @@ export async function triggerManualMaterialization(
     throw new NotFoundError(`subscription not found: ${input.subscriptionId}`);
   }
 
-  // Cross-tenant authority gate — mirrors the identity-module pattern.
-  if (ctx.tenantId !== targetTenantId && !ctx.actor.permissions.has("subscription:read_all")) {
+  // Same-tenant only. Any cross-tenant materialize is forbidden — staff have
+  // NO path to materialize a merchant's subscription, regardless of marker
+  // (Love, Phase 12.2 Lane 1). The subscription's own-tenant path is unbroken.
+  if (ctx.tenantId !== targetTenantId) {
     throw new ForbiddenError(
-      "cross-tenant materialization requires subscription:read_all",
+      "materialization is restricted to the subscription's own tenant",
     );
   }
 

@@ -147,45 +147,21 @@ describe("triggerManualMaterialization — cross-tenant authority gate", () => {
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
-  it("allows a cross-tenant trigger when the actor carries subscription:read_all", async () => {
+  it("rejects a cross-tenant trigger even when the actor carries subscription:read_all", async () => {
+    // Phase 12.2 Lane 1 (Love): cross-tenant materialize is ALWAYS forbidden.
+    // subscription:read_all no longer opens an escape — Transcorp staff have
+    // no reachable path to materialize a merchant's subscription.
     setupLookupAndMaterialize(TENANT_B);
-    mockMaterialize.mockResolvedValueOnce({
-      newInsertedTaskIds: ["t1", "t2", "t3"],
-      addressResolutionFailedCount: 1,
-    });
 
-    const result = await triggerManualMaterialization(
-      ctx(["subscription:update", "subscription:read_all"], TENANT_A),
-      { subscriptionId: SUB_ID },
-    );
+    await expect(
+      triggerManualMaterialization(
+        ctx(["subscription:update", "subscription:read_all"], TENANT_A),
+        { subscriptionId: SUB_ID },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenError);
 
-    expect(result).toEqual({
-      newInsertedTaskCount: 3,
-      addressResolutionFailedCount: 1,
-    });
-    // Materialized over [today, horizon] in Dubai (mocked dubai-date).
-    expect(mockMaterialize).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        subscriptionId: SUB_ID,
-        startDate: "2026-05-01",
-        endDate: "2026-05-15",
-      }),
-    );
-    expect(mockEmit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventType: "cron.on_demand_invoked",
-        tenantId: TENANT_B,
-        resourceId: SUB_ID,
-        metadata: expect.objectContaining({
-          triggered_by: "admin_manual_trigger",
-          subscription_id: SUB_ID,
-          new_inserted_task_count: 3,
-          address_resolution_failed_count: 1,
-          target_date: "2026-05-15",
-        }),
-      }),
-    );
+    expect(mockMaterialize).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });
 
