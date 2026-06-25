@@ -44,6 +44,7 @@ import {
 import { parseAwbsParam } from "@/components/asset-reports/report-helpers";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
+import { HeroCount } from "@/components/HeroCount";
 import { SearchBar } from "@/components/SearchBar";
 import { listMerchants } from "@/modules/merchants/service";
 import type { Merchant } from "@/modules/merchants/types";
@@ -168,14 +169,18 @@ export default async function AdminTasksPage({ searchParams }: AdminTasksPagePro
           </p>
         </header>
 
-        <section className="mb-8 flex items-baseline justify-between border-t border-b border-[color:var(--color-border-strong)] bg-[color:var(--color-tint-navy-subtle)] px-6 py-6">
-          <p className="font-serif text-5xl font-light tabular-nums leading-none">
-            {totalCount}
-          </p>
-          <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--color-text-secondary)]">
-            {status !== undefined || merchantSlug !== undefined || q !== undefined ? "Matching tasks" : "Total tasks"}
-          </p>
-        </section>
+        {/* Phase 12.2 Batch B / Item 3 — adopt the shared <HeroCount> floating
+            B+ card (the same treatment on Merchants / Subscriptions) in place of
+            the legacy grey navy-tinted count-band, which read as pre-B+ branding.
+            Count + label only; the "Matching"/"Total" label logic is preserved. */}
+        <HeroCount
+          count={totalCount}
+          label={
+            status !== undefined || merchantSlug !== undefined || q !== undefined
+              ? "Matching tasks"
+              : "Total tasks"
+          }
+        />
 
         <DateRangeFilter
           today={today}
@@ -260,17 +265,33 @@ function buildAdminTasksHref({
   return qs ? `/admin/tasks?${qs}` : "/admin/tasks";
 }
 
-// Phase 10 · Batch B1 — the admin tasks list adopts the shared <DataTable>
-// (Gap C, B+ skin): floating card, never-wrap eyebrow headers, mono figures,
-// truncation, hover, mobile-overflow containment. SHELL RESKIN ONLY — the task
-// courier-status rendering is untouched: the Status cell still calls
-// resolveCourierDisplay(courierStatus, internalStatus) and renders the same
-// pill (display.pillClass + <StatusIcon> + display.label) verbatim. No
-// StatusBadge and no LED status-spine here (task/courier domains are outside the
-// StatusBadge contract). The ?status= filter, parseCourierStatusParam, and
-// <CourierStatusFilter> are page-level and unchanged. Columns, order, the
-// whole-row detail link, and the POD cell (own lightbox, no row-link) are all
-// preserved.
+// Phase 10 · Batch B1 reskinned the admin tasks list onto the shared <DataTable>
+// (floating B+ card, never-wrap eyebrow headers, mono figures, truncation,
+// mobile-overflow). The Status cell rendering remains untouched: it still calls
+// resolveCourierDisplay(courierStatus, internalStatus) and renders the same pill
+// (display.pillClass + <StatusIcon> + display.label) verbatim — no StatusBadge,
+// no LED spine (task/courier domains are outside the StatusBadge contract). The
+// ?status= filter, parseCourierStatusParam, and <CourierStatusFilter> are
+// page-level and unchanged, as is the whole-row detail link and the POD cell.
+//
+// Phase 12.2 Batch B / Item 1 — column rework to the owner's final set + order
+// (authed walk). SELECTION / ORDER only — no logic, no new data fetch:
+//   Merchant · AWB · Status · Consignee name · Delivery date · Time slot ·
+//   Telephone · POD
+//   - DROP the Order # column (AWB is the key identifier).
+//   - DROP the (already-absent) full Address column — District + City suffice.
+//   - SPLIT the merged Consignee column into "Consignee name" + "Telephone".
+//     consigneeName / consigneePhone are already projected onto AdminTaskRow
+//     (#639 FIX 3) — this only re-presents that data; the query/data layer is
+//     untouched.
+//   - "Window" header → "Time slot" (the owner's label; same start–end value).
+//   HELD: the owner's set also names District + City after Telephone. They are
+//   NOT projected by listAllTasksRows — `district` lives on consignees but is
+//   not SELECTed by the admin query, and there is NO `city` column in the schema
+//   at all (migration 0013 maps SF's "city" onto the `district` field). Adding
+//   either is a data-layer / schema change (Floor 1/2), so both are held for a
+//   ruling (see PR description). They slot cleanly between Telephone and POD
+//   once ruled — no reflow needed.
 const TASK_COLUMNS: ReadonlyArray<DataTableColumn<AdminTaskRow>> = [
   {
     key: "merchant",
@@ -286,30 +307,14 @@ const TASK_COLUMNS: ReadonlyArray<DataTableColumn<AdminTaskRow>> = [
     title: (row) => `${row.merchant.name} · ${row.merchant.slug}`,
   },
   {
-    // Phase 12.2 FIX 3 — the Consignee column (Love: critical). Name primary,
-    // phone secondary muted-mono, mirroring the operator /tasks consignee
-    // presentation. Em-dash when the consignee row is absent (legacy LEFT JOIN).
-    key: "consignee",
-    header: "Consignee",
+    key: "awb",
+    header: "AWB",
+    mono: true,
     cell: (row) =>
-      row.consigneeName ? (
-        <>
-          <span className="font-medium text-navy">{row.consigneeName}</span>
-          {row.consigneePhone ? (
-            <span className="ml-2 font-b-mono text-xs tabular-nums text-[color:var(--color-text-tertiary)]">
-              {row.consigneePhone}
-            </span>
-          ) : null}
-        </>
-      ) : (
+      row.task.externalTrackingNumber ?? (
         <span className="text-[color:var(--color-text-tertiary)]">—</span>
       ),
-    title: (row) =>
-      row.consigneeName
-        ? row.consigneePhone
-          ? `${row.consigneeName} · ${row.consigneePhone}`
-          : row.consigneeName
-        : undefined,
+    title: (row) => row.task.externalTrackingNumber ?? undefined,
   },
   {
     key: "status",
@@ -330,11 +335,19 @@ const TASK_COLUMNS: ReadonlyArray<DataTableColumn<AdminTaskRow>> = [
     },
   },
   {
-    key: "orderNumber",
-    header: "Order #",
-    mono: true,
-    cell: (row) => row.task.customerOrderNumber,
-    title: (row) => row.task.customerOrderNumber,
+    // Phase 12.2 Batch B / Item 1 — Consignee NAME (split from the merged
+    // Consignee column; the phone now lives in its own Telephone column).
+    // Em-dash when the consignee row is absent (legacy LEFT JOIN). consigneeName
+    // is projected onto AdminTaskRow by #639 FIX 3 — re-presentation only.
+    key: "consigneeName",
+    header: "Consignee name",
+    cell: (row) =>
+      row.consigneeName ? (
+        <span className="font-medium text-navy">{row.consigneeName}</span>
+      ) : (
+        <span className="text-[color:var(--color-text-tertiary)]">—</span>
+      ),
+    title: (row) => row.consigneeName ?? undefined,
   },
   {
     key: "deliveryDate",
@@ -343,20 +356,23 @@ const TASK_COLUMNS: ReadonlyArray<DataTableColumn<AdminTaskRow>> = [
     cell: (row) => row.task.deliveryDate,
   },
   {
-    key: "window",
-    header: "Window",
+    key: "timeSlot",
+    header: "Time slot",
     mono: true,
     cell: (row) => `${row.task.deliveryStartTime.slice(0, 5)} – ${row.task.deliveryEndTime.slice(0, 5)}`,
   },
   {
-    key: "awb",
-    header: "AWB",
+    // Phase 12.2 Batch B / Item 1 — Telephone (split from the merged Consignee
+    // column). consigneePhone is projected onto AdminTaskRow by #639 FIX 3 —
+    // re-presentation only. Em-dash when absent.
+    key: "telephone",
+    header: "Telephone",
     mono: true,
     cell: (row) =>
-      row.task.externalTrackingNumber ?? (
+      row.consigneePhone ?? (
         <span className="text-[color:var(--color-text-tertiary)]">—</span>
       ),
-    title: (row) => row.task.externalTrackingNumber ?? undefined,
+    title: (row) => row.consigneePhone ?? undefined,
   },
   {
     key: "pod",
