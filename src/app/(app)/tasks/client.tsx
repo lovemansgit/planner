@@ -270,7 +270,12 @@ export function TasksClient({
           derivation, courier_status rendering, selection, filters, and all row
           logic are untouched (the status-filter lane owns those). */}
       <div className="overflow-x-auto rounded-2xl bg-[color:var(--color-b-card)] shadow-b-card">
-        <table className="w-full min-w-[64rem] border-collapse text-sm">
+        {/* Phase 12.2 cosmetic — the forced min-w-[64rem] (which, with the wide
+            Address column, pushed the table past the shell and forced a
+            horizontal scroll) is dropped. With Address gone the remaining columns
+            fit the shell width at desktop; overflow-x-auto stays as the
+            narrow-viewport fallback only. */}
+        <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-[color:var(--color-border-strong)]">
               <Th>
@@ -286,7 +291,6 @@ export function TasksClient({
               <Th>AWB</Th>
               <Th>Status</Th>
               <Th>Consignee</Th>
-              <Th>Address</Th>
               <Th>District</Th>
               <Th>City</Th>
               <Th>Telephone</Th>
@@ -411,16 +415,18 @@ function Row({
           <span className={`${STATUS_PILL_BASE} mt-1 bg-red/15 text-red`}>Failed push</span>
         ) : null}
       </Td>
-      {/* R6.4: Consignee · Address · District · City · Telephone form
-          ONE click target to the consignee detail page. The name cell is
+      {/* R6.4 + Phase 12.2 cosmetic: Consignee · District · City · Telephone
+          form ONE click target to the consignee detail page. The name cell is
           the keyboard-focusable primary link; the rest are mouse targets
-          (tabIndex -1) so the block is one logical stop. Telephone is
-          plain text inside the link — NOT a tel: link. */}
+          (tabIndex -1) so the block is one logical stop. Telephone is plain text
+          inside the link — NOT a tel: link. The Address column was dropped (Love
+          consciously superseded the Day-53 R6.2/R6.4 nine-column ruling:
+          District + City suffice, and Address forced the table's horizontal
+          scroll); the underlying addressLine projection is unchanged — just not
+          rendered. "City" is the relabel-lane header (#648) over the emirate
+          value (`cgn.emirate`). */}
       <ConsigneeCell href={cgn.href} primary ariaLabel={`View consignee ${cgn.name}`}>
         {cgn.name}
-      </ConsigneeCell>
-      <ConsigneeCell href={cgn.href} truncateTitle={cgn.addressLine}>
-        {cgn.addressLine}
       </ConsigneeCell>
       <ConsigneeCell href={cgn.href}>{cgn.district}</ConsigneeCell>
       <ConsigneeCell href={cgn.href}>{cgn.emirate}</ConsigneeCell>
