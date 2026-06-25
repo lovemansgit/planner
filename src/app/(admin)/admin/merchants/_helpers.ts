@@ -239,7 +239,7 @@ export function parseCreateMerchantForm(formData: FormData): ParseCreateMerchant
 
   const emirate = trimmed("pickup_emirate");
   if (emirate.length === 0)
-    fieldErrors.pickup_emirate = "Emirate is required.";
+    fieldErrors.pickup_emirate = "City is required.";
 
   const suitefleetCustomerCode = trimmed("suitefleet_customer_code");
   if (suitefleetCustomerCode.length === 0) {
@@ -347,7 +347,7 @@ export function parseEditMerchantForm(formData: FormData): ParseEditMerchantResu
         "District is required when any pickup field is set.";
     if (emirate.length === 0)
       fieldErrors.pickup_emirate =
-        "Emirate is required when any pickup field is set.";
+        "City is required when any pickup field is set.";
   }
 
   const suitefleetCustomerCode = trimmed("suitefleet_customer_code");

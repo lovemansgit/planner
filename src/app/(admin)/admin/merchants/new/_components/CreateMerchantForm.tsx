@@ -148,7 +148,7 @@ export function CreateMerchantForm() {
             />
 
             <TextField
-              label="Emirate"
+              label="City"
               name="pickup_emirate"
               placeholder="Dubai"
               error={fieldErrors.pickup_emirate}

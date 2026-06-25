@@ -46,3 +46,15 @@ describe("ConsigneesTable — phone display (Gap J / D4)", () => {
     expect(html).toContain("+971 4 123 4567");
   });
 });
+
+// Phase 12.2 RELABEL lane — the emirate column is relabelled "City" app-wide.
+// The bound data field (emirateOrRegion) is unchanged; only the header text.
+describe("ConsigneesTable — emirate column relabelled to City (Phase 12.2)", () => {
+  it("renders the column header as 'City', never 'Emirate'", () => {
+    const html = renderToStaticMarkup(
+      <ConsigneesTable rows={[consigneeRow()]} query="" />,
+    );
+    expect(html).toContain("City");
+    expect(html).not.toContain("Emirate");
+  });
+});
