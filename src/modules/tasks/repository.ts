@@ -863,6 +863,11 @@ type AdminTaskJoinRow = TaskRow & {
   // consignees JOIN already exists (name-search); now projected, not just filtered.
   readonly consignee_name: string | null;
   readonly consignee_phone: string | null;
+  // Phase 12.2 RELABEL lane — effective District + City (emirate) for the admin
+  // /tasks columns. COALESCE(override address → consignee own), mirroring the
+  // operator list (listTasksByTenant). Both nullable (LEFT JOINs + legacy rows).
+  readonly effective_district: string | null;
+  readonly effective_emirate: string | null;
 };
 
 /**
@@ -895,6 +900,8 @@ export async function listAllTasksRows(
     };
     consigneeName: string | null;
     consigneePhone: string | null;
+    effectiveDistrict: string | null;
+    effectiveEmirate: string | null;
   }[]
 > {
   const limit = Math.min(filters.limit ?? 50, 500);
@@ -918,10 +925,13 @@ export async function listAllTasksRows(
       ten.name AS merchant_name,
       ten.status AS merchant_status,
       c.name  AS consignee_name,
-      c.phone AS consignee_phone
+      c.phone AS consignee_phone,
+      COALESCE(a.district, c.district) AS effective_district,
+      COALESCE(a.emirate, c.emirate_or_region) AS effective_emirate
     FROM tasks t
     JOIN tenants ten ON ten.id = t.tenant_id
     LEFT JOIN consignees c ON c.id = t.consignee_id
+    LEFT JOIN addresses a ON a.id = t.address_id AND a.tenant_id = t.tenant_id
     WHERE 1 = 1
       ${buildGenuineTenantsFilter("ten")}
       ${statusFilter}
@@ -944,6 +954,8 @@ export async function listAllTasksRows(
     },
     consigneeName: row.consignee_name ?? null,
     consigneePhone: row.consignee_phone ?? null,
+    effectiveDistrict: row.effective_district ?? null,
+    effectiveEmirate: row.effective_emirate ?? null,
   }));
 }
 
