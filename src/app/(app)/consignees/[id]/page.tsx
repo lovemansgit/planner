@@ -414,7 +414,7 @@ export default async function ConsigneeDetailPage({ params, searchParams }: Page
             </DetailSection>
             <DetailSection label="Location">
               <FieldRow label="District" value={consignee.district} />
-              <FieldRow label="Emirate / region" value={consignee.emirateOrRegion} />
+              <FieldRow label="City" value={consignee.emirateOrRegion} />
               <FieldRow label="Address" value={consignee.addressLine} />
             </DetailSection>
           </DetailView>

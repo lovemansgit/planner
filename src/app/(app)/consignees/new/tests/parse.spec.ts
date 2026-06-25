@@ -86,10 +86,13 @@ describe("parseConsigneeForm", () => {
     if (!result.ok) expect(result.fieldErrors.address_district).toMatch(/required/i);
   });
 
-  it("rejects missing emirate", () => {
+  // Phase 12.2 RELABEL lane — the field is now labelled "City" in the UI; the
+  // validation copy was relabelled in lockstep ("Emirate is required." →
+  // "City is required."). The form field NAME (address_emirate) is unchanged.
+  it("rejects missing city with the relabelled message", () => {
     const result = parseConsigneeForm(form({ ...VALID, address_emirate: "" }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.fieldErrors.address_emirate).toMatch(/required/i);
+    if (!result.ok) expect(result.fieldErrors.address_emirate).toBe("City is required.");
   });
 
   it("omits empty optional fields from the parsed value", () => {
