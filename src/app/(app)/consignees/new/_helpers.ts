@@ -86,7 +86,7 @@ export function parseConsigneeForm(formData: FormData): ParseConsigneeResult {
 
   const addressEmirate = trimmed("address_emirate");
   if (addressEmirate.length === 0) {
-    fieldErrors.address_emirate = "Emirate is required.";
+    fieldErrors.address_emirate = "City is required.";
   }
 
   if (Object.keys(fieldErrors).length > 0) {

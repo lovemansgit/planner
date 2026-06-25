@@ -178,6 +178,24 @@ describe("parseCreateMerchantForm", () => {
     }
   });
 
+  // Phase 12.2 RELABEL lane — the pickup-address "Emirate" field is relabelled
+  // "City" in the UI; the validation copy was relabelled in lockstep. The form
+  // field NAME (pickup_emirate) is unchanged.
+  it("rejects a missing pickup city with the relabelled message", () => {
+    const result = parseCreateMerchantForm(
+      makeForm({
+        name: "Demo Bistro",
+        slug: "demo-bistro",
+        pickup_line: "Building 4",
+        pickup_district: "Al Quoz",
+        pickup_emirate: "",
+        suitefleet_customer_code: "588",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.fieldErrors.pickup_emirate).toBe("City is required.");
+  });
+
   it("rejects slugs that fail the service-layer regex (e.g. underscores)", () => {
     const result = parseCreateMerchantForm(
       makeForm({

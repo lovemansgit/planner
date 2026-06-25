@@ -159,7 +159,7 @@ export function EditMerchantForm({ initial, activeRegions }: EditMerchantFormPro
             />
 
             <TextField
-              label="Emirate"
+              label="City"
               name="pickup_emirate"
               defaultValue={initial.pickupAddress?.emirate ?? ""}
               placeholder="Dubai"

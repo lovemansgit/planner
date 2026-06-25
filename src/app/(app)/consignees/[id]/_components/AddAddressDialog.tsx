@@ -92,7 +92,7 @@ export function AddAddressForm({ consigneeId, onCancel, onSuccess }: FormProps) 
       <Field label="Address line" name="line" required />
       <div className="grid grid-cols-2 gap-3">
         <Field label="District" name="district" required />
-        <Field label="Emirate" name="emirate" required />
+        <Field label="City" name="emirate" required />
       </div>
 
       <div className="flex items-center justify-end gap-3 pt-2">
