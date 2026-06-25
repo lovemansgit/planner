@@ -4,7 +4,7 @@
 **Base:** `e01d2ad` (= `origin/main`). **Target table:** `public.suitefleet_regions` on Supabase project **`qdotjmwqbyzldfuxphei`** (production — **there is no dev/staging; this DB is production**).
 **Floor 1:** live DB change. **Nothing is deleted or modified this round.** This is the written plan only.
 
-> **What this is / isn't.** This is the WRITTEN deletion plan for you to rule on. **It runs no query and changes no row today** — not even the read-only audit (it needs the same prod access the deletes do; see §6). The display FILTER that hides the junk on `/admin/regions` already shipped separately (commit `4b907ad`, Item 5); **this lane is the actual deletion.** Execution is a separate dispatch after your named DB authorization.
+> **What this is / isn't.** This is the WRITTEN deletion plan for you to rule on. **It runs no query and changes no row today** — not even the read-only audit (it needs the same prod access the deletes do; see §6). A display FILTER that hides the junk on `/admin/regions` is built separately (Item 5, commit `4b907ad`) — note it currently lives on the `phase122b-cos` integration branch and is **not yet merged to main**; either way a filter only hides rows. **This lane is the actual deletion.** Execution is a separate dispatch after your named DB authorization.
 
 ---
 
@@ -21,7 +21,7 @@
 
 ## 1. The risk in one paragraph
 
-`suitefleet_regions` is load-bearing: merchants bind to a region via `tenants.suitefleet_region_id → suitefleet_regions.id`, and the SuiteFleet credential resolver JOINs them on every push (`src/modules/credentials/suitefleet-resolver.ts:91-92`). Deleting a region a live merchant is bound to would break that merchant's SuiteFleet routing. **The schema already protects us:** the FK is `ON DELETE RESTRICT` and `tenants.suitefleet_region_id` is `NOT NULL` (`supabase/migrations/0024_…sql:206-217`) — so a delete of a bound region **errors and rolls back; it cannot silently orphan anyone.** The plan leans on that guarantee and adds an explicit binding audit + backup so the operation is safe *and* reversible.
+`suitefleet_regions` is load-bearing: merchants bind to a region via `tenants.suitefleet_region_id → suitefleet_regions.id`, and the SuiteFleet credential resolver JOINs them on every push (`src/modules/credentials/suitefleet-resolver.ts:91-92`). Deleting a region a live merchant is bound to would break that merchant's SuiteFleet routing. **The schema already protects us:** the FK is `ON DELETE RESTRICT` (`supabase/migrations/0024_…sql:207`) and `tenants.suitefleet_region_id` is `NOT NULL` (`…sql:217`) — so a delete of a bound region **errors and rolls back; it cannot silently orphan anyone.** The plan leans on that guarantee and adds an explicit binding audit + backup so the operation is safe *and* reversible.
 
 ---
 
@@ -36,11 +36,13 @@
 | `transcorpuae` | Transcorp UAE | **UAE** | api_key | `gen_random_uuid()` — read from prod |
 | `transcorpqatar` | Transcorp Qatar | **Qatar** | api_key | `gen_random_uuid()` — read from prod |
 
-**Reconciliation result:** Love's "Sandbox / UAE / Qatar / KSA" maps 1:1 to the seeded four. **No content mismatch.** The only subtlety: **KSA's `client_id` is the bare `transcorp`** (there is no `transcorpksa`). Three of the four `id`s were `gen_random_uuid()` at seed time, so their real UUIDs are unknown from code and must be read live (the audit does this). Junk filter, exactly as the display filter (`src/app/(admin)/admin/regions/_helpers.ts`, `CANONICAL_REGION_CLIENT_IDS`):
+**Reconciliation result:** Love's "Sandbox / UAE / Qatar / KSA" maps 1:1 to the seeded four. **No content mismatch.** The only subtlety: **KSA's `client_id` is the bare `transcorp`** (there is no `transcorpksa`). Three of the four `id`s were `gen_random_uuid()` at seed time, so their real UUIDs are unknown from code and must be read live (the audit does this). Junk filter (the same four literals the display filter uses):
 
 ```
 client_id NOT IN ('transcorpsb','transcorp','transcorpuae','transcorpqatar')
 ```
+
+> Source-of-truth note: these four literals are authoritative from **migration 0024 (on main)**. The matching display-filter constant `CANONICAL_REGION_CLIENT_IDS` / `isCanonicalRegion` currently lives **only in unmerged commit `4b907ad`** — the `src/app/(admin)/admin/regions/_helpers.ts` on main is still the Day-26 version without it. The deletion key does not depend on that filter being merged; it depends on 0024, which is on main.
 
 **Junk provenance:** the ~70 rows are created by integration tests calling `createRegion()` (e.g. `tests/integration/admin-merchants-credentials-action-di.spec.ts:72-103`, display_name literal `"ACD OAuth Region"`, client_ids like `acd<hex>` / `arl<hex>` / `umr<hex>`). Their teardown deletes the region inside a `try/catch` that swallows the FK-RESTRICT error (`…:128 /* FK RESTRICT; ignore */`) — which is exactly why they accumulate, sometimes with a leftover test tenant still bound (the likely source of "IN USE: 1").
 
@@ -125,7 +127,7 @@ Run as ONE transaction in the Supabase SQL editor (D3). Stop at any step whose o
 
 ## 5. Why deletion is needed at all (filter already ships)
 
-The display filter (`4b907ad`) only hides junk on `/admin/regions`; the rows stay live, routable, and selectable in the New-merchant / credentials-edit region picker, and they inflate the table. Your rule is that the table itself should hold **only** the four real regions. That requires the actual delete — this lane.
+The display filter (Item 5, commit `4b907ad`, on the `phase122b-cos` branch — not yet on main) only hides junk on `/admin/regions`; the rows stay live, routable, and selectable in the New-merchant / credentials-edit region picker, and they inflate the table. Your rule is that the table itself should hold **only** the four real regions. That requires the actual delete — this lane.
 
 ---
 
