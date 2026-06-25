@@ -182,6 +182,11 @@ export interface AdminTaskRow {
   // whose consignee row is absent (LEFT JOIN).
   readonly consigneeName: string | null;
   readonly consigneePhone: string | null;
+  // Phase 12.2 RELABEL lane — effective District + City (emirate) for the admin
+  // /tasks columns. COALESCE(override address → consignee own); mirrors the
+  // operator TaskListRow.effectiveDistrict/effectiveEmirate. Null on legacy rows.
+  readonly effectiveDistrict: string | null;
+  readonly effectiveEmirate: string | null;
 }
 
 export type { ListTasksOpts } from "./repository";
