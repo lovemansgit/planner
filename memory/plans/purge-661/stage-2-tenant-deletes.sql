@@ -98,13 +98,22 @@ BEGIN
 END $$;
 
 DELETE FROM tenants WHERE id IN (SELECT tenant_id FROM _purge_targets);
--- Cascades the remaining leaf children: users, roles, role_assignments, api_keys,
--- task_generation_runs, tenant_suitefleet_webhook_credentials, webhook_events.
+-- Cascades the 6 identity/integration leaf children: users, roles, role_assignments,
+-- api_keys, tenant_suitefleet_webhook_credentials, webhook_events.
+-- (task_generation_runs was already deleted explicitly in Stage 1.)
 
--- Verify: targets gone; genuine merchants untouched.
+-- Verify (post-delete): targets gone; genuine merchants untouched; AND every one of the
+-- 6 cascade-only leaf tables now reads 0 for the target set (their tenants are gone -> they
+-- are gone). _purge_targets still holds the 54 ids after the tenant delete. [Option B]
 SELECT 'targets_remaining'   AS k, count(*) AS v FROM tenants WHERE id IN (SELECT tenant_id FROM _purge_targets)
-UNION ALL SELECT 'allowlisted_present', count(*) FROM tenants WHERE slug IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1');
--- targets_remaining must be 0; allowlisted_present must equal its pre-run value (unchanged).
+UNION ALL SELECT 'allowlisted_present', count(*) FROM tenants WHERE slug IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1')
+UNION ALL SELECT 'users_remaining', count(*) FROM users WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'roles_remaining', count(*) FROM roles WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'role_assignments_remaining', count(*) FROM role_assignments WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'api_keys_remaining', count(*) FROM api_keys WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'tenant_suitefleet_webhook_credentials_remaining', count(*) FROM tenant_suitefleet_webhook_credentials WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'webhook_events_remaining', count(*) FROM webhook_events WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
+-- targets_remaining 0; allowlisted_present unchanged; all six *_remaining must be 0.
 
 ROLLBACK;
 
@@ -205,12 +214,21 @@ BEGIN
 END $$;
 
 DELETE FROM tenants WHERE id IN (SELECT tenant_id FROM _purge_targets);
--- Cascades the remaining leaf children: users, roles, role_assignments, api_keys,
--- task_generation_runs, tenant_suitefleet_webhook_credentials, webhook_events.
+-- Cascades the 6 identity/integration leaf children: users, roles, role_assignments,
+-- api_keys, tenant_suitefleet_webhook_credentials, webhook_events.
+-- (task_generation_runs was already deleted explicitly in Stage 1.)
 
--- Verify: targets gone; genuine merchants untouched.
+-- Verify (post-delete): targets gone; genuine merchants untouched; AND every one of the
+-- 6 cascade-only leaf tables now reads 0 for the target set (their tenants are gone -> they
+-- are gone). _purge_targets still holds the 54 ids after the tenant delete. [Option B]
 SELECT 'targets_remaining'   AS k, count(*) AS v FROM tenants WHERE id IN (SELECT tenant_id FROM _purge_targets)
-UNION ALL SELECT 'allowlisted_present', count(*) FROM tenants WHERE slug IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1');
--- targets_remaining must be 0; allowlisted_present must equal its pre-run value (unchanged).
+UNION ALL SELECT 'allowlisted_present', count(*) FROM tenants WHERE slug IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1')
+UNION ALL SELECT 'users_remaining', count(*) FROM users WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'roles_remaining', count(*) FROM roles WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'role_assignments_remaining', count(*) FROM role_assignments WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'api_keys_remaining', count(*) FROM api_keys WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'tenant_suitefleet_webhook_credentials_remaining', count(*) FROM tenant_suitefleet_webhook_credentials WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets)
+UNION ALL SELECT 'webhook_events_remaining', count(*) FROM webhook_events WHERE tenant_id IN (SELECT tenant_id FROM _purge_targets);
+-- targets_remaining 0; allowlisted_present unchanged; all six *_remaining must be 0.
 
 COMMIT;
