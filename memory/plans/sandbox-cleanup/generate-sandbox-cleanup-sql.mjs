@@ -224,9 +224,52 @@ ${fingerprint}
 ${Array.from({ length: N }, (_, i) => backupBatch(i)).join("\n\n")}
 `;
 
+// ---- SINGLE-FILE psql BACKUP (no row cap): one read-only query -> sandbox-cleanup-backup-<date>.sql ----
+// Run via:  psql "$SUPABASE_DB_URL" -At -f backup-query.sql > sandbox-cleanup-backup-<date>.sql
+// -At = unaligned + tuples-only, so the output is ONLY the INSERT statements (a runnable restore file).
+function psqlDumpArm([table, col, cite], seq) {
+  const where = col === "id" ? "x.id IN (SELECT tenant_id FROM snap)" : `x.${col} IN (SELECT tenant_id FROM snap)`;
+  return `  SELECT ${seq} AS restore_seq,
+         format('INSERT INTO %I SELECT * FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+                '${table}', '${table}', to_jsonb(x)::text) AS stmt
+  FROM ${table} x WHERE ${where}   -- ${cite}`;
+}
+const backupQuerySql = `-- SANDBOX JUNK CLEANUP — SINGLE-FILE BACKUP QUERY (READ ONLY). Target: ${PROJECT_REF} (PROD).
+-- Emits one INSERT per row for all ${AUDITED_COUNT} junk tenants + every FK-child row, in restore order
+-- (tenants first; transcorpsb is KEPT so the FK parent exists). Run with psql -At to bypass the SQL-editor
+-- ~1k CSV cap and write ONE runnable restore file:
+--   psql "$SUPABASE_DB_URL" -At -f backup-query.sql > sandbox-cleanup-backup-<date>.sql
+-- Same frozen predicate as the delete (derived in-DB). See BACKUP-RUNBOOK.md for the full steps.
+WITH snap AS (
+  SELECT t.id AS tenant_id
+  FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+  WHERE ${JUNK_WHERE}
+)
+SELECT stmt FROM (
+${BACKUP_TABLES.map((t, j) => psqlDumpArm(t, j + 1)).join("\n  UNION ALL\n")}
+) s ORDER BY restore_seq, stmt;`;
+
+// Row-count cross-check (one number) — compare to `wc -l` of the backup file.
+const rowcountSql = `-- SANDBOX JUNK CLEANUP — EXPECTED BACKUP ROW COUNT (READ ONLY). Target: ${PROJECT_REF} (PROD).
+-- Run:  psql "$SUPABASE_DB_URL" -At -f backup-rowcount.sql
+-- Prints one number = total rows the backup will contain (cross-check vs Stage-A Query E, ~20k).
+WITH snap AS (
+  SELECT t.id AS tenant_id
+  FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+  WHERE ${JUNK_WHERE}
+)
+SELECT 0
+${BACKUP_TABLES.map(([t, col]) =>
+  `    + (SELECT count(*) FROM ${t} WHERE ${col === "id" ? "id" : col} IN (SELECT tenant_id FROM snap))`).join("\n")}
+  AS expected_backup_rows;`;
+
 writeFileSync(join(HERE, "delete-batched.sql"), deleteSql);
 writeFileSync(join(HERE, "stage-b-backup-perbatch.sql"), perBatchSql);
+writeFileSync(join(HERE, "backup-query.sql"), backupQuerySql);
+writeFileSync(join(HERE, "backup-rowcount.sql"), rowcountSql);
 
 console.log(`Generated for AUDITED_COUNT ${AUDITED_COUNT}, ${N} batches of <= ${BATCH_SIZE} (in-DB frozen snapshot):`);
 console.log("  delete-batched.sql            (DRY-RUN + EXECUTE; TEMP snapshot + rn-range batches)");
-console.log("  stage-b-backup-perbatch.sql   (READ ONLY, " + N + " per-batch CSVs)");
+console.log("  stage-b-backup-perbatch.sql   (READ ONLY, " + N + " per-batch CSVs; SQL-editor fallback)");
+console.log("  backup-query.sql              (READ ONLY, single-file psql backup — see BACKUP-RUNBOOK.md)");
+console.log("  backup-rowcount.sql           (READ ONLY, expected row count cross-check)");

@@ -18,18 +18,21 @@ SQL-editor Run** so the `ON COMMIT PRESERVE ROWS` snapshot survives the per-batc
 | File | Purpose |
 |---|---|
 | `stage-a-audit.sql` | READ-ONLY. Already run: junk_count (A) = 1759, keep_count (B) = 11, keep-set LIST (C), backup-volume summary (E). (Query D id-export retired — frozen in-DB instead.) |
-| `generate-sandbox-cleanup-sql.mjs` | Generator (no id input; `AUDITED_COUNT=1759`, `BATCH_SIZE=100`). Emits the 2 SQL files below. |
+| `generate-sandbox-cleanup-sql.mjs` | Generator (no id input; `AUDITED_COUNT=1759`, `BATCH_SIZE=100`). Emits the 4 SQL files below. |
 | `delete-batched.sql` | *(generated)* DRY-RUN + EXECUTE sections. Each: fingerprint → snapshot → freeze guard (=1759) → scope fence → 18 `rn`-range batches (Blocker A/B, child→parent deletes, 0-residual verify) → drop snapshot. |
-| `stage-b-backup-perbatch.sql` | *(generated)* READ-ONLY, 18 per-batch CSVs (same predicate + `rn`-ranges as the delete). Secondary artifact — see backup note. |
+| `BACKUP-RUNBOOK.md` | Non-technical step-by-step for Love to run the backup himself (Free tier, no PITR): install/locate `psql`, copy the Session-pooler connection string, run the one command, confirm success. |
+| `backup-query.sql` | *(generated)* READ-ONLY single-file backup query. `psql -At -f` it → one runnable restore file (no CSV cap). **Primary backup.** |
+| `backup-rowcount.sql` | *(generated)* READ-ONLY. Prints the expected backup row count (~20k) for a `wc -l` cross-check. |
+| `stage-b-backup-perbatch.sql` | *(generated)* READ-ONLY, 18 per-batch CSVs (same predicate + `rn`-ranges). SQL-editor fallback only if `psql` is unavailable. |
 
-## Backup
+## Backup (Free tier — no PITR/dashboard backup)
 
-**Primary (recommended):** a Supabase **database backup** (Dashboard → Database → Backups,
-or PITR) taken immediately before EXECUTE — one click, full fidelity, no row cap. The right
-tool for ~20k backup rows vs the editor's ~1k CSV export cap.
+**Primary — `BACKUP-RUNBOOK.md`** (step-by-step for Love): run `backup-query.sql` via `psql`
+to stream one runnable restore file `sandbox-cleanup-backup-<date>.sql` (~20k rows, no CSV cap).
+`backup-rowcount.sql` gives the expected count for a `wc -l` cross-check.
 
-**Secondary:** `stage-b-backup-perbatch.sql` (18 CSVs) for granular row-level restore. If a
-batch CSV truncates at the cap, rely on the DB backup for that slice.
+**Fallback — `stage-b-backup-perbatch.sql`** (SQL editor, 18 CSVs) only if `psql` is unavailable;
+some CSVs may truncate at the editor's ~1k cap.
 
 ## Flow
 

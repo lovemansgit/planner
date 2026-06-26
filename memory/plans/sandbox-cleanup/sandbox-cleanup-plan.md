@@ -115,30 +115,34 @@ If EXECUTE is interrupted, committed batches stand (junk — safe partial); re-r
 fresh snapshot will trip the `=1759` freeze guard (intended), so resume = re-audit the smaller
 count + regenerate.
 
-## Deliverable 5 — Backup (scale-honest)
+## Deliverable 5 — Backup (Free tier, no PITR/dashboard backup)
 
-**Primary (recommended) rollback artifact:** a **Supabase database backup** taken immediately
-**before** the EXECUTE — Dashboard → Database → Backups (or confirm PITR covers the window).
-One click, full fidelity, **no row cap**. At ~20k backup rows against the editor's ~1k CSV
-export cap, this is the right tool; the per-row CSV path is ~18+ downloads and audit_events-
-heavy batches may truncate.
+Supabase **Free has no PITR or dashboard backup**, so the rollback artifact is a scoped,
+self-run dump.
 
-**Secondary (per instruction) — `stage-b-backup-perbatch.sql`:** 18 read-only queries, each
-the same `rn`-range as its delete batch (identical in-DB predicate → identical frozen set),
-emitting an `INSERT`-per-row via `to_jsonb`+`jsonb_populate_record` (restorable; tenants
-restore first, `transcorpsb` is KEPT so the FK parent exists). Run first, Download one CSV per
-batch. Granular row-level restore for specific tenants. **If a batch CSV truncates at the
-export cap, rely on the Supabase DB backup for that slice** (stated, not a silent fallback).
+**Primary — `BACKUP-RUNBOOK.md` + `backup-query.sql` (run via `psql`):** one read-only query
+emits an `INSERT`-per-row (`to_jsonb`+`jsonb_populate_record`) for all 1,759 junk tenants + every
+FK-child row, in restore order; `psql -At` streams it to **one file**
+`sandbox-cleanup-backup-<date>.sql` with **no row cap**. `backup-rowcount.sql` prints the
+expected ~20k for a `wc -l` cross-check. Restore = `psql -1 -f <file>` (parents before children;
+`INSERT` allowed on the append-only tables). The runbook is written for a non-technical operator
+(psql install, where to copy the Session-pooler connection string, the exact commands, what
+success looks like) and keeps the secret on Love's machine (hidden `read -rs` prompt, never
+echoed/committed).
 
-_(Original single-file backup retired at this scale — one CSV of ~20k rows is not reliably
-exportable. The per-batch + DB-backup combination replaces it.)_
+**Fallback — `stage-b-backup-perbatch.sql` (SQL editor):** 18 read-only queries, same `rn`-ranges
+as the delete batches, one CSV each. Only if `psql` is unavailable; some CSVs may truncate at the
+editor's ~1k cap (stated, not silent).
+
+_(Single-file CSV via the editor retired — ~20k rows is not reliably exportable there. psql is
+the path.)_
 
 ## Authorization shape (Floor 1 — named clears, dry-run-then-execute)
 
 | # | Stage | Type |
 |---|---|---|
 | 1 | **Audit** (`stage-a-audit.sql`) — DONE; junk=1759, keep=11 | READ ONLY |
-| 2 | **Backup** — Supabase DB backup (recommended) and/or `stage-b-backup-perbatch.sql` | READ ONLY |
+| 2 | **Backup** — `BACKUP-RUNBOOK.md` (psql single-file, primary) or `stage-b-backup-perbatch.sql` (editor fallback) | READ ONLY |
 | 3 | **Delete — DRY-RUN** (`delete-batched.sql` dry-run section, ONE Run; all batches ROLLBACK; watch NOTICE lines) | dry-run |
 | 4 | **Delete — EXECUTE** (execute section, ONE Run; all batches COMMIT) | execute |
 | 5 | **Final verify** (read-only: 0 junk tenants remain on `transcorpsb`) | READ ONLY |
