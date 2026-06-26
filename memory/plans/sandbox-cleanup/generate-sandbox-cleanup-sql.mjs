@@ -275,13 +275,91 @@ ${BACKUP_TABLES.map(([t, col]) =>
   `    + (SELECT count(*) FROM ${t} WHERE ${col === "id" ? "id" : col} IN (SELECT tenant_id FROM snap))`).join("\n")}
   AS expected_backup_rows;`;
 
+// ---- EDITOR-CSV BACKUP (no psql / no DB password): one .sql, run each block in the SQL editor ----
+// The editor caps CSV export at ~1,000 rows; big tables split into 900-row parts via ORDER BY id +
+// LIMIT/OFFSET (only the chunked tables are ordered — they all have an `id` PK). Same frozen predicate
+// + generated-column fix. Chunk counts from Stage-A Query E estimates; Query 0 is live-authoritative.
+const EDITOR_CHUNK = 900;
+const EDITOR_CHUNKS = { tenants: 2, consignees: 2, task_generation_runs: 4, tasks: 6, audit_events: 6 };
+const EDITOR_EST = { tenants: 1759, consignees: 1090, task_generation_runs: 3094, tasks: 4507, audit_events: 4996 };
+const pad2 = (n) => String(n).padStart(2, "0");
+const SNAP_CTE = `WITH snap AS (
+  SELECT t.id AS tenant_id
+  FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+  WHERE ${JUNK_WHERE}
+)`;
+function editorArm([table, col, cite], seq, part, total) {
+  const label = total > 1 ? `${pad2(seq)}_${table}_part${part}of${total}.csv` : `${pad2(seq)}_${table}.csv`;
+  const where = col === "id" ? "x.id IN (SELECT tenant_id FROM snap)" : `x.${col} IN (SELECT tenant_id FROM snap)`;
+  const page = total > 1 ? `\nORDER BY x.id LIMIT ${EDITOR_CHUNK} OFFSET ${(part - 1) * EDITOR_CHUNK}` : "";
+  const note = total > 1 ? `  (part ${part}/${total}: rows ${(part - 1) * EDITOR_CHUNK + 1}..${part * EDITOR_CHUNK})` : "";
+  return `-- >>> SAVE RESULT AS: ${label}${note}   [${cite}]
+${SNAP_CTE}
+SELECT format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+              '${table}', c.cols, c.cols, '${table}', to_jsonb(x)::text) AS restore_sql
+FROM ${table} x
+${COLS_LATERAL(table)}
+WHERE ${where}${page};`;
+}
+const sizeCheck = `${SNAP_CTE}
+SELECT * FROM (
+${BACKUP_TABLES.map(([t, col], i) =>
+  `  SELECT ${i + 1} AS nn, '${t}' AS table_name, count(*) AS rows, ceil(count(*) / ${EDITOR_CHUNK}.0)::int AS chunks_needed FROM ${t} WHERE ${col === "id" ? "id" : col} IN (SELECT tenant_id FROM snap)`
+).join("\n  UNION ALL\n")}
+) v ORDER BY nn;`;
+const editorQueries = BACKUP_TABLES.map((t, i) => {
+  const total = EDITOR_CHUNKS[t[0]] || 1;
+  if (total === 1) return editorArm(t, i + 1, 1, 1);
+  return Array.from({ length: total }, (_, k) => editorArm(t, i + 1, k + 1, total)).join("\n\n");
+}).join("\n\n");
+const expectedTable = BACKUP_TABLES.map(([t], i) => {
+  const est = EDITOR_EST[t];
+  const total = EDITOR_CHUNKS[t] || 1;
+  return `--   ${pad2(i + 1)}_${t}: ${est ? `~${est} rows (${total} files)` : "expect <900 -> 1 file, or 0 -> skip"}`;
+}).join("\n");
+const editorBackupSql = `-- SANDBOX JUNK CLEANUP — BACKUP via SUPABASE SQL EDITOR (READ ONLY). Target: ${PROJECT_REF} (PROD).
+-- For Love, entirely in the dashboard SQL editor — no psql, no Terminal, no DB password.
+--
+-- WHY MANY FILES: the editor caps CSV export at ~1,000 rows; the backup is ~20k rows, so big tables
+-- split into 900-row parts. Each query emits one runnable INSERT per row (generated columns such as
+-- asset_tracking_cache.awb are omitted — they recompute on restore).
+--
+-- HOW TO RUN (per block):
+--   1) Run QUERY 0 (SIZE CHECK) first. It lists every table's live row count + how many 900-row parts
+--      it needs. SKIP any table with rows = 0. If a table's chunks_needed is MORE than the parts
+--      provided below for it, STOP and tell the agent.
+--   2) For each block below: highlight the whole block -> Run -> "Download CSV" -> save it under the
+--      exact name in its "SAVE RESULT AS" label, into  memory/handoffs/sandbox-backup-<date>/ .
+--   3) After saving, check the CSV's row count vs QUERY 0. FEWER than expected = it truncated -> STOP
+--      and tell the agent. Save files in NN order (parents before children = restore order).
+--
+-- EXPECTED ROWS PER FILE (cross-check vs Stage-A Query E; grand total ~20k):
+${expectedTable}
+--   (Tables not listed: expect <900 -> one file, or 0 -> skip. QUERY 0 is the live authority.)
+--
+-- RESTORE (break-glass, its own clear — NOT now): run the saved files in NN order. Each file's
+-- 'restore_sql' column IS the INSERT statements; to replay in the editor, open the CSV, copy the
+-- restore_sql column, paste into a SQL-editor query, Run. Parents insert before children; INSERT is
+-- allowed on append-only tables (audit_events / asset_scan_log). Or hand the files to the agent to
+-- reassemble one runnable .sql.
+
+-- ============================================================================
+-- QUERY 0 — SIZE CHECK (run FIRST; read-only). rows = 0 -> skip; chunks_needed -> # of part files.
+-- ============================================================================
+${sizeCheck}
+
+${editorQueries}
+`;
+
 writeFileSync(join(HERE, "delete-batched.sql"), deleteSql);
 writeFileSync(join(HERE, "stage-b-backup-perbatch.sql"), perBatchSql);
 writeFileSync(join(HERE, "backup-query.sql"), backupQuerySql);
 writeFileSync(join(HERE, "backup-rowcount.sql"), rowcountSql);
+writeFileSync(join(HERE, "stage-b-backup-editor.sql"), editorBackupSql);
 
 console.log(`Generated for AUDITED_COUNT ${AUDITED_COUNT}, ${N} batches of <= ${BATCH_SIZE} (in-DB frozen snapshot):`);
 console.log("  delete-batched.sql            (DRY-RUN + EXECUTE; TEMP snapshot + rn-range batches)");
-console.log("  stage-b-backup-perbatch.sql   (READ ONLY, " + N + " per-batch CSVs; SQL-editor fallback)");
-console.log("  backup-query.sql              (READ ONLY, single-file psql backup — see BACKUP-RUNBOOK.md)");
-console.log("  backup-rowcount.sql           (READ ONLY, expected row count cross-check)");
+console.log("  stage-b-backup-editor.sql     (READ ONLY, SQL-editor CSV backup — PRIMARY for Love)");
+console.log("  stage-b-backup-perbatch.sql   (READ ONLY, " + N + " per-batch CSVs; older editor variant)");
+console.log("  backup-query.sql              (READ ONLY, psql backup — only if a DB password exists)");
+console.log("  backup-rowcount.sql           (READ ONLY, psql expected row count cross-check)");

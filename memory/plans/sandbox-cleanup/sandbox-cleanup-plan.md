@@ -115,34 +115,36 @@ If EXECUTE is interrupted, committed batches stand (junk — safe partial); re-r
 fresh snapshot will trip the `=1759` freeze guard (intended), so resume = re-audit the smaller
 count + regenerate.
 
-## Deliverable 5 — Backup (Free tier, no PITR/dashboard backup)
+## Deliverable 5 — Backup (Free tier, GitHub-OAuth login → no DB password)
 
-Supabase **Free has no PITR or dashboard backup**, so the rollback artifact is a scoped,
-self-run dump.
+Supabase **Free has no PITR/dashboard backup**, and Love logs in via **GitHub OAuth so there is
+no database password** — i.e. **no `psql`/Terminal path**. The backup runs **entirely in the SQL
+editor**, designed around its ~1,000-row CSV export cap.
 
-**Primary — `BACKUP-RUNBOOK.md` + `backup-query.sql` (run via `psql`):** one read-only query
-emits an `INSERT`-per-row (`to_jsonb`+`jsonb_populate_record`) for all 1,759 junk tenants + every
-FK-child row, in restore order; `psql -At` streams it to **one file**
-`sandbox-cleanup-backup-<date>.sql` with **no row cap**. `backup-rowcount.sql` prints the
-expected ~20k for a `wc -l` cross-check. Restore = `psql -1 -f <file>` (parents before children;
-`INSERT` allowed on the append-only tables). The runbook is written for a non-technical operator
-(psql install, where to copy the Session-pooler connection string, the exact commands, what
-success looks like) and keeps the secret on Love's machine (hidden `read -rs` prompt, never
-echoed/committed).
+**Primary — `stage-b-backup-editor.sql`:** one file Love runs block-by-block in the editor.
+- **QUERY 0 (size check)** lists each table's live row count + `chunks_needed` (`ceil(rows/900)`);
+  Love skips `rows = 0` tables and learns how many parts each needs (live-authoritative).
+- One labelled query **per non-empty tenant-scoped table** in restore order (`NN_table.csv`,
+  `NN` = restore_seq). Tables ≤ 900 rows → one CSV; over → the **minimum** 900-row parts via
+  stable `ORDER BY id` + `LIMIT/OFFSET` (`NN_table_partKofM.csv`). Chunked (Stage-A est.):
+  `tenants` 2, `consignees` 2, `task_generation_runs` 4, `tasks` 6, `audit_events` 6.
+- Each row is a runnable `INSERT` (`to_jsonb`+`jsonb_populate_record`, **generated columns omitted**
+  so `asset_tracking_cache.awb` etc. recompute on restore). Header gives a per-file expected-row
+  table (cross-check vs Query E, total ~20k) and a **truncation guard**: if a saved CSV has fewer
+  rows than Query 0 says, STOP (it truncated). Restore = run the CSVs' `restore_sql` column in
+  `NN` order (parents before children; `INSERT` allowed on the append-only tables).
 
-**Fallback — `stage-b-backup-perbatch.sql` (SQL editor):** 18 read-only queries, same `rn`-ranges
-as the delete batches, one CSV each. Only if `psql` is unavailable; some CSVs may truncate at the
-editor's ~1k cap (stated, not silent).
-
-_(Single-file CSV via the editor retired — ~20k rows is not reliably exportable there. psql is
-the path.)_
+**Not usable here — `BACKUP-RUNBOOK.md` + `backup-query.sql`/`backup-rowcount.sql` (psql):** kept
+for the record; needs a DB password Love doesn't have. Use only if a direct DB password is ever set.
+`stage-b-backup-perbatch.sql` (18 rn-range CSVs) is an older editor variant superseded by the
+table-by-table `stage-b-backup-editor.sql`.
 
 ## Authorization shape (Floor 1 — named clears, dry-run-then-execute)
 
 | # | Stage | Type |
 |---|---|---|
 | 1 | **Audit** (`stage-a-audit.sql`) — DONE; junk=1759, keep=11 | READ ONLY |
-| 2 | **Backup** — `BACKUP-RUNBOOK.md` (psql single-file, primary) or `stage-b-backup-perbatch.sql` (editor fallback) | READ ONLY |
+| 2 | **Backup** — `stage-b-backup-editor.sql` (SQL editor, primary; size-check then per-table CSVs) | READ ONLY |
 | 3 | **Delete — DRY-RUN** (`delete-batched.sql` dry-run section, ONE Run; all batches ROLLBACK; watch NOTICE lines) | dry-run |
 | 4 | **Delete — EXECUTE** (execute section, ONE Run; all batches COMMIT) | execute |
 | 5 | **Final verify** (read-only: 0 junk tenants remain on `transcorpsb`) | READ ONLY |

@@ -18,21 +18,21 @@ SQL-editor Run** so the `ON COMMIT PRESERVE ROWS` snapshot survives the per-batc
 | File | Purpose |
 |---|---|
 | `stage-a-audit.sql` | READ-ONLY. Already run: junk_count (A) = 1759, keep_count (B) = 11, keep-set LIST (C), backup-volume summary (E). (Query D id-export retired — frozen in-DB instead.) |
-| `generate-sandbox-cleanup-sql.mjs` | Generator (no id input; `AUDITED_COUNT=1759`, `BATCH_SIZE=100`). Emits the 4 SQL files below. |
+| `generate-sandbox-cleanup-sql.mjs` | Generator (no id input; `AUDITED_COUNT=1759`, `BATCH_SIZE=100`). Emits the 5 SQL files below. |
 | `delete-batched.sql` | *(generated)* DRY-RUN + EXECUTE sections. Each: fingerprint → snapshot → freeze guard (=1759) → scope fence → 18 `rn`-range batches (Blocker A/B, child→parent deletes, 0-residual verify) → drop snapshot. |
-| `BACKUP-RUNBOOK.md` | Non-technical step-by-step for Love to run the backup himself (Free tier, no PITR): install/locate `psql`, copy the Session-pooler connection string, run the one command, confirm success. |
-| `backup-query.sql` | *(generated)* READ-ONLY single-file backup query. `psql -At -f` it → one runnable restore file (no CSV cap). **Primary backup.** |
-| `backup-rowcount.sql` | *(generated)* READ-ONLY. Prints the expected backup row count (~20k) for a `wc -l` cross-check. |
-| `stage-b-backup-perbatch.sql` | *(generated)* READ-ONLY, 18 per-batch CSVs (same predicate + `rn`-ranges). SQL-editor fallback only if `psql` is unavailable. |
+| `stage-b-backup-editor.sql` | *(generated)* **PRIMARY backup.** READ-ONLY, run in the SQL editor: QUERY 0 size-check, then one labelled CSV query per non-empty table (restore order; ≤900 → 1 file, over → 900-row parts). Generated columns omitted. |
+| `stage-b-backup-perbatch.sql` | *(generated)* READ-ONLY, 18 per-`rn`-range CSVs. Older editor variant, superseded by the table-by-table editor backup. |
+| `BACKUP-RUNBOOK.md`, `backup-query.sql`, `backup-rowcount.sql` | psql single-file path. **Not usable here** — needs a DB password Love doesn't have (GitHub-OAuth login). Kept for the record / future. |
 
-## Backup (Free tier — no PITR/dashboard backup)
+## Backup (Free tier, GitHub-OAuth login — no DB password, no psql)
 
-**Primary — `BACKUP-RUNBOOK.md`** (step-by-step for Love): run `backup-query.sql` via `psql`
-to stream one runnable restore file `sandbox-cleanup-backup-<date>.sql` (~20k rows, no CSV cap).
-`backup-rowcount.sql` gives the expected count for a `wc -l` cross-check.
+**Primary — `stage-b-backup-editor.sql`** (SQL editor, one file): run QUERY 0 (size check) first
+to see which tables to skip (rows=0) and how many 900-row parts each needs, then run each labelled
+block → Download CSV → save as the `NN_table[_partKofM].csv` in its label (restore order). Cross-
+check every CSV's row count against QUERY 0 (fewer = truncated → stop). ~20k rows total.
 
-**Fallback — `stage-b-backup-perbatch.sql`** (SQL editor, 18 CSVs) only if `psql` is unavailable;
-some CSVs may truncate at the editor's ~1k cap.
+**Not usable here:** `BACKUP-RUNBOOK.md` + `backup-query.sql`/`backup-rowcount.sql` (psql) need a DB
+password Love doesn't have. `stage-b-backup-perbatch.sql` is an older editor variant, superseded.
 
 ## Flow
 
