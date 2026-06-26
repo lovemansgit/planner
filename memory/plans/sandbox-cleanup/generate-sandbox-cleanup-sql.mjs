@@ -186,12 +186,22 @@ const BACKUP_TABLES = [
   ["outbound_push_failures", "tenant_id", "0023:101"], ["asset_scan_log", "tenant_id", "0032:42"],
   ["audit_events", "tenant_id", "0002:45"],
 ];
+// Non-generated column list for a table (omits GENERATED ALWAYS columns, e.g.
+// asset_tracking_cache.awb 0011:152 — inserting into a generated column raises 428C9 and would
+// abort the whole psql -1 restore). Generic via the catalog, so future generated cols are covered.
+const COLS_LATERAL = (table) =>
+  `CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
+                      FROM pg_attribute
+                      WHERE attrelid = '${table}'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c`;
+
 function dumpArm([table, col, cite], seq) {
   const where = col === "id" ? "x.id IN (SELECT tenant_id FROM b)" : `x.${col} IN (SELECT tenant_id FROM b)`;
   return `  SELECT ${seq} AS restore_seq, '${table}' AS tbl,
-         format('INSERT INTO %I SELECT * FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
-                '${table}', '${table}', to_jsonb(x)::text) AS stmt
-  FROM ${table} x WHERE ${where}   -- ${cite}`;
+         format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+                '${table}', c.cols, c.cols, '${table}', to_jsonb(x)::text) AS stmt
+  FROM ${table} x
+  ${COLS_LATERAL(table)}
+  WHERE ${where}   -- ${cite}`;
 }
 function backupBatch(idx) {
   const i = idx + 1;
@@ -230,9 +240,11 @@ ${Array.from({ length: N }, (_, i) => backupBatch(i)).join("\n\n")}
 function psqlDumpArm([table, col, cite], seq) {
   const where = col === "id" ? "x.id IN (SELECT tenant_id FROM snap)" : `x.${col} IN (SELECT tenant_id FROM snap)`;
   return `  SELECT ${seq} AS restore_seq,
-         format('INSERT INTO %I SELECT * FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
-                '${table}', '${table}', to_jsonb(x)::text) AS stmt
-  FROM ${table} x WHERE ${where}   -- ${cite}`;
+         format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+                '${table}', c.cols, c.cols, '${table}', to_jsonb(x)::text) AS stmt
+  FROM ${table} x
+  ${COLS_LATERAL(table)}
+  WHERE ${where}   -- ${cite}`;
 }
 const backupQuerySql = `-- SANDBOX JUNK CLEANUP — SINGLE-FILE BACKUP QUERY (READ ONLY). Target: ${PROJECT_REF} (PROD).
 -- Emits one INSERT per row for all ${AUDITED_COUNT} junk tenants + every FK-child row, in restore order
