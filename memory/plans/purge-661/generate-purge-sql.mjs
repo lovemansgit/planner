@@ -182,11 +182,21 @@ function whereFor(scope) {
       ? `x.id IN (SELECT tenant_id FROM tgt)`
       : `x.tenant_id IN (SELECT tenant_id FROM tgt)`;
 }
+// Non-generated column list for a table (omits GENERATED ALWAYS columns, e.g.
+// asset_tracking_cache.awb 0011:152 — inserting into a generated column raises 428C9 and would
+// abort the whole restore). Generic via the catalog, so any future generated col is covered too.
+const COLS_LATERAL = (table) =>
+  `CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
+                      FROM pg_attribute
+                      WHERE attrelid = '${table}'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c`;
+
 function dumpArm([table, scope, , cite], seq) {
   return `  SELECT ${seq} AS restore_seq, '${table}' AS tbl,
-         format('INSERT INTO %I SELECT * FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
-                '${table}', '${table}', to_jsonb(x)::text) AS stmt
-  FROM ${table} x WHERE ${whereFor(scope)}   -- ${cite}`;
+         format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+                '${table}', c.cols, c.cols, '${table}', to_jsonb(x)::text) AS stmt
+  FROM ${table} x
+  ${COLS_LATERAL(table)}
+  WHERE ${whereFor(scope)}   -- ${cite}`;
 }
 function countArm([table, scope], seq) {
   const w = scope === "regions"
