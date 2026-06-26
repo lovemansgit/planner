@@ -47,39 +47,52 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION '${SANDBOX} region missing — STOP'; END IF;
 END $$;`;
 
-// Snapshot the frozen junk set ONCE (rn = stable order for deterministic batching). PRESERVE ROWS so it
-// survives the per-batch COMMIT/ROLLBACKs within one SQL-editor Run.
-const snapshot = `-- Freeze the junk set in-DB (derived once; NOT a live pattern per batch).
-DROP TABLE IF EXISTS _sandbox_junk;
-CREATE TEMP TABLE _sandbox_junk (tenant_id uuid PRIMARY KEY, rn int) ON COMMIT PRESERVE ROWS;
-INSERT INTO _sandbox_junk (tenant_id, rn)
+// Freeze the junk set into a NORMAL (persistent) table, COMMITTED once before any delete. This is the
+// Option-B fix for the Supabase SQL editor: the editor wraps a pasted script in ONE implicit
+// transaction, so a TEMP table created before the batches is UNWOUND by the first batch's ROLLBACK
+// (dry-run -> 42P01 at batch 2). A committed normal table survives every later ROLLBACK, so DRY-RUN and
+// EXECUTE use the IDENTICAL frozen set (guard runs once, == ${AUDITED_COUNT}, before any delete; the deletes
+// never shrink it because batches read this static copy, not the live predicate).
+const snapshot = `-- Clean any leftover from a prior aborted run, then freeze the junk set (derived ONCE; not a live
+-- pattern per batch). rn = stable ORDER BY id for deterministic, disjoint batch ranges.
+DROP TABLE IF EXISTS _sandbox_junk_frozen;
+CREATE TABLE _sandbox_junk_frozen (tenant_id uuid PRIMARY KEY, rn int);
+INSERT INTO _sandbox_junk_frozen (tenant_id, rn)
 SELECT t.id, row_number() OVER (ORDER BY t.id)
 FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
 WHERE ${JUNK_WHERE};
 
--- FREEZE GUARD: snapshot size MUST equal the Stage-A audited junk_count (${AUDITED_COUNT}).
+${fingerprint}
+
+-- FREEZE GUARD: frozen set size MUST equal the Stage-A audited junk_count (${AUDITED_COUNT}). Runs ONCE,
+-- before any delete -> valid in BOTH dry-run and execute. If the live count drifted, abort.
 DO $$
 DECLARE n int;
 BEGIN
-  SELECT count(*) INTO n FROM _sandbox_junk;
+  SELECT count(*) INTO n FROM _sandbox_junk_frozen;
   IF n <> ${AUDITED_COUNT} THEN
-    RAISE EXCEPTION 'FREEZE GUARD: snapshot has % rows, expected audited ${AUDITED_COUNT} — re-audit, do NOT proceed', n;
+    RAISE EXCEPTION 'FREEZE GUARD: frozen set has % rows, expected audited ${AUDITED_COUNT} — re-audit, do NOT proceed', n;
   END IF;
 END $$;
 
--- SCOPE FENCE: re-assert every snapshot id is on ${SANDBOX} + has an 8-hex run + is NOT allowlisted.
+-- SCOPE FENCE: every frozen id is on ${SANDBOX} + has an 8-hex run + is NOT allowlisted.
 -- (Tautological vs the predicate above — defense in depth; the 11 keep-set can never be here.)
 DO $$
 DECLARE bad int;
 BEGIN
   SELECT count(*) INTO bad
   FROM tenants t
-  WHERE t.id IN (SELECT tenant_id FROM _sandbox_junk)
+  WHERE t.id IN (SELECT tenant_id FROM _sandbox_junk_frozen)
     AND ( t.suitefleet_region_id <> ${SANDBOX_ID}
           OR t.slug !~ '${HEX}'
           OR t.slug IN (${allowlist}) );
-  IF bad <> 0 THEN RAISE EXCEPTION 'SCOPE FENCE: % snapshot id(s) off-Sandbox / non-hex(keep-set) / allowlisted — STOP', bad; END IF;
-END $$;`;
+  IF bad <> 0 THEN RAISE EXCEPTION 'SCOPE FENCE: % frozen id(s) off-Sandbox / non-hex(keep-set) / allowlisted — STOP', bad; END IF;
+END $$;
+
+-- Persist the validated frozen set so the per-batch ROLLBACKs below cannot unwind it (the core editor
+-- fix). In a wrapping editor this COMMIT commits the leading statements; in an auto-commit editor it is a
+-- harmless "no transaction in progress" notice. Either way _sandbox_junk_frozen is committed here.
+COMMIT;`;
 
 // FK delete order per batch (child -> parent). RESTRICT anchors first; tenants last.
 const DELETE_SEQUENCE = [
@@ -99,7 +112,7 @@ const VERIFY_TABLES = [
   ["asset_scan_log", "tenant_id"], ["audit_events", "tenant_id"],
 ];
 
-const rangeSel = (lo, hi) => `(SELECT tenant_id FROM _sandbox_junk WHERE rn > ${lo} AND rn <= ${hi})`;
+const rangeSel = (lo, hi) => `(SELECT tenant_id FROM _sandbox_junk_frozen WHERE rn > ${lo} AND rn <= ${hi})`;
 
 function batchBlock(idx, finalWord) {
   const i = idx + 1;
@@ -147,21 +160,31 @@ WHERE ${JUNK_WHERE};
   return `-- ############################################################
 -- # ${title}
 -- ############################################################
-${fingerprint}
-
 ${snapshot}
 
 ${batches}${finalVerify}
 
-DROP TABLE IF EXISTS _sandbox_junk;`;
+-- CLEANUP: drop the frozen helper table. If the script ABORTED at a batch above, this line may not have
+-- run — then run it manually to clean up:  DROP TABLE IF EXISTS _sandbox_junk_frozen;
+DROP TABLE IF EXISTS _sandbox_junk_frozen;`;
 }
 
-const deleteSql = `-- SANDBOX JUNK CLEANUP — BATCHED DELETE (in-DB frozen snapshot). Target: ${PROJECT_REF} (PROD).
+const deleteSql = `-- SANDBOX JUNK CLEANUP — BATCHED DELETE (committed frozen table). Target: ${PROJECT_REF} (PROD).
 -- ${AUDITED_COUNT} junk tenants on ${SANDBOX} (KEPT region), ${N} batches of <= ${BATCH_SIZE}. No region delete.
--- RUN EACH SECTION AS ONE SQL-EDITOR RUN (one session) so the TEMP snapshot persists across the
--- per-batch transactions. The snapshot is frozen once and count-guarded == ${AUDITED_COUNT}; batches consume
--- disjoint rn-ranges over it (never a live pattern per batch). Watch the NOTICE lines for per-batch verify.
--- Authorization: run DRY-RUN (all batches ROLLBACK), then on Love's named clear run EXECUTE (all COMMIT).
+--
+-- EDITOR-SAFE DESIGN: each section freezes the junk set into a NORMAL table _sandbox_junk_frozen and
+-- COMMITs it BEFORE the batches, so it survives the per-batch ROLLBACKs (a TEMP table did not — the
+-- editor wraps the script in one implicit transaction, so batch 1's ROLLBACK unwound it -> 42P01). The
+-- freeze guard (== ${AUDITED_COUNT}) runs ONCE before any delete, so DRY-RUN and EXECUTE use the IDENTICAL frozen
+-- set and the dry-run faithfully predicts the execute. Batches consume disjoint rn-ranges of the static
+-- frozen table (deletes never shrink it). Watch the NOTICE lines for per-batch verify.
+--
+-- HOW TO RUN: paste and Run the DRY-RUN SECTION as ONE block; confirm every "BATCH k/18 verified: 0
+-- residual" NOTICE and that nothing errored. Then, on Love's named clear, paste and Run the EXECUTE
+-- SECTION as ONE block. Each section creates + drops its own _sandbox_junk_frozen.
+-- If a section ABORTS mid-run, the helper table may remain — clean it with:
+--   DROP TABLE IF EXISTS _sandbox_junk_frozen;
+-- DRY-RUN is data-safe: it commits/drops only the helper table (net nothing) and rolls back ALL deletes.
 -- If EXECUTE is interrupted, committed batches stand (junk; safe partial). To resume: re-audit the now-
 -- smaller junk_count and regenerate (the == ${AUDITED_COUNT} freeze guard will intentionally abort a stale re-run).
 

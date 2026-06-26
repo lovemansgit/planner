@@ -9,9 +9,12 @@ clear per stage. Deletes the **1,759** hex-slug junk tenants ON the KEPT `transc
 ## In-DB frozen snapshot (no literal id list)
 
 The ~1,759 ids exceed the SQL-editor CSV export cap, so there is **no `target_ids.txt`**.
-The delete script snapshots the junk set in-DB into a TEMP table `_sandbox_junk` (count-
-guarded `= 1759`) and batches over disjoint `rn`-ranges. Run each delete section as **one
-SQL-editor Run** so the `ON COMMIT PRESERVE ROWS` snapshot survives the per-batch commits.
+The delete script freezes the junk set in-DB into a **NORMAL table `_sandbox_junk_frozen`,
+committed once** (count-guarded `= 1759`) before the batches, then batches over disjoint
+`rn`-ranges. A committed table survives the per-batch `ROLLBACK`s in the Supabase editor (which
+wraps a paste in one implicit transaction — a TEMP table got unwound by batch 1's ROLLBACK →
+42P01). DRY-RUN and EXECUTE use the identical frozen set. Run each section as one editor paste;
+if a section aborts, run `DROP TABLE IF EXISTS _sandbox_junk_frozen;`.
 
 ## Files
 

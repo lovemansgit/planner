@@ -56,35 +56,46 @@ editor's `postgres` owner role). No agent executes any SQL.
 - **Query E** — backup-volume summary (per-table row counts for the junk set) so Love
   sizes the backup (single-file vs per-batch) before running it.
 
-## Deliverable 2 — Freeze-then-delete, IN-DATABASE (no literal list)
+## Deliverable 2 — Freeze-then-delete, IN-DATABASE (committed table; editor-safe)
 
 The ~1,759 ids exceed the SQL-editor CSV export cap (~1k rows), so we do **not** export a
-literal list. Instead the delete script freezes the set **in-DB at the top of each run**:
+literal list. The delete script freezes the set in-DB into a **NORMAL (persistent) table,
+committed once before any delete**:
 
 ```sql
-DROP TABLE IF EXISTS _sandbox_junk;
-CREATE TEMP TABLE _sandbox_junk (tenant_id uuid PRIMARY KEY, rn int) ON COMMIT PRESERVE ROWS;
-INSERT INTO _sandbox_junk (tenant_id, rn)
+DROP TABLE IF EXISTS _sandbox_junk_frozen;
+CREATE TABLE _sandbox_junk_frozen (tenant_id uuid PRIMARY KEY, rn int);
+INSERT INTO _sandbox_junk_frozen (tenant_id, rn)
 SELECT t.id, row_number() OVER (ORDER BY t.id)
 FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
 WHERE r.client_id = 'transcorpsb' AND t.slug ~ '[0-9a-f]{8}'
   AND t.slug NOT IN (<8 genuine slugs>);
+-- fingerprint + FREEZE GUARD (count = 1759) + SCOPE FENCE, then:
+COMMIT;   -- persist so the per-batch ROLLBACKs cannot unwind it
 ```
 
-Then a **FREEZE GUARD**: `count(_sandbox_junk)` MUST equal the Stage-A audited `junk_count`
-(**1,759**) — abort otherwise. The snapshot is derived **once** and every batch consumes a
-disjoint `rn`-range over it (`rn > lo AND rn <= hi`) — the live pattern is **never** re-run
-per batch, so the set is frozen even though it is derived in-DB (a tenant created mid-op can
-never be swept; one appearing pre-run bumps the count → the guard aborts). `ON COMMIT
-PRESERVE ROWS` keeps the snapshot alive across the per-batch `BEGIN/COMMIT`s **within one
-SQL-editor Run** — so each section (dry-run / execute) must be run as a single Run.
-`AUDITED_COUNT = 1759` is baked into the generator; it emits `ceil(1759/100) = 18` batches.
+**Why a committed normal table, not a TEMP table:** the Supabase SQL editor wraps a pasted
+script in **one implicit transaction**, so a `TEMP` snapshot created before the batches is
+**unwound by the first batch's `ROLLBACK`** (dry-run → `42P01 relation "_sandbox_junk" does
+not exist` at batch 2) — and worse, EXECUTE (all `COMMIT`) might survive, so the dry-run
+could not faithfully predict the execute. Committing a normal table makes it survive every
+later `ROLLBACK`, so **DRY-RUN and EXECUTE use the IDENTICAL frozen set**. The explicit
+`COMMIT` is honored whether the editor wraps the script (it commits the leading statements)
+or auto-commits (harmless no-op). Each section drops the table at top and end; if a section
+aborts mid-batch, run `DROP TABLE IF EXISTS _sandbox_junk_frozen;` to clean up.
+
+**FREEZE GUARD** `count(_sandbox_junk_frozen) = 1759` runs **once, before any delete** → valid
+in both modes (deletes never shrink the static frozen copy; a tenant appearing pre-run bumps
+the count → abort). Each batch consumes a disjoint `rn`-range (`rn > lo AND rn <= hi`) of the
+frozen table — the live pattern is **never** re-run per batch. `AUDITED_COUNT = 1759` is baked
+into the generator; it emits `ceil(1759/100) = 18` batches. Each section is run as **one
+editor paste**.
 
 ## Deliverable 3 — Safety guards
 
 - **Project-ref fingerprint** (`qdotjmwqbyzldfuxphei`) + `transcorpsb` presence — at the top
   of each section; abort on mismatch, never re-scope.
-- **Freeze guard:** `count(_sandbox_junk) = 1759` or abort.
+- **Freeze guard:** `count(_sandbox_junk_frozen) = 1759` or abort (once, pre-delete).
 - **Scope fence (once, against the snapshot):** abort if any snapshot id is **not on
   `transcorpsb`**, or **lacks the 8-hex run** (a keep-set tenant), or **is an allowlist slug**.
   Centralized at the snapshot (the whole frozen set is fenced), not re-derived per batch.
