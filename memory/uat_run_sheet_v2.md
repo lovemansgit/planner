@@ -74,11 +74,11 @@ are uniform across pages; zero behavior change.)*
 Fatima → Calendar → Month/June 2026: "Scheduled 16:00–18:00" weekdays.
 Click a delivery → the day panel shows Status, Window, Task ID + actions.
 
-> *Phase-8 status delta (heads-up for Ops):* the delivery-status pill now shows
-> SuiteFleet's **fine courier status** once SF reports one (e.g. Ordered /
-> Assigned / Out for delivery / On hold), and falls back to the coarse
-> **Scheduled / Delivered / Canceled** when none is set yet. That's extra detail
-> the script doesn't spell out — expected, not a bug.
+> *Phase-8 status delta (heads-up for Ops):* once SuiteFleet reports a courier
+> status, the delivery-status pill shows that **fine SF state** (e.g. Driver
+> assigned, Out for delivery, Delivered, Returned to shipper); until SF reports
+> one it shows the coarse status this script already describes. Extra detail the
+> script doesn't enumerate — expected, not a bug.
 
 ### C. History drawer (read-only) — one delta
 
@@ -88,9 +88,9 @@ entry point (Day-54 drawer relocation) — same content, fewer clicks.
 
 ### D. POD photo view (read-only) — unchanged
 
-> *Phase-8 filter delta:* the Tasks status filter now carries the expanded
-> courier-status options (e.g. **ON_HOLD**) alongside Delivered / Canceled —
-> just pick **Delivered** as before.
+> *Phase-8 filter delta:* the Tasks status filter now lists the **fine courier
+> states** (Ordered through Delivered, plus the return/failure states) alongside
+> Created / Cancelled — just pick **Delivered** as before.
 
 Tasks → filter Delivered, May 2026 → `MPL-80355079` (or siblings) → POD icon →
 **styled "Photo expired at the delivery vendor" placeholder** (H3) — honest,
