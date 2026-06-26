@@ -21,7 +21,7 @@
 --   04_role_assignments: expect <900 -> 1 file, or 0 -> skip
 --   05_api_keys: expect <900 -> 1 file, or 0 -> skip
 --   06_task_generation_runs: ~3094 rows (4 files)
---   07_tenant_suitefleet_webhook_credentials: expect <900 -> 1 file, or 0 -> skip
+--   07_tenant_suitefleet_webhook_credentials: 2 files max (see Query 0; skip empty trailing parts)
 --   08_webhook_events: expect <900 -> 1 file, or 0 -> skip
 --   09_consignees: ~1090 rows (2 files)
 --   10_addresses: expect <900 -> 1 file, or 0 -> skip
@@ -29,7 +29,7 @@
 --   12_subscriptions: expect <900 -> 1 file, or 0 -> skip
 --   13_subscription_address_rotations: expect <900 -> 1 file, or 0 -> skip
 --   14_subscription_exceptions: expect <900 -> 1 file, or 0 -> skip
---   15_subscription_materialization: expect <900 -> 1 file, or 0 -> skip
+--   15_subscription_materialization: 4 files max (see Query 0; skip empty trailing parts)
 --   16_tasks: ~4507 rows (6 files)
 --   17_task_packages: expect <900 -> 1 file, or 0 -> skip
 --   18_failed_pushes: expect <900 -> 1 file, or 0 -> skip
@@ -267,7 +267,7 @@ CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum
 WHERE x.tenant_id IN (SELECT tenant_id FROM snap)
 ORDER BY x.id LIMIT 900 OFFSET 2700;
 
--- >>> SAVE RESULT AS: 07_tenant_suitefleet_webhook_credentials.csv   [0013:148]
+-- >>> SAVE RESULT AS: 07_tenant_suitefleet_webhook_credentials_part1of2.csv  (part 1/2: rows 1..900)   [0013:148]
 WITH snap AS (
   SELECT t.id AS tenant_id
   FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
@@ -281,7 +281,25 @@ FROM tenant_suitefleet_webhook_credentials x
 CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
                       FROM pg_attribute
                       WHERE attrelid = 'tenant_suitefleet_webhook_credentials'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c
-WHERE x.tenant_id IN (SELECT tenant_id FROM snap);
+WHERE x.tenant_id IN (SELECT tenant_id FROM snap)
+ORDER BY x.tenant_id LIMIT 900 OFFSET 0;
+
+-- >>> SAVE RESULT AS: 07_tenant_suitefleet_webhook_credentials_part2of2.csv  (part 2/2: rows 901..1800)   [0013:148]
+WITH snap AS (
+  SELECT t.id AS tenant_id
+  FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+  WHERE r.client_id = 'transcorpsb'
+      AND t.slug ~ '[0-9a-f]{8}'
+      AND t.slug NOT IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1')
+)
+SELECT format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+              'tenant_suitefleet_webhook_credentials', c.cols, c.cols, 'tenant_suitefleet_webhook_credentials', to_jsonb(x)::text) AS restore_sql
+FROM tenant_suitefleet_webhook_credentials x
+CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
+                      FROM pg_attribute
+                      WHERE attrelid = 'tenant_suitefleet_webhook_credentials'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c
+WHERE x.tenant_id IN (SELECT tenant_id FROM snap)
+ORDER BY x.tenant_id LIMIT 900 OFFSET 900;
 
 -- >>> SAVE RESULT AS: 08_webhook_events.csv   [0018:74]
 WITH snap AS (
@@ -413,7 +431,7 @@ CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum
                       WHERE attrelid = 'subscription_exceptions'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c
 WHERE x.tenant_id IN (SELECT tenant_id FROM snap);
 
--- >>> SAVE RESULT AS: 15_subscription_materialization.csv   [0015:212]
+-- >>> SAVE RESULT AS: 15_subscription_materialization_part1of4.csv  (part 1/4: rows 1..900)   [0015:212]
 WITH snap AS (
   SELECT t.id AS tenant_id
   FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
@@ -427,7 +445,59 @@ FROM subscription_materialization x
 CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
                       FROM pg_attribute
                       WHERE attrelid = 'subscription_materialization'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c
-WHERE x.tenant_id IN (SELECT tenant_id FROM snap);
+WHERE x.tenant_id IN (SELECT tenant_id FROM snap)
+ORDER BY x.subscription_id LIMIT 900 OFFSET 0;
+
+-- >>> SAVE RESULT AS: 15_subscription_materialization_part2of4.csv  (part 2/4: rows 901..1800)   [0015:212]
+WITH snap AS (
+  SELECT t.id AS tenant_id
+  FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+  WHERE r.client_id = 'transcorpsb'
+      AND t.slug ~ '[0-9a-f]{8}'
+      AND t.slug NOT IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1')
+)
+SELECT format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+              'subscription_materialization', c.cols, c.cols, 'subscription_materialization', to_jsonb(x)::text) AS restore_sql
+FROM subscription_materialization x
+CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
+                      FROM pg_attribute
+                      WHERE attrelid = 'subscription_materialization'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c
+WHERE x.tenant_id IN (SELECT tenant_id FROM snap)
+ORDER BY x.subscription_id LIMIT 900 OFFSET 900;
+
+-- >>> SAVE RESULT AS: 15_subscription_materialization_part3of4.csv  (part 3/4: rows 1801..2700)   [0015:212]
+WITH snap AS (
+  SELECT t.id AS tenant_id
+  FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+  WHERE r.client_id = 'transcorpsb'
+      AND t.slug ~ '[0-9a-f]{8}'
+      AND t.slug NOT IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1')
+)
+SELECT format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+              'subscription_materialization', c.cols, c.cols, 'subscription_materialization', to_jsonb(x)::text) AS restore_sql
+FROM subscription_materialization x
+CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
+                      FROM pg_attribute
+                      WHERE attrelid = 'subscription_materialization'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c
+WHERE x.tenant_id IN (SELECT tenant_id FROM snap)
+ORDER BY x.subscription_id LIMIT 900 OFFSET 1800;
+
+-- >>> SAVE RESULT AS: 15_subscription_materialization_part4of4.csv  (part 4/4: rows 2701..3600)   [0015:212]
+WITH snap AS (
+  SELECT t.id AS tenant_id
+  FROM tenants t JOIN suitefleet_regions r ON r.id = t.suitefleet_region_id
+  WHERE r.client_id = 'transcorpsb'
+      AND t.slug ~ '[0-9a-f]{8}'
+      AND t.slug NOT IN ('meal-plan-scheduler', 'dr-nutrition', 'fresh-butchers', 'transcorp', 'hem', 'mlp', 'demo-bistro', 'demo-bistro1')
+)
+SELECT format('INSERT INTO %I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I, %L::jsonb);',
+              'subscription_materialization', c.cols, c.cols, 'subscription_materialization', to_jsonb(x)::text) AS restore_sql
+FROM subscription_materialization x
+CROSS JOIN LATERAL (SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) AS cols
+                      FROM pg_attribute
+                      WHERE attrelid = 'subscription_materialization'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '') c
+WHERE x.tenant_id IN (SELECT tenant_id FROM snap)
+ORDER BY x.subscription_id LIMIT 900 OFFSET 2700;
 
 -- >>> SAVE RESULT AS: 16_tasks_part1of6.csv  (part 1/6: rows 1..900)   [0006:125]
 WITH snap AS (

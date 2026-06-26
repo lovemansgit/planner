@@ -300,11 +300,25 @@ ${BACKUP_TABLES.map(([t, col]) =>
 
 // ---- EDITOR-CSV BACKUP (no psql / no DB password): one .sql, run each block in the SQL editor ----
 // The editor caps CSV export at ~1,000 rows; big tables split into 900-row parts via ORDER BY id +
-// LIMIT/OFFSET (only the chunked tables are ordered — they all have an `id` PK). Same frozen predicate
-// + generated-column fix. Chunk counts from Stage-A Query E estimates; Query 0 is live-authoritative.
+// LIMIT/OFFSET (only chunked tables are ordered, each by its REAL primary key — see PK_COL). Same
+// frozen predicate + generated-column fix. Chunk counts from Stage-A Query E estimates; Query 0 is live-authoritative.
 const EDITOR_CHUNK = 900;
-const EDITOR_CHUNKS = { tenants: 2, consignees: 2, task_generation_runs: 4, tasks: 6, audit_events: 6 };
+// Chunked tables (rows over ~900). tenant_suitefleet_webhook_credentials (PK tenant_id, <=1 per
+// tenant -> <=1759) and subscription_materialization (PK subscription_id, 1 per junk subscription)
+// exceed 900, so they are chunked too. Counts are generous upper bounds; trailing empty parts return
+// 0 rows (skip them) and Query 0 is authoritative.
+const EDITOR_CHUNKS = {
+  tenants: 2, consignees: 2, task_generation_runs: 4, tasks: 6, audit_events: 6,
+  tenant_suitefleet_webhook_credentials: 2, subscription_materialization: 4,
+};
 const EDITOR_EST = { tenants: 1759, consignees: 1090, task_generation_runs: 3094, tasks: 4507, audit_events: 4996 };
+// Real primary-key column per table (default `id`); the ORDER BY for chunked LIMIT/OFFSET MUST use the
+// actual PK or it errors (42703) on tables whose PK is not `id`. Verified against migrations.
+const PK_COL = {
+  tenant_suitefleet_webhook_credentials: "tenant_id",  // 0013:148
+  subscription_materialization: "subscription_id",     // 0015:212
+};
+const pkOf = (table) => PK_COL[table] || "id";
 const pad2 = (n) => String(n).padStart(2, "0");
 const SNAP_CTE = `WITH snap AS (
   SELECT t.id AS tenant_id
@@ -314,7 +328,7 @@ const SNAP_CTE = `WITH snap AS (
 function editorArm([table, col, cite], seq, part, total) {
   const label = total > 1 ? `${pad2(seq)}_${table}_part${part}of${total}.csv` : `${pad2(seq)}_${table}.csv`;
   const where = col === "id" ? "x.id IN (SELECT tenant_id FROM snap)" : `x.${col} IN (SELECT tenant_id FROM snap)`;
-  const page = total > 1 ? `\nORDER BY x.id LIMIT ${EDITOR_CHUNK} OFFSET ${(part - 1) * EDITOR_CHUNK}` : "";
+  const page = total > 1 ? `\nORDER BY x.${pkOf(table)} LIMIT ${EDITOR_CHUNK} OFFSET ${(part - 1) * EDITOR_CHUNK}` : "";
   const note = total > 1 ? `  (part ${part}/${total}: rows ${(part - 1) * EDITOR_CHUNK + 1}..${part * EDITOR_CHUNK})` : "";
   return `-- >>> SAVE RESULT AS: ${label}${note}   [${cite}]
 ${SNAP_CTE}
@@ -338,7 +352,12 @@ const editorQueries = BACKUP_TABLES.map((t, i) => {
 const expectedTable = BACKUP_TABLES.map(([t], i) => {
   const est = EDITOR_EST[t];
   const total = EDITOR_CHUNKS[t] || 1;
-  return `--   ${pad2(i + 1)}_${t}: ${est ? `~${est} rows (${total} files)` : "expect <900 -> 1 file, or 0 -> skip"}`;
+  const desc = est
+    ? `~${est} rows (${total} files)`
+    : total > 1
+      ? `${total} files max (see Query 0; skip empty trailing parts)`
+      : "expect <900 -> 1 file, or 0 -> skip";
+  return `--   ${pad2(i + 1)}_${t}: ${desc}`;
 }).join("\n");
 const editorBackupSql = `-- SANDBOX JUNK CLEANUP — BACKUP via SUPABASE SQL EDITOR (READ ONLY). Target: ${PROJECT_REF} (PROD).
 -- For Love, entirely in the dashboard SQL editor — no psql, no Terminal, no DB password.
