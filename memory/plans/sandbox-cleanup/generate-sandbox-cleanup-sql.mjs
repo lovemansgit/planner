@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // SANDBOX JUNK CLEANUP — SQL generator (in-DB frozen-snapshot variant).
 // No literal id list (the ~1,759 ids exceed the SQL-editor CSV export cap). The junk set is
-// frozen IN-DATABASE at delete time into a TEMP table, count-guarded against the Stage-A audited
-// junk_count, then consumed in rn-range batches. Run:  node generate-sandbox-cleanup-sql.mjs
+// frozen IN-DATABASE at delete time into a committed normal table, count-guarded against the
+// Stage-A audited junk_count, then consumed in rn-range batches. Run: node generate-sandbox-cleanup-sql.mjs
 //
 // Output (next to this file):
 //   delete-batched.sql            DRY-RUN + EXECUTE sections; each: snapshot -> guards -> rn-range batches
@@ -381,7 +381,7 @@ writeFileSync(join(HERE, "backup-rowcount.sql"), rowcountSql);
 writeFileSync(join(HERE, "stage-b-backup-editor.sql"), editorBackupSql);
 
 console.log(`Generated for AUDITED_COUNT ${AUDITED_COUNT}, ${N} batches of <= ${BATCH_SIZE} (in-DB frozen snapshot):`);
-console.log("  delete-batched.sql            (DRY-RUN + EXECUTE; TEMP snapshot + rn-range batches)");
+console.log("  delete-batched.sql            (DRY-RUN + EXECUTE; committed frozen table + rn-range batches)");
 console.log("  stage-b-backup-editor.sql     (READ ONLY, SQL-editor CSV backup — PRIMARY for Love)");
 console.log("  stage-b-backup-perbatch.sql   (READ ONLY, " + N + " per-batch CSVs; older editor variant)");
 console.log("  backup-query.sql              (READ ONLY, psql backup — only if a DB password exists)");
