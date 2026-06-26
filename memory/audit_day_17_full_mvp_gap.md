@@ -6,6 +6,8 @@ type: project
 
 # Day-17 EOD Full MVP Audit
 
+> **⚠️ SUPERSEDED (2026-06-26) by `memory/audit_day_57_mvp_gap.md`.** This Day-17 audit (main HEAD `3f70378`) is a historical baseline — most of its gaps are long closed. For the current MVP-gap picture against main `fb907a8`, read the Day-57 audit. Kept here for history; do not action against this file.
+
 **Filed:** Day 17 (7 May 2026), late evening, post-PR-#183 merge.
 **Main HEAD at audit time:** `3f70378`.
 **Trigger:** Love hard constraint — this is the FINAL demo slip; demo cannot ship until 100% MVP-complete per brief. Tonight surfaced merchant-admin frontend gap by coincidence; need exhaustive audit so Day-18 + Day-19 critical-path is complete, not incremental.

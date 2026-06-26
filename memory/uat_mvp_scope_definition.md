@@ -1,5 +1,7 @@
 # UAT-MVP Scope Definition — Transcorp Subscription Planner
 
+> **⚠️ SUPERSEDED (2026-06-26) by `memory/audit_day_57_mvp_gap.md`.** This Day-52 scope definition is a historical baseline. Key deltas since: api_key sandbox auth is now PROVEN on the wire (2026-06-26 MPL probe); R4/R5 address overrides are built + proven (Day-53); the §5 "deaf integration" list is all proven. The current UAT *script* is `memory/uat_run_sheet_v2.md`; the current gap analysis is the Day-57 audit. Kept for history; do not action against this file.
+
 **Filed:** Day-52 (2026-06-10), reviewer-counter session with Love.
 **Status:** Working definition. This is a **UAT line, not a final MVP sign-off.**
 **Purpose:** Define what "done enough to put in front of the Ops team" means, so the Ops demo surfaces real gaps rather than embarrassing ones. Love signs off on MVP only *after* the Ops team reviews this and tells him what else to add.
