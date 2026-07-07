@@ -1206,6 +1206,14 @@ The global Build Methodology moved to v2.0 (objective-gated, model-agnostic auto
 
 NOT a brief version bump: process/methodology entry, no product-scope change (Day-51-amendment precedent). Docs-only; NO src, NO migration, NO promote.
 
+### 2026-07-07 amendment — AC-LOOP-1 ratified; methodology v2.0 live (owner ruling)
+
+Love's ruling, verbatim (7 Jul 2026, session record): "AC-LOOP-1 is ratified as the standing loop-test criterion." and "v2.0 is now live for all load-bearing work."
+
+Effect: (1) the DRAFTED-BY-AGENT tag on the 2026-07-07 AC-LOOP-1 entry above is closed — AC-LOOP-1 is owner-ratified and stands as this project's permanent loop-test criterion; (2) the repo mirror `memory/BUILD-METHODOLOGY.md` is synced to canonical v2.0 in the same PR as this entry; all sessions on this project operate under v2.0 from this merge forward.
+
+NOT a brief version bump: process/methodology entry, no product-scope change (Day-51-amendment precedent). Docs-only; NO src, NO migration, NO promote.
+
 ---
 
 ## 10. Acknowledge protocol for fresh sessions
