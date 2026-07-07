@@ -1196,6 +1196,16 @@ Scope reversion path: if Vercel is upgraded back to Pro tier in future, revert t
 
 NOT a brief version bump. This is an operational degradation log, not a scope change. The v1.17 bump still happens with the first net-new outbound shape in calendar-management Phase 1 (PR-2 or PR-3) per the prior reviewer ruling — note that prior reviewer ruling framed it as "v1.16 bump" but v1.16 was already shipped on Day-30 via PR #308, so the next bump is v1.17.
 
+### 2026-07-07 amendment — methodology v2.0 loop-test acceptance criterion (process; DRAFTED-BY-AGENT, pending owner ratification)
+
+The global Build Methodology moved to v2.0 (objective-gated, model-agnostic autonomy; owner-ruled 7 Jul 2026). Its §11 step 6 requires the full loop proven end-to-end on one trivial criterion before load-bearing work rides it. Per v2.0 §3 (single clarification pass), the builder drafts the criterion and proceeds; Love ratifies or supersedes by a later entry.
+
+- **AC-LOOP-1** — Intent: the project carries the v2.0 session-survival state file (`memory/STATE.md`) with its five mandatory sections.
+  Check (run from repo root): `for h in "## Now" "## Criteria" "## Attempts" "## Defaults taken" "## Adds"; do grep -qxF "$h" memory/STATE.md || { echo "FAIL: missing $h"; exit 1; }; done; echo PASS`
+  Pass condition: exit code 0 and final output line `PASS`.
+
+NOT a brief version bump: process/methodology entry, no product-scope change (Day-51-amendment precedent). Docs-only; NO src, NO migration, NO promote.
+
 ---
 
 ## 10. Acknowledge protocol for fresh sessions
