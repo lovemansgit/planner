@@ -1,6 +1,6 @@
-# STATE — v2.0 session-survival file
+# STATE — v2.1 session-survival file
 
-_Methodology v2.0 §7. Read first every session (after the date check); rewritten
+_Methodology v2.1 §7. Read first every session (after the date check); rewritten
 after every cycle's verify step. Where conversation memory and this file
 disagree, this file wins._
 
@@ -28,3 +28,4 @@ Next action: none in flight — next session bootstraps from brief + POINTER.md.
 - ADD: memory/check-runs/AC-LOOP-1-2.txt — required by AC-LOOP-1 (re-run after this cycle's STATE.md rewrite)
 - ADD: memory/check-runs/AC-LOOP-1-3.txt — required by AC-LOOP-1 (re-run after this cycle's STATE.md rewrite)
 - ADD: memory/POINTER.md — required by owner ruling 7 Jul 2026 (order 1, quoted in the brief §9 pointer entry and the LOVE-RULING comment on its PR); no AC-id — owner-ordered addition
+- ADD: memory/followup_methodology_pointer_dangling_refs.md — required by reviewer round-1 item 3 on PR #667 (files the off-allowlist follow-up); no AC-id — review-ordered addition

@@ -1212,6 +1212,8 @@ Love's ruling, verbatim (7 Jul 2026, session record): "AC-LOOP-1 is ratified as 
 
 Effect: (1) the DRAFTED-BY-AGENT tag on the 2026-07-07 AC-LOOP-1 entry above is closed — AC-LOOP-1 is owner-ratified and stands as this project's permanent loop-test criterion; (2) the repo mirror `memory/BUILD-METHODOLOGY.md` is synced to canonical v2.0 in the same PR as this entry; all sessions on this project operate under v2.0 from this merge forward.
 
+NOT a brief version bump: process/methodology entry, no product-scope change (Day-51-amendment precedent). Docs-only; NO src, NO migration, NO promote.
+
 ### 2026-07-07 amendment — methodology mirror replaced by pointer (process; owner-ordered)
 
 Love's order, verbatim (7 Jul 2026, session record): "Then remove memory/BUILD-METHODOLOGY.md from planner via a docs-lane PR, replaced by a three-line POINTER.md naming the repo and pinned version. Project memory (brief, STATE.md, check-runs) stays in planner untouched".
@@ -1219,8 +1221,6 @@ Love's order, verbatim (7 Jul 2026, session record): "Then remove memory/BUILD-M
 Effect: the mirror file is removed; `memory/POINTER.md` names the canonical repo (lovemansgit/methodology, private) and pins v2.1 at commit f15fb13e. Project memory stays in planner. Supersedes the mirror-sync arrangement in the ratification entry above (append-only; that entry is not edited).
 
 NOT a brief version bump: process/methodology entry, no product-scope change. Docs-only; NO src, NO migration, NO promote.
-
-NOT a brief version bump: process/methodology entry, no product-scope change (Day-51-amendment precedent). Docs-only; NO src, NO migration, NO promote.
 
 ---
 
