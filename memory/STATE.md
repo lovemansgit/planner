@@ -5,14 +5,14 @@ after every cycle's verify step. Where conversation memory and this file
 disagree, this file wins._
 
 ## Now
-Loop test (methodology v2.0 §11 step 6, Love-ruled 7 Jul 2026): prove the full
-loop — brief amendment → STATE.md → check → reviewer → merge gate → notification
-— on AC-LOOP-1. Next action: open docs-lane PR, invoke reviewer with PR number.
+Loop test complete (#665 merged); AC-LOOP-1 owner-ratified 7 Jul 2026; v2.0 live
+for all load-bearing work. This PR: methodology mirror synced to v2.0 + brief
+ratification entry. Next action: none in flight — next session starts from brief.
 
 ## Criteria
 | AC-id | Check command | Last run | PASS/FAIL | Output path |
 |---|---|---|---|---|
-| AC-LOOP-1 | `for h in "## Now" "## Criteria" "## Attempts" "## Defaults taken" "## Adds"; do grep -qxF "$h" memory/STATE.md \|\| { echo "FAIL: missing $h"; exit 1; }; done; echo PASS` | 2026-07-07 | PASS | memory/check-runs/AC-LOOP-1-1.txt |
+| AC-LOOP-1 | `for h in "## Now" "## Criteria" "## Attempts" "## Defaults taken" "## Adds"; do grep -qxF "$h" memory/STATE.md \|\| { echo "FAIL: missing $h"; exit 1; }; done; echo PASS` | 2026-07-07 | PASS | memory/check-runs/AC-LOOP-1-2.txt |
 
 ## Attempts
 (none — no check has failed yet)
@@ -25,3 +25,4 @@ loop — brief amendment → STATE.md → check → reviewer → merge gate → 
 ## Adds
 - ADD: memory/STATE.md — required by AC-LOOP-1
 - ADD: memory/check-runs/AC-LOOP-1-1.txt — required by AC-LOOP-1
+- ADD: memory/check-runs/AC-LOOP-1-2.txt — required by AC-LOOP-1 (re-run after this cycle's STATE.md rewrite)
