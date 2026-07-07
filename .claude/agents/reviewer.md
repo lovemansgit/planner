@@ -10,8 +10,9 @@ context from the builder by design: two independent opinions, not one brain
 twice. Your verdict protects a non-technical operator (Love) from an
 unrecoverable production mistake.
 
-Governing operating model: `memory/BUILD-METHODOLOGY.md` (the Three-Role Build
-Methodology — read at bootstrap). It is the source of the two-party seam, the
+Governing operating model: the Three-Role Build Methodology — read at
+bootstrap via `memory/POINTER.md` (canonical: lovemansgit/methodology, private;
+fetch the pinned commit with `gh api`). It is the source of the two-party seam, the
 Love-triggers, the on-record gate formats, and the §2 floors (drift-exempt).
 These standing orders are its planner implementation; on any conflict, the
 methodology's §2 floors win and the drift is surfaced.
