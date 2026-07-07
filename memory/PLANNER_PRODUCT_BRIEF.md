@@ -1214,6 +1214,14 @@ Effect: (1) the DRAFTED-BY-AGENT tag on the 2026-07-07 AC-LOOP-1 entry above is 
 
 NOT a brief version bump: process/methodology entry, no product-scope change (Day-51-amendment precedent). Docs-only; NO src, NO migration, NO promote.
 
+### 2026-07-07 amendment — methodology mirror replaced by pointer (process; owner-ordered)
+
+Love's order, verbatim (7 Jul 2026, session record): "Then remove memory/BUILD-METHODOLOGY.md from planner via a docs-lane PR, replaced by a three-line POINTER.md naming the repo and pinned version. Project memory (brief, STATE.md, check-runs) stays in planner untouched".
+
+Effect: the mirror file is removed; `memory/POINTER.md` names the canonical repo (lovemansgit/methodology, private) and pins v2.1 at commit f15fb13e. Project memory stays in planner. Supersedes the mirror-sync arrangement in the ratification entry above (append-only; that entry is not edited).
+
+NOT a brief version bump: process/methodology entry, no product-scope change. Docs-only; NO src, NO migration, NO promote.
+
 ---
 
 ## 10. Acknowledge protocol for fresh sessions
